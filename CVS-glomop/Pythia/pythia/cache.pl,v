@@ -1,0 +1,248 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	V1_1_2:1.1.1.1
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#  $Id: cache.pl,v 1.5 1996/09/09 23:04:10 fox Exp $
+
+=head1 NAME
+
+cache.pl - an embarrassingly naive, FIFO caching manager for Pythia
+
+=head1 SYNOPSIS
+
+ $c =  new cache ($cachedir, $hashproc);
+ $success = $c->store($content[,$type]);
+
+ ($content,$type) = $c->get($url);
+  $content        = $c->get($url);
+
+ ($content,$type) = $c->fetch($url);
+
+ $c->clean();
+ $c->delete();
+
+=head1 DESCRIPTION
+
+=over 3
+
+=item $c = new cache ($cachedir, $hashproc, $maxbytes [,$thresh])
+
+Initialize caching with the (existing, writable) directory $cachedir as the
+cache repository.  $hashproc must be a reference to a subroutine that takes a
+canonicalized string and returns a unique hash of it that is suitable as a
+filename; the function should return the "filename part" only, not the
+directory part.  Pythia will use FIFO (first entries added to cache are the
+first ones to be cleaned) to make the cache occupy not more than
+$maxbytes bytes (content bytes only, not including file system overhead);
+this is a soft limit, not a guarantee.  $thresh indicates the "cleaning
+threshold", i.e. if $thresh is 0.6, once cleaning is initiated it will continue
+until the cache is at less than 60% capacity.  Default is 0.7.
+
+=cut
+
+package cache;
+
+sub new {
+    shift;
+    my $dir = $_[0];
+    $dir =~ s!/^!!;
+    bless {
+        "dir" => $dir,
+        "proc" => $_[1],
+        "files" => [],
+        "sizes" => [],
+        "size" => 0,
+        "max" => ($_[2] >= 1e6 ? $_[2] : 1e6),
+        "thresh" => $_[3] || 0.7,
+        };
+}
+
+=item $cache->store($url,$content[,$type[,$replace]])
+
+Hint cache to store $content, whose MIME type is $type (default text/plain),
+which can be either a scalar or a reference to a 
+scalar containing the actual
+stuff to cache, under the given $url (which should be canonicalized).  The
+operation will return 1 iff the item was successfully cached; a
+debugging message will be generated and zero returned if there was a
+problem (disk full, etc.)  If there is already some content keyed to this URL,
+it will be replaced with the new content iff $replace is true; if $replace is
+false then the old content will remain, a debugging message will be generated,
+and zero will be returned.
+
+=cut
+
+sub store {
+    my($self,$url,$content,$type,$overwrite) = @@_;
+    my $hash = $self->{"proc"};
+    my $ofn = &$hash($url);
+    
+    &main::log("*** cache store: content for '$url' is undef!"), return
+        unless defined $content;
+    my $fn = join('/', $self->{"dir"}, $ofn);
+
+    &main::debug('cache', "Won't replace old content for '$url'"), return 0
+        if ((-r $fn) && !$overwrite);
+    unless (open(F,">$fn")) {
+        &main::debug('cache', "Writing $fn: $!");
+        return 0;
+    }
+    $content = $$content if ref($content) eq 'SCALAR';
+    chomp $type;
+    print F $type,':',$content;
+    close F;
+    push(@@{$self->{"files"}}, $ofn);
+    push(@@{$self->{"sizes"}}, length($type)+length($content)+1);
+    $self->{"size"} += length($content);
+    &main::debug('cache', "Stored $url ($type) in cachefile $ofn");
+    $self->clean() if $self->{"size"} > $self->{"max"};
+    1;
+}
+
+=item $content = $cache->get($url)
+
+Returns the content associated with $url from the cache, or undef if
+it is not in the cache.
+
+=cut
+
+sub get {
+    my ($self,$url) = @@_;
+    my $fn = join('/', $self->{"dir"}, &{$self->{"proc"}}($url));
+    &main::debug('cache', "$url not in cache"), return undef
+        unless -r $fn;
+    unless (open(F,$fn)) {
+        &main::debug("Opening $fn: $!");
+        return undef;
+    }
+    local($/) = undef;
+    my $type = 'text/plain';
+    my $content = <F>;
+    close F;
+    $type = $1 if $content =~ s!^([^/]+/[^/:]+):!!;
+    &main::debug('cache', "$url found");
+    return (wantarray ? ($content,$type) : $content);
+}
+
+=item $content = $cache->fetch($url)
+
+B<NOT YET IMPLEMENTED>
+
+Fetches $url from a server and stores it in the cache, returning the content.
+Intended to be used for doing prefetching: this routine would be called from a
+separate (e.g. forked) process.  The file's appearance in the cache is
+"atomic", i.e. there is no possibility that a L<get> call would return the
+contents of a cache file containing only partial content.
+    
+=cut
+
+=item $cache->clean()
+
+Performs internal cache maintenance, size trimming, aging, etc.  Should be
+called periodically to keep the cache at a reasonable size.  Returns 1 if all
+went well, undef if some cache files couldn't be removed.  BUG: May end up
+deleting files corresponding to active page segments, though this is highly
+unlikely for a cache of any size.
+
+=cut
+
+sub clean {
+    my $self = shift;
+    my $files = $self->{"files"};
+    my $sizes = $self->{"sizes"};
+    my @@cant_delete = ();
+    my @@cant_sizes = ();
+    my ($file,$size);
+    
+    &main::debug('cache', "Cleaning cache...");
+    while ((scalar @@$files)
+           && ($self->{"size"} > $self->{"max"} * $self->{"thresh"})) {
+        $file = shift @@$files;
+        $size = shift @@$sizes;
+        if (unlink $file) {
+            $self->{"size"} -= (shift @@$sizes);
+            last unless (scalar @@$files);
+        } else {
+            unshift(@@cant_delete, $file);
+            unshift(@@cant_sizes, $size);
+        }
+    }
+    # no more files, or cache is small enough now.
+    push(@@$files, @@cant_delete);
+    push(@@$sizes, @@cant_sizes);
+    my $cant_delete = scalar @@cant_delete;
+    if ($cant_delete) {
+        &main::debug('cache', "Failed to delete $cant_delete files");
+    }
+    &main::debug('cache',join(' ', "New cache size:", $self->{"size"},
+                              "(max", $self->{"max"}, ")"));
+    1;
+}
+
+=item $cache->trash()
+
+Removes all cached items (ie makes cache go away). Not desirable if you want
+the cache to survive across invocations of Pythia.
+
+=cut
+
+sub trash {
+    my $self = shift;
+    if (@@{$self->{"files"}}) {
+        unlink (@@{$self->{"files"}})
+            or &main::debug('cache', "Cleaning up cache: $!");
+    }
+}
+
+=back
+
+=head1 BUGS
+
+The clean routine doesn't do anything yet.
+
+URL's should be canonicalized before being hashed.  Failure to do so may
+result in degraded, but correct, performance.
+
+=cut
+
+
+1;
+@
+
+
+1.1.1.1
+log
+@New, distribution version of Pythia with a real directory structure and
+real documentation
+@
+text
+@@

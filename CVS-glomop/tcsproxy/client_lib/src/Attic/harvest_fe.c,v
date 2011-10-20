@@ -1,0 +1,98 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	96.11.15.04.48.28;	author gribble;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.08.02.33.58;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Woohoo!  Got the partition front end working, fixed a few bugs here and
+there.
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <netdb.h>
+#include <errno.h>
+#include <unistd.h>
+
+#include "proxy.h"
+#include "clib.h"
+#include "icp.h"
+
+extern int errno;
+
+int main(int argc, char **argv)
+{
+  clib_response       clresp;
+  pthread_t           res;
+
+  Clib_Initialize("part.config");
+  if ((res = httpreq_init(7364)) == 0) {
+    fprintf(stderr, "httpreq_init 7364: %s\n", strerror(res));
+    exit(1);
+  }
+  (void)make_threads(20);
+
+  while(1)
+    sleep(10);
+}
+
+void *harvest_http_go_proc(void *arg)
+{
+  task_t   *t = (task_t *) arg;
+  int       fd = (int)TASK_DATA(t), rv;
+  unsigned  inlen, outlen;
+  char     *inbuf=NULL, *outbuf=NULL;
+
+  if (do_http_receive(fd, &inlen, &inbuf) != 0) {
+    close(fd);
+    return (void *) 0;
+  }
+
+  if (Clib_Lowlevel_Op(inbuf, inlen, &outbuf, &outlen) != CLIB_OK) {
+    free(inbuf);
+    free(outbuf);
+    close(fd);
+    return (void *) 0;
+  }
+
+  if ((rv = write(fd, outbuf, outlen)) != outlen) {
+    free(inbuf);
+    free(outbuf);
+    close(fd);
+    return (void *) 0;
+  }
+
+  free(inbuf);
+  free(outbuf);
+  close(fd);
+  return (void *) 0;
+}
+@
+
+
+1.1
+log
+@Making partitioned harvest frontend
+@
+text
+@@

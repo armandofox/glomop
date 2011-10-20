@@ -1,0 +1,254 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.30.20.47.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From mds@@ic.EECS.Berkeley.EDU  Fri Oct 30 12:21:03 1998
+Return-Path: mds@@ic.EECS.Berkeley.EDU
+Received: from ic.EECS.Berkeley.EDU (ic.EECS.Berkeley.EDU [128.32.168.7]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id MAA13754 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 30 Oct 1998 12:21:03 -0800
+Received: (from mds@@localhost)
+	by ic.EECS.Berkeley.EDU (8.8.8/8.8.8) id MAA01343;
+	Fri, 30 Oct 1998 12:21:17 -0800 (PST)
+Date: Fri, 30 Oct 1998 12:21:17 -0800 (PST)
+From: "Mark D. Spiller" <mds@@EECS.Berkeley.EDU>
+Message-Id: <199810302021.MAA01343@@ic.EECS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: Mark D. Spiller - homework#2
+Cc: mds@@ic.EECS.Berkeley.EDU
+Status: RO
+
+
+
+Mark D. Spiller
+CS 261, HW #2
+
+Note:  I discussed these problems with Chen-Nee Chuah.
+
+**************
+Question 1
+**************
+
+SPIF = Stateful packet inspection firewall
+ALPF = Application level proxy firewall
+IDS = IDS.
+
+*******************
+Part 1: SPIF & ALPF
+*******************
+
+One question that I ran into for this problem was whether an ALPF has
+checks at every level of the protocol stack, or whether it trusts its
+TCP/IP stack and simply implements application-level protection on top
+of that stack (i.e. it is assuming that it would be used in
+conjunction with a normal packet filter.)  The benefit, if the TCP/IP
+stack is indeed trustworthy, is that one doesn't have to worry about
+the details of the transmission, and can focus on the high-level
+application information.  The question is, can you trust it?
+
+Both ALPFs and SPIFs are fail-close.  Both must maintain state for
+every possible port/application on every machine behind the firewall.
+The amount of state that has to be maintained for active connections
+differs, though - ALPFs often wait for all fragments to arrive, while
+from the description it sounds like SPIFs might just forward them,
+since they wouldn't necessarily have the application-level knowledge
+to intelligently do anything with the data.  This gives the ALPF an
+advantage for some of the more complex overlap/fragmentation attacks.
+
+If the SPIF does not have a TCP/IP stack, any manipulation of
+application-level data would require programming into the SPIF
+knowledge about application-level details, from the 3/4th (IP/TCP)
+layer, without abstractions.  This would require knowing where in
+packets you need to dig to find the right data, which I would think
+would be hard to write into rules (based on the Network Insecurity
+Through IP Packet Filtering paper), inflexible to protocol changes,
+and bug- and error-prone.  If it were the only thing protecting the
+internal trust of the machines behind the firewall, getting these
+rules completely right becomes very critical, which is bad since the
+complexity makes that very unlikely.
+
+For neither case does one need to worry about the heterogeneity of the
+machines behind the firewall.  However, for the ALPF one might have
+the overhead of rewriting some of the applications to handle the
+proxy.  It is easier to add new application protocols to the ALPF, but
+then one might have to modify the applications on the clients behind
+the firewall.  The SPIF works at a different layer, so this would not
+be as much of an issue, but requires the the new protocol be
+understood/handled at the lower layers, which is also hard.
+
+If the number of applications/rules in the SPIF is small, the lack of
+the TCP/IP stack would mean that the SPIF would get higher
+performance/throughput than the ALPF, where everything would be
+passing through the TCP/IP stack.  However, the cost would be that
+with the SPIF one gets less of a global view / application
+abstraction, and it is easy to lose sight of greater security picture
+and get lost in TCP/IP implementation details.
+
+ALPFs seem more amenable to stacking - an ALPF+standard PIF seems much
+more secure and robust than a PF+SPF or a SPIF+ALPF, for each can be
+simple in its domain (high-level/layers, low-level/layers (3&4)).
+
+*******************
+Part 2: SPIF & IDS
+*******************
+
+SPIFs are active/visible and fail-close, while IDSs are passive and
+fail-open.  An IDS is better for seeing both in-bound and internal
+attacks, and has a better chance of catching someone, while a SPIF
+will only protect from attacks crossing the line.  On the other hand,
+the IDS may generate false alarms, while the SPIF will either work
+(quietly) or not.  The SPIF does not have to worry about heterogeneity
+behind the firewall nearly as much as the IDS does, but one instead
+has to trust the implementation of a complex filter.  For the IDS one
+has to believe/ensure that what happens to its TCP/IP stack indicates
+what happens to other TCP/IP stacks for all machines in the
+organization.
+
+Both have to deal with a similar level of complexity - both must make
+sure that layers 3 and 4 are handled right, and both have to monitor
+all connections on all machines.  The IDS has to keep more state and
+work more, though, because it needs to know what is actually happening
+on each machine because of the packet contents, while the SPIF is just
+making sure that only the packet connections are valid, not really the
+contents or their consequences.
+
+Overload is much more dangerous security-wise than performance-wise
+for an IDS, but in turn, since the IDS is not the link between inside
+and outside, it is less of a bottleneck than the SPIF.  It is also
+much easier and safer to deploy multiple IDSs in parallel.  IDSs are
+less restrictive than SPIFs, making them a more reasonable option for
+sites that do protocol research, such as universities, 
+
+For stacking, packet filter + IDS or ALPF + IDS are pretty handy, PF +
+IDS + ALPF is REALLY cool.  I'm not sure whether SPF + IDS would be
+useful, for the two seem somewhat similar in what they filter, and
+thus more vulnerable to some of the trickier bugs.
+
+**************
+Question 2
+**************
+
+How does modifying memory layout so that the stack grows upwards help
+buffer overrun bugs?
+
+The trick with buffer overruns when the stack was growing downwards
+was that if you knew what function was calling the function that you
+were targeting the buffer overrun with, you could overwrite a the
+caller's stack frame and put malicious code on the stack and overwrite
+the return value to call it.  When the stack goes the other way,
+overrunning the buffer in a function is not as useful, for it is
+overrunning a part of the stack that is not used yet.  One trick you
+can pull here to do stack smashing is pass a *pointer* to a buffer (on
+the stack) in your stack frame to a function, and have THAT function
+overwrite *your* buffer, thus changing its (the called function's)
+return value.  For example:
+
+  void foo(){
+    char buf[10];
+    char bigbuf[100] = "something long and malicious";
+    strcpy(buf, bigbuf);
+  }
+
+Buf on the stack will be overrun, and will overrun the return value
+for strcpy.  Seems like it should still be pretty easy to find strcpy
+in existing libraries, so it should be doable to exploit holes like
+this...
+
+The same kind of thing would work for overwriting a function pointer
+stored on the stack with a pointer to code in the stack, heap, or data
+segments.  The only trick is overwriting the pointer within the stack
+frame of a function that you have called instead of in your or your
+parents' stack frame.
+
+The "Overrun a buffer and overwrite a security-critical piece of
+internal state" and "abuse stdio global variable, get stdio to do the
+attack for you" attacks still seem valid, since they don't necessarily
+depend on the stack at all - the security-critical piece of code being
+affected by the overrun could very well be in the heap/global
+variables as well.
+
+
+Does growing the stack upwards allow for any new attack methods?
+
+1.  New stack frames go above the current frame.  If a buffer is
+overrun and then a function is called, the new frame on the stack
+could overwrite the buffer, perhaps getting rid of termination or
+important data and changing the behavior of the program.
+
+2.  If one modifies the memory layout so that stacks grow upward, one
+has to make sure that buffer overruns can't write into whatever lives
+above the stack in memory.  
+
+3.  Switching the implementation of the stack might be a cause new
+bugs... (especially if people aren't careful and try to copy the old
+downwards stack code instead of re-writing from scratch...).  Who
+knows what might break?
+
+
+**************
+Question 3
+**************
+
+What changes could be made to the C compiler to help protect against
+buffer-overflow attacks?
+
+My answers range from radical to subtle...  Some of the radical
+options are clearly infeasible, but perhaps a subset or partial
+implementation might help...  I readily admit that I am far from a
+compiler guru... :)
+
+- Modify the compiler to accept only a subset of C (sort of like false
+negatives), to remove some or all of the constructions likely to cause
+memory problems, for instance lots of weird pointer arithmetic.  This
+could be very difficult and time consuming, but it might be possible
+to create a safer subset of C that was still useful.  The extreme
+would be making the compiler and runtime handle all memory checking,
+as in Java, which would leave very little of C.  But an option might
+be to do something like create a new C++ "Buffer" type/class that
+allows for bounds-checking, and then substitute that in at
+compile-time.  Or the compiler could require that before every pointer
+reference there is an explicit buffer size check (i.e. the compiler
+could generate for each buffer foo an associated variable _foo_size,
+and write in size checks).  These substitutions are probably still too
+complex and restrictive, but something more doable would be to find
+instances of {gets, strlen, strcpy, sprintf} and automatically convert
+them into {fgets, strncpy, snprintf, etc}, or better yet, into
+something that also guarantees null-termination and anything else
+necessary.
+
+- As discussed in class, if memory space isn't too expensive, the
+compiler could modify the final code output to pad buffers to
+page-sizes, and use the virtual memory system to generate faults for
+overruns.  (This depends on page size too - as page size increase,
+this become less feasible...).
+
+- As was also touched upon in class, the compiler could modify the
+machine code structure to create multiple separate and protected
+(sandboxed) stacks, for instance one for return addresses, one for
+buffers, and one for arguments.  This might reduce some of the
+problems, but others might still persist, for instance when buffers
+overran other buffers in the same stack, or somehow managed to write
+beyond the stack.
+
+- How about changing the output of the C compiler to instead generate
+something like Java byte code, and then using the Java runtime
+environment to do bounds checking or verification or throw
+exceptions...  Hmmm...
+
+@

@@ -1,0 +1,652 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.10
+date	99.01.15.22.03.32;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.01.12.22.21.31;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	99.01.12.04.25.10;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.01.11.20.06.21;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.01.08.23.42.05;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.01.08.19.58.21;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.01.08.18.14.14;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.01.08.03.53.37;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.01.07.23.43.46;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.01.07.22.53.35;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Just archiving the in-progress version of setsolver.c.
+@
+text
+@(* There's a serious architectural flaw with the way we convert
+   set constraints into range constraints, or generate set constraints,
+   or something.  For instance, consider the set constraint
+   S - S >= 0, where S is a set of integers.  This gets converted
+   into the the range l..h, and then S - S is represented as the
+   range l-h..h-l, which already represents a loss of accuracy.
+   Then if we consider the linear model for S - S >= 0, we see
+   that it is l-h >= 0, i.e. l >= h, which is clearly inaccurate
+   except when l=h (in which case the idea of value-range arithmetic
+   collapses into constant propagation).  I'm not sure how to fix this. *)
+      
+
+structure Constraint : CONSTRAINT =
+  struct
+    exception Err
+
+    type label = int
+    val curLabel = ref 0
+    fun getFreshLabel () = let val l = !curLabel in curLabel := l + 1; l end
+    val curConstraints = ref ""
+    val curInts = ref ""
+
+    datatype var = LoVar of int | HiVar of int (* int = unique label *)
+
+    (* E([{mul=5,var=LoVar(0)},{mul=1,var=HiVar(3)}],-1)
+       means 5*L0 + H3 - 1. *)
+    datatype eqn = E of {coeff:int, var:var} list * int
+
+    datatype term = T of eqn * eqn (* (lo,hi) represents the interval lo..hi *)
+
+    type range = int option * int option
+    type query = string * term * term * (range * range -> unit)
+    val curQueries = ref [] : query list ref
+
+    fun myIntStr i = if i<0 then "-"^(myIntStr (~i)) else Int.toString i
+
+    fun varToStr (LoVar(i) )= "L"^(Int.toString i)
+      | varToStr (HiVar(i)) = "H"^(Int.toString i)
+    fun cvlistToStr [] = ""
+      | cvlistToStr ({coeff,var}::xs) = 
+            (if coeff=1 then "" else (myIntStr coeff)^"*")
+            ^ (varToStr var)
+            ^ (if xs=[] then "" else " + "^(cvlistToStr xs))
+    fun eqnToStr (E(vlist,const)) = 
+          let val vs = cvlistToStr vlist
+              val cs = myIntStr const
+          in
+              if vs="" then cs
+              else if const=0 then vs
+              else vs ^ " + " ^ cs
+          end
+    fun toString (T(xl,xh)) = "range ["^(eqnToStr xl)^", "^(eqnToStr xh)^"]"
+
+    fun constrain s =
+          (curConstraints := ((!curConstraints)^s);
+           print ("Debug: new constraint: "^s);
+           ())
+    fun query x =
+          (curQueries := x::(!curQueries);
+           print ("Debug: new query: "^(#1 x));
+           ())
+
+    fun constantTerm i = T(E([],i),E([],i))
+    fun top () = T(E([],0),E([],100000)) (* MAXINT ? *)
+
+    fun reset () = (curLabel := 0; curConstraints := ""; curQueries := [];
+                    curInts := "")
+
+    fun makeSingleton (T(xl,xh)) =
+          constrain ((eqnToStr xl)^" = "^(eqnToStr xh)^";\n")
+
+    (* naive O(n^2) algorithm; better is to use sorted lists *)
+    fun addLists (xl,[]) = xl
+      | addLists (xl,y::ys) =
+          let fun addVar [] v = [v]
+                | addVar ((z as {coeff=zc,var=zv})::zs)
+                         (v as {coeff=vc,var=vv}) =
+                    if zv = vv then {coeff=zc+vc,var=zv}::zs
+                    else z::(addVar zs v)
+          in  addLists(addVar xl y,ys)
+          end
+    fun addEqns (E(xl,xc),E(yl,yc)) = E(addLists(xl,yl),xc+yc)
+    fun negEqn (E(l,c)) =
+          let fun negateOne {coeff=cc,var=vv} = {coeff=(~cc),var=vv}
+          in  E(map negateOne l, ~c)
+          end
+    fun constMulEqn (c,E(ylist,yconst)) =
+          let fun mulOne {coeff=cc,var=vv} = {coeff=(c*cc),var=vv}
+          in  E(map mulOne ylist, c*yconst)
+          end
+          
+
+    fun addTerms (T(xl,xh),T(yl,yh)) = T(addEqns(xl,yl),addEqns(xh,yh))
+    fun negate (T(xl,xh)) = T(negEqn xh, negEqn xl) (* note: order swapped *)
+    fun subTerms (x,y) = addTerms (x,negate y)
+
+    (* Only implemented when one of the terms is a constant range. *)
+    fun mulTerms (T(E([],xlc),E([],xhc)),T(yl,yh)) =
+          if xlc>xhc then (print "Assertion failed in mulTerms!\n"; raise Err)
+          else if xlc>=0 then T(constMulEqn (xlc,yl), constMulEqn (xhc,yh))
+          (* Beware of negatives! *)
+          else if xhc<0  then T(constMulEqn (xlc,yh), constMulEqn (xhc,yl))
+          else (* Aww, hell. This is the hardest case: xlc..xhc includes both
+                  negative and positive numbers.  FIX: For now, just punt. *)
+               (print "Warning(mulTerms): range crosses zero.\n"; raise Err)
+      | mulTerms (x,y as T(E([],_),E([],_))) = mulTerms (y,x)
+      | mulTerms (_,_) = raise Err
+
+    fun op / _ = raise Err
+    fun union _ = raise Err
+    fun intersect _ = raise Err
+    fun eqTerms (T(xl,xh),T(yl,yh)) =
+          constrain ((eqnToStr xl)^" = "^(eqnToStr yl)^";\n" ^
+                     (eqnToStr xh)^" = "^(eqnToStr yh)^";\n")
+    fun subset (T(xl,xh),T(yl,yh)) =
+          constrain ((eqnToStr xl)^" >= "^(eqnToStr yl)^";\n" ^
+                     (eqnToStr xh)^" <= "^(eqnToStr yh)^";\n")
+    fun termGe (T(E(xllist,xlc),_), T(E([],0),E([],0))) =
+          let fun f ({coeff,var},x:int) = x+(if coeff<0 then 1 else 0)
+              val numNegative = foldl f 0 xllist
+          in
+              if xlc >= 0 andalso numNegative = 0
+              then () (* FIX: mega-hack to not get warnings from lp_solve
+                         (since all variables are positive in lp_solve). *)
+              else constrain ((eqnToStr (E(xllist,xlc)))^" >= 0;\n")
+          end
+      | termGe (T(xl,_),T(_,yh)) =
+          constrain ((eqnToStr xl)^" >= "^(eqnToStr yh)^";\n")
+
+    fun queryge (x as T(xl,xh), y as T(yl,yh), errorfn) =
+          query (((eqnToStr xl)^" >= "^(eqnToStr yh)^";\n"),x,y,errorfn)
+
+    fun freshTerm () =
+          let val lbl = getFreshLabel()
+              val lo = E([{coeff=1,var=LoVar(lbl)}], 0)
+              val hi = E([{coeff=1,var=HiVar(lbl)}], 0)
+          in
+              constrain ((eqnToStr lo)^" <= "^(eqnToStr hi)^";\n");
+              T(lo,hi)
+          end
+
+    fun getFreshInt () =
+          let val lbl = getFreshLabel ()
+              val (lo,hi) = (LoVar(lbl), HiVar(lbl))
+          in
+              curInts := (!curInts) ^ "int "^(varToStr lo)
+                         ^", "^(varToStr hi)^";\n";
+              (lo,hi)
+          end
+    fun min (T(yl,yh),T(zl,zh)) =
+          let val T(xl,xh) = freshTerm ()
+              val (tl,th) = getFreshInt ()
+              val huge = Int.toString 10000 (* MAXINT? *)
+              fun minStr (a,b,c,t) = (
+                    constrain (" "^b^" <= "^c^" - "^huge^"*"^t^" + "^huge^";\n");
+                    constrain ("  "^a^" <= "^b^" - "^huge^"*"^t^" + "^huge^";\n");
+                    constrain ("  "^a^" >= "^b^" + "^huge^"*"^t^" - "^huge^";\n");
+                    constrain ("  "^a^" <= "^c^" + "^huge^"*"^t^";\n");
+                    constrain ("  "^a^" >= "^c^" - "^huge^"*"^t^";\n");
+                    constrain ("  "^t^" <= 1;\n");
+                    (* no need to ensure t>=0, if we're using lp_solve. *)
+                    ()
+                   )
+          in
+               (* Ok because we only maximize (never minimize) LoVar's. *)
+               constrain ((eqnToStr xl)^" <= "^(eqnToStr yl)^";\n");
+               constrain ((eqnToStr xl)^" <= "^(eqnToStr zl)^";\n");
+               (* minStr (eqnToStr xl, eqnToStr yl, eqnToStr zl, varToStr tl); *)
+               minStr (eqnToStr xh, eqnToStr yh, eqnToStr zh, varToStr th);
+              T(xl, xh)
+          end
+              
+          
+
+
+
+    fun lp_solve system =
+          let val solver = "./mysolver"
+                (* "/tmp/lp_solve_2.3/lp_solve" *)
+              val p = Unix.execute(solver, [])
+              val (rd,wr) = Unix.streamsOf p
+          in
+              TextIO.output (wr,system);
+              TextIO.closeOut wr;
+              let val s = (TextIO.inputAll rd)
+              in  Unix.reap p; s
+              end
+          end;
+    (* lp_solve's response for infeasible linear programming models *)
+    val infeasible = "This problem is infeasible\n"
+    val solnfound  = "Value of objective function: "
+    val unbounded = "This problem is unbounded\n"
+
+    fun isFeasible output =
+          if output=infeasible then false
+          else if output=unbounded then true
+          else if String.isPrefix solnfound output then true
+          else (print "Warning: unexpected response from lp_solve:\n";
+                print output; false)
+
+    (* Interpret lp_solve's output, and turn it into an integer
+       if there is a bound on the value of the objective function,
+       or NONE otherwise. *)
+    fun getBound input =
+          let val output = lp_solve input
+              val (_,suf) = Substring.position solnfound (Substring.all output)
+          in
+              if output = unbounded
+              then NONE
+              else if (Substring.size suf) <= (size solnfound)
+              then (print "Error: unexpected response from lp_solve:\n";
+                    print output; raise Err)
+              else let val rest = Substring.slice (suf, size(solnfound), NONE)
+                       val (s,_) = Substring.position "\n" rest
+                   in  case (Int.fromString (Substring.string s)) of
+                           SOME(i) => SOME(i)
+                         | NONE => (print ("Error: unexpected response "
+                                           ^"from lp_solve:\n");
+                                    print output; raise Err)
+                   end
+          end
+
+
+    (* We already found that the "query constraint" q is inconsistent with
+       the rest of the system; so find the ranges of the terms involved in
+       it, and call the error function. *)
+    fun callErrorfn (q, T(E(xll,xlc),E(xhl,xhc)),
+                     T(E(yll,ylc),E(yhl,yhc)), errfn) =
+          let val rest = ";\n"^(!curConstraints)^(!curInts)
+              fun optAdd a NONE      = NONE
+                | optAdd a (SOME(b)) = SOME(a+b)
+              fun maxAdd a b = case (optAdd a b) of
+                               NONE => NONE
+                             | SOME(c) => if c>=100000 then NONE else SOME(c)
+              val xlow = optAdd xlc (getBound ("max: "^(cvlistToStr xll)^rest))
+              val xupp = maxAdd xhc (getBound ("min: "^(cvlistToStr xhl)^rest))
+              val ylow = optAdd ylc (getBound ("max: "^(cvlistToStr yll)^rest))
+              val yupp = maxAdd yhc (getBound ("min: "^(cvlistToStr yhl)^rest))
+          in  errfn ((xlow,xupp), (ylow,yupp))
+          end handle _ => (print "callErrorfn failed.\n"; raise Err)
+
+    (* Figure out which of the "query constraints" are inconsistent with
+       the remainder of the constraint system. *)
+    (* FIX: more efficient to use binary search (rather than linear search). *)
+    fun tryQueries [] = ()
+      | tryQueries ((q,x,y,e)::xs) =
+          let val input = "max: L0;\n" ^ q ^ (!curConstraints) ^ (!curInts)
+          in
+              if (isFeasible (lp_solve input))=false
+              then callErrorfn (q,x,y,e) else ();
+              tryQueries xs
+          end
+
+    (* Solve the constraint system, handling "query constraints" too. *)
+    fun solve () =
+          let val some = "max: L0;\n" ^ (!curConstraints) ^ (!curInts)
+              val all = "max: L0;\n" ^ (concat (map #1 (!curQueries)))
+                         ^ (!curConstraints) ^ (!curInts)
+              val _ = print ("Debug: input = \n"^all)
+              val allOut = lp_solve all
+              val _ = print ("Debug: output = \n"^allOut)
+          in
+              (* Optimistically hope all constraints are feasible.
+                 If so, we're done.  Otherwise, figure out which of
+                 the "query constraints" are violated. *)
+              if (isFeasible allOut)=false
+              then (print "Potential vulnerabilities detected, analyzing...\n";
+                    if (isFeasible (lp_solve some))=false
+                    then (print "Error: base constraint system infeasible!?\n";
+                          raise Err)
+                    else tryQueries (!curQueries))
+              else print "No vulnerabilities detected.\n"
+          end
+
+    val op = = eqTerms
+    val op + = addTerms
+    val op - = subTerms
+    val op * = mulTerms
+    val op >= = termGe
+  end
+@
+
+
+1.9
+log
+@Now handles sprintf(), snprintf().
+Fixes to Constraint.min.
+Now strings are of length >= 1.
+Various bugfixes.
+@
+text
+@d259 1
+a259 1
+              (* val _ = print ("Debug: input = \n"^all) *)
+d261 1
+a261 1
+              (* val _ = print ("Debug: output = \n"^allOut) *)
+@
+
+
+1.8
+log
+@Bugfixes.  Now examples/{rlogin,getenv}.c work.
+@
+text
+@d26 1
+a26 1
+       means 5*l0 + h3 - 1. *)
+d37 2
+a38 2
+    fun varToStr (LoVar(i) )= "l"^(Int.toString i)
+      | varToStr (HiVar(i)) = "h"^(Int.toString i)
+d142 1
+a142 1
+    fun getFreshIntLabel () =
+d144 1
+d146 3
+a148 2
+              curInts := (!curInts) ^ "int i"^(Int.toString lbl)^";\n";
+              lbl
+d152 1
+a152 1
+              val tlbl = getFreshIntLabel ()
+d165 6
+a170 5
+               minStr (eqnToStr xl, eqnToStr yl, eqnToStr zl,
+                       varToStr (LoVar(tlbl)));
+               minStr (eqnToStr xh, eqnToStr yh, eqnToStr zh,
+                       varToStr (HiVar(tlbl)));
+              T(xl, yl)
+d194 7
+d232 3
+d236 1
+a236 1
+              val xupp = optAdd xhc (getBound ("min: "^(cvlistToStr xhl)^rest))
+d238 1
+a238 1
+              val yupp = optAdd yhc (getBound ("min: "^(cvlistToStr yhl)^rest))
+d244 1
+d247 1
+a247 1
+          let val input = "max: l0;\n" ^ q ^ (!curConstraints) ^ (!curInts)
+d249 1
+a249 1
+              if (lp_solve input) = infeasible
+d254 1
+d256 2
+a257 2
+          let val some = "max: l0;\n" ^ (!curConstraints) ^ (!curInts)
+              val all = "max: l0;\n" ^ (concat (map #1 (!curQueries)))
+d259 3
+d266 1
+a266 3
+              (* FIX: should do better error detection *)
+              (* print ("Debug: input = \n"^all); *)
+              if (lp_solve all) = infeasible
+d268 1
+a268 1
+                    if (lp_solve some)=infeasible
+@
+
+
+1.7
+log
+@Lots of stuff.  New str*() functions modeled.  Now detect which
+variables the overrun is in, and how bad the overrun might be.
+Lots of bugfixes.  Probably other stuff which I'm forgetting
+right now.
+@
+text
+@d64 1
+a64 1
+    fun top () = raise Err
+@
+
+
+1.6
+log
+@Yah, we have a working buffer overflow detector.
+@
+text
+@d1 12
+d21 1
+d32 1
+a32 1
+    type query = (string * term * term * (range * range -> unit))
+d45 7
+a51 2
+          (cvlistToStr vlist)
+          ^ (if const=0 then "" else " + "^(myIntStr const))
+d54 8
+a61 2
+    fun constrain s = (curConstraints := ((!curConstraints)^s); ())
+    fun query x = (curQueries := x::(!curQueries); ())
+d66 5
+a70 1
+    fun reset () = (curLabel := 0; curConstraints := ""; curQueries := [])
+d91 1
+d142 31
+d175 3
+a177 1
+          let val p = Unix.execute("/tmp/lp_solve_2.3/lp_solve", []);
+d219 1
+a219 1
+          let val rest = ";\n"^(!curConstraints)
+d233 6
+a238 3
+          (if (lp_solve ("max: l0;\n" ^ (!curConstraints) ^ q)) = infeasible
+           then callErrorfn (q,x,y,e) else ();
+           tryQueries xs)
+d241 3
+a243 2
+          let val some = "max: l0;\n" ^ (!curConstraints)
+              val all = some ^ (concat (map #1 (!curQueries)))
+d248 2
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@a8 1
+    val curQueries = ref [] : (string * string) list ref
+d18 6
+d26 5
+d32 2
+a33 5
+          let fun listToStr [] = Int.toString const
+                | listToStr ({coeff,var}::xs) =
+                    (Int.toString coeff)^"*"^(varToStr var)^" + "^(listToStr xs)
+          in  listToStr vlist
+          end
+d101 2
+a102 2
+    fun queryge (T(xl,xh),T(yl,yh),errormsg) =
+          query (((eqnToStr xl)^" >= "^(eqnToStr yh)^";\n"),errormsg)
+d124 51
+a177 2
+              val resAll = lp_solve all
+              val infeas = "This problem is infeasible\n"
+d179 10
+a188 9
+              if resAll = infeas
+                then let fun tryQueries [] = ()
+                           | tryQueries ((q,e)::xs) =
+                               (if (lp_solve (some ^ q)) = infeas
+                                then print (e^".\n") else ();
+                                tryQueries xs)
+                     in  tryQueries (!curQueries)
+                     end
+                else print "No potential problems detected.\n"
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+    exception NotImpl
+d11 17
+a27 11
+    (* ("x+5","7") represents a range bounded below by x+5 and above by 7 *)
+    datatype term = T of string * string
+    (* FIX: this should become
+         datatype var = LoVar(int) | HiVar(int) (* unique label *)
+         type eqn = {vars:{mul:int, var:var} list, const:int}
+         datatype term = T of eqn * eqn (* low, hi *)
+       so that
+         T({vars=[{mul=5,var=LoVar(0)},{mul=1,var=HiVar(3)}],const=-1},
+           {vars=[], const=5})
+       represents the range bounded below by 5*l0 + h3 - 1 and above by 5.
+     *)
+d32 47
+a78 13
+    fun op + (T(xl,xh),T(yl,yh)) = T(xl^" + "^yl, xh^" + "^yh)
+    fun op - (T(xl,xh),T(yl,yh)) = T(xl^" - "^yh, xh^" - "^yl)
+    (* FIX: not quite right, what if one of the args is negative!? *)
+    fun op * (T(xl,xh),T(yl,yh)) =
+          if yl = yh then T(yl^" * "^xl, yl^" * "^xh)
+          else if xl = xh then T(xl^" * "^yl, xl^" * "^yh)
+          else raise NotImpl
+    fun op / _ = raise NotImpl
+    fun negate (T(xl,xh)) = raise NotImpl
+    fun union _ = raise NotImpl
+    fun intersect _ = raise NotImpl
+    fun real_equals (T(xl,xh),T(yl,yh)) =
+          constrain (xl^" = "^yl^";\n"^xh^" = "^yh^";\n")
+d80 13
+a92 3
+          constrain (xl^" >= "^yl^";\n"^xh^" <= "^yh^";\n")
+    fun op >= (T(xl,xh),T(yl,yh)) =
+          constrain (xl^" >= "^yh^";\n")
+d95 1
+a95 1
+          query ((xl^" >= "^yh^";\n"),errormsg)
+d98 7
+a104 10
+          let val l = (Int.toString (getFreshLabel()))
+          in  constrain ("l"^l^" <= "^"h"^l^";\n");
+              T("l"^l, "h"^l)
+          end
+    val globalZero = T("0","0")
+    fun constantTerm i = T(Int.toString i,Int.toString i)
+    fun top () = raise NotImpl
+
+    fun reset () = (curLabel := 0; curConstraints := ""; curQueries := [])
+
+a105 1
+    fun toString (T(xl,xh)) = ("range ["^xl^", "^xh^"]")
+d134 5
+a138 1
+    val op = = real_equals
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d72 3
+a74 2
+          let val all = !curConstraints ^ (concat (map #1 (!curQueries)))
+              val resAll = lp_solve ("max: l0;\n" ^ all)
+d77 9
+a85 4
+              print ("Debug: all constraints:\n"^all^"Debug: result:\n"^resAll);
+              print ("Debug: size(resAll)="^(Int.toString (size resAll))^
+                     ", size(...n)="^(Int.toString (size infeas))^"\n");
+              print (if resAll = infeas then "Infeasible\n" else "Feasible\n")
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d8 2
+d23 2
+d37 2
+a38 2
+    fun op = (T(xl,xh),T(yl,yh)) =
+          print (xl^" = "^yl^";\n"^xh^" = "^yh^";\n")
+d40 1
+a40 1
+          print (xl^" >= "^yl^";\n"^xh^" <= "^yh^";\n")
+d42 4
+a45 1
+          print (xl^" >= "^yh^";\n")
+d49 1
+a49 1
+          in  print ("l"^l^" <= "^"h"^l^";\n");
+d56 1
+a56 1
+    fun reset () = curLabel := 0
+d60 23
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@a8 2
+    datatype operator = Plus | Minus | Myl | Div | Union | Intersect
+
+d11 11
+d33 4
+a36 2
+    fun op = (T(xl,xh),T(yl,yh)) = print (xl^" = "^yl^"\n"^xh^" = "^yh^"\n")
+    fun subset (T(xl,xh),T(yl,yh)) = print (xl^" >= "^yl^"\n"^xh^" <= "^yh^"\n")
+d38 1
+a38 1
+          print (xl^" >= "^yl^"\n"^xh^" >= "^yh^"\n")
+d42 2
+a43 1
+          in  T("l"^l, "h"^l)
+@

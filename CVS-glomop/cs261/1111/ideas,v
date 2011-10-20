@@ -1,0 +1,240 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	98.11.11.22.05.50;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.11.22.02.18;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.11.21.27.34;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.11.21.14.08;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@-- System, protocol, implementation
+-- System
+   -- Key distribution
+      -- Centralized trusted authentication server AS (aka KDC)
+      -- You (client C) share a password with AS
+      -- Server S shares a key with AS
+      -- AS helps you two establish a session key, so you can then talk
+         securely (with authentication, plus optional session encryption)
+	 -- Note that it shows its age here; today, if you designed a
+	    service without default session encryption, you'd better have
+	    a good reason...
+   -- Two levels: AS + TGS (ticket granting server)
+      -- Why?  (So only TGS needs to know about the list of all servers;
+         a level of indirection; and for key management -- you get a master
+	 ticket which lets you get access to more tickets for specific servers)
+   -- Single point of failure
+      -- How do you fix it?  (Replication)
+         -- What about consistency?  (Stateless)
+   -- Timeouts
+      -- Ticket only good for (say) 12 hours
+      -- Limits impact of a potential host compromise
+   -- Revocation
+      -- Easy: just go disable the account at the AS (and potentially TGS)
+      -- If the user has an outstanding ticket, you may have to wait 12 hours;
+         otherwise, that's it
+   -- So, what's in the TCB?  (AS, TGS, timeserver, end hosts)
+   -- Cross-realm issues
+      -- Realm = set of hosts under one AS/TGS
+      -- How do you decide which hosts to put in which realms?
+         (By administrative domain, usually, because all clients + servers
+	 have to trust the AS+TGS)
+      -- But then what if you want to connect to a host in another realm?
+         -- Can ensure that all realm-pairs share a set of keys (K4), and
+	    set up "roaming agreements"; but this has n^2 scaling
+	 -- K5: multi-hop authentication, + hierarchical structure on realms.
+	    Disadvantages?  (Global trust in the root, inflexibility of
+	    hierarchical structure, transitive trust.  This one sucks:
+	    it has all the disadvantages of the worst of hierarchical and
+	    peer-to-peer models, and none of the advantages.  Yuck.)
+   -- Delegation
+   -- Threat model
+      -- What can the AS+TGS do if they are compromised for a few days?
+         (Defeat authentication for those few days; decrypt all past traffic
+	 (and possibly future traffic, if keys aren't changed))
+      -- But that sucks!  So why did they use a single trusted central
+         server, anyway?  (The n^2 scaling problem; public-key stuff not
+	 really mature yet; revocation; because authentication, not
+	 confidentiality, was primary original focus; and because it
+	 was designed for scenarios where all hosts are in the same
+	 administrative domain and thus have to trust some central set
+	 of machines anyway)
+      -- Kerberos is missing forward secrecy and backward secrecy...
+  -- Comparison to public-key crypto
+     -- Pubkey allows for same O(n) scaling without global trust in
+        the server -- except that it is trusted not to impersonate folks,
+	but otherwise it can't read encrypted traffic.  Why is the
+	distinction important?  (Maybe there's not much difference if
+	the server is malicious, but there's a big difference if the
+	server is temporarily hacked.)
+     -- However, revocation is much harder with pubkey stuff
+     -- This suggests a rule of thumb:
+        (cost of setup) + (cost of revocation) = constant
+-- Protocol
+   -- N = nonce (random challenge)
+   -- T_{C<->S} = (K_{C<->S}, C, S, ip address, timestamp, lifetime, N)
+   -- The basic protocol:
+      1. C->AS: C, S, expiration date, N
+      2. AS->C: {T_{C<->S}}_{K_{C<->AS}}, {T_{C<->S}}_{K_{S<->AS}}
+      3. C->S:  {C,S,timestamp}_{K_{C<->S}}, {T_{C<->S}}_{K_{S<->AS}}
+      4. S->C:  {C,S,timestamp+1}_{K_{C<->S}} (optional)
+      At the end, S and C share a good key k.  S knows it is speaking
+      to C.  If they did msg 4, C knows it is talking to S.
+   -- The complete protocol:
+      A. Do 1--4 above to get a key for C<->TGS from AS.
+      B. Do 1--4 above to get a key for C<->S from TGS.
+         (Note: can piggyback A3 on B1 and A4 on B2.)
+   -- T_{C<->TGS} is known as a TGT (ticket granting ticket).
+   -- Note: K_{C<->AS} is your password.
+   -- {C,S,timestamp}_{K_{C<->S}} also called an "authenticator".
+   -- If you leave out "authenticator", what breaks?  (Replays.
+   -- If you leave out the name of the client in the ticket, what breaks?
+      (Client can request a ticket from TGS under one name C, then can
+      give it to server under another name C'.)
+   -- If you leave out the name of the server in the ticket, what breaks?
+      (Answer: man in the middle attack, where client asks TGS for ticket
+      for server S, but M modifies changes the S to a S', and client gets
+      back a ticket for S'; then when client sends the ticket to S, M
+      redirects it to S'; and the client thinks he is speaking to S even
+      though he is really talking to S'.)
+   -- If a key K_{C<->S} ever gets compromised, what happens?
+      (You can replay it, if you managed to the handshake messages;
+      and you can create new authenticators, because you know the key
+      they are encrypted under.)
+-- Implementation
+   -- Servers check IP address, so it's not enough to break Kerberos,
+      you also have to do IP spoofing.  Seems like a useful property
+      (and ensures that Kerberos can't make things any *worse*, no matter
+      what happens).
+      -- But bad interactions with multi-homing.
+   -- Gets MACs wrong.  Uses encrypted checksum, a big no-no we saw in
+      homework #1.  And guess what -- there are attacks.
+   -- Dictionary attacks.  If you can guess K_{C<->AS} (e.g. via a
+      wordlist), you can test your guesses offline and eliminate wrong ones.
+      Don't even need to intercept an encrypted {T_{C<->TGS}}_{K_{C<->AS}},
+      why?  (Can just ask the AS nicely for it.)
+      -- But, you need to know a username and realm name.
+         However, there was a bug ("buffer underflow") that discloses
+	 usernames: you send it a malformed packet, and it sends back
+	 a packet containing an error message.  However, the packet
+	 contains left-over data from some unsanitized data structures;
+	 and that contains the name of the last user to request a TGT
+	 as well as the realm.
+   -- Time stamp woes.
+      -- If you can hack NTP, what breaks?
+         (Can replay old authenticators, if can move S's clock back.
+	 If can move AS's and TGS's and C's clock forward, also can do
+	 attacks.)
+      -- Replays.  Endpoints usually accept a clock skew of up to 5 minutes;
+         but this has security implications.  Original paper suggested that
+	 there was no chance of replay within 5 minutes -- clearly bogus.
+	 (Why?) What's the right thing to do?  (Store a copy of all the
+	 "authenticators" you got in the past 5 minutes, check that list for
+	 replays, time out entries after 5 minutes.  This was actually
+	 suggested but apparently not implemented.)
+	 But this "windowing" idea is a pretty general technique;
+	 you'll see it again in e.g. IP security.
+      -- Not easy to do secure network time service...
+      -- Simple fix?  (Challenge-response.)  But challenge-response involves
+         one more roundtrip; timestamps were used for performance fine-tuning.
+	 This is a pretty general trade-off.  In general, I think the
+	 tendency today is to go for the challenge-response protocols,
+	 since then you don't need to trust any timeservers.
+   -- Chosen-plaintext attacks.
+       -- Same key used for both authentication and message encryption,
+          and for multiple sessions; if you can get a message of your
+	  choosing encrypted, you can spoof future sessions.
+   -- How would you do this on a PDA?  (Split proxy.)
+      How do you implement the split proxy?  (Charon.)
+      -- K_{C<->AS} (your password) and K_{C<->TGS} live on the PDA;
+         session keys and service tickets T_{C<->S} live on the proxy.
+      -- How does this help?  (Less trust in proxy.)
+         How about giving K_{C<->TGS} to the proxy?  (More trust in proxy.)
+	 The way it currently is, proxy just has to be at least as secure
+	 as the server S you're using.
+      -- Protocol:
+         1. Client gets a TGT from AS; the proxy just copies bits.
+         2. Client gets a secure connection with proxy, by making proxy
+            a kerberized service.  Remaining messages go over this link.
+         3. To access a server S, client talks to the TGS, gets a ticket
+	    and a session key, then gives the session key and ticket
+	    T_{C<->S} to the proxy (over the secure link established in 2),
+	    and the proxy can access the service on the client's behalf.
+   -- Key generation: used bad randomness (getpid(), time of day).
+      Totally breakable.  A failure of both software engineering and
+      social processes...
+-- Summary
+   -- K5 will be (is?) in NT.  Is used in Wall Street.  Etc.
+   -- Sort of the ancient dinosaur we all view with respect, awe, and
+      a little bit of fear.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d80 14
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d26 1
+d52 1
+d65 1
+a65 1
+   -- T_{C<->S} = (K_{C<->S}, C, S, expiration date, N)
+d69 2
+a70 2
+      3. C->S:  {timestamp, k}_{K_{C<->S}}, {T_{C<->S}}_{K_{S<->AS}}
+      4. S->C:  {timestamp+1}_{K_{C<->S}} (optional)
+d79 1
+d85 1
+d88 35
+d139 7
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+      -- Centralized trusted authentication server AS
+d75 2
+d84 16
+@

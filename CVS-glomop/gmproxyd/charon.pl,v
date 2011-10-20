@@ -1,0 +1,299 @@
+head	1.2;
+access;
+symbols
+	current:1.2
+	prewink:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.08.23.19.35.52;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.07.01.04.00.41;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@# $Id: charon.pl,v 1.2 96/08/22 14:43:41 glomop Exp $
+#
+#  charon.pl: Charon functions for supporting AUTH_KERB connections
+#  Needs to be commented and cleaned up.
+#
+
+
+sub kerbauth {
+    my $globals = shift;
+    my $mon = shift;
+    my $princ = shift;
+    my $life = shift;
+    my $key;
+    my $arg = "foo";                        # dummy string arg
+    my $decrypt_proc = "auth::receive_auth";
+    my $auth_with_bogus_reqid;
+    my $rpkt;
+
+    # step 1: request ticket for PDA's principal.  Ticket will arrive encrypted
+    # with principal's key.  Send the ticket to PDA, which will decrypt it and
+    # send back a cipherblock which has a bogus session key but is otherwise
+    # correct, so the krb_get_in_tkt call should not complain.  PDA also sends
+    # back authenticator, which we grab now for use later when we request an
+    # rcmd ticket.
+
+    my $res = &KerberosIV::krb_get_in_tkt($princ, undef, $auth::KRB_realm, "krbtgt",
+                                          $auth::KRB_realm, $life, $decrypt_proc, $arg);
+
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+    &Mon::status("Got initial ticket successfully");
+    &Mon::show_credentials();
+
+    # Obtain an rcmd ticket for the proxy.  To do this, begin with krb_mk_req to
+    # construct an authentication packet for the TGT we have.  The req_id in
+    # the authenticator (confusingly, the thing that Kerberos literature calls
+    # "authenticator") will be bogus because it will be encrypted with the
+    # bogus s-key from above.
+
+    ($res, $auth_with_bogus_reqid) 
+        = &KerberosIV::krb_mk_req("krbtgt", $auth::KRB_realm, $auth::KRB_realm, 0);
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+    # Overwrite the bogus reqid with the one received from PDA in the
+    # last mesg. 
+    # WARN::this requires us to know the internals of the ticket structure!
+    # Here it is, from krb.h:
+    #
+    # struct ktext {
+    #   int     length;		/* Length of the text */
+    #   unsigned char dat[MAX_KTXT_LEN];	/* The data itself */
+    #   BIT32 mbz;		/* zero to catch runaway strings */
+    # };
+    #
+    # We need to overwrite the dat[] part with the reqid we have, which
+    # should be the same length since the principal, instance and realm are the
+    # same.  What saves our butt is that the (bogus) reqid is the last thing
+    # (before the four bytes of zero) in
+    # the structure returned by krb_mk_req, so we can pack it in at the end.
+        
+    #open(F,">/tmp/reqid"); print F $auth_with_bogus_reqid; close F;
+    #warn "Overwriting bogus auth with: " . sprintf("%02x " x length($auth::KRB_auth),
+    # unpack("C*",$auth::KRB_auth));
+    my ($orig_len,$more_stuff,$rpkt,@@rpkt);
+    $orig_len = unpack("L", $auth_with_bogus_reqid);
+
+    # determine offset into the auth_with_bogus_reqid where we should overwrite
+    # the auth we have.  We do this by observing that the (bogus) reqid is the
+    # last thing at the end of this structure.
+    # Therefore the desired offset is 4+$orig_len-length($auth::KRB_auth)
+    # (the initial 4 skips over the packet's length bytes).
+
+    my $offset = 4 + $orig_len - length($auth::KRB_auth);
+    &util::debug("charon", "Writing good req_id at offset $offset");
+    substr($auth_with_bogus_reqid, $offset, length($auth::KRB_auth))
+       = $auth::KRB_auth;
+    #open(F,">/tmp/reqid_2"); print F $auth_with_bogus_reqid; close F;
+
+    # OK, now we have an authenticator (TGT+reqid) ALMOST ready to send to the KDC.
+    # Need to add on ws's clock time (4 bytes), tkt lifetime in 5-min intervals
+    # (1 byte), service, sinstance.
+    # WARN::This is copied from get_ad_tkt.
+
+    $more_stuff =  pack("C4Ca*xa*x", 
+                        0, 0, 0, 0, $life,
+                        $globals->{ProxyService}, $globals->{ProxyInstName});
+    # Place the extra stuff in the authenticator
+    substr($auth_with_bogus_reqid, 4+$orig_len, length($more_stuff)) = $more_stuff;
+
+    # Record new length of the authenticator and store in first 4 bytes
+    $orig_len += length($more_stuff);
+    substr($auth_with_bogus_reqid, 0, 4) = pack("L", $orig_len);
+
+    # Finally, we're ready to send to the KDC, to get our 'rcmd' ticket.
+
+    #open(F,">/tmp/reqid_3"); print F $auth_with_bogus_reqid; close F;
+
+    &Mon::status("Sending ticket request for '$globals->{ProxyService}' ".
+                 "to KDC");
+    ($res,$rpkt) = &KerberosIV::send_to_kdc($auth_with_bogus_reqid, $auth::KRB_realm);
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+
+    # Do some standard checks that krb_get_ad_tkt does with the returned packet
+    # from KDC.
+
+    @@rpkt = &Kutil::decomp_rpkt($rpkt);
+    
+    &util::debug("charon", "Wrong Kerberos version $rpkt[0] (should be 4)")
+        unless ($rpkt[0] == 4);
+
+    # BUG::must do some checks here from get_ad_tkt.c l.165
+
+    if (($rpkt[1] >> 1) == (11 >> 1)) {
+        # error!
+        &util::debug("charon", "TGS error: packet written");
+        &Mon::status("TGS Error");
+        #open(F,">/tmp/pkt"); print F $rpkt; close F;
+        die;
+    }
+
+    # extract cipherblock from returned object (rpkt)
+
+    my $cipherblock = &KerberosIV::pkt_cipher($rpkt);
+    if ($res = length($cipherblock) % 8) {
+        return (undef, "Cipherblock length $res not multiple of 8");
+    }
+    # send cipherblock to PDA (hsk_kerb_4)
+
+    #warn "Sending cipherblock to PDA. First/last 4 bytes: " .
+    # sprintf("%02x " x 4, substr($cipherblock,0,4)) . "..." .
+    # sprintf("%02x " x 4, substr($cipherblock, -4));
+
+    &Msg::send_hsk_kerb_4(0,$cipherblock);
+
+    # PDA returns decrypted cipherblock with bogus s-key, as before
+
+    &Mon::status("(8) Sent TGT response to PDA, awaiting response");
+    eval { ($decrypted) = &Msg::receive_hsk_kerb_5 };
+    if ($@@) {
+        return (0, "Reading decrypted cipherblock: $@@");
+    }
+
+    &Mon::status("Decrypting ticket with '$globals->{ProxyService}' svc key");
+    #warn "Decrypted cipherblock server name,realm,inst = ".
+    #substr($decrypted, 8, 60);
+
+    # check the decrypted info in the message to make sure it's valid.
+
+    # pull the sessionkey out of the ticket, by decrypting the ticket with the
+    # rcmd credentials stored in krb.srvtab.  (Must be running as root!)
+
+    my $key;
+    ($res,$key)= &KerberosIV::read_service_key($globals->{ProxyService},
+                                               $globals->{ProxyInstName},
+                                               $auth::KRB_realm, 0,
+                                               $globals->{SvcKeyFile});
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+    if ($res = length($key) % 8) {
+        return (undef,
+                "$globals->{ProxyService} session key modulus $res not multiple of 8");
+    }
+    # Decrypt the ticket with the rcmd credentials, and extract the session key
+    # from it.
+
+    my $ksch = &KerberosIV::des_key_sched($key);
+
+    # WARN::the following relies on the structure of ciphertext block
+
+    my ($sname,$sinst,$srealm,$life,$kvno,$tktlen,$tkt,$ts)
+        = ($1,$2,$3,$4,$5,$6,$7,$8)
+            if $decrypted =~
+                /\A........([^\0]+)\0([^\0]+)\0([^\0]+)\0(.)(.)(.)(.+)(....)\Z/s;
+    # two of these were unsigned chars; convert them to ints
+    $life = ord($life);
+    $kvno = ord($kvno);
+
+    #warn sprintf("life,kvno,tktlen = %d,%d,%d", ord($4),ord($5),ord($6));
+    #warn sprintf( "svc,inst,realm is $1,$2,$3, actual tktlen=%d", length($7));
+
+    # Got the ticket, now stuff it into a KTEXT structure to pass to decomp_ticket.
+
+    $tkt = &Kutil::make_ktext($tkt);
+    
+    my (@@tktstuff);
+    ($res,@@tktstuff) = (&KerberosIV::decomp_ticket($tkt,$key,$ksch));
+
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+
+    my ($flags,$pname,$pinstance,$prealm,$paddress,$skey,$life,$time_sec,
+        $sname,$sinst) = @@tktstuff;
+    
+    # Save ticket in ticket file.
+
+    &Mon::status("Saving ticket");
+    $res = &KerberosIV::save_credentials($sname, $sinst, $srealm, $skey,
+                                         $life, $kvno, $tkt, time);
+    if ($res != &KerberosIV::KSUCCESS) {
+        return (undef, &KerberosIV::krb_strerror($res));
+    }
+
+    # Display new credentials
+    &Mon::show_credentials();
+    # BUG::destroy all traces of keys before returning
+    return ($skey);
+}
+
+#
+#  This is the callback function that krb_get_in_tkt will call to get the TGT.
+#  This function sends the cipherblock to the pda, which decrypts it and
+#  returns a correct ticket that happens to have a bogus session key.
+#  It also grabs the authenticator and saves it for later.
+#
+
+sub receive_auth {
+    my ($user,$inst,$realm,$ciptext,$arg) = @@_;
+    # my $ciptext = $_[3];                    # ciphertext from tgs
+    my $decrypted;
+
+    &Mon::status("(4) Sending ciphertext for \[$user,$inst,$realm\] to PDA");
+    
+    &Msg::send_hsk_kerb_2(0, $ciptext);
+
+    # Expect a reply which is the decrypted cipherblock with bogus s-key
+
+    &Mon::status("(5) Receiving decrypted packet from PDA...");
+    
+    eval { ($decrypted, $auth::KRB_auth) = &Msg::receive_hsk_kerb_3 };
+    if ($@@) {                               # failed to receive msg correctly
+        &Mon::status("Error receiving hsk_kerb_3 message: $@@");
+        # die "Error receiving hsk_kerb_3 message: $@@";
+        return '0' x length($ciptext);
+    }
+    return $decrypted;
+}
+
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+1;
+@
+
+
+1.1
+log
+@Split the Charon stuff out into charon.pl.
+@
+text
+@d1 1
+d243 12
+@

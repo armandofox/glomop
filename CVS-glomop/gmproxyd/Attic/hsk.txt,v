@@ -1,0 +1,348 @@
+head	1.9;
+access;
+symbols
+	prewink:1.8
+	stable:1.8
+	release:1.5
+	current:1.5;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	96.08.23.18.24.14;	author gribble;	state dead;
+branches;
+next	1.8;
+
+1.8
+date	96.06.13.09.15.31;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.11.02.17.26;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.07.00.33.52;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.05.25.02.45.58;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.05.24.20.45.32;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.05.22.23.59.19;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.28.00.41.44;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.27.02.27.01;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@Moved to config directory.
+@
+text
+@// This file describes the wireline byte stream between the proxy and
+// GloMop using a crude BNF-like syntax.  "Receive" indicates a message
+// that the proxy can receive from GloMop but never sends.  Vice versa
+// "Send".  "Reply" implies that the message expects a particular kind of
+// reply, and failure to get the reply indicates an error.
+// 
+// WIRE LINE BYTESTREAM
+// 
+// All messages consist of:
+// 
+// byte := 0x00..0xff
+// bytepair := byte byte
+// i32 := byte byte byte byte   // 32 bit unsigned number in network order
+// i16 := byte byte             // 16 bit unsigned number in network order
+// str1 := byte byte*
+// str2 := i16 byte*
+// token := str1 | str2
+// flags := byte
+// encrypted_message := length flags token+
+// length := i16
+// clear_message := length flags token+
+// 
+// In English:  
+// An i32 (32-byte number) is 4 bytes in network order, to be interpreted signed or
+//   unsigned depending on the protocol being run.
+//  THe length byte is the total length of the message including flags byte.
+//  The flags byte indicates whether a message is encrypted or not, and
+// whether it is a "normal" message or an error message.
+
+// Some useful constants
+
+defconst ERR_STR := str1:"ER"
+defconst OK_STR := str1:"OK"
+defconst FLAG_MSG_ERROR :=  i16:0x1
+defconst FLAG_MSG_ENCRYPT := i16:0x2
+// other flags to be defined later
+
+// operation requests from GloMop to proxy:
+defconst OP_OPEN_CREEK := str1:"OC"
+defconst OP_CLOSE_CREEK := str1:"CC"
+defconst OP_SET_PREFS := str1:"PF"
+defconst OP_SET_TYPES := str1:"TY"
+defconst OP_OPEN_DOC := str1:"OD"
+defconst OP_CLOSE_DOC := str1:"CD"
+defconst OP_CHUNK := str1:"ch"
+defconst OP_GET_CHUNK := str1:"get"
+defconst OP_FAIL := str1:"FAIL"
+
+// The following conditions cause immediate hang-up:
+
+// 1. If the indicated number of bytes cannot be read by either party
+// 
+// 2. If a message cannot be completely read (ie some tokens could not be
+// read).  The number of tokens in each message is known
+// a priori because it is defined unambiguously in this file.
+// 
+// 3. After decryption, a message is garbage; or without decryption, the
+// message is garbage.
+// 
+// 4. Reliable transport is assumed, therefore partial messages will never
+// be received except in case of a line drop.
+// 
+// INITIAL HANDSHAKE
+
+// Must specify AUTH_NONE or AUTH_KERB for now.  AUTH_KERB implies doing
+// the 3-way authentication.
+
+// Handshake is username, device id, auth type, optional additional arg(s)
+// auth_type: str1, must be "AUTH_NONE" or "AUTH_KERB"
+// auth_args: str2, any args needed by authentication protocol. Currently not used.
+
+// End of Authentication cycle is marked by one of auth_error or auth_ok
+
+defmsg <> auth_error := $ERR_STR str1:reason
+defmsg <handshake := str1:username str1:devid str1:authtype str2:authargs i16:version
+
+// Multiple-step Charon handshake.  First step is handshake msg above
+// with authtype = str1:"AUTH_KERB" and authargs is a str2 consisting of
+// the Kerberos realm immediately followed by a single byte indicating
+// the desired lifetime of the TGT.
+// The version number is a major and minor version number, e.g. 0x0102 is 
+// version 1.2. 
+// At this point, proxy requests Kerberos ticket for PDA's principal.
+// Ticket arrives encrypted with principal's key, then relayed to PDA:
+
+defmsg >hsk_kerb_2 := str2:krb_ticket
+
+// PDA decrypts ticket using principal's key, extracts the
+// ticket-granting ticket (still encrypted in TGT key), and constructs
+// an authenticator, then sends all of that back to proxy:
+
+defmsg <hsk_kerb_3  := str2:tgt str2:krbauth
+
+// Proxy receives these and attempts to use them to obtain a ticket for
+// the proxy (rcmd) on the principal's behalf.  TGT returns a ticket
+// encrypted with proxy's key and a conversation key between the proxy rcmd
+// and principal, all encrypted with the conversation key between the
+// principal and TGS.  This message is forwarded verbatim to PDA.
+
+defmsg >hsk_kerb_4  := str2:opaque_ticket
+
+// PDA receives message, extracts conversation key and stores it away,
+// and extracts ticket for proxy rcmd (still encrypted in proxy's key).
+// The proxy rcmd ticket is transmitted back to the proxy:
+
+defmsg <hsk_kerb_5 := str2:proxy_tkt
+
+// Proxy verifies that ticket is valid and extracts the
+// conversation key from it.  If all is well, the proxy returns auth_ok
+// message to the PDA.
+
+defmsg >auth_ok := $OK_STR str1:info
+
+// opening a creek.  in most cases authparams is the sequence number of this message
+// (used as a nonce).
+
+defmsg <open_creek >open_ok := $OP_OPEN_CREEK str1:serv_or_port str1:authtype str2:authparams
+defmsg >open_ok := $OK_STR i32:creek_id
+
+// closing a creek
+
+defmsg <>close_creek := $OP_CLOSE_CREEK i32:creekid
+
+// opening/closing a document:
+
+defmsg <open_doc := $OP_OPEN_DOC str2:locator i16:max i32:id
+defmsg <close_doc := $OP_CLOSE_DOC i32:id
+
+// transmitting a chunk
+
+defmsg <getchunk := $OP_GET_CHUNK i32:doc_id i32:chunk_index
+defmsg <>chunk := $OP_CHUNK i32:doc_id i32:chunk_index str2:chunk_data
+
+// operation failed
+
+defmsg >op_failed := $OP_FAIL i32:id  str2:error
+
+// type registration:
+
+defmsg <set_types := $OP_SET_TYPES i16:numtypes str2:typelist
+
+// set preferences:
+// Give the htype for which preferences are being set, and
+// a str2 of the form "name=value:weight,name=value:weight, ..."
+
+defmsg <set_prefs := $OP_SET_PREFS str1:htype str2:preflist
+@
+
+
+1.8
+log
+@Defined a simple protocol in hsk.txt for setting session-level
+preferences for an htype, and implemented the message handler for it
+which sends the parsed prefs info to the set_prefs routine of the
+appropriate htype module.
+@
+text
+@@
+
+
+1.7
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.
+@
+text
+@d41 1
+d142 3
+d146 1
+@
+
+
+1.6
+log
+@Added utilities file (with debugging stuff and generalization of
+instance-variable access for various classes), and segment manager
+(provides generic segmentation services).  'tm' submodule will contain
+high-level document type (htype) "chunkers".  added close_doc message to
+hsk.txt.
+@
+text
+@d130 2
+a131 2
+defmsg <getchunk := $OP_GET_CHUNK i32:id i32:chunk_index
+defmsg <>chunk := $OP_CHUNK i32:id i32:chunk_index str2:chunk_data
+@
+
+
+1.5
+log
+@no longer a need for http transport mgr; using LWP perl module.
+completed multilanguage support for msgdef generation.  added messages
+for doc open and chunk xmission to hsk.txt.  added monitor calls for
+showing open documents.  modified testdrv to use as generic send/receive
+of any messags defined in hsk.txt.  began working on doc.pl document
+abstraction.
+@
+text
+@d43 1
+d123 1
+a123 1
+// opening a document:
+d126 1
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@a110 1
+defmsg >auth_err := $ERR_STR str1:info
+@
+
+
+1.3
+log
+@moved some globals into config file.  first cut at mainloop.  created
+directories for front-end servers, transport managers, and doc type
+segmenters.  split out message-parsing-code generation so that various
+language back-ends can be used, allowing message code to be generated
+automatically for clients in different languages; say 'perl5 msgdefs.pl
+<lang>' to do it.
+@
+text
+@d44 2
+d73 1
+a73 1
+defmsg <handshake := str1:username str1:devid str1:authtype str2:authargs
+d76 5
+a80 1
+// with authtype = str1:"AUTH_KERB" and authargs=str2:kerberos-realm.
+d123 4
+d129 6
+a134 1
+defmsg <>chunk := $OP_CHUNK i32:creek_id str2:chunk_data
+a139 3
+// opening a document:
+
+defmsg <open_doc >open_ok := $OP_OPEN_DOC str2:locator i16:max i16:id
+@
+
+
+1.2
+log
+@Kerberos handshake works.  Need to put in code to actually check fields
+of received packets, timestamps, etc., and remove debugging printf's.
+@
+text
+@a28 6
+//
+// length 0xffff for a str2, indicate that an uexpected message was
+// received and an immediate error should be thrown.  In practice, this
+// means that str1's can be <= 254 bytes and str2 <= 65534 bytes.  If
+// such an error occurs, both sides revert to "initial state" in
+// whatever protocol was being run.
+d30 1
+a30 2
+
+// SOme useful constants
+d73 1
+a73 1
+// Multiple-step kerb_auth handshake.  First step is handshake msg above
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d91 1
+a91 1
+defmsg <hsk_krb_3  := str2:tgt str2:krbauth
+d99 1
+a99 1
+defmsg >hsk_krb_4  := str2:opaque_ticket
+d105 1
+a105 1
+defmsg <hsk_krb_5 := str2:proxy_tkt
+@

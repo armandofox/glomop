@@ -1,0 +1,149 @@
+Data Stream Definition for GloMop proxy-client communication
+Proxy version 0.0p (Posix/Perl)
+Client version 0.0m (Magic Cap) and 0.0j (Java)
+Authors: Armando Fox, David Gourley, Steven Gribble
+
+----------------------------------------------------------------------
+It may help to refer to gm_c_structs.h and gm_c_protos.h while reading
+this... 
+
+ASSUMPTIONS:
+- In all cases, notation such as #string# indicates that the delimiters
+  '#' can be any matched pair of characters that don't occur in the string
+  being delimited.
+- Each line sent to proxy ends in either a CR, a newline (ASCII 10), or
+  both.
+- Each line sent from proxy ends in ASCII 10.
+
+---------------------------------------------------------------------------
+Action: Open connection to proxy
+Client call: CConnectProxy
+Params: return-path (client name), id string (client's moniker)
+
+Description: Accepts connection from client, prepares to receive
+document requests
+
+Byte sequence: C #returnpath#idstring#
+
+---------------------------------------------------------------------------
+Action: Request new document connection
+Client call: CGetDoc
+Params: Doc locator, type list, max #chunks, request ID
+
+DOCUMENT LOCATOR: used for doc request.
+format is #path##proto#, where path i "inbox" and proto is "mail" for this
+app.  the #'s can be any matched pair of characters not occurring in the
+fields they enclose.
+
+CGetDoc: client should send:
+GET locator
+TYPES #type##type#...
+MAX max
+ID id
+END
+
+each line is terminated by newline.  locator is the DocLocator described
+above. each type is a list of acceptable types for the document; omit for
+now, since we're jut handling mail.  thresh and max describe the threshold
+and maximum chunk numbers, as described in the api document. (in the
+java/glomop/doc area, client_api.fm)
+
+id is a unique (on the client side) numeric id for the request, which is
+also returned to the caller immediately after these bytes are sent to the
+proxy.
+
+---------------------------------------------------------------------------
+Action: Request chunk from already-open document connection
+Client call: CGetChunk
+Params: Existing request ID, chunk index
+
+DOCUMENT CHUNK:
+
+the client side needs a method to listen for an incoming chunk, parse it,
+and package it into the appropriate DocChunk fields.
+
+for email, one chunk == one mesage.
+a proposed format:
+HERE reqid totalchunks thischunk
+NDOCS drtsize
+DRT entry
+DRT entry
+...more drt entries...
+DSIZE bytes
+...actual data...
+END
+
+reqid is the numeric id from before;
+totalchunks is the number of chunks in the whole document (==the number of
+msgs in the inbox);
+thischunk = the index number of this chunk in the sequence (if zero, this
+is the document table of contents, ie the "scan" summary of the inbox; see
+below);
+
+drtsize: a number giving length of document reference table for this chunk
+DRT: each entry of the drt (see below) on a separate line
+DSIZE:  number of data bytes to follow (excluding the newline ending this line)
+then the actual text, arbitrarily formatted
+and the string END to mark the end of the chunk.
+
+the Document table of contents for email is similar to the "scan" listing
+of mh.  it associates message summary lines with chunk numbers.  its format
+is the same as above for a generic chunk, but each line of the DATA listing
+will begin with <n> where n is a number corresponding to a chunk number.
+thus a line might look like:
+3: client API is a bust
+which means: "chunk 3 contains the message whose summary line is 'client
+API is a bust'".  the data in the table of contents is intended to be
+displayed, so the user can select messages to view, etc.
+
+DRT ENTRIES (used for MIME components in messages)
+
+[question: it would be nice if the user could click on some string in the
+actual message text that serves as a placeholer for the MIME component.
+or, at its option, the email app may want to start prefetching the
+components. any preferences?]
+
+a drt entry has this format, all on one line.  as with DocLocator, the #'s
+can be arbitrary pairs of identical characters that do not appear in the
+strings they delimit.  note that the description isn't delimited by these,
+but simply extends to the end of the line.
+
+#entrynum##path##proto##reqid##size#...description...\n
+
+entrynum is the entry number of this drt entry.  numbers can be assumed
+consecutive.  reqid is a request id *provided by the proxy* that should be
+used to get this document.  (it's not an error to ignore this, but the
+proxy will have prefetched and distilled the document and is waiting to
+send it when handed this request id.)
+
+size is the size in bytes of the original document.  eventually we will
+come up witha  way of representing various (possibly predicted) sizes,
+corresponding to degrees of distillation.  should we maybe have two sizes
+in the DRT entry, perhaps corresponding to the original version an some
+"default" distillation (thumbnail, etc.?)
+
+---------------------------------------------------------------------------
+Action: Request uplink of document
+Client call: CPutDoc
+Params: doclocator, type, num chunks, request ID
+
+PUT locator
+TYPES #type#
+MAX nchunks
+ID id
+END
+
+---------------------------------------------------------------------------
+Action: Request uplink of a document chunk
+
+Then for each chunk, including (optional) TOC:
+
+HERE reqid totalchunks thischunk
+NDOCS drtsize
+DRT entry
+DRT entry...  (as for GetChunk)
+DSIZE bytes
+...data...
+END
+
+All as for PutChunk.

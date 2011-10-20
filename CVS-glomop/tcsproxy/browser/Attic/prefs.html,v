@@ -1,0 +1,814 @@
+head	1.11;
+access;
+symbols
+	Yatin-final:1.10
+	Yatin:1.10.0.2
+	pre-yatin-merge:1.9
+	transend-beta2:1.8
+	fox-dev:1.8
+	transend-beta-reallylatest:1.1.2.6
+	browser-ng:1.2
+	transend-beta-latest:1.2
+	Aggregators:1.2
+	NoAggregators:1.2
+	iang:1.2.0.2
+	transend-beta:1.1.0.2;
+locks; strict;
+comment	@# @;
+
+
+1.11
+date	98.01.24.22.51.25;	author fox;	state dead;
+branches;
+next	1.10;
+
+1.10
+date	97.11.13.23.44.50;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.08.26.23.51.52;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.17.22.02.25;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.06.26.19.13.15;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.20.18.07.40;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.06.19.00.26.59;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.06.11.17.23.53;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.06.00.07.42;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.04.30.07.55.12;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.24.19.23.17;	author gribble;	state Exp;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.04.29.01.20.00;	author fox;	state Exp;
+branches;
+next	1.1.2.2;
+
+1.1.2.2
+date	97.04.29.17.45.26;	author gribble;	state Exp;
+branches;
+next	1.1.2.3;
+
+1.1.2.3
+date	97.04.29.17.47.35;	author gribble;	state Exp;
+branches;
+next	1.1.2.4;
+
+1.1.2.4
+date	97.05.16.08.39.47;	author achuang;	state Exp;
+branches;
+next	1.1.2.5;
+
+1.1.2.5
+date	97.05.16.09.48.46;	author achuang;	state Exp;
+branches;
+next	1.1.2.6;
+
+1.1.2.6
+date	97.05.27.03.52.05;	author achuang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.11
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@<HTML>
+<HEAD>
+<TITLE>TranSend Proxy Settings</TITLE>
+</HEAD>
+<BODY BGCOLOR=#FFFFFF TEXT=#000000>
+
+<img norefine align=left src="tlogo_mini.gif*^i1=1^" WIDTH=80 HEIGHT=81>
+<A HREF="help.html">
+	<IMG NOREFINE WIDTH="45" HEIGHT="25" SRC="help2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right>
+<A HREF="../about/index.html">
+	<IMG NOREFINE WIDTH="45" HEIGHT="25" SRC="about2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right><BR CLEAR=left>
+
+<FORM ACTION="/SetPrefs/" METHOD="GET">
+<TABLE WIDTH=100% BORDER=0 CELLPADDING=3 CELLSPACING=0 BGCOLOR=#FFFFFF>
+  <TR><TD WIDTH=100% ALIGN=center BGCOLOR=#000000>
+    <FONT SIZE=5 COLOR=#FFFFFF>
+    <STRONG>TranSend Proxy Settings</STRONG>
+    </FONT>
+  </TD></TR>
+</TABLE>
+
+<P>
+<CENTER>
+<i>&quot;Reload&quot; this page to get your current settings.</i>
+</CENTER>
+<P>
+
+<CENTER>
+<INPUT TYPE="Reset" VALUE="Reset to previous settings">
+<INPUT TYPE="Submit" VALUE="Submit preferences">
+</CENTER>
+
+
+<TABLE WIDTH=100% BORDER=1 CELLPADDING=5 CELLSPACING=1 BGCOLOR=#FFFFFF>
+
+<TR><TD WIDTH=130 ALIGN=center>
+  <TABLE BORDER=0 CELLPADDING=2 CELLSPACING=0>
+  <TR><TD ALIGN=center>
+    <INPUT TYPE="hidden" NAME="i1" VALUE="1" TRANSENDID="i1" TRANSENDVAL="1">
+    <INPUT TYPE="checkbox" NAME="i1" VALUE="0" TRANSENDID="i1" TRANSENDVAL="0">
+  </TD><TD ALIGN=left>
+    <IMG NOREFINE SRC="enproxy.gif*^i1=1^" WIDTH=78 HEIGHT=13>
+  </TD></TR></TABLE>
+</TD><TD ALIGN=left>
+  <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0><TR><TD>
+    When this button is selected, the proxy is enabled.<P>
+
+    The default and recommended setting is to leave the proxy enabled.
+  </TD></TR></TABLE>
+</TD></TR>
+	
+<TR><TD WIDTH=140 ALIGN=center>
+  <TABLE BORDER=0 CELLPADDING=10 CELLSPACING=0>
+  <TR><TD WIDTH=140>
+    <TABLE BORDER=0 CELLPADDING=0 CELLSPACING=0>
+    <TR><TD WIDTH=140 ALIGN=center>
+      <IMG NOREFINE ALIGN=middle SRC="imgtitle.gif*^i1=1^" WIDTH=87 HEIGHT=13>
+    </TD></TR>
+    <TR><TD ALIGN=center>
+      <IMG NOREFINE ALIGN=middle SRC="imgbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+    </TD></TR>
+    <TR><TD ALIGN=center>
+      <INPUT TYPE=radio NAME="i5" VALUE="1" 
+	TRANSENDID="i5" TRANSENDVAL="1">
+      <INPUT TYPE=radio NAME="i5" VALUE="2" 
+	TRANSENDID="i5" TRANSENDVAL="2">
+      <INPUT TYPE=radio NAME="i5" VALUE="3" 
+	TRANSENDID="i5" TRANSENDVAL="3">
+      <INPUT TYPE=radio NAME="i5" VALUE="4" 
+ 	TRANSENDID="i5" TRANSENDVAL="4">
+      <INPUT TYPE=radio NAME="i5" VALUE="5"
+	TRANSENDID="i5" TRANSENDVAL="5">
+    </TD></TR>
+    <TR><TD ALIGN=center>
+      <IMG NOREFINE ALIGN=top SRC="lsbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+    </TD></TR>
+    <TR><TD ALIGN=center>
+      <IMG NOREFINE ALIGN=middle SRC="lstitle.gif*^i1=1^" WIDTH=93 HEIGHT=13>
+    </TD></TR></TABLE>
+  </TD></TR></TABLE>
+</TD><TD ALIGN=left>
+  <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0><TR><TD>
+
+    <P> The button on the far left represents fastest loading, but worst
+    image quality.  The button on the far right represents slowest loading,
+    but best image quality.
+    <P>The default and recommended setting is the middle button.
+  </TD></TR></TABLE>
+</TD></TR>
+
+<TR><TD WIDTH=130 ALIGN=center>
+  <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0>
+  <TR><TD WIDTH=130 ALIGN=left>
+    <IMG NOREFINE SRC="display.gif*^i1=1^" WIDTH=63 HEIGHT=15>
+  </TD></TR></TABLE>
+  <TABLE BORDER=0 CELLPADDING=2 CELLSPACING=0>
+  <TR><TD ALIGN=center>
+    <INPUT TYPE=radio NAME="i6" VALUE="1" 
+      TRANSENDID="i6" TRANSENDVAL="1">
+  </TD><TD ALIGN=left>
+    <IMG NOREFINE SRC="showlogo.gif*^i1=1^" WIDTH=30 HEIGHT=13>
+<TR><TD ALIGN=center>
+<INPUT TYPE=radio NAME="i6" VALUE="2" TRANSENDID="i6" TRANSENDVAL="2">
+</TD><TD ALIGN=left>
+<IMG NOREFINE SRC="showpanel.gif*^i1=1^" WIDTH=79 HEIGHT=22>
+  <TR><TD ALIGN=center>
+    <INPUT TYPE=radio NAME="i6" VALUE="0" 
+      TRANSENDID="i6" TRANSENDVAL="0">
+  </TD><TD ALIGN=left>
+    <IMG NOREFINE SRC="shownothing.gif*^i1=1^" WIDTH=82 HEIGHT=13>
+  </TD></TR></TABLE>
+</TD><TD ALIGN=left>
+  <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0><TR><TD>
+    These three buttons give you a choice as to how you set preferences.<P>
+<ul>
+    <LI>By selecting "logo," the TranSend Logo will appear in the upper
+    right-hand corner of each page you visit; clicking on this logo will
+    take you to this page.<P>
+
+    <LI>By selecting "show control panel," a floating palette will
+         allow you to change various
+         preferences quickly, without having to go to another page.
+         <B>To use the control panel, be sure that your browser supports
+         Java.</B><P> 
+
+    <LI>By selecting "show nothing," neither the logo nor the palette will be
+         displayed.  <b>If you select "nothing," you must return to this page
+         in order to change your preferences</b>, so you may want to
+         bookmark this page now.<p>
+  </ul>
+    
+  </TD></TR></TABLE>
+</TD></TR>
+
+</TABLE>
+<INPUT TYPE="hidden" NAME="i7" VALUE="0" TRANSENDID="i7">
+
+<CENTER>
+<INPUT TYPE="Reset" VALUE="Reset to previous settings">
+<INPUT TYPE="Submit" VALUE="Submit preferences">
+</CENTER>
+</FORM>
+
+<P>
+
+<FORM METHOD=POST 
+      ACTION="http://www.cs.berkeley.edu/cgi-bin/mailform?transend-bugs@@latte.cs.berkeley.edu">
+<TABLE WIDTH=100% BORDER=0 CELLPADDING=3 CELLSPACING=0 BGCOLOR=#FFFFFF>
+  <TR><TD WIDTH=100% ALIGN=center BGCOLOR=#000000>
+    <FONT SIZE=5 COLOR=#FFFFFF>
+    <STRONG>Send Comments</STRONG>
+    </FONT>
+  </TD></TR>
+</TABLE>
+
+<TABLE WIDTH=100% BORDER=1 CELLPADDING=15 CELLSPACING=1 BGCOLOR=#FFFFFF>
+<TR><TD ALIGN=left>
+    <STRONG>
+
+    Email address (optional):<BR>
+    <INPUT TYPE="text" NAME="Sender" SIZE=45><P>
+
+    Subject:<BR>
+    <INPUT TYPE="text" NAME="Subject" SIZE=45><P>
+
+    Comment type: </STRONG><BR>
+    <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0>
+    <TR><TD ALIGN=left>
+      <INPUT TYPE="radio" NAME="Type">Bug Report (click 
+	<A HREF="bugs.html">here</A> to see a list of known bugs.)<BR>
+      <INPUT TYPE="radio" NAME="Type">General Comment
+    </TD></TR></TABLE><P>
+
+    <STRONG>Type your comments in the space below:<BR>
+    <TEXTAREA NAME="comment" ROWS=8 COLS=50></TEXTAREA>
+
+    </STRONG>
+</TD></TR></TABLE>
+
+<CENTER>
+<INPUT TYPE="Submit" VALUE="Mail comments">
+</CENTER>
+</FORM>
+
+</BODY>
+</HTML>
+
+
+
+
+
+@
+
+
+1.10
+log
+@incorporates toolbar pref button
+@
+text
+@@
+
+
+1.9
+log
+@This is the right way around.
+@
+text
+@a4 1
+
+d7 1
+a7 1
+<img align=left src="tlogo_mini.gif*^i1=1^" WIDTH=80 HEIGHT=81>
+d42 1
+a42 1
+    <IMG SRC="enproxy.gif*^i1=1^" WIDTH=78 HEIGHT=13>
+d57 1
+a57 1
+      <IMG ALIGN=middle SRC="imgtitle.gif*^i1=1^" WIDTH=87 HEIGHT=13>
+d60 1
+a60 1
+      <IMG ALIGN=middle SRC="imgbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+d75 1
+a75 1
+      <IMG ALIGN=top SRC="lsbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+d78 1
+a78 1
+      <IMG ALIGN=middle SRC="lstitle.gif*^i1=1^" WIDTH=93 HEIGHT=13>
+d94 1
+a94 1
+    <IMG SRC="display.gif*^i1=1^" WIDTH=63 HEIGHT=15>
+d101 5
+a105 6
+    <IMG SRC="showlogo.gif*^i1=1^" WIDTH=30 HEIGHT=13>
+<!--   <TR><TD ALIGN=center> -->
+<!--     <INPUT TYPE=radio NAME="i6" VALUE="2"  -->
+<!--       TRANSENDID="i6" TRANSENDVAL="2"> -->
+<!--   </TD><TD ALIGN=left> -->
+<!--     <IMG SRC="showpanel.gif*^i1=1^" WIDTH=79 HEIGHT=22> -->
+d110 1
+a110 1
+    <IMG SRC="shownothing.gif*^i1=1^" WIDTH=82 HEIGHT=13>
+d115 1
+a115 1
+    
+d120 11
+a130 15
+    <LI> By selecting "show nothing," the logo will not be displayed.
+	 displayed.  <b>If you select "nothing," you must return to this page
+	 in order to change your preferences</b>, so you may want to
+	 bookmark this page now.<p>
+	      
+<!--     <LI>By selecting "show control panel," a separate floating control panel will -->
+<!--          allow you to change various -->
+<!--          preferences quickly and without having to go to another page. -->
+<!-- 	 <B>To use the control panel, be sure that your browser supports Java.</B><P> -->
+
+<!--     <LI>By selecting "show nothing," neither the logo nor dashboard will be -->
+<!--     displayed.  <b>If you select "nothing," you must return to this page -->
+<!--          in order to change your preferences</b>, so you may want to -->
+<!--          bookmark this page now.<p> -->
+
+@
+
+
+1.8
+log
+@Shazam.
+@
+text
+@d103 5
+a111 5
+    <IMG SRC="showpanel.gif*^i1=1^" WIDTH=79 HEIGHT=22>
+  <TR><TD ALIGN=center>
+    <INPUT TYPE=radio NAME="i6" VALUE="2" 
+      TRANSENDID="i6" TRANSENDVAL="2">
+  </TD><TD ALIGN=left>
+a117 1
+
+d122 9
+a130 4
+    <LI>By selecting "show control panel," a separate floating control panel will
+         allow you to change various
+         preferences quickly and without having to go to another page.
+	 <B>To use the control panel, be sure that your browser supports Java.</B><P>
+d132 4
+a135 4
+    <LI>By selecting "show nothing," neither the logo nor dashboard will be
+    displayed.  <b>If you select "nothing," you must return to this page
+         in order to change your preferences</b>, so you may want to
+         bookmark this page now.<p>
+@
+
+
+1.7
+log
+@Added SQUID!
+@
+text
+@d107 1
+a107 1
+    <IMG SRC="showpanel.gif*^i1=1^" WIDTH=68 HEIGHT=13>
+d112 1
+a112 1
+    <IMG SRC="shownothing.gif*^i1=1^" WIDTH=47 HEIGHT=13>
+@
+
+
+1.6
+log
+@made UI prefs values backwards compat
+@
+text
+@d123 6
+a128 1
+    <LI>By selecting "nothing," neither the logo nor dashboard will be
+a132 3
+    <LI>By selecting "dashboard," a separate floating control panel will
+         allow you to change various
+         preferences quickly and without having to go to another page.<P>
+@
+
+
+1.5
+log
+@changes and additions to transend.text.piml (pilot markup language html
+distiller).  commented the ARGS.h file for distillers.  distillers now
+only observe Quality arg if it has a reasonable value.  Changes to main
+prefs to make values of FRONT_SHOW_ICON arg agree with perl html distiller.
+@
+text
+@d104 2
+a105 2
+    <INPUT TYPE=radio NAME="i6" VALUE="2" 
+      TRANSENDID="i6" TRANSENDVAL="2">
+d109 2
+a110 2
+    <INPUT TYPE=radio NAME="i6" VALUE="0" 
+      TRANSENDID="i6" TRANSENDVAL="0">
+d118 5
+a126 5
+
+
+    <LI>By selecting "logo," the TranSend Logo will appear in the upper
+    right-hand corner of each page you visit; clicking on this logo will
+    take you to this page.<P>
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d118 6
+d126 1
+a126 1
+    take you to a page where preferences may be set.<P>
+d128 3
+a130 3
+    <LI>By selecting "dashboard," a control panel will appear on the top of 
+    of each page you visit; this panel allows you to change various
+    preferences quickly and without having to go to another page.<P>
+a131 3
+    <LI>By selecting "nothing," neither the logo nor dashboard will be
+    displayed.  If you select "nothing," you must remember the following
+    website in order to change your preferences: <code> http://transend.CS.Berkeley.EDU/prefs.html </code>
+d147 1
+a147 1
+      ACTION="mailto:transend-bugs@@latte.cs.berkeley.edu">
+@
+
+
+1.3
+log
+@Many changes to support SDK, including bin and sbin directories,
+and modified make targets and names of some binary targets.  Calling
+convention changed for perl distillers, so fixed html distiller and
+added it as transend.text.html.  monitor.multicast property is now
+Monitor.listen; all relevant code was changed.  Monitor can now parse
+this from the options file.  Updated all UI changes from branch head.
+@
+text
+@d144 1
+a144 1
+      ACTION="http://www.cs.berkeley.edu/cgi-bin/mailform?transend-bugs@@latte.cs.berkeley.edu">
+@
+
+
+1.2
+log
+@frontend and ptm changes for new distiller api
+@
+text
+@d8 1
+d10 1
+a10 1
+	<IMG NOREFINE SRC="help2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right>
+d12 1
+a12 2
+	<IMG NOREFINE SRC="about2.gif*^i1=1^" ALIGN=right BORDER=0></A>
+<BR CLEAR=rigth><BR>
+d14 1
+a14 1
+<FORM ACTION="http://SetPrefs/" METHOD="GET">
+d35 1
+a35 1
+<TABLE WIDTH=100% BORDER=1 CELPADDING=5 CELLSPACING=1 BGCOLOR=#FFFFFF>
+d37 2
+a38 3
+
+<TR><TD ALIGN=center>
+  <TABLE BORDER=0 CELLPADDING=5 CELLSPACING=0>
+a39 2
+    <IMG SRC="enproxy.gif*^i1=1^">
+  </TD><TD ALIGN=center>
+d42 2
+d53 1
+a53 1
+<TR><TD ALIGN=center>
+d55 1
+a55 1
+  <TR><TD>
+d57 2
+a58 2
+    <TR><TD ALIGN=center>
+      <IMG ALIGN=middle SRC="imgtitle.gif*^i1=1^">
+d61 1
+a61 1
+      <IMG ALIGN=middle SRC="imgbar.gif*^i1=1^">
+d76 1
+a76 1
+      <IMG ALIGN=top SRC="lsbar.gif*^i1=1^">
+d79 1
+a79 1
+      <IMG ALIGN=middle SRC="lstitle.gif*^i1=1^">
+d92 1
+a92 1
+<TR><TD ALIGN=center>
+d94 14
+d109 4
+a112 4
+    <IMG SRC="dlogo2.gif*^i1=1^">
+  </TD><TD ALIGN=center>
+    <INPUT TYPE="hidden" NAME="i6" VALUE="0" TRANSENDID="i6" TRANSENDVAL="0">
+    <INPUT TYPE="checkbox" NAME="i6" VALUE="1" TRANSENDID="i6" TRANSENDVAL="1">
+d116 13
+a128 9
+    When this button is selected, the TranSend logo will be displayed on 
+    the upper left hand corner of each web page that you visit.<P>
+  
+    <FONT COLOR=red><STRONG><BLINK>WARNING!!!</BLINK></STRONG></FONT> 
+    If you hide the TranSend logo by deselecting this button, you must 
+    remember the following website in order to change your TranSend 
+    Proxy settings: </br>
+	<ul><xmp> http://transend.CS.Berkeley.EDU/prefs.html </xmp></ul>
+    The default and recommended setting is to display the logo.
+@
+
+
+1.1
+log
+@Salvaged from web server.
+@
+text
+@d9 1
+a9 1
+	<IMG SRC="help2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right>
+d11 1
+a11 1
+	<IMG SRC="about2.gif*^i1=1^" ALIGN=right BORDER=0></A>
+@
+
+
+1.1.2.1
+log
+@added NOREFINE attribute to IMG tags in prefs.html and ICON_STRING; modified munge_magic.c to respect this attribute, which avoids placing the refinement link in html
+@
+text
+@d9 1
+a9 1
+	<IMG NOREFINE SRC="help2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right>
+d11 1
+a11 1
+	<IMG NOREFINE SRC="about2.gif*^i1=1^" ALIGN=right BORDER=0></A>
+@
+
+
+1.1.2.2
+log
+@cool new logo
+@
+text
+@a7 1
+<img align=left src="tlogo_mini.gif*^i1=1" WIDTH=80 HEIGHT=81>
+d11 2
+a12 1
+	<IMG NOREFINE SRC="about2.gif*^i1=1^" ALIGN=right BORDER=0></A><BR CLEAR=right><BR CLEAR=left>
+@
+
+
+1.1.2.3
+log
+@auugh.
+@
+text
+@d8 1
+a8 1
+<img align=left src="tlogo_mini.gif*^i1=1^" WIDTH=80 HEIGHT=81>
+@
+
+
+1.1.2.4
+log
+@new icons and new prefs.html to support the java control panel
+@
+text
+@d37 1
+d41 1
+a41 1
+    <IMG SRC="enproxy.gif*^i1=1^" WIDTH=78 HEIGHT=13>
+d54 1
+a54 1
+<TR><TD WIDTH=140 ALIGN=center>
+d56 1
+a56 1
+  <TR><TD WIDTH=140>
+d58 2
+a59 2
+    <TR><TD WIDTH=140 ALIGN=center>
+      <IMG ALIGN=middle SRC="imgtitle.gif*^i1=1^" WIDTH=87 HEIGHT=13>
+d62 1
+a62 1
+      <IMG ALIGN=middle SRC="imgbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+d77 1
+a77 1
+      <IMG ALIGN=top SRC="lsbar.gif*^i1=1^" WIDTH=112 HEIGHT=20>
+d80 1
+a80 1
+      <IMG ALIGN=middle SRC="lstitle.gif*^i1=1^" WIDTH=93 HEIGHT=13>
+d96 1
+a96 11
+    <IMG SRC="showicon.gif*^i1=1^" WIDTH=62 HEIGHT=11>
+  </TD><TD ALIGN=center>
+    <INPUT TYPE=radio NAME="i6" VALUE="0" 
+      TRANSENDID="i6" TRANSENDVAL="0">
+  <TR><TD ALIGN=center>
+    <IMG SRC="showpanel.gif*^i1=1^" WIDTH=79 HEIGHT=22>
+  </TD><TD ALIGN=center>
+    <INPUT TYPE=radio NAME="i6" VALUE="1" 
+      TRANSENDID="i6" TRANSENDVAL="1">
+  <TR><TD ALIGN=center>
+    <IMG SRC="shownothing.gif*^i1=1^" WIDTH=82 HEIGHT=13>
+d98 2
+a99 2
+    <INPUT TYPE=radio NAME="i6" VALUE="2" 
+      TRANSENDID="i6" TRANSENDVAL="0">
+@
+
+
+1.1.2.5
+log
+@update on the last change to prefs.html - we still have to change the description
+@
+text
+@d37 2
+a38 2
+<TR><TD WIDTH=130 ALIGN=center>
+  <TABLE BORDER=0 CELLPADDING=2 CELLSPACING=0>
+d40 2
+a43 2
+  </TD><TD ALIGN=left>
+    <IMG SRC="enproxy.gif*^i1=1^" WIDTH=78 HEIGHT=13>
+d92 1
+a92 1
+<TR><TD WIDTH=130 ALIGN=center>
+a93 4
+  <TR><TD WIDTH=130 ALIGN=left>
+    <IMG SRC="display.gif*^i1=1^" WIDTH=63 HEIGHT=15>
+  </TD></TR></TABLE>
+  <TABLE BORDER=0 CELLPADDING=2 CELLSPACING=0>
+d95 2
+a98 2
+  </TD><TD ALIGN=left>
+    <IMG SRC="showlogo.gif*^i1=1^" WIDTH=30 HEIGHT=13>
+d100 2
+a103 2
+  </TD><TD ALIGN=left>
+    <IMG SRC="showpanel.gif*^i1=1^" WIDTH=68 HEIGHT=13>
+d105 2
+a108 2
+  </TD><TD ALIGN=left>
+    <IMG SRC="shownothing.gif*^i1=1^" WIDTH=47 HEIGHT=13>
+@
+
+
+1.1.2.6
+log
+@new prefs.html with the correct comments.
+@
+text
+@d99 2
+a100 2
+    <INPUT TYPE=radio NAME="i6" VALUE="1" 
+      TRANSENDID="i6" TRANSENDVAL="1">
+d104 2
+a105 2
+    <INPUT TYPE=radio NAME="i6" VALUE="2" 
+      TRANSENDID="i6" TRANSENDVAL="2">
+d109 1
+a109 1
+    <INPUT TYPE=radio NAME="i6" VALUE="0" 
+d116 9
+a124 13
+    These three buttons give you a choice as to how you set preferences.<P>
+    
+    <LI>By selecting "logo," the TranSend Logo will appear in the upper
+    right-hand corner of each page you visit; clicking on this logo will
+    take you to a page where preferences may be set.<P>
+
+    <LI>By selecting "dashboard," a control panel will appear on the top of 
+    of each page you visit; this panel allows you to change various
+    preferences quickly and without having to go to another page.<P>
+    
+    <LI>By selecting "nothing," neither the logo nor dashboard will be
+    displayed.  If you select "nothing," you must remember the following
+    website in order to change your preferences: <code> http://transend.CS.Berkeley.EDU/prefs.html </code>
+@

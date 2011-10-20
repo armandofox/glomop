@@ -1,0 +1,288 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	98.01.29.21.35.10;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.01.24.22.51.59;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@miniserver can now act as a stock http server or a proxy
+@
+text
+@use TACCutils;
+use clib;
+use LWP;
+use LWP::MediaTypes;
+
+sub DistillerInit {
+    %gFiles = ();
+    $gRoot = &Options_Find("proxy.home") or die "No proxy.home option found";
+    $gPrefix = &Options_Find("frontend.aggString")
+        or die "No frontend.aggString option found";
+
+    # check that the webServerName option matches the prefix.  If not, workers
+    # that rely on webServerName for fetching "support" documents may not work.
+
+    my $wsname = &Options_Find("frontend.webServerName") || "[no entry found]";
+
+    # match with or without trailing slash
+    unless ($gPrefix =~ m!^$wsname/?!io) {
+        &message("**WARNING** frontend.webServerName '$wsname' doesn't match\n".
+                 "frontend.aggString '$gPrefix'...is this what you meant?\n");
+    }
+
+    # set up the mapping of file suffixes to MIME types...this should really be
+    # configurable externally, in the gm_options file or something.
+
+    %gMimeTypes = (&read_mime_types("$gRoot/mime.types"))
+        or die "No file $gRoot/mime.types";
+    
+    %gCache = ();
+
+    $gRoot .= "/wwwroot";
+    &message("Root of WWW filesystem is $gRoot\n");
+
+    $SIG{'HUP'} = \&flush_cache;
+}
+
+sub DistillerMain {
+    my ($data,$hdrs,$type,%args) = @@_;
+    my ($filename,$file);
+    
+    # verify the prefix matches.  We should never get here unless this is the
+    # case, but it's easy to double check.
+    
+    my $url = &get_my_url($hdrs);
+
+    if ($url =~ m!^http://!i) {
+        unless ($url =~ s/^$gPrefix//io) {
+            &message("Error 404 (not on this server) on $url\n");
+            return(&make_error(404, "<b>URL $url doesn't live on this server.</b>"));
+        }
+    }
+    # if URL DOESN'T start with http://hostname, this part has already been
+    # removed by the frontend hook, and only the pathname is left.
+    # remove leading slash from remainder of URL, if any.
+    $url =~ s!^/!!;
+
+    # to find the file:
+    # - try the URL appended to the root of the filesystem.
+    # - if that fails, but the URL corresponds to a subdirectory name (or is
+    #   empty), try to get index.html from that subdirectory.
+    # - otherwise error.
+
+
+    if ($url eq '') {
+        $filename = "$gRoot/index.html";
+    } elsif (-f "$gRoot/$url") {
+        $filename = "$gRoot/$url";
+    } elsif (-d "$gRoot/$url" && -e "$gRoot/$url/index.html") {
+        $filename = "$gRoot/$url/index.html";
+    } else {
+        &message("Error 404 (not found) on $url\n");
+        return(&make_error(404, "<b>URL '$url' not found on this server.</b>"));
+    }
+
+    # got the filename, see if we've cached it.  canonicalize slashes first...
+    $filename =~ s!/+!/!g;
+    my $cached = "";
+    unless ( &fresh($filename) ) {
+        $cached = "*";
+        unless (&fetch_file($filename)) {
+            &message("500 Fetch failed on $url\n");
+            return (&make_error(500, "<b>Internal server error fetching '$url'</b>"));
+        }
+    }
+    $file = $gCache{$filename};
+    &message(sprintf("$url ==> [%s]%s $filename\n", $file->{type}, $cached));
+
+    # special case for prefs form
+    if ($file->{type} eq 'text/html') {
+        &message("Forwarding text/html using X-Route\n");
+        my $h = $file->{headers};
+        $h =~ s!\r\n!\r\nX-Route: transend/text/html\r\n!;
+        return($file->{data}, $h, $file->{type}, 10);
+    } else {
+        return($file->{data}, $file->{headers}, $file->{type}, 0);
+    }
+}
+
+sub make_error {
+    my ($errcode,$msg) = @@_;
+    $msg = &htmlify($msg) if $msg;
+    my $h = new TACCutils::Headers("HTTP/1.0 $errcode", "");
+    $h->header("Content-type", "text/html");
+    $h->header("Content-length", length($msg));
+    return($msg, $h->as_string, "text/html", 0);
+}
+
+sub fresh {
+    my $filename = shift;
+    exists $gCache{$filename}
+    && (stat($filename))[9] <= $gCache{$filename}->{modtime};
+}
+
+sub fetch_file {
+    my $filename = shift;
+    my $hdrs = new HTTP::Response;
+    my $type;
+    
+    unless (open(F,$filename)) {
+        &message( "Error: $filename was readable before but now is not!" );
+        delete $gCache{$filename};
+        return undef;
+    }
+
+    $gCache{$filename}->{data} = join('', (<F>));
+    $gCache{$filename}->{modtime} = (stat(F))[9];
+    close F;
+    
+    if ( $filename =~ /\.([^.]+)$/ ) {
+        $type = $gMimeTypes{lc $1} || &guess_media_type($filename);
+    }
+    $gCache{$filename}->{type} = $type;
+    $gCache{$filename}->{headers} = join("\r\n",
+                                         "HTTP/1.0 200 OK",
+                                         "Content-type: " . $type,
+                                         "Content-length: " .
+                                         length($gCache{$filename}->{data}),
+                                         "\r\n");
+    1;
+}
+                 
+sub message {
+    &MonitorClient_Send("Tiny httpd messages", shift @@_, "Log");
+}
+
+sub read_mime_types {
+    my $fn = shift;
+    open(MIME,$fn) or die "Cannot read $fn: $!";
+    my $type;
+    my %mime;
+    while (<MIME>) {
+        next if /^#/;
+        chomp;
+        split;
+        next unless $#_ > 0;
+        $type = shift;
+        for (@@_) { $mime{lc $_} = $type; }
+    }
+    close MIME;
+    return %mime;
+}
+
+sub flush_cache {
+    &message("Flushing cache\n");
+    %gCache = ();
+}
+
+        
+1;
+@
+
+
+1.1
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@d46 5
+a50 3
+    unless ($url =~ s/^$gPrefix//io) {
+        &message("Error 404 (not on this server) on $url\n");
+        return(&make_error(404, "<b>URL $url doesn't live on this server.</b>"));
+d52 2
+d119 5
+a123 2
+    open(F,$filename)
+        or die "Fatal: $filename was readable before but now is not!";
+d139 1
+@

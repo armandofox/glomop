@@ -1,0 +1,521 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	98.07.11.00.40.31;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.06.09.03.31.32;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.06.08.20.11.26;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@/*
+ *  TACC glue to implement the Java Servlet class interface
+ *  Mike Chen & Armando Fox  06/98
+ */
+
+
+#include <jni.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "config_tr.h"
+#include "optdb.h"
+#include "distinterface.h"
+
+#if 0
+JNI_GetDefaultJavaVMInitArgs(void *x)  { return 0; }
+JNI_CreateJavaVM(JavaVM **x,JNIEnv **y,void *z) { return -1; }
+#endif
+
+MonitorClientID mon;
+
+/* Denotes a Java VM */
+static JavaVM *jvm;
+
+/* Pointer to native method interface */
+static JNIEnv *env;
+
+/* Java type info */
+static jclass byteArrayInputStreamClass;
+static jmethodID byteArrayInputStreamConstructor;
+static jclass pushbackInputStreamClass;
+static jmethodID pushbackInputStreamConstructor;
+static jclass byteArrayOutputStreamClass;
+static jmethodID byteArrayOutputStreamConstructor;
+static jmethodID byteArrayOutputStreamToByteArray;
+
+/* the actual worker class */
+static jclass ServletSubclass;
+static jmethodID ServletSubclassInit;
+static jmethodID ServletSubclassMain;
+
+/*
+ *  Append ${proxy.home}/classes to CLASSPATH in environment
+ */
+static void
+SetClassPath(void)
+{
+  char *clspath;
+  char *newclspath;
+  const char *proxyhome;
+  /*
+   *  Add ${proxy.home}/classes to the default CLASSPATH.
+   */
+  proxyhome = Options_Find((Options) NULL, "proxy.home");
+  if (proxyhome == NULL) {
+    fprintf(stderr, "Warning: no proxy.home configuration option found--"
+            "not setting CLASSPATH--this will almost certainly "
+            "cause an error\n");
+  } else {
+    clspath = getenv("CLASSPATH");
+    if (clspath) {
+      newclspath = ALLOCA(strlen(clspath)+1 /* for colon */
+                          + strlen(proxyhome)
+                          + strlen("/classes")
+                          + 1);   /* for terminating null */
+      strcpy(newclspath, clspath);
+      strcat(newclspath, ":");
+    } else {
+      newclspath = ALLOCA(strlen(proxyhome) + strlen("/classes") + 1);
+      *newclspath = 0;
+    }
+    strcat(newclspath, proxyhome);
+    strcat(newclspath, "/classes");
+    setenv("CLASSPATH", (const char *)newclspath, 1); /* 1=overwrite old val */
+  }
+}
+
+/*
+ *  DistillerInit for Java servlets:
+ *  - Initialize java VM
+ *  - Setup classpath to include classes in proxy source tree
+ *  - Call the Initialize method of the Servlet subclass instantiated
+ */
+
+#define GM_JNI_VERSION_WE_WANT  0x00010001
+#define FindClassOrFail(var,clsname) \
+  if ((var = (*env)->FindClass(env,clsname)) == NULL) { \
+    fprintf(stderr, "Couldn't load class %s, bye bye\n", clsname); \
+    return distFatalError; \
+  }
+#define GetMethodIDOrFail(var,cls,mthname,type) \
+  if ((var = (*env)->GetMethodID(env,cls,mthname,type)) == NULL) { \
+    fprintf(stderr, "Couldn't find method %s, bye bye\n", mthname); \
+    return distFatalError; \
+  }
+
+DistillerStatus
+DistillerInit(C_DistillerType distType, int argc, const char * const *argv) 
+{
+  JDK1_1InitArgs vm_args;
+
+  /*
+   * Java version that we expect VM to support
+   */
+  vm_args.version = GM_JNI_VERSION_WE_WANT;
+  if (JNI_GetDefaultJavaVMInitArgs(&vm_args) != 0) {
+    fprintf(stderr, "JNI version is 0x%x (expected 0x%x), bye bye\n",
+            vm_args.version, GM_JNI_VERSION_WE_WANT);
+    return distFatalError;
+  }
+  /*
+   *  Set up the classpath in the environment var CLASSPATH.
+   */
+  SetClassPath();
+  /*
+   *  Instantiate the Java VM and try to load classfile specified in argv[0].
+   */
+  if (JNI_CreateJavaVM(&jvm, &env, &vm_args) != 0) {
+    fprintf(stderr, "Failed to create Java VM\n");
+    return distFatalError;
+  }
+    
+  /* Retrieve type info for the Java classes we are going to use */
+
+  FindClassOrFail(byteArrayInputStreamClass, "java/io/ByteArrayInputStream");
+  FindClassOrFail(byteArrayOutputStreamClass, "java/io/ByteArrayOutputStream");
+  FindClassOrFail(pushbackInputStreamClass, "java/io/PushbackInputStream");
+  FindClassOrFail(ServletSubclass, argv[0]);
+
+  GetMethodIDOrFail(byteArrayInputStreamConstructor,
+                    byteArrayInputStreamClass, "<init>", "([B)V");
+  GetMethodIDOrFail(byteArrayOutputStreamConstructor,
+                    byteArrayOutputStreamClass, "<init>", "()V");
+  GetMethodIDOrFail(byteArrayOutputStreamToByteArray,
+                    byteArrayOutputStreamClass, "toByteArray", "()[B");
+  GetMethodIDOrFail(pushbackInputStreamConstructor,
+                    pushbackInputStreamClass, "<init>",
+                    "(Ljava/io/InputStream;)V");
+  GetMethodIDOrFail(ServletSubclassInit,
+                    ServletSubclass, "<init>",
+                    "(Ljava/io/PushbackInputStream;Ljava/io/OutputStream;)V");
+  GetMethodIDOrFail(ServletSubclassMain,
+                    ServletSubclass, "main", "()V");
+
+  /*
+   *  At this point we're ready to call the Init method, and later we'll be
+   *  able to call the Main method in DistillerMain()
+   */
+
+  return distOk;
+}
+
+void
+  DistillerCleanup()
+{
+  /* This call should fail because JDK 1.1 does not support unloading the VM */
+  
+  (*jvm)->DestroyJavaVM(jvm);
+}
+
+
+DistillerStatus
+DistillerMain(Argument *args, int numberOfArgs,
+              DistillerInput *input, DistillerOutput *output)
+{
+#if 0
+  jbyteArray inputArray, outputArray;
+  jbyte *nativeInputArray, *nativeOutputArray;
+  jobject byteArrayInputStream;
+  jobject pushbackInputStream;
+  jobject byteArrayOutputStream;
+  jobject HTMLParser;
+  jsize outputArrayLen;
+
+  if (strcmp(input->mimeType, "text/html")) {
+    return distFatalError;
+  }
+
+  /* Create a ByteArray for input */
+  inputArray = (*env)->NewByteArray(env, input->length);
+  if (inputArray == NULL) {
+    return distFatalError;
+  }
+
+  /* Get a C buffer of the ByteArray */
+  nativeInputArray = (*env)->GetByteArrayElements(env, inputArray, NULL);
+  if (nativeInputArray == NULL) {
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Copy the input data into the ByteArray */
+  memcpy(nativeInputArray, input->data, input->length);
+
+  /* Release the C buffer */
+  (*env)->ReleaseByteArrayElements(env, inputArray, nativeInputArray, 0);
+
+  /* Create a ByteArrayInputStream from the ByteArray */
+  byteArrayInputStream = (*env)->NewObject(env, byteArrayInputStreamClass,
+					   byteArrayInputStreamConstructor,
+					   inputArray);
+  if (byteArrayInputStream == NULL) {
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+    
+  /* Create a PushbackInputStream from the ByteArrayInputStream */
+  pushbackInputStream = (*env)->NewObject(env, pushbackInputStreamClass,
+					  pushbackInputStreamConstructor,
+					  byteArrayInputStream);
+  if (pushbackInputStream == NULL) {
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Create a ByteArrayOutputStream */
+  byteArrayOutputStream = (*env)->NewObject(env, byteArrayOutputStreamClass,
+					    byteArrayOutputStreamConstructor);
+  if (byteArrayOutputStream == NULL) {
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Create a HTMLParser */
+  HTMLParser = (*env)->NewObject(env, HTMLParserClass, HTMLParserConstructor,
+				 pushbackInputStream, byteArrayOutputStream);
+  if (HTMLParser == NULL) {
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Call the parse method */
+  (*env)->CallVoidMethod(env, HTMLParser, HTMLParserParse);
+  if ((*env)->ExceptionOccurred(env) != NULL) {
+    (*env)->ExceptionDescribe(env);
+    (*env)->DeleteLocalRef(env, HTMLParser);
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;    
+  }
+
+  /* Get a C buffer of the ByteArrayOutputStream */
+  outputArray = (*env)->CallObjectMethod(env, byteArrayOutputStream,
+					 byteArrayOutputStreamToByteArray);
+  outputArrayLen = (*env)->GetArrayLength(env, outputArray);
+  nativeOutputArray = (*env)->GetByteArrayElements(env, outputArray, NULL);
+  if (nativeOutputArray == NULL) {
+    (*env)->DeleteLocalRef(env, outputArray);
+    (*env)->DeleteLocalRef(env, HTMLParser);
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Allocate a buffer to copy the array and return to caller */
+  output->data = DistillerMalloc(outputArrayLen);
+  memcpy(output->data, nativeOutputArray, outputArrayLen);
+  output->length = outputArrayLen;
+  strcpy(output->mimeType, "application/x-distilled-html");
+  *freeOutputBuffer = gm_True;
+
+  /* Release the C buffer of the ByteArrayOutputStream */  
+  (*env)->ReleaseByteArrayElements(env, outputArray, nativeOutputArray, 0);
+
+  /* Remove all references */
+  (*env)->DeleteLocalRef(env, outputArray);
+  (*env)->DeleteLocalRef(env, HTMLParser);
+  (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+  (*env)->DeleteLocalRef(env, pushbackInputStream);
+  (*env)->DeleteLocalRef(env, byteArrayInputStream);
+  (*env)->DeleteLocalRef(env, inputArray);
+#endif
+  return distOk;
+}
+@
+
+
+1.2
+log
+@changed configure.in to correctly set javaincdir and javalibdir vars;
+edited java stub makefiles to get right linking order on cmd line
+@
+text
+@d6 1
+d14 5
+d105 1
+a105 1
+  if (JNI_GetDefaultJavaVMInitArgs(&vm_args) < 0) {
+@
+
+
+1.1
+log
+@added stuff to configure.in to support java stub compilation (include
+and lib paths for java runtime and VM); to toplevel Makefile to support
+conditional compilation of java stub (if --enable-java is given to
+configure); added java_stub.c and Makefile.in (based on their
+counterparts from perl_stub).  The java stub will be designed so that
+Servlets can be loaded directly into it, ie it will expect to load a
+classfile that implements a subclass of Servlet, and then have
+DistillerInit() and DistillerMain() call the servlet's init and main
+functions respectively.
+@
+text
+@d1 5
+d7 5
+d13 1
+a13 1
+#include "distinterface.h"
+d29 5
+a33 3
+static jclass HTMLParserClass;
+static jmethodID HTMLParserConstructor;
+static jmethodID HTMLParserParse;
+d36 1
+a36 7
+ * DistillerInit for servlets:
+ * - Extract the java classpath from the Options file (or pick a default)
+ * - 
+ * - Extract the java classfile name from the 
+ * opens the perl file in PERL_DIR with a name = to the distiller type (with 
+ * /'s turned into .'s.  Then calls the perl function DisitillerInit in 
+ * that file.
+d38 23
+a60 27
+
+static gm_Bool
+LoadClassFile(const int argc, const char * const * argv) {
+  const char *classpath = NULL;
+
+  
+  
+
+DistillerInit(C_DistillerType distType, int argc, const char * const *argv) {
+  int count;
+  int ret_val;
+  register SV **sp;
+  int i,j;
+  int exitstatus;
+
+
+  perl_args = DistillerMalloc((4+argc) * sizeof(char *));
+
+  i = 0;
+  perl_args[i++] = "";          /* perl "binary" name */
+  
+  tmp = Options_Find((Options) NULL, "proxy.perlmod");
+  if (tmp != NULL  &&  *tmp != '\0') {
+    /* include path for perl modules on local site */
+    perl_args[i] = ALLOCA(1 + 2 + strlen(tmp));
+    if (strncmp(tmp, "-I", 2) == 0) {
+      strcpy(perl_args[i], tmp);
+d62 2
+a63 2
+      strcpy(perl_args[i], "-I");
+      strcat(perl_args[i], tmp);
+d65 3
+a67 1
+    i++;
+d69 1
+d71 6
+d78 10
+a87 12
+  if ((tmp = Options_Find((Options) NULL, "proxy.home")) != NULL) {
+    /* include path for 'xs' stuff in proxy */
+    const char *xspath = "/xs/lib";
+    perl_args[i] = ALLOCA(1 + strlen("-I") +  strlen(tmp) + strlen(xspath));
+    strcpy(perl_args[i], "-I");
+    strcat(perl_args[i], tmp);
+    strcat(perl_args[i], xspath);
+    i++;
+  } else {
+    /* no proxy.home -- probably an error */
+    fprintf(stderr, "Warning: no proxy.home configuration option found--"
+            "this will almost certainly cause an error\n");
+d90 4
+a93 40
+  /* copy remaining arguments */
+  for (j=0; j<argc; j++)
+    perl_args[i++] = (char *) argv[j];
+  /* make last arg NULL */
+  perl_args[i] = NULL;
+  
+  exitstatus = perl_parse(dist_perl, xs_init, i, (char **)perl_args, NULL);
+
+  DistillerFree(perl_args);
+
+  if (exitstatus)
+    return distFatalError;
+
+  /*  dSP; */
+  sp = stack_sp;
+  ENTER;
+  SAVETMPS;
+
+  PUSHMARK(sp);
+
+  count = perl_call_pv("DistillerInit", G_NOARGS | G_SCALAR | G_EVAL);
+
+  /* Check the eval first */
+  if (SvTRUE(GvSV(errgv))) {
+    fprintf(stderr,"perl_stub: calling DistillerInit: %s\n", SvPV(GvSV(errgv), na));
+    (void)POPs ;
+    return distFatalError;
+  }
+  if (count != 1)
+    return distFatalError;      /* init routine didn't return 1 arg */
+
+  ret_val = POPi;
+  
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  
+  return ret_val;
+}
+
+d95 16
+a110 11
+
+DistillerStatus DistillerInit()
+{
+  JDK1_1InitArgs vm_args; /* JDK 1.1 VM initialization arguments */
+    
+  /* Get the default initialization arguments and set the class 
+   * path */
+  JNI_GetDefaultJavaVMInitArgs(&vm_args);
+    
+  /* load and initialize a Java VM, return a JNI interface 
+   * pointer in env */
+d112 1
+a116 7
+  byteArrayInputStreamClass
+    = (*env)->FindClass(env, "java/io/ByteArrayInputStream");
+  byteArrayOutputStreamClass
+    = (*env)->FindClass(env, "java/io/ByteArrayOutputStream");
+  pushbackInputStreamClass
+    = (*env)->FindClass(env, "java/io/PushbackInputStream");
+  HTMLParserClass = (*env)->FindClass(env, "HTMLParser");
+d118 24
+a141 25
+  if (byteArrayInputStreamClass == NULL || byteArrayOutputStreamClass == NULL
+      || pushbackInputStreamClass == NULL || HTMLParserClass == NULL) {
+    return distFatalError;
+  }
+
+  byteArrayInputStreamConstructor
+    = (*env)->GetMethodID(env, byteArrayInputStreamClass, "<init>", "([B)V");
+  byteArrayOutputStreamConstructor
+    = (*env)->GetMethodID(env, byteArrayOutputStreamClass, "<init>", "()V");
+  byteArrayOutputStreamToByteArray
+    = (*env)->GetMethodID(env, byteArrayOutputStreamClass, "toByteArray",
+			  "()[B");
+  pushbackInputStreamConstructor
+    = (*env)->GetMethodID(env, pushbackInputStreamClass, "<init>",
+			  "(Ljava/io/InputStream;)V");
+  HTMLParserConstructor
+    = (*env)->GetMethodID(env, HTMLParserClass, "<init>",
+			  "(Ljava/io/PushbackInputStream;Ljava/io/OutputStream;)V");
+  HTMLParserParse = (*env)->GetMethodID(env, HTMLParserClass, "parse", "()V");
+  if (byteArrayInputStreamConstructor == NULL
+      || byteArrayOutputStreamConstructor == NULL
+      || pushbackInputStreamConstructor == NULL
+      || HTMLParserConstructor == NULL) {
+    return distFatalError;
+  }
+d146 2
+a147 1
+void DistillerCleanup()
+d150 1
+d155 3
+a157 3
+DistillerStatus DistillerMain(Argument *args, int numberOfArgs,
+			      DistillerInput *input, DistillerOutput *output,
+			      gm_Bool *freeOutputBuffer)
+d159 1
+d275 1
+a275 1
+
+@

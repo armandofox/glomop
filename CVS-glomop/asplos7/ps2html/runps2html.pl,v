@@ -1,0 +1,123 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.06.11.03.53.53;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.06.11.03.53.53;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/sww/bin/perl5
+
+# Usage: $0 file
+# file is a list of pathnames to PS documents.
+# From each .ps, we create .ps.gz, .html, .html.gz, .txt, and .txt.gz,
+# measuring the latency 
+# of each and the resulting file sizes.  Results written on stdout.
+BEGIN {
+    push(@@INC, "/disks/barad-dur/now/pythia/release/perllib");
+    my $uname = `uname` || `/bin/uname` || `/usr/ucb/uname`  ||
+        warn "Can't get uname";
+    chomp $uname;
+    push(@@INC,
+         ($ENV{PERLMOD} || "/disks/barad-dur/now/pythia/release/perlmod.") .
+         $uname);
+    
+}
+
+$ps2html = "/disks/barad-dur/now/pythia/fox/demo/pstotext.SunOS";
+
+# use the gettimeofday stuff i hacked together.
+
+use Times;
+
+open(F, pop @@ARGV) or die $!;
+
+open(OUT, ">ps2html_stats") or die $!;
+
+format OUT_TOP =
+                  -------------sizes--------------               ----------times---------------
+file	pgs	.ps     .ps.gz	.html	.htm.gz	 .txt	.txt.gz	.ps.gz	.html	.htm.gz	.txt	.txt.gz
+.
+
+format OUT = 
+@@<<<<<<< @@##   @@####### @@####### @@###### @@###### @@###### @@###### @@##.### @@##.### @@##.### @@##.### @@##.###
+$file,$pgs,@@sizes,@@times
+.
+
+    ;                                       
+    select STDOUT; $| = 1;
+select OUT; $| = 1;
+$SIG{INT} = 'flush';
+sub flush { close OUT; exit 1; }
+
+ FILE:
+while ($file = <F>) {
+    chop($file);
+    next if $file =~ /^#/;
+    next if $file =~ /^\s*$/;
+    next unless -r $file;
+    @@pages = @@sizes = @@times = ();
+    push(@@sizes, -s $file);
+    $pgs = 0;
+    foreach $cmd ("gzip -f -c $file",
+                  "$ps2html -html $file",
+                  "$ps2html -html $file | gzip -f -c -",
+                  "$ps2html  $file",
+                  "$ps2html  $file | gzip -f -c -",
+                  ) {
+        $time = &Times::timecmd("($cmd >/tmp/foo) 2>/tmp/bar", 1);
+        # attempt to figure out number of pages
+        open(B,"/tmp/bar") or next;
+        @@b = <B>;
+        $b = join(/ /, reverse(@@b));
+        if ($time < 0) {                    # error!
+            warn "Skipping $file: error ", -$time, ",stderr is $b\n";
+            next FILE;
+        }
+        $pgs = $1 if $b =~ /^page\s+(\d+)/i;
+        warn "$cmd\n";
+        push(@@times, $time);
+        push(@@sizes, -s "/tmp/foo");
+        # attempt to figure out number of pages
+        open(B,"/tmp/bar") or next;
+        @@b = <B>;
+        $b = join(/ /, reverse(@@b));
+        $pgs = $1 if $b =~ /^page\s+(\d+)/i;
+    }
+    # report
+    $file =~ s|.*/||;
+    write OUT;
+}
+
+
+    
+@
+
+
+1.1.1.1
+log
+@ps to html conversion & stats collection for asplos7 paper
+@
+text
+@@

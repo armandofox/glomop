@@ -1,0 +1,110 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.13.21.55.37;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@-- IPSEC
+   -- intended to provide communications security --
+      authentication, encryption, etc.
+   -- in a way that can be readily deployed without modifying legacy
+      applications
+      (because the IPSEC implementation is in the OS TCP/IP stack, and
+      just transparently encrypts/authenticates outgoing and incoming
+      IP packets based on a policy configured by the admin)
+   -- both IPv4 and IPv6 versions are available
+   -- modes of usage: host-to-host, host-to-gateway, gateway-to-gateway,
+      outboard encryptor, etc.
+   -- primarily intended for end-to-end security, not per-link security
+      (e.g. gateway might be a firewall which has to be trusted anyway)
+   -- deployment: not yet, but required for IPv6, going into many OS's
+   -- separates packet protocols from key negotiation
+   -- architecture: 3 orthogonal pieces: key negotiation, policy mgmt,
+      on-the-wire cryptographic packet formats
+   -- breakdown
+      -- wire protocols (ESP & AH)
+         -- e.g. | IP | ESP | TCP | payload |
+	 -- ESP for encryption, AH for authentication
+	    -- ESP = encryption + authentication of all subsequent bytes
+	    -- AH = authentication of all subsequent bytes, plus some of header
+	    -- authentication = MAC + sequence number
+	       (why? for replay protection)  (why not timestamp?)
+	       (doesn't this violate the IP protocols stateless nature?)
+	    -- but ESP transforms now always include authentication;
+	       why need AH?  (Describe differences between ESP and AH;
+	       then ask class to brainstorm why AH exists.  firewall, plus
+	       authenticating part of the header)
+	    -- violation of the layering model
+      -- transport mode vs. tunnel mode
+         -- transport: | IP | ESP | TCP | payload |
+	    -- for endpoints
+	 -- tunnel:    | IP | ESP | IP | TCP | payload |
+	    -- for gateways
+      -- also can mix and match (e.g. IP-ESP-AH, IP-ESP-IP-ESP, -- why
+         are these useful? -- but not IP-AH-ESP -- why?)
+      -- security association (SA) =
+         unidirectional traffic flow, uniquely identifies a key.
+	 ESP and AH headers contain a SPI.
+	 (dest host, SPI, protocol type) triple uniquely identifies a SA.
+	 SPI is chosen by dest host (why?) (multicast?)
+      -- soft state: SA's have a 'drop dead' expiration date, as well
+         as a 'time to renegotiate' expiration date (plus similar expiry
+	 options based on packet counts or byte counts)
+      -- ISAKMP/Oakley: key negotiation
+         -- negotiates a security association, i.e. bi-directional SPI pair
+	 -- Diffie-Hellman for forward secrecy
+	 -- naming is a tough issue
+         -- dead candidates: SKIP, Photuris
+      -- policy files
+         -- selection of SA's based on host IP addresses, port numbers, etc.
+	 -- what should you do about receiving non-IPSEC data?
+	    drop it?  or accept it?  (latter favors backwards compatibility for
+	    ease of deployment, but opens you up to attacks )
+   -- bump-in-the-stack encryptors
+      -- principle: interpose at small, simple, open interfaces
+   -- attacks:
+      -- IP forwarding
+         -- or! application-level forwarding (eek)
+      -- fragmentation & bump-in-stack IPSEC modules
+         (defense: tunnel mode)
+      -- threats on multi-user hosts with mutually untrusting users and
+         host keying
+         -- cut-and-paste (paste a TCP payload into a UDP packet destined
+	    for a different port owned by a different user; both use same key)
+	 -- session hijacking
+	 -- defenses?  (use per-user keying -- note that this interestingly
+	    moves IPSEC closer to a transport-layer protocol;
+	    require authentication on all packets)
+      -- (weaknesses of stream ciphers)
+      -- abusing IVs
+      -- short-block attacks
+      -- getting chosen plaintext
+      -- responding to encrypted data with unencrypted, or vice versa
+      -- traffic analysis not protected against
+      -- defenses?
+  -- lots of future work (ipsecond): multicast, gateway discovery, 
+  -- lessons to take away:
+      -- designing cryptographic packet formats is harder than it looks
+      -- encryption with integrity checking is all but useless
+      -- chosen-plaintext attacks are practical
+      -- interpose transparent security mechanisms
+         at small, simple, open interfaces, so legacy apps can gain protection
+      -- the number of systems issues (as opposed to cryptographic issues)
+         is surprisingly large
+@

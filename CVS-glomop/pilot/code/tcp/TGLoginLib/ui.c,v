@@ -1,0 +1,186 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.11.22.48.50;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.11.22.48.50;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <Pilot.h>
+#include "ui.h"
+#include "display.h"
+
+void *saveuistate = NULL;
+Erf saveerf = NULL;
+void *saveerfp = NULL;
+
+typedef struct {
+    long (*down_write)(unsigned char *,long,void *,Erf,void*);
+    void *down_state;
+    void (*down_setterm)(char *,int,int,int,int,void *,Erf,void*);
+
+    Display *dpy;
+    char *term;
+    int termrows, termcols, termx, termy;
+    char *connid;
+
+} UiState;
+
+void *ui_init(long (*down_write)(unsigned char *,long,void *,Erf,void*),
+		void *down_state, Erf erf, void *erfp)
+{
+    UiState *state;
+
+    state = MemPtrNew(sizeof(UiState));
+    if (!state) {
+	ui_fatal("Out of mem");
+	return NULL;
+    }
+
+    state->down_write = down_write;
+    state->down_state = down_state;
+    state->down_setterm = NULL;
+    state->dpy = NULL;
+    state->term = NULL;
+    state->termrows = state->termcols = state->termx = state->termy = 0;
+    state->connid = NULL;
+
+    saveuistate = state;
+
+    return state;
+}
+
+long ui_write(unsigned char *data, long len, void *state_, Erf erf, void *erfp)
+{
+    UiState *state = state_;
+
+    if (len < 0) {
+	/* Clean up */
+	if (state->connid) MemPtrFree(state->connid);
+	if (state->term) MemPtrFree(state->term);
+	if (state->down_write) {
+	    (state->down_write)(data, len, state->down_state, erf, erfp);
+	}
+	MemPtrFree(state);
+	return -1;
+    }
+
+    return (state->down_write)(data, len, state->down_state, erf, erfp);
+}
+
+void ui_dispatch(unsigned char *data, long len, void *state_, Erf erf,
+    void *erfp)
+{
+    UiState *state = state_;
+
+    saveuistate = state_;
+    saveerf = erf;
+    saveerfp = erfp;
+
+    /* If we don't have a display, drop it */
+    if (!state->dpy) return;
+
+    /* Send the data */
+    display_addtxt(state->dpy, data, len);
+}
+
+void ui_setconnid(char *connid, void *state_, Erf erf, void *erfp)
+{
+    UiState *state = state_;
+
+    if (state->connid) {
+	MemPtrFree(state->connid);
+	state->connid = NULL;
+    }
+    if (connid) {
+	state->connid = MemPtrNew(StrLen(connid)+1);
+	if (!state->connid) {
+	    ui_fatal("Out of mem");
+	    return;
+	}
+	StrCopy(state->connid, connid);
+	if (state->dpy) display_status(state->dpy, state->connid);
+    }
+}
+
+void ui_setterm(char *term, int rows, int cols, int x, int y, void *state_,
+    Erf erf, void *erfp)
+{
+    UiState *state = state_;
+
+    if (state->term) {
+        MemPtrFree(state->term);
+        state->term = NULL;
+    }
+    if (term) {
+        state->term = MemPtrNew(StrLen(term)+1);
+        if (!state->term) {
+            ui_fatal("Out of mem");
+            return;
+        }
+        StrCopy(state->term, term);
+    }
+    state->termrows = rows;
+    state->termcols = cols;
+    state->termx = x;
+    state->termy = y;
+
+    if (state->down_setterm) {
+	(state->down_setterm)(state->term, state->termrows, state->termcols,
+				state->termx, state->termy, state->down_state,
+				erf, erfp);
+    }
+}
+
+void ui_set_setterm(
+    void (*down_setterm)(char *,int,int,int,int,void*,Erf,void*),
+    void *state_, Erf erf, void *erfp)
+{
+    UiState *state = state_;
+
+    state->down_setterm = down_setterm;
+    if (state->down_setterm) {
+	(state->down_setterm)(state->term, state->termrows, state->termcols,
+				state->termx, state->termy, state->down_state,
+				erf, erfp);
+    }
+}
+
+void ui_setdpy(Display *dpy, void *state_)
+{
+    UiState *state = state_;
+
+    state->dpy = dpy;
+    if (state->connid) display_status(dpy, state->connid);
+    ui_setterm(NULL, dpy->rows, dpy->cols, 0, 0, state, saveerf, saveerfp);
+}
+@
+
+
+1.1.1.1
+log
+@Top Gun Login Library
+@
+text
+@@

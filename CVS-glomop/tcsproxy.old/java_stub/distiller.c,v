@@ -1,0 +1,237 @@
+head	1.1;
+access;
+symbols
+	Yatin-final:1.1
+	Yatin:1.1.0.6
+	pre-yatin-merge:1.1
+	transend-beta2:1.1
+	fox-dev:1.1
+	java_stub-ng:1.1
+	transend-beta-latest:1.1
+	Aggregators:1.1
+	NoAggregators:1.1
+	iang:1.1.0.4
+	transend-beta:1.1.0.2;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.04.27.06.22.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@changed jpg munger to observe transparency/animation bailout for threshold size based on quality.  fixed gifmunger, but doesnt seem likely we will use it at this point.
+@
+text
+@#include <jni.h>
+
+#include "distinterface.h"
+
+/* Denotes a Java VM */
+static JavaVM *jvm;
+
+/* Pointer to native method interface */
+static JNIEnv *env;
+
+/* Java type info */
+static jclass byteArrayInputStreamClass;
+static jmethodID byteArrayInputStreamConstructor;
+static jclass pushbackInputStreamClass;
+static jmethodID pushbackInputStreamConstructor;
+static jclass byteArrayOutputStreamClass;
+static jmethodID byteArrayOutputStreamConstructor;
+static jmethodID byteArrayOutputStreamToByteArray;
+static jclass HTMLParserClass;
+static jmethodID HTMLParserConstructor;
+static jmethodID HTMLParserParse;
+
+DistillerStatus DistillerInit()
+{
+  JDK1_1InitArgs vm_args; /* JDK 1.1 VM initialization arguments */
+    
+  /* Get the default initialization arguments and set the class 
+   * path */
+  JNI_GetDefaultJavaVMInitArgs(&vm_args);
+    
+  /* load and initialize a Java VM, return a JNI interface 
+   * pointer in env */
+  if (JNI_CreateJavaVM(&jvm, &env, &vm_args) != 0) {
+    return distFatalError;
+  }
+    
+  /* Retrieve type info for the Java classes we are going to use */
+  byteArrayInputStreamClass
+    = (*env)->FindClass(env, "java/io/ByteArrayInputStream");
+  byteArrayOutputStreamClass
+    = (*env)->FindClass(env, "java/io/ByteArrayOutputStream");
+  pushbackInputStreamClass
+    = (*env)->FindClass(env, "java/io/PushbackInputStream");
+  HTMLParserClass = (*env)->FindClass(env, "HTMLParser");
+
+  if (byteArrayInputStreamClass == NULL || byteArrayOutputStreamClass == NULL
+      || pushbackInputStreamClass == NULL || HTMLParserClass == NULL) {
+    return distFatalError;
+  }
+
+  byteArrayInputStreamConstructor
+    = (*env)->GetMethodID(env, byteArrayInputStreamClass, "<init>", "([B)V");
+  byteArrayOutputStreamConstructor
+    = (*env)->GetMethodID(env, byteArrayOutputStreamClass, "<init>", "()V");
+  byteArrayOutputStreamToByteArray
+    = (*env)->GetMethodID(env, byteArrayOutputStreamClass, "toByteArray",
+			  "()[B");
+  pushbackInputStreamConstructor
+    = (*env)->GetMethodID(env, pushbackInputStreamClass, "<init>",
+			  "(Ljava/io/InputStream;)V");
+  HTMLParserConstructor
+    = (*env)->GetMethodID(env, HTMLParserClass, "<init>",
+			  "(Ljava/io/PushbackInputStream;Ljava/io/OutputStream;)V");
+  HTMLParserParse = (*env)->GetMethodID(env, HTMLParserClass, "parse", "()V");
+  if (byteArrayInputStreamConstructor == NULL
+      || byteArrayOutputStreamConstructor == NULL
+      || pushbackInputStreamConstructor == NULL
+      || HTMLParserConstructor == NULL) {
+    return distFatalError;
+  }
+
+  return distOk;
+}
+
+void DistillerCleanup()
+{
+  /* This call should fail because JDK 1.1 does not support unloading the VM */
+  (*jvm)->DestroyJavaVM(jvm);
+}
+
+
+DistillerStatus DistillerMain(Argument *args, int numberOfArgs,
+			      DistillerInput *input, DistillerOutput *output,
+			      gm_Bool *freeOutputBuffer)
+{
+  jbyteArray inputArray, outputArray;
+  jbyte *nativeInputArray, *nativeOutputArray;
+  jobject byteArrayInputStream;
+  jobject pushbackInputStream;
+  jobject byteArrayOutputStream;
+  jobject HTMLParser;
+  jsize outputArrayLen;
+
+  if (strcmp(input->mimeType, "text/html")) {
+    return distFatalError;
+  }
+
+  /* Create a ByteArray for input */
+  inputArray = (*env)->NewByteArray(env, input->length);
+  if (inputArray == NULL) {
+    return distFatalError;
+  }
+
+  /* Get a C buffer of the ByteArray */
+  nativeInputArray = (*env)->GetByteArrayElements(env, inputArray, NULL);
+  if (nativeInputArray == NULL) {
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Copy the input data into the ByteArray */
+  memcpy(nativeInputArray, input->data, input->length);
+
+  /* Release the C buffer */
+  (*env)->ReleaseByteArrayElements(env, inputArray, nativeInputArray, 0);
+
+  /* Create a ByteArrayInputStream from the ByteArray */
+  byteArrayInputStream = (*env)->NewObject(env, byteArrayInputStreamClass,
+					   byteArrayInputStreamConstructor,
+					   inputArray);
+  if (byteArrayInputStream == NULL) {
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+    
+  /* Create a PushbackInputStream from the ByteArrayInputStream */
+  pushbackInputStream = (*env)->NewObject(env, pushbackInputStreamClass,
+					  pushbackInputStreamConstructor,
+					  byteArrayInputStream);
+  if (pushbackInputStream == NULL) {
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Create a ByteArrayOutputStream */
+  byteArrayOutputStream = (*env)->NewObject(env, byteArrayOutputStreamClass,
+					    byteArrayOutputStreamConstructor);
+  if (byteArrayOutputStream == NULL) {
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Create a HTMLParser */
+  HTMLParser = (*env)->NewObject(env, HTMLParserClass, HTMLParserConstructor,
+				 pushbackInputStream, byteArrayOutputStream);
+  if (HTMLParser == NULL) {
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Call the parse method */
+  (*env)->CallVoidMethod(env, HTMLParser, HTMLParserParse);
+  if ((*env)->ExceptionOccurred(env) != NULL) {
+    (*env)->ExceptionDescribe(env);
+    (*env)->DeleteLocalRef(env, HTMLParser);
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;    
+  }
+
+  /* Get a C buffer of the ByteArrayOutputStream */
+  outputArray = (*env)->CallObjectMethod(env, byteArrayOutputStream,
+					 byteArrayOutputStreamToByteArray);
+  outputArrayLen = (*env)->GetArrayLength(env, outputArray);
+  nativeOutputArray = (*env)->GetByteArrayElements(env, outputArray, NULL);
+  if (nativeOutputArray == NULL) {
+    (*env)->DeleteLocalRef(env, outputArray);
+    (*env)->DeleteLocalRef(env, HTMLParser);
+    (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+    (*env)->DeleteLocalRef(env, pushbackInputStream);
+    (*env)->DeleteLocalRef(env, byteArrayInputStream);
+    (*env)->DeleteLocalRef(env, inputArray);
+    return distFatalError;
+  }
+
+  /* Allocate a buffer to copy the array and return to caller */
+  output->data = DistillerMalloc(outputArrayLen);
+  memcpy(output->data, nativeOutputArray, outputArrayLen);
+  output->length = outputArrayLen;
+  strcpy(output->mimeType, "application/x-distilled-html");
+  *freeOutputBuffer = gm_True;
+
+  /* Release the C buffer of the ByteArrayOutputStream */  
+  (*env)->ReleaseByteArrayElements(env, outputArray, nativeOutputArray, 0);
+
+  /* Remove all references */
+  (*env)->DeleteLocalRef(env, outputArray);
+  (*env)->DeleteLocalRef(env, HTMLParser);
+  (*env)->DeleteLocalRef(env, byteArrayOutputStream);
+  (*env)->DeleteLocalRef(env, pushbackInputStream);
+  (*env)->DeleteLocalRef(env, byteArrayInputStream);
+  (*env)->DeleteLocalRef(env, inputArray);
+
+  return distOk;
+}
+@

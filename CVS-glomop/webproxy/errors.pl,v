@@ -1,0 +1,166 @@
+head	1.2;
+access;
+symbols
+	release:1.1
+	geoworks:1.1.2.1
+	pregeo:1.1
+	geoworks-0701:1.1.2.1
+	geoworks-062696:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.07.04.02.38.47;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.02.08.38.37;	author fox;	state Exp;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	96.07.04.03.18.45;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#  these routines are in the same package as those of child.pl.
+#  they deal with error and signal handling and reporting.
+#
+
+
+$Const{GenericError} = <<EndHtml;
+    <p>This error was reported by <I>$Const{Proxy}</I>,
+    not by the remote HTTP server.</P>
+    If you believe you have reached this recording in error,
+    <A HREF=mailto:fox\@@cs.berkeley.edu>send us email</A>
+    explaining how to reproduce this problem.
+EndHtml
+
+sub client_disallowed {
+    local($ipaddr) = shift;                 # ip addr that was denied
+    local($html) = &regpage_with_prefs("default");
+    &http_error("502 Unregistered Host $ipaddr", $html,
+                "$Const{Proxy} Registration");
+    1;
+}
+
+sub http_error {
+    local($msg) = shift;
+    local($body) = shift || $Const{GenericError};
+    local($title) = shift || "Pythia Error";
+    local($errstr);
+    local(@@errstr) = ($msg ? "$Const{HTTPVersion} $msg"
+                      : "$Const{HTTPVersion} 505 Pythia Internal Intercept") ;
+    push(@@errstr, "Server: $Const{Proxy} $Const{Rev}");
+    push(@@errstr, "Content-type: text/html");
+    push(@@errstr, "");                      # blank line separator
+    push(@@errstr,"<HTML><HEAD><TITLE>$title</TITLE></HEAD><BODY>");
+    push(@@errstr,"<H1>$msg</H1>") if $msg;
+    push(@@errstr, $body);
+    push(@@errstr,"</BODY></HTML>");
+    &send_client($errstr = join($Const{Crlf},@@errstr));
+    &send_client("$Const{Crlf}$Const{Crlf}");
+    &debug('http',$msg);
+    &child_cleanup;                         # never returns
+}
+    
+#
+#  This subr is called if SIGINT is received by an executing child
+#
+sub child_interrupted {
+    &http_error("500 someone sent me a SIGINT, bye bye...");
+    &child_cleanup;
+}
+
+sub child_cleanup {
+    $Socket->killsock();
+    &debug('fork', "*** Cleaned up child $$\n");
+    # only exit if we are a child.
+    exit 0 unless $$ == $Const{Ppid};
+}
+
+@
+
+
+1.1
+log
+@added errors and jpeg
+@
+text
+@d28 2
+a29 1
+    local(@@errstr) = ("$Const{HTTPVersion} $msg") ;
+d33 2
+a34 2
+    push(@@errstr,"<HEAD><TITLE>Pythia Error</TITLE></HEAD>");
+    push(@@errstr,"<BODY><H1>$msg</H1>");
+d36 1
+a36 1
+    push(@@errstr,"</BODY>");
+@
+
+
+1.1.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d18 1
+a18 1
+    &http_error($con,"502 Unregistered Host $ipaddr", $html,
+a22 15
+#
+#  Construct minimal standard HTTP "OK" headers (including blank line
+#  separator!) to accompany a response; return a string.
+#
+sub minimal_headers {
+    my $stuff= shift;
+    return(join($Const{Crlf},
+                "$Const{HTTPVersion} 200 OK",
+                "Content-type: text/html",
+                "Content-length: " . length($stuff),
+                $Const{Crlf}));
+}
+                
+    
+
+a23 1
+    my $con = shift;
+d28 1
+a28 2
+    local(@@errstr) = ($msg ? "$Const{HTTPVersion} $msg"
+                      : "$Const{HTTPVersion} 505 Pythia Internal Intercept") ;
+d32 2
+a33 2
+    push(@@errstr,"<HTML><HEAD><TITLE>$title</TITLE></HEAD><BODY>");
+    push(@@errstr,"<H1>$msg</H1>") if $msg;
+d35 3
+a37 3
+    push(@@errstr,"</BODY></HTML>");
+    &send_client($con,($errstr = join($Const{Crlf},@@errstr)));
+    &send_client($con,"$Const{Crlf}$Const{Crlf}");
+d39 1
+a39 1
+    &child_cleanup($con);                         # never returns
+d46 1
+a46 1
+    &http_error($con,"500 someone sent me a SIGINT, bye bye...");
+d51 1
+a51 2
+    my $con = shift;
+    eval { $con->{"sock"}->killsock(); }
+@

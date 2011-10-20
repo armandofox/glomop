@@ -1,0 +1,89 @@
+head	1.1;
+access;
+symbols
+	SOSP:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.09.11.10.17;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@early observations by steve from when we started playing with the software
+@
+text
+@From: Steven Gribble <gribble@@CS.Berkeley.EDU>
+Subject: various cache/thread/front-end observations
+To: glomop@@full-sail.CS.Berkeley.EDU
+Date: Tue, 04 Feb 1997 14:29:31 -0800
+
+I've been hammering the cache front end and cache partitions with various
+different types of workload, to try and find out roughly what they can
+handle, where things break down, etc.  Here's what I've found so far,
+all done on ultras, and some of which we saw before:
+
+1) Sending bursts of traffic vs. smooth traffic seems to make little
+   difference with respect to performance and capacity.  I assume that
+   smoothing is happening adequately well on the network, in the OS, or in
+   our application code.
+
+2) One machine can handle a _great deal_ of load.  I've run a cache
+   partition, four front ends, and four traffic load generators running
+   at a total of about 60 requests per second, all on a single node, and it
+   could handle it.
+
+3) A single cache partition can handle approximately 80-90 requests per
+   second, which is about 5 times the peak load we'll ever see.  This means
+   that the biggest benefits of cache partitioning will be from additional
+   cache size (i.e. more disk/memory) and from redundancy/fault
+   tolerance.  (I measured this by blasting traffic from multiple playback
+   engines on other machines at a cold cache partition.  I know the network
+   wasn't the bottleneck, as blasting between multiple (playback engine,
+   cold cache partition) pairs doesn't have this 80-90 request/second total
+   limit.  I was able to go up over 200.)
+
+4) Thread overhead/context switching seems to be very cheap.  The playback
+   engine is creating and destroying two threads for _every trace entry_,
+   one to deal with the trace entry and one to schedule the next trace
+   entry.  A single playback engine can seemingly handle more than 100
+   requests per second;  I'm not sure if the bottleneck after that is
+   reading from disk, the TCP session startup, printing status messages
+   on the screen (!!), or thread overhead.
+
+5) Having many threads around is expensive in terms of memory.  There is
+   on the order of 10-60 MB of memory required for 200-300 threads,
+   depending on the particular app-specific data per thread.  This means
+   that there is a danger of thrashing on the front-end machine if we're
+   sloppy about how much state we keep.
+
+6) On average, a cache miss takes about 4-8 seconds, and a cache hit is
+   measured on the order of milliseconds.  At peak 15 requests per second,
+   this implies we'll have about a hundred outstanding tasks, which
+   implies about 200 open file descriptors and 100 threads needed at the
+   proxy front-end.
+
+7) Even at crushingly high load, the latency seen by the user through the
+   front-end/cache system is low, and the front-end/cache machines are
+   seemingly not highly taxed - the CPU is about 10% busy, 15% i/o wait,
+   10% kernel, and the rest idle.
+
+This all begs the question, so where is the bottleneck, anyway?  Armando is
+right now instrumenting the thread code, so hopefully we'll have an answer
+soon.  Also, I have yet to measure the web cache working set size as a
+function of the number of users, which will tell us how much disk we'll
+need to get a desired cache hit rate (including the max theoretical
+hit rate).
+
+--Steve
+
+
+@

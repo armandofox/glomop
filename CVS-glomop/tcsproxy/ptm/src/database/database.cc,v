@@ -1,0 +1,647 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.9
+	Yatin:1.9.0.2
+	pre-yatin-merge:1.9
+	transend-beta2:1.9
+	fox-dev:1.9
+	ptm-ng:1.8
+	transend-beta-latest:1.8
+	Aggregators:1.8
+	NoAggregators:1.8
+	iang:1.8.0.4
+	transend-beta:1.8.0.2
+	SOSP:1.8
+	stable_ptm:1.7
+	merged_preintegrate:1.5
+	heisenbug:1.5
+	PRE_INTEGRATION:1.5
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.9
+date	97.06.14.05.05.48;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.17.03.01.19;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.05.20.20.54;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.05.03.49.03;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.22;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.08.12.21;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.55;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.51;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.00;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.00;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@#include "database.h"
+
+
+Index::~Index()
+{
+  if (buckets!=NULL) {
+    delete [] buckets;
+    buckets = NULL;
+    numberOfBuckets = 0;
+  }
+}
+
+
+/*void
+Index::Remove(IndexKey *key)
+{
+  int     hashValue = Normalize(key->Hash());
+  ListIdx idx, prev, next;
+  Bucket  *bucket = &buckets[hashValue];
+
+  prev = 0;
+  idx = bucket->Head();
+
+  while (bucket->IsDone(idx)==gm_False) {
+    if (getIndexKey(bucket->Record(idx))->Equal(key)==gm_True) {
+      idx = bucket->Next(idx);
+      bucket->DeleteAfter(prev);
+    }
+    else {
+      next = bucket->Next(idx);
+      prev = idx;
+      idx  = next;
+    }
+  }
+}*/
+void
+Index::Remove(IndexKey *key)
+{
+  ListIndex idx, next;
+  Bucket    *bucket = getBucket(key);
+
+  idx = bucket->BeginTraversal();
+  while (bucket->IsDone(idx)==gm_False) {
+    if (getIndexKey(bucket->getData(idx))->Equal(key)==gm_True) {
+      next = bucket->getNext(idx);
+      bucket->Remove(idx);
+      idx = next;
+    }
+    else {
+      idx = bucket->getNext(idx);
+    }
+  }
+  bucket->EndTraversal();
+}
+
+
+void
+Index::Remove(DatabaseRecord *record)
+{
+  getBucket(getIndexKey(record))->Remove(record);
+}
+
+
+DatabaseRecord*
+Index::FindOne(IndexKey *key)
+{
+  ListIndex      idx;
+  Bucket         *bucket = getBucket(key);
+  DatabaseRecord *returnValue=NULL;
+
+  idx = bucket->BeginTraversal();
+  for (; bucket->IsDone(idx)==gm_False; idx=bucket->getNext(idx)){
+    if (getIndexKey(bucket->getData(idx))->Equal(key)==gm_True) {
+      returnValue = bucket->getData(idx);
+      break;
+    }
+  }
+  bucket->EndTraversal();
+  return returnValue;
+}
+
+
+void
+Index::Find(IndexKey *key, List<DatabaseRecord> *list)
+{
+  ListIndex idx;
+  Bucket *bucket = getBucket(key);
+
+  idx = bucket->BeginTraversal();
+  for (; bucket->IsDone(idx)==gm_False; idx=bucket->getNext(idx)){
+    if (getIndexKey(bucket->getData(idx))->Equal(key)==gm_True) {
+      list->InsertAtHead(bucket->getData(idx));
+      // ignore return value here. if gm_False, then we are out of memory
+      // can't do much about it!
+    }
+  }
+  bucket->EndTraversal();
+}
+
+
+Database::~Database()
+{
+  // don't need to do anything here 'coz the destructors for 'indices' and
+  // 'records' will take care of themselves
+
+  /*while (indices.IsEmpty()==gm_False) {
+    Index *index = indices.RemoveFromHead();
+    delete index;
+  }  
+
+  while (records.IsEmpty()==gm_False) {
+    //DatabaseRecord *record = records.Record(records.Head());
+    records.RemoveFromHead();
+    //delete record;
+  }*/
+}
+
+
+gm_Bool
+Database::Add(DatabaseRecord *record) 
+{
+  ListIndex idx;
+
+  if (records.InsertAtHead(record)==gm_False) return gm_False;
+
+  idx = indices.BeginTraversal();
+  for (; indices.IsDone(idx)==gm_False; idx=indices.getNext(idx)) {
+    Index *index = indices.getData(idx);
+    if (index->Add(record)==gm_False) {
+      // remove the record from the database and all previous indices
+      records.Remove(record);
+      for (idx=indices.getPrev(idx); 
+	   indices.IsDone(idx)==gm_False; 
+	   idx=indices.getPrev(idx)) {
+	indices.getData(idx)->Remove(record);
+      }
+      indices.EndTraversal();
+      return gm_False;
+    }
+  }
+  indices.EndTraversal();
+  return gm_True;
+}
+
+
+void
+Database::Remove(DatabaseRecord *record)
+{
+  ListIndex idx;
+  idx = indices.BeginTraversal();
+  for (; indices.IsDone(idx)==gm_False; idx=indices.getNext(idx)) {
+    Index *index = indices.getData(idx);
+    index->Remove(record);
+  }
+  indices.EndTraversal();
+  records.Remove(record);
+}
+
+
+void
+Database::DeleteAllRecords()
+{
+  DatabaseRecord *record;
+  while (records.IsEmpty()==gm_False) {
+    //record = records.RemoveFromHead();
+    record = records.PeekAtHead();
+    Remove(record);
+    if (record!=NULL) delete record;
+  }
+}
+
+
+gm_Bool
+Database::ForEach(ForEachFunction function, void *functionData)
+{
+  ListIndex idx, next;
+
+  idx = records.BeginTraversal();
+  while(records.IsDone(idx) == gm_False) {
+    next = records.getNext(idx);
+    if ((*function)(this, records.getData(idx), functionData)==gm_False) {
+      records.EndTraversal();
+      return gm_False;
+    }
+    idx = next;
+  }
+  records.EndTraversal();
+  return gm_True;
+}
+
+
+
+@
+
+
+1.8
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d165 3
+a167 1
+    record = records.RemoveFromHead();
+@
+
+
+1.7
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d25 1
+a25 1
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==gm_True) {
+d39 2
+a40 5
+  int     hashValue = Normalize(key->Hash());
+  ListIdx idx, next;
+  Bucket  *bucket = &buckets[hashValue];
+
+  idx = bucket->Head();
+d42 1
+d44 4
+a47 4
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==gm_True) {
+      next = bucket->Next(idx);
+      bucket->DeleteNode(idx);
+      idx  = next;
+d50 1
+a50 1
+      idx = bucket->Next(idx);
+d53 1
+d60 1
+a60 2
+  int hashValue = Normalize(GetIndexKey(record)->Hash());
+  buckets[hashValue].Remove(record);
+d67 9
+a75 6
+  ListIdx idx;
+  Bucket  *bucket = getBucket(key);
+
+  for (idx=bucket->Head();bucket->IsDone(idx)==gm_False;idx=bucket->Next(idx)){
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==gm_True) {
+      return (bucket->Record(idx));
+d78 2
+a79 2
+
+  return NULL;
+d84 1
+a84 1
+Index::Find(IndexKey *key, LinkedList<DatabaseRecord> *list)
+d86 2
+a87 2
+  ListIdx idx;
+  Bucket  *bucket = getBucket(key);
+d89 4
+a92 3
+  for (idx=bucket->Head();bucket->IsDone(idx)==gm_False;idx=bucket->Next(idx)){
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==gm_True) {
+      list->InsertAtHead(bucket->Record(idx));
+d97 1
+d103 5
+a107 3
+  while (indices.IsEmpty()==gm_False) {
+    Index *index = indices.Record(indices.Head());
+    indices.DeleteNode(indices.Head());
+d113 1
+a113 1
+    records.DeleteNode(records.Head());
+d115 1
+a115 1
+  }
+d122 1
+a122 1
+  ListIdx idx, newIdx;
+d126 3
+a128 2
+  for (idx=indices.Head(); indices.IsDone(idx)==gm_False; idx=indices.Next(idx)) {
+    Index *index = indices.Record(idx);
+d130 1
+d132 4
+a135 2
+      for (newIdx=indices.Head(); newIdx!=idx; newIdx=indices.Next(newIdx)) {
+	indices.Record(newIdx)->Remove(record);
+d137 1
+d141 1
+a141 1
+
+d149 4
+a152 4
+  ListIdx idx;
+
+  for (idx=indices.Head(); indices.IsDone(idx)==gm_False; idx=indices.Next(idx)) {
+    Index *index = indices.Record(idx);
+d155 1
+a155 1
+
+d165 1
+a165 2
+    record = records.Record(records.Head());
+    records.DeleteNode(records.Head());
+d174 1
+a174 1
+  ListIdx idx, next;
+d176 1
+a176 1
+  idx = records.Head();
+d178 3
+a180 2
+    next = records.Next(idx);
+    if ((*function)(this, records.Record(idx), functionData)==gm_False) 
+d182 1
+d185 1
+a185 1
+
+@
+
+
+1.6
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@a68 1
+  int     hashValue = Normalize(key->Hash());
+d70 1
+a70 1
+  Bucket  *bucket = &buckets[hashValue];
+a84 1
+  int     hashValue = Normalize(key->Hash());
+d86 1
+a86 1
+  Bucket  *bucket = &buckets[hashValue];
+d88 1
+a88 1
+  for (idx=bucket->Head(); bucket->IsDone(idx)==gm_False; idx=bucket->Next(idx)){
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d73 1
+a73 1
+  for (idx=bucket->Head(); bucket->IsDone(idx)==gm_False; idx=bucket->Next(idx)){
+@
+
+
+1.4
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d24 2
+a25 2
+  while (bucket->IsDone(idx)==FALSE) {
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==TRUE) {
+d45 2
+a46 2
+  while (bucket->IsDone(idx)==FALSE) {
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==TRUE) {
+d73 2
+a74 2
+  for (idx=bucket->Head(); bucket->IsDone(idx)==FALSE; idx=bucket->Next(idx)){
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==TRUE) {
+d90 2
+a91 2
+  for (idx=bucket->Head(); bucket->IsDone(idx)==FALSE; idx=bucket->Next(idx)){
+    if (GetIndexKey(bucket->Record(idx))->Equal(key)==TRUE) {
+d93 1
+a93 1
+      // ignore return value here. if false, then we are out of memory
+d102 1
+a102 1
+  while (indices.IsEmpty()==FALSE) {
+d108 1
+a108 1
+  while (records.IsEmpty()==FALSE) {
+d116 1
+a116 1
+Bool
+d121 1
+a121 1
+  if (records.InsertAtHead(record)==FALSE) return FALSE;
+d123 1
+a123 1
+  for (idx=indices.Head(); indices.IsDone(idx)==FALSE; idx=indices.Next(idx)) {
+d125 1
+a125 1
+    if (index->Add(record)==FALSE) {
+d130 1
+a130 1
+      return FALSE;
+d134 1
+a134 1
+  return TRUE;
+d143 1
+a143 1
+  for (idx=indices.Head(); indices.IsDone(idx)==FALSE; idx=indices.Next(idx)) {
+d156 1
+a156 1
+  while (records.IsEmpty()==FALSE) {
+d164 1
+a164 1
+Bool
+d170 1
+a170 1
+  while(records.IsDone(idx) == FALSE) {
+d172 2
+a173 2
+    if ((*function)(this, records.Record(idx), functionData)==FALSE) 
+      return FALSE;
+d177 1
+a177 1
+  return TRUE;
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@a65 45
+/*void
+Index::Remove(DatabaseRecord *record)
+{
+  int     hashValue = Normalize(GetIndexKey(record)->Hash());
+  ListIdx idx, next;
+  Bucket  *bucket = &buckets[hashValue];
+
+  idx = bucket->Head();
+
+  while (bucket->IsDone(idx)==FALSE) {
+    if (record==bucket->Record(idx)) {
+      next = bucket->Next(idx);
+      bucket->DeleteNode(idx);
+      idx  = next;
+    }
+    else {
+      idx = bucket->Next(idx);
+    }
+  }
+}*/
+
+/*void
+Index::Remove(DatabaseRecord *record)
+{
+  int     hashValue = Normalize(GetIndexKey(record)->Hash());
+  ListIdx idx, prev, next;
+  Bucket  *bucket = &buckets[hashValue];
+
+  prev = 0;
+  idx = bucket->Head();
+
+  while (bucket->IsDone(idx)==FALSE) {
+    if (record==bucket->Record(idx)) {
+      idx = bucket->Next(idx);
+      bucket->DeleteAfter(prev);
+    }
+    else {
+      next = bucket->Next(idx);
+      prev = idx;
+      idx  = next;
+    }
+  }
+}*/
+
+
+a99 23
+/*Bool
+Index::ForEach(ForEachFunction function, void *functionData)
+{
+  int     bucketNumber = 0;
+  ListIdx idx;
+  Bucket  *bucket;
+
+  for (bucketNumber=0; bucketNumber<numberOfBuckets; bucketNumber++) {
+    bucket = &buckets[bucketNumber];
+
+    for (idx = bucket->Head(); 
+	 bucket->IsDone(idx) == FALSE; 
+	 idx = bucket->Next(idx)){
+
+      if ((*function)(bucket->Record(idx), functionData)==FALSE) return FALSE;
+    }
+  }
+
+  return TRUE;
+}*/
+
+
+
+a103 1
+    //indices.DeleteAfter(0);
+d109 1
+a109 2
+    DatabaseRecord *record = records.Record(records.Head());
+    //records.DeleteAfter(0);
+d111 1
+a111 1
+    delete record;
+d155 6
+a160 2
+  while (records.IsEmpty()==FALSE) 
+    Remove(records.Record(records.Head()));
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d233 1
+a233 1
+  ListIdx idx;
+d235 6
+a240 4
+  for (idx = records.Head(); 
+       records.IsDone(idx) == FALSE; 
+       idx = records.Next(idx)) {
+    if ((*function)(records.Record(idx), functionData)==FALSE) return FALSE;
+d242 1
+a242 1
+  
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d222 8
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

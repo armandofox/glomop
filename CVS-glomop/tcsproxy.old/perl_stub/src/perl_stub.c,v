@@ -1,0 +1,1069 @@
+head	1.26;
+access;
+symbols
+	Yatin-final:1.25.2.1
+	Yatin:1.25.0.2
+	pre-yatin-merge:1.25
+	transend-beta2:1.20
+	fox-dev:1.20
+	perl_stub-ng:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.3.0.4
+	transend-beta:1.3.0.2;
+locks; strict;
+comment	@ * @;
+
+
+1.26
+date	98.01.16.22.16.07;	author yatin;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.10.25.22.57.00;	author gribble;	state Exp;
+branches
+	1.25.2.1;
+next	1.24;
+
+1.24
+date	97.09.30.04.10.04;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.09.26.03.04.12;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.09.06.02.06.38;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.09.06.01.08.55;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.08.05.20.54.11;	author gribble;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.08.04.22.53.22;	author gribble;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.07.30.02.28.24;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.07.25.01.06.40;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.07.24.03.19.05;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.07.15.02.43.15;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.07.11.22.15.07;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.06.23.04.06.01;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.06.19.00.27.14;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.06.14.15.30.47;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.06.12.18.31.52;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.05.14.23.18.32;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.05.14.22.43.22;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.05.11.01.50.44;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.05.01.21.45.38;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.04.30.22.43.09;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.30.22.01.45;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.04.24.01.19.20;	author aspolito;	state Exp;
+branches
+	1.3.4.1;
+next	1.2;
+
+1.2
+date	97.04.21.22.51.49;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.21.22.37.00;	author aspolito;	state Exp;
+branches;
+next	;
+
+1.3.4.1
+date	97.05.06.23.49.44;	author iang;	state Exp;
+branches;
+next	;
+
+1.25.2.1
+date	97.12.01.22.19.26;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.26
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include "EXTERN.h"
+#include "perl.h"
+
+#include "config_tr.h"
+#include "optdb.h"
+#include "distinterface.h"
+#ifdef INST
+FILE *Log;
+#endif
+MonitorClientID mon;
+
+#ifdef __cplusplus
+#  define EXTERN_C extern "C"
+#else
+#  define EXTERN_C extern
+#endif
+
+static PerlInterpreter *dist_perl;
+static void xs_init(void);
+
+/*
+ * given a list of user args and a stack pointer SV** it pushes the args
+ * onto the stack in the same ofrmat that perl pushes a %array on the stack
+ * keys = argument ids, values = argument values.
+ */
+static SV**
+push_args_onto_stack(Argument *args, int nargs, register SV **sp) {
+   int i;
+   char tmparg[1 + 10 + 1]; /* [sfi]\d+\0, e.g. "s11" */
+   char argtype;
+   char *tmpstr;
+   SV *argsv;
+
+   for (i = 0; i < nargs; i++) {
+    switch ARG_TYPE(args[i]) {      
+    case typeString:           
+      argtype = 's';
+      tmpstr = ARG_STRING(args[i]);
+      argsv = newSVpv(tmpstr,strlen(tmpstr));
+      break;
+    case typeDouble:
+      argtype = 'f';
+      argsv = newSVnv(ARG_DOUBLE(args[i]));
+      break;
+    case typeInt:
+      argtype = 'i';
+      argsv = newSViv(ARG_INT(args[i]));
+      break;
+    default:
+      fprintf(stderr, "Argument id %ld has bad type\n", ARG_ID(args[i]));
+      break;
+    }
+
+    snprintf(tmparg, sizeof(tmparg)-1, "%c%d", argtype, ARG_ID(args[i]));
+/*    sprintf(tmparg, "%c%d", argtype, ARG_ID(args[i])); */
+    XPUSHs(sv_2mortal(newSVpv(tmparg, strlen(tmparg))));
+    XPUSHs(sv_2mortal(argsv));
+  }
+  return sp;
+}
+
+/*
+ * should become a perl function.
+ */
+DistillerStatus
+ComputeDistillationCost(Argument *args, int numArgs,
+                        DistillerInput *in,
+                        DistillationCost *cost)
+{
+  cost->estimatedTime_ms = DataLength(in);
+  return distOk;
+}
+
+/*
+ * opens the perl file in PERL_DIR with a name = to the distiller type (with 
+ * /'s turned into .'s.  Then calls the perl function DisitillerInit in 
+ * that file.
+ */
+DistillerStatus
+DistillerInit(C_DistillerType distType, int argc, const char * const *argv) {
+  int count;
+  int ret_val;
+  char **perl_args;
+  const char *tmp;
+  register SV **sp;
+  int i,j;
+  int exitstatus;
+
+  dist_perl = perl_alloc();
+  perl_construct(dist_perl);
+
+  perl_args = DistillerMalloc((4+argc) * sizeof(char *));
+
+  i = 0;
+  perl_args[i++] = "";          /* perl "binary" name */
+  
+  tmp = Options_Find((Options) NULL, "proxy.perlmod");
+  if (tmp != NULL  &&  *tmp != '\0') {
+    /* include path for perl modules on local site */
+    perl_args[i] = ALLOCA(1 + 2 + strlen(tmp));
+    if (strncmp(tmp, "-I", 2) == 0) {
+      strcpy(perl_args[i], tmp);
+    } else {
+      strcpy(perl_args[i], "-I");
+      strcat(perl_args[i], tmp);
+    }
+    i++;
+  }
+  if ((tmp = Options_Find((Options) NULL, "proxy.home")) != NULL) {
+    /* include path for 'xs' stuff in proxy */
+    const char *xspath = "/xs/lib";
+    perl_args[i] = ALLOCA(1 + strlen("-I") +  strlen(tmp) + strlen(xspath));
+    strcpy(perl_args[i], "-I");
+    strcat(perl_args[i], tmp);
+    strcat(perl_args[i], xspath);
+    i++;
+  } else {
+    /* no proxy.home -- probably an error */
+    fprintf(stderr, "Warning: no proxy.home configuration option found--"
+            "this will almost certainly cause an error\n");
+  }
+
+  /* copy remaining arguments */
+  for (j=0; j<argc; j++)
+    perl_args[i++] = (char *) argv[j];
+  /* make last arg NULL */
+  perl_args[i] = NULL;
+  
+  exitstatus = perl_parse(dist_perl, xs_init, i, (char **)perl_args, NULL);
+
+  DistillerFree(perl_args);
+
+  if (exitstatus)
+    return distFatalError;
+
+  /*  dSP; */
+  sp = stack_sp;
+  ENTER;
+  SAVETMPS;
+
+  PUSHMARK(sp);
+
+  count = perl_call_pv("DistillerInit", G_NOARGS | G_SCALAR | G_EVAL);
+
+  /* Check the eval first */
+  if (SvTRUE(GvSV(errgv))) {
+    fprintf(stderr,"perl_stub: calling DistillerInit: %s\n", SvPV(GvSV(errgv), na));
+    (void)POPs ;
+    return distFatalError;
+  }
+  if (count != 1)
+    return distFatalError;      /* init routine didn't return 1 arg */
+
+  ret_val = POPi;
+  
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+  
+  return ret_val;
+}
+
+
+/* 
+ * perl distiller takes 4 vals
+ * 1) input data
+ * 2) input metadata (ie headers)
+ * 3) input mimetype as deduced by frontend (obsolete?)
+ * 4) assoc array of args
+ * you should say something like:
+ * my ($data,$metadata,$mimetype,%args) = @@_;
+ *
+ * perl distiller main returns 4 vals
+ * 1) output data
+ * 2) output metadata
+ * 3) output mimetype
+ * 4) return status
+ */
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+              DistillerInput *din,
+              DistillerOutput *dout)
+{
+  int count;
+  int ret_stat = distFatalError;
+  SV * ret_sv;
+  char * ret_sv_val;
+  unsigned int i;
+
+  dSP;
+
+  DataNeedsFree(dout, gm_True);
+  MetadataNeedsFree(dout, gm_True);
+
+  ENTER;
+  SAVETMPS;
+
+  PUSHMARK(sp);
+
+  /* if we have a page of size zero we can't just create a zero length SVpv */
+  if (DataLength(din)) {
+    XPUSHs (sv_2mortal(newSVpv(DataPtr(din), DataLength(din))));
+  } else {
+    XPUSHs (sv_2mortal(newSVpv("", 0)));
+  }
+  if (MetadataLength(din)) {
+    XPUSHs (sv_2mortal(newSVpv(MetadataPtr(din), MetadataLength(din))));
+  } else {
+    XPUSHs (sv_2mortal(newSVpv("", 0)));
+  }
+  XPUSHs (sv_2mortal(newSVpv(din->mimeType, strlen(din->mimeType))));
+  sp = push_args_onto_stack(args, nargs, sp);
+
+  PUTBACK;
+
+  /* call perl */
+  count = perl_call_pv("DistillerMain", G_ARRAY | G_EVAL);
+
+  SPAGAIN;
+
+  /* count is the number of arguments returned */
+  /* only first 4 args are looked at */
+  while (count > 4) {
+    (void)POPs;
+    count--;
+  }
+  
+  /* Check the eval first */
+  if (!SvTRUE(GvSV(errgv)) && (count == 4)) {
+    /* return status */
+    ret_stat = POPi;
+
+    /* mimetype */
+    ret_sv = POPs;
+    strncpy(dout->mimeType, SvPV(ret_sv, na), MAX_MIMETYPE-1);
+    dout->mimeType[MAX_MIMETYPE-1] = 0;
+    
+    /* metadata */
+    ret_sv = POPs;
+    ret_sv_val = SvPV(ret_sv, i);
+    SetMetadataLength(dout, i);
+    SetMetadata(dout, (char *) DistillerMalloc(i));
+    memcpy(MetadataPtr(dout), ret_sv_val, i);
+
+    /* and data */
+    ret_sv = POPs;
+    ret_sv_val = SvPV(ret_sv, i);
+    SetDataLength(dout, i);
+    SetData(dout, (char *) DistillerMalloc(i));
+    memcpy(DataPtr(dout), ret_sv_val, i);
+   
+  } else {
+    ret_stat = distFatalError;
+    DataNeedsFree(dout, gm_False);
+    MetadataNeedsFree(dout, gm_False);
+    if (count != 4) {                      /* wrong number of args */
+      fprintf(stderr,"perl_stub: wrong number of arguments returned from DistillerMain\n");
+    }
+    fprintf(stderr,"perl_stub: calling DistillerMain $@@ = %s\n", SvPV(GvSV(errgv), na));
+  } 
+
+  PUTBACK;
+  FREETMPS;
+  LEAVE;
+
+  return((DistillerStatus)ret_stat);
+}
+
+/*
+ *  The following magic is necessary to allow the embedded Perl interpreter
+ *  to dynamically load extensions.  Don't touch it unless you know what
+ *  you're doing.  (This code stolen from perl_main.c)
+ */
+
+/* Do not delete this line--writemain depends on it */
+EXTERN_C void boot_DynaLoader _((CV* cv));
+
+static void
+xs_init()
+{
+  /*  dXSUB_SYS; */
+    char *file = __FILE__;
+    {
+        newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
+    }
+}
+@
+
+
+1.25
+log
+@Clib_Push from PERL works - was XS lossage.
+@
+text
+@a193 1
+
+@
+
+
+1.25.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@d194 1
+@
+
+
+1.24
+log
+@added EVAL checks to print out perl errors if DistillerMain or DistillerInit perl calls barf
+@
+text
+@a262 2
+    } else {                      /* EVAL experienced a fatal error */
+      fprintf(stderr,"perl_stub: calling DistillerMain: %s\n", SvPV(GvSV(errgv), na));
+d264 1
+@
+
+
+1.23
+log
+@yucko - refinement now works.  someone had put a linein
+transend.text.piml that deletes all NUL's from the input, but that's the
+wrong thing for non-ascii data such as images.  also minor fix to
+perl_stub to cover corner case of null input data or null input
+metadata.  the debugging msgs in Tbmp_munger are now just that - not
+spewage to stderr.
+@
+text
+@d149 6
+d233 2
+a234 2
+  if (count == 4) {
+
+d261 5
+@
+
+
+1.22
+log
+@Fixed path to point to /xs/lib instead of /xs/
+@
+text
+@d203 1
+a203 1
+    XPUSHs (sv_2mortal(newSVpv("", 1)));
+d208 1
+a208 1
+    XPUSHs (sv_2mortal(newSVpv("", 1)));
+@
+
+
+1.21
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@d115 2
+a116 1
+    perl_args[i] = ALLOCA(1 + 5 + strlen(tmp));
+d119 1
+a119 1
+    strcat(perl_args[i], "/xs");
+@
+
+
+1.20
+log
+@Now correctly includes the snprintf.c from frontend/src if snprintf is
+not defined.  Modified Makefile.in to use @@LIBOBJS@@ and to point at
+frontend/src/
+@
+text
+@d5 5
+a9 2
+#include <EXTERN.h>
+#include <perl.h>
+d54 1
+a54 1
+      fprintf(stderr, "Argument id %d has bad type\n", ARG_ID(args[i]));
+d87 2
+a88 1
+  const char **perl_args;
+d90 1
+a90 2
+  int i;
+  int j;
+d99 26
+a124 5
+  perl_args[i++] = "";
+  perl_args[i++] = PERLINC1;
+#ifdef PERLINC2
+  perl_args[i++] = PERLINC2;
+#endif
+d126 1
+d128 1
+a128 1
+    perl_args[i++] = argv[j];
+@
+
+
+1.19
+log
+@Changed snprintf() to sprintf(), because Solaris doesn't have
+snprintf().
+@
+text
+@d54 3
+a56 3
+/* XXX - Solaris doesn't have snprintf */
+/*    snprintf(tmparg, sizeof(tmparg)-1, "%c%d", argtype, ARG_ID(args[i])); */
+    sprintf(tmparg, "%c%d", argtype, ARG_ID(args[i]));
+@
+
+
+1.18
+log
+@Toplevel Makefile slimmed down.  lib/ subdir and corresponding install
+targets added, to prep for binary dist.  client_lib now has
+strerror()-style error reporting.  Fixed bug in dispatch.c that caused
+prefs call for an aggregator to coredump (strcpy called on null ptr).
+text/html distiller more streamlined and correctly "munges" user prefs
+form items.  GetOptions moved from clib to TaccUtils.  perl_stub now
+passes arguments named "s11", "i2", etc. instead of "11", "2", etc.
+@
+text
+@d54 3
+a56 1
+    snprintf(tmparg, sizeof(tmparg)-1, "%c%d", argtype, ARG_ID(args[i]));
+@
+
+
+1.17
+log
+@temporary commit so anthony can make; still tracking memory bug interaction frontend/clientlib
+@
+text
+@d30 4
+d35 1
+a35 2
+  for (i = 0; i < nargs; i++) {
+    XPUSHs(sv_2mortal(newSViv(ARG_ID(args[i]))));
+d38 3
+a40 2
+      XPUSHs(sv_2mortal(newSVpv(ARG_STRING(args[i]), 
+				strlen (ARG_STRING(args[i])))));
+d43 2
+a44 1
+      XPUSHs(sv_2mortal(newSVnv(ARG_DOUBLE(args[i]))));
+d47 5
+a51 1
+      XPUSHs(sv_2mortal(newSViv(ARG_INT(args[i]))));
+d54 3
+@
+
+
+1.16
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d73 1
+d79 1
+a79 1
+  perl_args = DistillerMalloc((2+argc) * sizeof(char *));
+d81 11
+a91 4
+  perl_args[0] = "";
+  for (i=0; i<argc; i++)
+    perl_args[i+1] = argv[i];
+  perl_args[argc+1] = NULL;
+d93 1
+a93 1
+  exitstatus = perl_parse(dist_perl, xs_init, argc+1, (char **)perl_args, NULL);
+@
+
+
+1.15
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@a7 1
+#include "../../frontend/include/ARGS.h"
+a21 7
+const char *fe_server_name = "www.CS.Berkeley.EDU",
+  *fe_set_prefs_url = "http://www.CS.Berkeley.EDU/~fox/tmp/prefs.html",
+  *fe_get_prefs_url = "http://www.CS.Berkeley.EDU/GetPrefs.html",
+  *fe_prefs_change_url_string = "http://www.CS.Berkeley.EDU/ChangePrefs",
+  *fe_prefs_set_url_string = "http://www.CS.Berkeley.EDU/SetPrefs",
+  *fe_agg_string = "http://www.CS.Berkeley.EDU/agg/";
+
+d99 1
+a99 1
+  count = perl_call_pv("DistillerInit", G_NOARGS|G_SCALAR);
+d168 1
+a168 1
+  count = perl_call_pv("DistillerMain", G_ARRAY);
+d215 6
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@a68 1
+
+a92 1
+  fprintf(stderr,"\n\n\n\n\n\n**** parsing interpreter\n\n\n\n\n");
+a93 1
+  fprintf(stderr,"\n\n\n\n\n\n**** done parsing\n\n\n\n\n");
+a106 1
+
+d147 1
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@a83 1
+  perl_args = DistillerMalloc((1+argc) * sizeof(char *));
+d87 3
+d91 2
+a92 2
+    perl_args[i] = argv[i];
+  perl_args[argc] = NULL;
+d94 3
+a96 1
+  exitstatus = perl_parse(dist_perl, xs_init, argc, (char **)perl_args, NULL);
+d99 1
+@
+
+
+1.12
+log
+@changes and additions to transend.text.piml (pilot markup language html
+distiller).  commented the ARGS.h file for distillers.  distillers now
+only observe Quality arg if it has a reasonable value.  Changes to main
+prefs to make values of FRONT_SHOW_ICON arg agree with perl html distiller.
+@
+text
+@a76 1
+  char *type;
+d79 1
+a79 2
+  char * perl_args[] = {"", "", NULL};
+  int perl_argc = (sizeof(perl_args)/sizeof(char *));
+d83 2
+a84 1
+  
+d88 5
+a92 21
+  type = GET_DISTILLER_TYPE(distType);
+
+  for (i=strlen(type)-1; i >= 0; i--) {
+    if (type[i] == '/') type[i] = '.';
+  }
+
+  /*
+   *  add -Iincpath to "command line"
+   */
+  perl_args[1] = alloca(strlen("-I") + strlen(XS_INCPATH) + 1);
+  strcpy(perl_args[1], "-I");
+  strcat(perl_args[1], XS_INCPATH);
+  /*
+   *  add filename.pl (file to be parsed)
+   */
+  perl_args[2] = alloca(strlen(PERL_DIR) + strlen(type) + 5);
+  strcpy(perl_args[2], PERL_DIR);
+  perl_args[2][strlen(PERL_DIR)] = '/';
+  strcpy(perl_args[2]+strlen(PERL_DIR) + 1, type);
+
+  exitstatus = perl_parse(dist_perl, xs_init, perl_argc, perl_args, NULL);
+d94 1
+@
+
+
+1.11
+log
+@changes to the DistillerInit() API
+@
+text
+@a8 1
+#include "perl_stub.h"
+d35 2
+a36 1
+SV** push_args_onto_stack(Argument *args, int nargs, register SV **sp) {
+d80 1
+a80 1
+  char * perl_args[] = {"", NULL};
+d95 13
+a107 5
+  perl_args[1] = alloca(strlen(PERL_DIR) + strlen(type) + 5);
+
+  strcpy(perl_args[1], PERL_DIR);
+  perl_args[1][strlen(PERL_DIR)] = '/';
+  strcpy(perl_args[1]+strlen(PERL_DIR) + 1, type);
+d120 2
+a121 1
+  
+@
+
+
+1.10
+log
+@various changes to makefiles to support auto-installation into sbin and bin directories.  perl HTML distiller no longer inserts UI in pages with frames.  PREFS_URL and similar strings are now static char* instead of #defines, but still need them to be initialized in PTM stub so distillers can get at them.  "run" targets are better now, they run stuff from the sbin and bin directories.
+@
+text
+@d76 1
+a76 1
+DistillerInit(C_DistillerType distType) {
+@
+
+
+1.9
+log
+@Fixed bug - get_distiller_type was returning a pointer to an automatic
+variable.  Fixed by switching to macro definition of GET_DISTILLER_TYPE().
+@
+text
+@d24 6
+d152 1
+a152 1
+  int i;
+d188 1
+a188 1
+    POPs;
+@
+
+
+1.8
+log
+@latest perl_stub that works with interface described in doc/aggregators.pod
+@
+text
+@a25 7
+ * returns a string containing the distiller type od a C_DistillerType
+ */
+char * get_distiller_type(C_DistillerType dType) {
+  return dType.string;
+}
+
+/*
+d83 1
+a83 1
+  type = get_distiller_type(distType);
+@
+
+
+1.7
+log
+@modified makefile and perl stub to allow dynamic loading
+@
+text
+@a101 7
+#if 0
+  exitstatus = perl_parse( dist_perl, xs_init, perl_argc, perl_args,
+                           (char **) NULL );
+  if (exitstatus)
+    return distFatalError;
+#endif
+  
+a103 1
+#if 0
+d106 1
+a106 1
+#endif
+a111 2
+
+
+d116 2
+a117 1
+  assert (count == 1);
+d131 6
+a136 6
+ * 1) an associative array of args
+ * 2) input data
+ * 3) input metadata
+ * 4) input mimetype
+ * you should pop of the last 3 and then fo sometihng like
+ * my %args = @@_;
+d138 1
+a138 1
+ * perl distiller main returns 3 or 4 vals
+d142 1
+a142 1
+ * 4) (optional) return status
+a163 1
+  sp = push_args_onto_stack(args, nargs, sp);
+d177 1
+a186 1
+  
+d193 3
+a195 2
+  /* if we have 4 arguments the third is the return status */
+  if (count == 4) {    
+a196 5
+    count--;
+  } 
+
+  /* if we have >= 3 args then the perl returneded data and mime type*/
+  if (count == 3) {
+d200 2
+a201 2
+    strncpy(dout->mimeType, SvPV(ret_sv, na), 49);
+    dout->mimeType[50] = 0;
+@
+
+
+1.6
+log
+@perl should handle metadata now.
+UNTESTED
+PERL DISTILLER DOESN'T USE IT YET.
+@
+text
+@d15 6
+d22 2
+d82 1
+d85 2
+a86 1
+
+d102 8
+a109 2
+  perl_parse(dist_perl, NULL, 2, perl_args, NULL);
+
+d111 4
+d159 1
+a159 1
+  int ret_stat = distOk;
+d241 1
+a241 1
+  return(distOk);
+d244 12
+@
+
+
+1.5
+log
+@fixed for new distiller interface
+@
+text
+@d119 1
+a119 1
+ * perl distiller takes 3 vals
+d122 3
+a124 2
+ * 3) input mimetype
+ * you should pop of the last 2 and then fo sometihng like
+d127 1
+a127 1
+ * perl distiller main returns 2 or 3 vals
+d129 3
+a131 2
+ * 2) output mimetype
+ * 3) (optional) return status
+d147 1
+d161 5
+d170 1
+d174 5
+a178 2
+    
+  while (count > 3) {
+d183 2
+a184 1
+  if (count == 3) {    
+d189 2
+a190 1
+  if (count == 2) {
+d197 7
+d214 1
+@
+
+
+1.4
+log
+@fixed for new distiller interface
+@
+text
+@d134 1
+a134 2
+              DistillerOutput *dout,
+              gm_Bool *freeOutputBuffer)
+d144 1
+a144 1
+  *freeOutputBuffer = gm_True;
+d192 1
+a192 1
+    *freeOutputBuffer = gm_False;
+@
+
+
+1.3
+log
+@fixed a stupid bug
+@
+text
+@d58 1
+a58 1
+  cost->estimatedTime_ms = in->length;
+d154 2
+a155 2
+  if (din->length) {
+    XPUSHs (sv_2mortal(newSVpv(din->data, din->length)));
+d187 3
+a189 3
+    dout->length = i;
+    dout->data = (char *) DistillerMalloc(dout->length);
+    memcpy(dout->data, ret_sv_val, dout->length);
+@
+
+
+1.3.4.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@d58 1
+a58 1
+  cost->estimatedTime_ms = DataLength(in);
+d134 2
+a135 1
+              DistillerOutput *dout)
+d145 1
+a145 1
+  DataNeedsFree(dout, gm_True);
+d154 2
+a155 2
+  if (DataLength(din)) {
+    XPUSHs (sv_2mortal(newSVpv(DataPtr(din), DataLength(din))));
+d187 3
+a189 3
+    SetDataLength(dout, i);
+    SetData(dout, (char *) DistillerMalloc(i));
+    memcpy(DataPtr(dout), ret_sv_val, i);
+d193 1
+a193 1
+    DataNeedsFree(dout, gm_False);
+@
+
+
+1.2
+log
+@added some comments
+@
+text
+@d152 7
+a158 1
+  XPUSHs (sv_2mortal(newSVpv(din->data, din->length)));
+@
+
+
+1.1
+log
+@the perl_stub and perl_dir directories have been added
+perl_stub has the source for the c stubs to allow for perl
+distillers.
+
+perl_dir is where the distillers live.  It is the location of the PERL_DIR
+#define in config_tr.h
+@
+text
+@d17 3
+d24 5
+d50 3
+d62 6
+@

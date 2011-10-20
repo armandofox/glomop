@@ -1,0 +1,430 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.2
+	pre-yatin-merge:1.6
+	transend-beta2:1.6
+	fox-dev:1.6
+	client_lib-ng:1.5
+	transend-beta-latest:1.5
+	Aggregators:1.5
+	NoAggregators:1.5
+	iang:1.4.0.4
+	transend-beta:1.4.0.2
+	SOSP:1.3
+	merged_preintegrate:1.1
+	heisenbug:1.1
+	PRE_INTEGRATION:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	97.06.06.00.07.48;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.08.21.47.51;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.19.00.16.28;	author gribble;	state Exp;
+branches
+	1.4.2.1;
+next	1.3;
+
+1.3
+date	97.01.29.01.42.52;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.28.22.48.51;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.28.01.14.46;	author gribble;	state Exp;
+branches;
+next	;
+
+1.4.2.1
+date	97.05.08.21.53.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Many changes to support SDK, including bin and sbin directories,
+and modified make targets and names of some binary targets.  Calling
+convention changed for perl distillers, so fixed html distiller and
+added it as transend.text.html.  monitor.multicast property is now
+Monitor.listen; all relevant code was changed.  Monitor can now parse
+this from the options file.  Updated all UI changes from branch head.
+@
+text
+@/*
+ * File:          configure.c
+ * Purpose:       Configuration file loading/parsing
+ * Author:        Steve Gribble
+ * Creation Date: October 23rd, 1996
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <sys/errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include "config_tr.h"
+#include "optdb.h"
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "configure.h"
+
+extern int errno;
+ll config_list = NULL;  /* list of name-value pairs in config file */
+
+char *name_tokens[] = { "cache.Partition", "cache.UDP_retries", 
+			"cache.UDP_timeout_sec", "cache.UDP_timeout_usec",
+                        "Monitor.listen",
+			NULL };
+
+/** 
+**  config_parse:  this function accepts an Options structure as an
+**  argument.
+** 
+**  The global linked list "config_list" is appended with cfg_nv structures,
+**  representing the name/value pairs.  This implies that:
+**   THIS FUNCTION IS NOT THREAD-SAFE.  IT SHOULD BE CALLED ONCE AND
+**   ONLY ONCE AT THE BEGINNING OF THE EXECUTION OF SOME PROCESS USING
+**   THIS LIBRARY, OR THE EXTERNAL CALLER IS RESPONSIBLE FOR THREAD
+**   SAFIFYING THESE FUNCTIONS WITH AN EXTERNAL MUTEX.
+**
+**  The function returns CLIB_OK on success, and some other error value
+**  in case of trouble.
+**/
+
+clib_response config_parse(Options opts)
+{
+  cfg_nv  *cur = NULL;
+  int      i=0;
+
+  if (config_list != NULL) {
+    ll_destroy(&config_list, free);
+    config_list = NULL;
+  }
+
+  while (name_tokens[i] != NULL) {
+    if (cur == NULL) {
+      cur = (cfg_nv *) calloc(1, sizeof(cfg_nv));
+      if (cur == NULL) {
+	fprintf(stderr, "out of memory in config_parse (1)\n");
+	exit(1);
+      }
+    }
+
+    cur->name = name_tokens[i];
+    cur->value = (char *) Options_Find(opts, cur->name);
+
+    if (cur->value != NULL) {
+      if (ll_add_to_end(&config_list, (void *) cur) != 1) {
+	free(cur);
+	return CLIB_CONFIG_ERROR;
+      }
+      cur = NULL;
+    }
+    i++;
+  }
+  return CLIB_OK;
+}
+
+/** 
+**  get_next_matching: given a string representing a name token, and a
+**  pointer to an element "last_value" in the linked list, this
+**  function will find and return a pointer to the first cfg_nv
+**  structure in the list after the "last_value" element that has a name
+**  that matches (case-insensitively) "name".  It returns a pointer to the
+**  cfg_nv structure and a pointer to the linked list element containing
+**  that structure on success, and NULL on failure.
+**
+**  This procedure IS THREAD UNSAFE if the linked list will be mucked
+**  with, safe otherwise since it's only going to read from the list.
+**/  
+
+cfg_nv *get_next_matching(char *name, ll *last_value)
+{
+  ll      cur_val = *last_value;
+  cfg_nv *data;
+
+  while (cur_val != NULL) {
+    data = (cfg_nv *) cur_val->data;
+    if (strcasecmp(data->name, name) == 0) {
+      *last_value = cur_val;
+      return data;
+    }
+    cur_val = cur_val->next;
+  }
+  *last_value = NULL;
+  return NULL;
+}
+
+int get_next_token(FILE *file, char **token)
+{
+  int nextc;
+  int toklen = 0;
+  char nextline[1024], *tmp;
+
+  *token = (char *) malloc(sizeof(char));
+  if (*token == NULL) {
+    fprintf(stderr, "Out of memory in get_next_token.\n");
+    exit(1);
+  }
+  *token = '\0';
+
+  while(1) {
+    /* Get next character, add it to the token */
+    nextc = fgetc(file);
+    if (nextc == EOF) {
+      if (toklen == 0)
+	return 0;
+      return toklen;
+    }
+
+    switch(nextc) {
+    case ' ':
+    case '\t':
+    case '\n':
+    case '\r':
+      if (toklen == 0)
+	continue;
+      return toklen;
+      break;
+    case '#':
+      /* read until end of line */
+      while (1) {
+	if (fgets(nextline, 1024, file) == NULL) {
+	  return toklen;
+	}
+	if (nextline[strlen(nextline)-1] == '\n')
+	  break;
+      }
+      break;
+    default:
+      /* we have a real character - append it to the token */
+      tmp = realloc(*token, toklen+2);
+      if (tmp == NULL) {
+	fprintf(stderr, "Out of memory in get_next_token.\n");
+	exit(1);
+      }
+      *token = tmp;
+      *(tmp + toklen) = nextc;
+      *(tmp + toklen + 1) = '\0';
+      toklen++;
+      break;
+    }
+  }
+  return 0;
+}
+
+int is_name_tok(char *tok)
+{
+  int i=0;
+
+  while(name_tokens[i] != NULL) {
+    if (strcasecmp(name_tokens[i], tok) == 0)
+      return 1;
+    i++;
+  }
+
+  return 0;
+}
+
+@
+
+
+1.5
+log
+@added Clib_Free
+@
+text
+@d33 1
+a33 1
+                        "monitor.multicast",
+@
+
+
+1.4
+log
+@Client lib now uses unified options file.
+@
+text
+@d33 1
+a33 2
+			"cache.Monitor_ip", "cache.Monitor_port",
+			"cache.Monitor_ttl",
+@
+
+
+1.4.2.1
+log
+@More minor fixes.
+@
+text
+@d33 2
+a34 1
+                        "monitor.multicast",
+@
+
+
+1.3
+log
+@fixed slight bug in clib.c's analysis of data back from HTTP server;  now
+returns error code in an error condition whereas before it just returned
+NULL data.
+@
+text
+@d20 2
+d31 4
+a34 3
+char *name_tokens[] = { "partition", "owner", 
+			"udp_retries", "udp_timeout_sec", "udp_timeout_usec",
+			"Monitor_ip", "Monitor_port", "Monitor_ttl",
+a36 3
+int get_next_token(FILE *file, char **token);
+int is_name_tok(char *tok);
+
+d38 3
+a40 9
+**  config_parse:  this function accepts a filename as an argument, and
+**  attempts to parse that filename as though it were a configuration file.
+**  Configuration files have name/value pairs.  A name is a white-space
+**  separated token that (case insensitively) matches one of the tokens
+**  in the name_tokens[] array.  A value is a sequence of white-space
+**  separated tokens that follows a name, and preceeds another value.
+**  Comments can be embedded in the configuration file;  the rest of a line
+**  is ignored after a '#' character.
+**
+d52 1
+a52 1
+clib_response config_parse(char *filename)
+a53 1
+  FILE    *cfg_file = NULL;
+d55 1
+a55 14
+  char    *tok, *tmp;
+  int      toklen;
+
+  cfg_file = fopen(filename, "r");
+  if (cfg_file == NULL) {
+    fprintf(stderr, "Couldn't open configuration file '%s'\n", filename);
+    return CLIB_NO_CONFIGFILE;
+  }
+
+  /* Grab very first token - presumably a name */
+  if ((toklen = get_next_token(cfg_file, &tok)) == 0) {
+      fclose(cfg_file);
+      return CLIB_OK;
+  }
+d62 8
+a69 1
+  while (1) {  /* repeat once for each name/value pair */
+d71 2
+a72 1
+    while(1) {  /* repeat once for each token */
+d74 4
+a77 46
+      /* Is the current token a name value? */
+      if (is_name_tok(tok)) {
+	if (cur != NULL) {
+	  /* need to add previous nv pair */
+	  if (ll_add_to_end(&config_list, (void *) cur) != 1) {
+	    free(cur);
+	    fclose(cfg_file);
+	    return CLIB_CONFIG_ERROR;
+	  }
+	}
+	/* Allocate a new nv pair */
+	cur = (cfg_nv *) calloc(1, sizeof(cfg_nv));
+	if (cur == NULL) {
+	  fprintf(stderr, "Out of memory in config_parse (1)\n");
+	  exit(1);
+	}
+	/* Stuff in the name value */
+	cur->name = tok;
+      } else {
+	/* it's a value.  special case the first value */
+	if (cur->value == NULL)
+	  cur->value = tok;
+	else {
+	  int slen = strlen(cur->value)+1;  /* + 1 for NULL */
+
+	  tmp = realloc(cur->value, slen + toklen + 1); /* +1 for space */
+	  if (tmp == NULL) {
+	    fprintf(stderr, "Out of memory in config_parse (2)\n");
+	    exit(1);
+	  }
+	  strcat(tmp, " ");
+	  strcat(tmp, tok);
+	  cur->value = tmp;
+	}
+      }
+      if ((toklen = get_next_token(cfg_file, &tok)) == 0) {
+	if (cur != NULL) {
+	  /* need to add previous nv pair */
+	  if (ll_add_to_end(&config_list, (void *) cur) != 1) {
+	    free(cur);
+	    fclose(cfg_file);
+	    return CLIB_CONFIG_ERROR;
+	  }
+	}
+	fclose(cfg_file);
+	return CLIB_OK;
+d79 1
+d81 1
+a81 1
+    cur = NULL;
+a82 1
+  fclose(cfg_file);
+@
+
+
+1.2
+log
+@Partitions grow as well as shrink now;  grow notification via
+a USR1 signal.
+@
+text
+@d31 1
+d149 2
+a150 1
+**  This procedure IS THREAD SAFE.
+@
+
+
+1.1
+log
+@Changed the directory structure around to match armando/yatin's.
+@
+text
+@d50 2
+a51 1
+**   THIS LIBRARY.
+d74 5
+@

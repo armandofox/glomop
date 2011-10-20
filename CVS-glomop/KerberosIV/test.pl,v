@@ -1,0 +1,227 @@
+head	1.3;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	96.04.09.05.45.04;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.09.04.24.26;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.08.23.00.45;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.04.08.23.00.45;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@sort of works, sort of
+@
+text
+@#!/usr/sww/bin/perl5 -d -w
+
+BEGIN {
+    unshift(@@INC, "../KerberosIV/blib/arch", "../KerberosIV/blib/lib");
+    require "/disks/barad-dur/now/pythia/release/perllib/gm_sock.pl";
+}
+
+use KerberosIV;
+
+sub get_initial_tkt {
+
+    system "stty -echo";
+    print "Password: ";
+    chop($word = <STDIN>);
+    print "\n";
+    system "stty echo";
+
+    chop ($user = `whoami`);
+    $realm = "EECS.BERKELEY.EDU";
+    $inst = undef;
+    $service = "krbtgt";
+    $lifetime = 5 * 10;
+
+    print STDERR "Calling krb_get_pw_in_tkt: ";
+    print STDERR &krb_strerror($result =
+                               &krb_get_pw_in_tkt($user,$inst,$realm,$service,
+                                                  $realm,$lifetime, $word));
+
+    die unless $result == &KDC_OK;
+    system("klist");
+    return 1;
+}
+
+sub sendauth {
+    $port = (getservbyname("eklogin","tcp"))[2];
+    warn "Port is $port";
+    $sock = connectsock gm_sock "full-sail",$port or die &gm_sock::lasterror();
+    $options = &KOPT_DO_MUTUAL;
+    $fh = ($sock->filehandles())[0];
+    $fd = fileno($fh);
+    warn "Filenumber = $fd, hope thats ok";
+
+    warn "Return to proceed\n";
+    <STDIN>;
+    ($lhost,$lport,$fhost,$fport) = $sock->endpoints();
+    $faddr= &Socket::pack_sockaddr_in($fport,&Socket::inet_aton($fhost));
+    $laddr = &Socket::pack_sockaddr_in($lport, &Socket::inet_aton($lhost));
+    ($result,$mdata,$cred,$sch) =
+        &KerberosIV::krb_sendauth($options,$fd,undef,"rcmd",$fhost,
+                                  "EECS.BERKELEY.EDU", $$, $laddr,$faddr, "KCMDV0.1");
+    print STDERR "Kerberos sez: ", &krb_strerror($result);
+    local($,) = ',';
+    @@cred = &Kutil::kutil_decomp_cred($cred);
+    
+}
+
+sub krlogin {
+    $sock = 0;
+    $ahost = "full-sail.CS.Berkeley.EDU";
+    $rport = (getservbyname("klogin","tcp"))[2] or die;
+    $locuser = $remuser= "fox";
+    $cmd = "network/9600";
+    $fd2p = 0;
+    $ticket = '';
+    $service = 'rcmd';
+    $realm = 'EECS.BERKELEY.EDU';
+    $cred = '';
+    $schedule= '';
+    $msg_data = '';
+    $laddr = $faddr = '';
+    #$authopts = &KOPT_DO_MUTUAL;
+    $authopts =0;
+
+    $res = &Rcmd::kcmd($sock, $ahost, $rport, undef, $remuser, $cmd, undef,
+                       $tkt, $service, $realm,
+                   undef,                   # no credentials
+                   undef,                   # no key schedule
+                   undef,                   # no MSG_DATA
+                   undef,                   # no local addr
+                   undef,                   # no foreign addr
+                   0);                      # no auth options
+
+    print STDERR "Result: ",&KerberosIV::krb_strerror($res),"\n";
+    return $res;
+}
+
+sub kpc {
+    local($,)=',';
+
+    $fh = ($z->filehandles())[0];
+
+    $x= sprintf("%04d", length($_[3]));
+    syswrite($fh,$x,4);
+    syswrite($fh,$_[3],length($_[3]));
+
+    $count =0;
+    $result='';
+    while ($count<$x) {
+        $count += sysread($fh, $result,$x-$count,$count);
+    }
+    open(FOO, "| od -c");
+    print FOO $result;
+    close FOO;
+    return $result;
+}
+
+sub testml {
+    $realm = "EECS.BERKELEY.EDU";
+    $user = "gribble";
+    $instance = undef;
+    $service = "krbtgt";
+    $sinstance = "EECS.BERKELEY.EDU";
+    $life= 10;
+    $decrypt_proc = "main::kpc";
+    $arg = "foobar";
+
+    $instance = undef;
+
+    # listen socket from magic cap
+
+    $z = listensock gm_sock 5678,"tcp";
+    warn "Waiting for connection\n";
+    $z = $z->acceptsock();
+    warn "Accepted connection\n";
+
+    warn "Getting kerberos ticket...\n";
+
+    $res = &KerberosIV::krb_get_in_tkt($user,$instance,$realm,$service,
+                                       $sinstance,$life,
+                                       $decrypt_proc,$arg);
+    
+    print "Kerberos result => $res ", &krb_strerror($res),"\n";
+}
+
+&testml;
+
+
+    
+@
+
+
+1.2
+log
+@Sort of works with callback proc for krb_get_in_tkt
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl5 -d
+d101 3
+a103 1
+    print "--->$result<---\n\n";
+d127 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+d35 1
+a35 2
+    require "/disks/barad-dur/now/pythia/release/perllib/gm_sock.pl";
+    $port = (getservbyname("klogin","tcp"))[2];
+d38 1
+a38 1
+    $options = 0;
+d45 6
+a50 3
+    $result =
+    &KerberosIV::krb_sendauth($options,$fd,undef,"rcmd","full-sail.CS.Berkeley.EDU",
+                  "EECS.BERKELEY.EDU", 0, undef, undef, "KCMDV0.1");
+d52 3
+d87 49
+a135 1
+&sendauth();
+@
+
+
+1.1.1.1
+log
+@KerberosIV for Perl5 sources
+@
+text
+@@

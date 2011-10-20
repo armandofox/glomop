@@ -1,0 +1,1027 @@
+#  Simple -*- perl -*- distiller for text/piml (Pilot markup language)
+#
+
+use TACCutils;
+use clib;
+use Para;
+use PilotFonts;
+use Layout;
+use LWP;
+
+sub message {
+    my $err = shift;
+    chomp $err;
+    $err .= "\n";
+    &MonitorClient_Send("WingMan Messages", $err, "Log");
+}
+
+sub makeTbmp {
+    my ($w, $rs, $h, @lines, $bits);
+    @lines = grep(tr/ \.:#//dc || 1, split(/\n/, $_[1]));
+    $w = 0;
+    grep($w = (length($_) > $w ? length($_) : $w), @lines);
+    $rs = int(($w+7)/8)*2;
+    grep($_ = substr($_ . ' ' x ($rs*4), 0, ($rs*4)), @lines);
+    $bits = join('',@lines);
+    $bits =~ s/ /00/g;
+    $bits =~ s/\./01/g;
+    $bits =~ s/:/10/g;
+    $bits =~ s/#/11/g;
+
+    $h = $#lines + 1;
+
+    $_[0] = new Para;
+    $_[0]->otext(pack('nnnnNNB*', $w*2, $h, $rs, 0, 0, 0, $bits));
+    $_[0]->width($w);
+    $_[0]->height($h);
+}
+
+sub DistillerInit {
+    $gProxyHome = &Options_Find("proxy.home");
+    &PilotFonts::init_fonts("$gProxyHome/pilotFonts");
+    $num_href_prefetches = &Options_Find("wingman.text.prefetch_href") || 0;
+
+    &message("Waiting for PTM....");
+    my $status = &InitializeDistillerCache;
+    return $status if ($status != 1);
+    &message("Got it");
+    
+    %Images = ();
+
+    # useful constants
+
+    $FRONT_NO_DISTILL = "i1";
+    $FRONT_CLI_VERSION = "i14";
+    $FRONT_SRCFLAG = "i16";
+    $FRONT_NOCACHE = "i13";
+    
+    $CLI_VERSION_HORIZSCROLL = 0x01000300;
+    $CLI_VERSION_ISMAP = 0x01050100;
+    $CLI_VERSION_CURRENT_WARN = 0x01050200;
+
+    $MAXSIZE = 32 * 1024;                   # max heap size on pilot
+    $LISTBULLET = chr(149);                 # bullet char in pilot's stdFont
+    $AREA_MIN = 30 * 20;                    # images smaller than this will be
+                                            # not be shrunk
+
+    ## Create the list of internally-known images
+    %internalImgs = ();
+    &makeTbmp($internalImgs{'broken'}, <<'EOB');
+   :..:  #... $
+ .: ..#:  #.. $
+.: ....::  #. $
+# ....#.:   # $
+ ...:..# :  # $
+.. ##..###    $
+.. ####...#   $
+....#..####:  $
+.......::#.#  $
+.......#### : $
+........:##.: $
+EOB
+
+    &makeTbmp($internalImgs{'internal-gopher-menu'}, <<'EOB');
+ ######       $
+##::::##      $
+#::::::#      $
+############# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+############# $
+EOB
+
+    &makeTbmp($internalImgs{'internal-gopher-text'}, <<'EOB');
+##########    $
+#........:#   $
+#.....#..::#  $
+#....#.#.:::# $
+#...#...#...# $
+#...#####...# $
+#...#...#...# $
+#...#...#...# $
+#...........# $
+#...........# $
+############# $
+EOB
+
+    &makeTbmp($internalImgs{'internal-gopher-binary'}, <<'EOB');
+##########    $
+#........:#   $
+#..##....::#  $
+#.#..#...:::# $
+#.#..#......# $
+#..##...#...# $
+#......:#...# $
+#.......#...# $
+#......###..# $
+#...........# $
+############# $
+EOB
+
+    &makeTbmp($internalImgs{'internal-gopher-image'}, <<'EOB');
+##########    $
+#........:#   $
+#...#....::#  $
+#..#:#...:::# $
+#.#####.....# $
+#.......##..# $
+#......#::#.# $
+#.......##..# $
+#...........# $
+#...........# $
+############# $
+EOB
+
+    &makeTbmp($internalImgs{'internal-gopher-unknown'}, <<'EOB');
+##########    $
+#........:#   $
+#........::#  $
+#........:::# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+#...........# $
+############# $
+EOB
+
+    ## need icons for internal-gopher-{sound,movie,telnet}
+
+    %flags_for = ('h1'    => $F_SIZE1,
+                  'h2'    => $F_BOLD,
+                  'h3'    => $F_BOLD,
+                  'title' => $F_BOLD,
+                  'b'     => $F_BOLD,
+                  'i'     => $F_UNDERLINE,
+                  );
+
+    ($NO_CLOSE, $CLOSE_NO_NEWLINE, $CLOSE_SOFT_NEWLINE, $CLOSE_HARD_NEWLINE,
+     $CLOSE_AND_CLEARBOTH)
+        = (0..9);
+
+    %clear_for = ('h1'    => $CLOSE_SOFT_NEWLINE,
+                  'h2'    => $CLOSE_SOFT_NEWLINE,
+                  'h3'    => $CLOSE_SOFT_NEWLINE,
+                  'h4'    => $CLOSE_SOFT_NEWLINE,
+                  'h5'    => $CLOSE_SOFT_NEWLINE,
+                  'h6'    => $CLOSE_SOFT_NEWLINE,
+                  '/h1'    => $CLOSE_HARD_NEWLINE,
+                  '/h2'    => $CLOSE_HARD_NEWLINE,
+                  '/h3'    => $CLOSE_HARD_NEWLINE,
+                  '/h4'    => $CLOSE_HARD_NEWLINE,
+                  '/h5'    => $CLOSE_HARD_NEWLINE,
+                  '/h6'    => $CLOSE_HARD_NEWLINE,
+                  'hr'     => $CLOSE_SOFT_NEWLINE,
+                  '/title' =>$CLOSE_AND_CLEARBOTH, 
+                  '/table' => $CLOSE_AND_CLEARBOTH,
+                  'img'    => $CLOSE_NO_NEWLINE,
+                  'a'     => $CLOSE_NO_NEWLINE,
+                  '/a'    => $CLOSE_NO_NEWLINE,
+                  'tr'    => $CLOSE_SOFT_NEWLINE,
+                  'td'    => $CLOSE_SOFT_NEWLINE,
+                  'ol'    => $CLOSE_SOFT_NEWLINE,
+                  'ul'    => $CLOSE_SOFT_NEWLINE,
+                  '/ol'    => $CLOSE_HARD_NEWLINE,
+                  '/ul'    => $CLOSE_HARD_NEWLINE,
+                  'li'    => $CLOSE_SOFT_NEWLINE,
+                  'dd'    => $CLOSE_SOFT_NEWLINE,
+                  'dt'    => $CLOSE_SOFT_NEWLINE,
+                  'br'    => $CLOSE_HARD_NEWLINE,
+                  'p'     => $CLOSE_SOFT_NEWLINE,
+                  '/p'    => $CLOSE_SOFT_NEWLINE,
+                  'b'     => $CLOSE_NO_NEWLINE,
+                  '/b'    => $CLOSE_NO_NEWLINE,
+                  'dummy' => $CLOSE_NO_NEWLINE,
+                  );
+
+    ##&clib::MonitorClient_Send("Distiller Log", "Wingman started", "Log");
+
+    return 0;
+}
+
+sub flags_for {
+    $_ = shift;
+    s!^/!!;
+    return $flags_for{lc $_};
+}
+
+sub clear_for {
+    my ($tag) = shift;
+    return 0 + $clear_for{lc $tag};
+}
+
+#
+#  try_flow is a state machine that attempts to layout a chunk of paragraph by calling
+#  pack_dynamic.  The logic is as follows:
+#  S0: attempt to pack; if success, return the remaining (not yet packed)
+#       portion and indicate success; otherwise go to state 1.
+#  S1: clear to right margin, and try again.  if success, return remaining
+#       portion.  otherwise go to state 2.
+#  S2: clear to left margin, and try again.  if success, return remaining
+#       portion.  otherwise go to state 3.
+#  S3: if it's possible to pop a layout frame, do so and then try again.
+#       return the result of doing this.
+
+sub try_flow {
+    my ($current_par,$ly) = @_;
+    my $retry = 0;
+    my ($status,$leftover);
+    while (1) {
+        ($status,$leftover) = $ly->pack_dynamic
+            ($current_par, -1, -1,
+             $current_par->font->maxwidth,
+             $current_par->font->height);
+        # if retry count exceeded
+        if ($status >= 0 || $retry >= 3) {  # success, or retry cnt exceeded 
+            return ($status,$leftover);
+        }
+        $retry++;
+        if ($retry == 1) {
+            # out of horizontal room
+            $ly->clearleft;
+            next;
+        } elsif ($retry == 2) {
+            $ly->clearright;
+            next;
+        } else {                            # $retry==3
+            $ly->spop;
+            next;
+        }
+    }
+}
+
+
+#
+#  Try to layout a Para.  In so doing, we may have to split it into multiple
+#  Para's, since the Pilot requires the width of each Para to be at most the
+#  screen width (it doesn't wrap text).
+#  ARGS:
+#    $par: Original Para
+#    $ly: layout object (for laying out paragraphs on page)
+#    $in_anchor:  the HREF URL of the link we are inside; if we're not inside a
+#      <A ...> construction, the F_LINK field won't be set so $in_anchor will
+#      be ignored.
+#    $flags:  paragraph attributes.  (Redundant - we could just get this from
+#       the $par object...)
+#  RETURNS:
+#    A list of new Para's that were laid out, if success.
+#    An empty list, if the Para that was passed in contained no material to
+#       layout.
+#    -1, if there wasn't enough room to layout any of $par. 
+#
+
+sub layout_paragraph {
+    my($par, $ly, $in_anchor, $flags) = @_;
+    my @pars = ();
+    
+    $par->link($in_anchor) if $flags & $F_LINK;
+    $par->font($PilotFonts::boldFont) if $flags & $F_BOLD;
+    $par->font($PilotFonts::largeFont) if $flags & $F_SIZE1;
+    $par->close();
+    if ($par->otext =~ /\S/) {
+        # layout paragraph
+        my $status = 0;
+        while ($status == 0) {          # more to do
+            ($status,$leftover) = &try_flow($par, $ly);
+            push(@pars, $par);
+            $par = $leftover if $leftover;
+        }
+        if ($status < 0) {
+            #warn("Ran out of room near " . $par->otext);
+            return (-1);
+        }
+    }
+    return @pars;
+}
+              
+sub parse_main {
+    my $FinalStatus = 0;
+    my($data,$hdrs,$type,%args) = @_;
+    my $just_did_newline = 0;
+    my $baseurl = &get_my_url($hdrs);
+    my ($in_list) = 0;
+    my ($success) = 0;
+    my ($in_pre) = 0;
+    my $leftmargin = 0;
+    my ($do_close) = $NO_CLOSE;
+    my @pars = ();
+    my ($what,$thing,$attrs);
+    my ($status,$leftover);
+    my ($in_anchor, $src);
+    my $tmp;
+    my $candolarge = ($args{$FRONT_CLI_VERSION} >= $CLI_VERSION_HORIZSCROLL);
+    
+    # start off with a blank paragraph and new layout
+    
+    my $par = new Para $PilotFonts::stdFont;
+    ## Ian says: why are we gridding to the stdFont height?  It makes tall
+    ## fonts (H1) end up with a lot of space between them...
+    my $ly = new Layout (0, 0, $SCREEN_WIDTH, 50000, 1, $par->font->height);
+
+    # if this is NOT a text/html, but rather image/*, "wrap" HTML around it.
+
+    if ($type =~ m!^image/!io) {
+	my $bestimage = !!$args{$FRONT_NO_DISTILL};
+	my $output_size = ($args{$FRONT_CLI_VERSION} >= $CLI_VERSION_ISMAP);
+	$bestimage *= 2 if $candolarge;
+        $par->otext("[image $baseurl]");
+        ($par,$success) = &process_image( { 'src' => $baseurl,
+                                            '_data_' => $data,
+                                            '_type_' => $type,
+                                        }, $ly, $baseurl, $par, $bestimage,
+					$candolarge, $output_size);
+        if (!defined ($par)) {
+            return('', '', 'text/plain', 8); # distBadInput
+        }
+        push(@pars,$par);
+        $FinalStatus = ($success ? 0 : 2);  # distFatalError
+        goto FINISH;
+    }
+
+    ## Make things a little nicer
+    $data =~ s/\0//gos;
+    $data =~ s/\r\n/\n/gos;
+    $data =~ s/\r/\n/gos;
+
+    ## Watch out for text/plain
+    if ($type =~ m!^text/plain\b!io || $args{$FRONT_SRCFLAG} == 1) {
+	## Try to munge things right
+	$data =~ s/\&/\&amp;/gos;
+	$data =~ s/\</\&lt;/gos;
+	$data =~ s/\>/\&gt;/gos;
+	$data =~ s/\n/\<BR\>\n/gos;
+    }
+        
+    if ($type =~ m!^text/!io &&
+	$args{$FRONT_CLI_VERSION} < $CLI_VERSION_CURRENT_WARN) {
+	## Prepend a warning
+	$data = "Warning: this beta version of Top Gun Wingman is about " .
+		"to expire.  Please upgrade to the " .
+		"<A HREF=\"http://www.isaac.cs.berkeley.edu/pilot/wingman/\">latest version</A>.<P><HR>\n" .
+		$data;
+    }
+
+    # maintain a "stack" of attributes.  whenever we enter a new tag construct,
+    # push a copy of the existing attributes; when we leave a tag construct,
+    # pop.  This allows things like <b>text<i>more text</i></b> to work
+    # properly, i.e. "more text" will have both the bold and italic flags set.
+    
+    my @sticky_attrs = ();
+    
+    # paragraphs are "closed" (added to the layout) when a tag of some kind is
+    # seen.  To catch malformed pages that don't end with </html> (or some kind
+    # of tag), add a "dummy" tag to the end of the text.
+
+#open(A, ">>/tmp/clq"); print A "\n$data\n"; close(A);
+    $data .= "<DUMMY>";
+    
+    while (length($data) > 0) {
+
+        ($what,$thing,$attrs) = &next_entity($data);
+
+        next if ($what == 0);               # ignore markup/comments
+
+        if ($what == 2) {                   # text
+	    if ($in_pre) {
+		if ($thing =~ s/\s*\n(.*)$//s) {
+		    substr($data,0,0) = "<BR>$1";
+		}
+	    } else {
+		$thing =~ s/\s*\n\s*/ /sg;  # replace newlines with spaces
+	    }
+            $thing =~ s/\t/ /sg;            # replace tabs with spaces
+            $thing =~ s/&([^;]+);/$TACCutils::entity{$1}/sg;
+                                            # expand HTML entities like "&amp;"
+            $par->add($thing),$just_did_newline = 0
+                unless $thing =~ /^\s*$/;   # add text to current paragraph
+            #
+            #  don't return a single chunk that is larger than about 1/4 the
+            #  maximum size ever returned.  if this is about to happen,
+            #  introduce an arbitrary break (using a dummy tag).
+            #
+            substr($data,0,0) = "<DUMMY>"
+                if length($par->otext) > ($MAXSIZE >> 2);
+            next;
+            
+        }
+        # tag: possibly close this paragraph, then process tag.
+
+        #if ($thing =~ /^script$/i || $thing =~ /^head$/i) {
+            #&zap_to_tag("</$thing>");
+            #next;
+        #}
+        
+	if ($thing =~ /^script$/io) {
+	    $data =~ s/^.*?\<\s*\/\s*${thing}\s*\>//ios;
+	    next;
+	}
+
+	if ($thing =~ /^select$/io) {
+	    $data =~ s/^.*?\<\s*\/\s*${thing}\s*\>/\[menu\]/ios;
+	    next;
+	}
+
+        $par->flags($flags = $sticky_attrs[0]);
+        $par->link($in_anchor) if $flags & $F_LINK;
+        if (&clear_for($thing) != $NO_CLOSE) {
+            $next_par = $par->clone();
+            $next_par->otext('');
+            @new_pars =  &layout_paragraph($par, $ly, $in_anchor, $flags);
+            goto FINISH if $new_pars[0] == -1; # out of room!!
+            push(@pars, @new_pars) if scalar @new_pars;
+            #$par = new Para $PilotFonts::stdFont;
+            $par = $next_par;
+        }
+        
+        #
+        # now process the tag...
+        #
+        if ($thing eq 'base'  && defined($attrs->{href})) {
+            $baseurl = $attrs->{href};
+            next;
+        }
+        if ($thing eq 'meta'
+            && $attrs->{"http-equiv"} =~ /^refresh$/i
+            && $attrs->{"content"} =~ /^\s*(\d+)\s*;\s*url\s*=\s*([^\s;]+)/ ) {
+            # insert a link to the new destination
+            my $newlink = &canonicalize($2,$baseurl);
+            $data = join('', "<h4>[<a href=\"$newlink\">Click ",
+                         ($1 > 0 ? "in $1 seconds" : "now"),
+                         "to refresh]</h4>",
+                         $data);
+            next;
+        }
+        #  do something for frames
+        if ($thing eq 'frame' && defined($tmp = $attrs->{'src'})) {
+            # insert a link to the frame
+            $data = join('', '<h4>[Frame: <a href="',
+                         &canonicalize($tmp,$baseurl), '">',
+                         $tmp,
+                         '</a>]</h4>',
+                         $data);
+            next;
+        }
+
+        if ($thing !~ /^img$/i && $thing !~ m!^/?a$!i) { # tag
+            my $flags = &flags_for($thing);
+
+            if (defined $flags) {
+                # if this is a close-tag, shift off the corresponding flags.
+                # if it's an open-tag, make a copy of the corresponding flags
+                # for it.  thus we keep a mini-stack of flags.
+                if ($thing =~ m!^/!) {
+                    $par->flags(shift @sticky_attrs);
+                    $par->flags_clear($flags);
+                } else {
+                    unshift(@sticky_attrs, $sticky_attrs[0] | $flags);
+                    $par->flags($sticky_attrs[0]);
+                }
+            }
+            $do_close = &clear_for($thing);
+            if ($do_close == $CLOSE_HARD_NEWLINE
+                || ((  $do_close == $CLOSE_SOFT_NEWLINE
+                     || $do_close == $CLOSE_AND_CLEARBOTH)
+                    && !$just_did_newline)) {
+                $just_did_newline = 1;
+                if ($attrs->{'clear'} =~ /left/i) {
+                    $ly->clearleft();
+                    $leftmargin = 0;
+                } else {
+                    $ly->cleartoleft($leftmargin,$par->font->height);
+                }
+            }
+            $in_list++ if (&tag_matches_open($thing,qw(ol ul dl)));
+            $in_list-- if ($in_list && &tag_matches_close($thing,qw(ol ul dl)));
+            # BUG::should be resetting leftmargin in here somewhere
+            $data=('  ' x $in_list).$LISTBULLET.$data
+                if ($in_list && &tag_matches_open($thing,qw(li)));
+	    $in_pre = 1 if (&tag_matches_open($thing,qw(pre)));
+	    $in_pre = 0 if (&tag_matches_close($thing,qw(pre)));
+        } elsif ($thing =~ /^a$/i && defined($in_anchor = $attrs->{'href'})) {
+            # open href
+	    $in_anchor = &canonicalize($in_anchor, $baseurl);
+            unshift(@sticky_attrs,
+                    $sticky_attrs[0] | $F_LINK);
+        } elsif ($thing =~ m!^/a$!i) {      # close anchor
+            undef $in_anchor;
+            shift @sticky_attrs;
+            # just in case....to avoid errors due to malformed nested anchors
+            $sticky_attrs[0] &= (~ $F_LINK);
+        } elsif ($thing =~ /^img$/i  && defined($src = $attrs->{'src'})) {
+            # canonicalize the SRC url, unless it's an "internal" image
+	    $src = &canonicalize($src, $baseurl)
+		unless $src =~ /^internal-gopher-\w+$/o;
+            $newpar = $par->clone();
+            $newpar->otext("[image $src]");
+            ($newpar,$success) =
+		&process_image($attrs, $ly, $src, $newpar,
+                               $args{$FRONT_NO_DISTILL}, $candolarge,
+			       ($args{$FRONT_CLI_VERSION}
+				    >= $CLI_VERSION_ISMAP));
+            if ($newpar) {
+                #  BUG::If the image was an imagemap, TURN OFF the Link field
+                #  for this Para, since we don't yet handle imagemaps correctly.
+                if (exists($attrs->{'ismap'})) {
+		    if ($args{$FRONT_CLI_VERSION} >= $CLI_VERSION_ISMAP) {
+			$newpar->flags_set($F_IMAGE_ISMAP); ## We can do 'ismap'
+		    } else {
+			$newpar->flags_clear($F_LINK); ## We can't do it
+		    }
+                } elsif (exists($attrs->{'usemap'})) {
+                    &message("Clearing LINK flag for imagemap");
+                    $newpar->flags_clear($F_LINK);
+                    # BUG::should we also clear LINK_ALT flag???
+                }
+                push(@pars, $newpar);
+		$just_did_newline = 0;
+                if ($attrs->{'align'} =~ /left/i) {
+                    $leftmargin = $newpar->x + $newpar->width + 2;
+                    $leftmargin = 0 if $leftmargin > $SCREEN_WIDTH-1;
+                }
+            }
+        }  else {
+            # warn "Nothing!";
+            # image
+        }
+        
+    }
+    
+  FINISH:
+    return ($FinalStatus,@pars);
+}
+
+#
+#  Process an inline image by fetching it, passing it to the correct distiller
+#  for scaling and format conversion, laying it out on the current page, and
+#  packing the result (with its x/y coords, size, link field, and refinement
+#  field) into a Para structure.
+#  ARGS:
+#    $attrs:  hash reference to the tag attributes for the <IMG> tag
+#    $ly: the layout object, used for laying out the image on the page
+#    $src:  the complete canonicalized source URL for the original image
+#    $p: the Para structure into which the image is to be packed
+#    $best: if 0, use the normal scaling rules.
+#           if 1, clip to full pilot screen.
+#           if 2, deliver "original size", to a limit of about 100Kpixels.
+#    $candolarge: if true, browser can handle images larger than the screen
+#  RETURNS:
+#    The Para object $p modified to contain the new image data, if success.
+#    Undef, if failure.  (Usually this means the image could not be fit onto
+#       the current page; if this happens, the caller may want to force a
+#       clear-to-left-margin operation on the page, and try again.)
+#
+
+sub process_image {
+    my ($attrs,$ly,$src,$p,$best,$candolarge,$output_size) = @_;
+    my %attrs = %$attrs;
+    my ($reqx,$reqy) = (0,0);
+    my ($x,$y) = (0,0);
+    my ($serv_x,$serv_y) = (0,0);
+    my ($srcxy);
+    my($stat,$hdrs,$data);
+    my ($cmd,$q,$buf);
+    my $success = 0;
+    my $headers = '';
+    my ($pinned, $shrank);
+
+    $headers = "User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\n";
+    $headers .= "Accept: image/gif, image/jpeg\r\n\r\n";
+
+    $reqx = $attrs{'width'} if defined $attrs{'width'};
+    $reqy = $attrs{'height'} if defined $attrs{'height'};
+    $srcxy = join(' ',$src,$reqx+0,$reqy+0);
+
+    #  if we have a cached version of the data for this image from a previous
+    #    instance of this SAME image on the SAME page, use it.  Otherwise fetch
+    #    and distill, etc.
+    
+    if (defined ($q=$Images{$srcxy})) {
+        &message("Postprocessed $src cached\n");
+        $buf = $q->otext;
+        $x = $q->width;
+        $y = $q->height;
+        $success = 1;
+    } elsif (defined ($q=$internalImgs{$src})) {
+        &message("Interal $src cached\n");
+        $buf = $q->otext;
+        $x = $q->width;
+        $y = $q->height;
+        $success = 1;
+    } else {
+        # start with fail fallback
+        $buf = $internalImgs{'broken'}->otext;
+        $x = $internalImgs{'broken'}->width;
+        $y = $internalImgs{'broken'}->height;
+
+        &message("Fetching image: $src");
+
+        if (defined ($attrs->{'_data_'}) && defined ($attrs->{'_type_'})) {
+            $data = $attrs->{'_data_'};
+            $type = $attrs->{'_type_'};
+        } else {
+            ($stat,$hdrs,$data) = &Clib_Redir_Fetch($src, $headers, 5);
+            if ($stat != 0 || $hdrs !~ /^(\S+\s+)?200/) {
+                &message( "Image processing of $src failed: $hdrs");
+                goto IMG_FINISH;
+            }
+            $type = $1 if $hdrs =~ /content-type:\s*(\S+)/i;
+        }
+        $type =~ tr/A-Z/a-z/;
+        
+        #  Set arguments: colors = 4, 2bit = 1
+
+        #my($argSizeX,$argSizeY,$argColors,$arg2bit,$nbuf);
+        my($argSizeX,$argSizeY,$nbuf);
+
+        #$argColors = &make_argument('i', 1511, 4);
+        #$arg2bit = &make_argument('i', 1501, 1);
+
+        if ($type =~ m!^image/jpe?g$!io) {
+            ($x,$y) = &jpeg_size(\$data);
+            &message(sprintf("JPEG size is %dx%d",$x,$y));
+        } elsif ($type =~ m!^image/gif$!io) {
+            ($x,$y) = &gif_size(\$data);
+            &message(sprintf("Gif size is %dx%d",$x,$y));
+        } else {
+            &message("Bad image type '$type' for $src");
+            return undef;
+        }
+	## change x and y to match the requested width and height
+	if ($reqx && $reqy) {
+	    $x = $reqx;
+	    $y = $reqy;
+	} elsif ($reqx) {
+	    $y *= $x ? ($reqx/$x) : 0;
+	    $x = $reqx;
+	} elsif ($reqy) {
+	    $x *= $y ? ($reqy/$y) : 0;
+	    $y = $reqy;
+	}
+        
+	$x = 1 if $x < 1;
+	$y = 1 if $y < 1;
+	($serv_x, $serv_y) = ($x, $y);
+	$pinned = 0; $shrank = 0;
+        if (!$best) {
+            #
+            # not $best: normal image scaling rules apply
+            #
+	    my $ratio = 1.0;
+	    if ($y > 44) {
+		$ratio = 4.0;
+		$shrank = 2;
+	    } elsif ($y > 22) {
+		$ratio = 2.0;
+		$shrank = 1;
+	    }
+	    $x /= $ratio;
+	    $y /= $ratio;
+        }
+	## But in any case, pin to fit
+	if (($best != 2) && ($x > $SCREEN_WIDTH - 1)) {
+            my $ratio = $x/($SCREEN_WIDTH - 1);
+            $x /= $ratio;
+            $y /= $ratio;
+	    $pinned = 1 unless $candolarge;
+	} elsif ($best == 2) {
+	    my $size = $x * $y;
+	    &message("very best size is $x by $y");
+	    if ($size > 130000) { # Don't make this any bigger; any one
+				  # piece can only be 32K large
+		my $origx = $x;
+		$ratio = sqrt($size/130000);
+		$x /= $ratio;
+		$x = 8 * int($x / 8);
+		$x = 1 if $x == 0;
+		$ratio = $origx/$x;
+		$y /= $ratio;
+		$pinned = 1;
+	    }
+	}
+	if ($shrank && !$pinned) {
+	    # insert LINK_ALT field for refinement
+	    $_[3]->flags_set($F_LINK_ALT);
+	    $_[3]->link_alt(&tomagic($src, "i1=1"));
+	    &message("Refinement available: " . $_[3]->link_alt);
+	}
+	$x = (int($x) || 1);
+	$y = (int($y) || 1);
+        $argSizeX = &make_argument('i', 1601, $x);
+        $argSizeY = &make_argument('i', 1602, $y);
+	&message("transformed size is $x by $y");
+        
+
+	my $req;
+
+        &message("Calling distiller for MIME type $type");
+        ($exitstatus,$req) = &DistillAsync($type, "wingman.img2Tbmp",
+                                            "", $data,
+                                            $argSizeX, $argSizeY);
+
+        &message("DistillAsync exitstatus = $exitstatus");
+        if ($exitstatus == 0) {             # distOk
+            $buf = [undef, $req];
+            $success = 1;
+        } else {
+	    &DistillDestroy($req);
+	}
+    }
+
+  IMG_FINISH:
+    # We now have the image data and image dimensions, either from the cached
+    # copy or from processing it on the fly (or from "broken image" icon).
+    if ($output_size) {
+	$_[3]->serv_x($serv_x);
+	$_[3]->serv_y($serv_y);
+	$_[3]->flags_set($F_IMAGE_HAS_SERV_SIZE);
+    }
+    $_[3]->otext($buf);
+    $_[3]->flags_set($F_IMAGE_2BIT | $F_IMAGE);
+    $_[3]->width($x);
+    $_[3]->height($y);
+
+    # cache for possible future use.  If distillation failed, we "negative
+    # cache" the image to avoid trying distillation next time.  Note that since
+    # this "cache" only lasts the lifetime of 1 page request, reloading the
+    # page can clear an erroneous error condition here.
+    $Images{$srcxy} = $_[3]->clone() unless defined ($Images{$srcxy});
+    
+    my $align = ($attrs->{align} =~ /right/i? 1 : -1);
+
+    if ($best == 2) {
+        # Grow the layout to the width of the selected image.
+        #  ASSUMPTION: $best==2 will only be invoked on a page containing a
+        # single image and nothing else.  If this assumption is violated,
+        # growing the layout to the width of the selcted image might not be
+        # enough (if there's already text etc. on this "row" of the page).  In
+        # this case we'll just get the same behavior as we would get if the
+        # image was too wide to fit ("out of room packing image").
+        $ly->grow_frame_to_atleast($x+1);
+    }
+
+    my $result = $ly->pack_static($p, $align, -1);
+    
+    if ($result == -1) {        # out of room!!
+        &message("Out of room, trying clearleft");
+        $ly->clearleft();        
+        $result = $ly->pack_static($p, $align, -1);
+    }
+    if ($result == -1) {
+        &message( "Out of room packing image $src");
+        return undef;
+    } else {
+        return (wantarray? ($p,$success) : $p);
+    }
+}
+
+
+
+#
+#  Given a bunch of "pieces", make them into a big glob which will be delivered
+#  as a tSTR resource of size at most $MAXSIZE.  Return the resource and any
+#  remaining pieces that didn't fit (ie that would have overflowed $MAXSIZE).
+#
+
+sub make_rsrc_from_pieces {
+    my $maxsize = shift @_;
+    my @pieces = @_;
+    my ($p, $lp);
+    my $last_backptr = 0;
+    my $rsrc = '';
+    # optionally sort pieces by y-coord here, though it shouldn't be a problem
+    # normally 
+    while ($p = shift @pieces) {
+        $lp = length($p);
+        # insure the piece has an even length.  (Warn if it doesn't since at
+        # this point it should!)
+        &message( "Zero length piece!  This is almost certainly wrong!"), next
+            if $lp == 0;
+        if ($lp & 1) {
+            &message("Odd number of bytes ($lp) in $p");
+            die;
+        }
+        #unshift(@pieces,$p), last if (length($rsrc) + $lp > $MAXSIZE);
+        # make back-pointer correct
+        substr($p,0,2) = pack("n", - $last_backptr);
+        $last_backptr = $lp + 14;
+        $rsrc .= $p;
+	last if length($rsrc) > $MAXSIZE;
+    }
+    # BUG::don't have length checking.
+    $rsrc .= pack("n", 0xffff);
+    return ($rsrc, @pieces);
+}
+
+sub make_stringy_piece {
+    my ($para) = shift;
+    my $attrs = $para->flags;
+    my $initx = $para->x;
+    my $inity = $para->y;
+    my $str = $para->otext;
+    my $is_nullstr_only = 1;
+    my $xextent = $para->width;
+    my $yextent = $para->height;
+    my $data = '';
+    my $l;
+    my $totallen = 0;
+
+    # format of stringy piece is described in cvs:browser/wintext.c.
+    # Not duplicated here because keeping the descriptions in sync is too
+    # hard. 
+
+    my $hdr = pack("n7", 
+                   0, 0, $initx,$inity,
+                   $xextent,$yextent,
+                   $attrs);
+
+    # Make sure we actually received the data
+    if (ref($str) eq "ARRAY") {
+	## This is an array reference, of the form [ $data, $request ].
+	## Exactly one of the two entries should be defined.
+	if (!defined $str->[0]) {
+	    ## Wait until this data is present
+	    ## This next call will clean up $str->[1] and set it to undef
+	    my ($status, $body, $hdrs) = &DistillRendezvous($str->[1], undef);
+	    if (!defined $str->[1]) {
+		&message("Rendezvous successful");
+		$str->[0] = $body;
+	    } else {
+		## Some kind of error occurred during Rendezvous
+		&message("Rendezvous unsuccessful: status = $status");
+		&DistillDestroy($str->[1]);
+		$str->[0] = $internalImgs{'broken'}->otext;
+	    }
+	}
+	$str = $str->[0];
+    }
+
+    # if we have to insert original x and y dims, do it now
+    if (($attrs & $F_IMAGE) && ($attrs & $F_IMAGE_HAS_SERV_SIZE)) {
+	$hdr .= pack('nn', $para->serv_x, $para->serv_y);
+	$totallen += 4;
+    }
+
+    # if a link, insert the length byte and link data.
+
+    if ($attrs & $F_LINK) {
+        $para->link($para->link . chr(0));
+        $l = length($para->link);
+        $para->link($para->link .  '*')
+            if $l & 1;
+        my $link = pack("n A*", $l, $para->link);
+        $hdr .= $link;
+        $totallen += length($link);
+    }
+
+    # if there is a LINK_ALT field (alternate link to follow for refinement or
+    #  drill-down), add that field too.
+
+    if ($attrs & $F_LINK_ALT) {
+        $para->link_alt($para->link_alt . chr(0));
+        $l = length($para->link_alt);
+        $para->link_alt($para->link_alt . '*')
+            if $l & 1;
+        my $link_alt = pack("n A*", $l, $para->link_alt);
+        $hdr .= $link_alt;
+        $totallen += length($link_alt);
+    }
+
+    #  If a bitmap, just return the "raw" content, which is already in
+    #  pilot-bitmap format.
+    #  BUG::the content should be in some generic format, and should be
+    #  converted to pilot-specific format in this function.
+
+    if ($attrs & $F_IMAGE) {
+        ($str .= chr(0xaa))
+            if length($str) & 1;
+        $is_nullstr_only = 0;
+        $data = $str;
+        $totallen += length($str);
+    } else {
+        #  otherwise, it's text content.  it has already been split into
+        #  lines.  the indices of the start char of each line are in the
+        #  'lines' array.  Pack up these lines into (length,data).
+        #  
+        #  BUG::the @lines array was created when the paragraph was initially
+        #  line-split, but not re-created after the paragraph was broken into
+        #  multple paragraphs!!
+        #my @lines = @{$para->{'lines'}};
+        my @lines = $para->font->split_string($para->otext,$para->width," ");
+        grep(s/\s+$//, @lines);
+        my $last = 0;
+        my $li;
+        foreach $x (@lines) {
+            next unless $x;
+            # insure text is even length
+            $x .= ' ' if (length($x) & 1);
+            $data .= pack("n", length($x));
+            $data .= $x;
+            $is_nullstr_only=0 if length($x);
+        }
+        $data .= pack("n",0);
+        $totallen += length($data);
+    }
+    # fix forward ptr in this piece.
+    # in addition to the length of this data, add 14 to skip over
+    #  the header bytes till the next forward_ptr.
+    substr($hdr,2,2) = pack("n",10+4+$totallen);
+    return ($is_nullstr_only? undef : $hdr . $data);
+}
+
+#
+#  attempt to prefetch all the images.  this will get only most of them,
+#  because (a) the regexp may not work for weird url's, (b) a "base href=" tag
+#  in the body can override the url that's being used for canonicalization.
+#  as long as we get most of them we should be fine.
+#
+sub prefetch_images {
+    my ($data,$url,$nocache_arg) = @_;
+    my %urls = ();
+    my (@data, @pages);
+    my ($fetched, $href);
+    my $headers = '';
+    local($@) = ',';
+
+    $headers .= "User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\n";
+    $headers .= "Accept: image/gif, image/jpeg\r\n";
+    if (defined($nocache_arg) && $nocache_arg==1) {
+	$headers .= "Pragma: no-cache\r\n";
+    }
+    $headers .= "\r\n";
+    @data = split(/<\s*img/is, $data);
+    for (@data) {
+        next unless m/src\s*=\s*\"?([^>\"\s]+)/is; #"
+        $urls{$1}++, &Clib_Async_Fetch(&canonicalize($1,$url), $headers)
+            unless $urls{$1};
+    }
+    if ($num_href_prefetches) {
+	$fetched = 0;
+	@pages = split(/<\s*a\s*/is, $data);
+	for (@pages) {
+	    next unless m/href\s*=\s*\"?([^>\"\s]+)/is; #"
+	    $href = $1;
+	    ++$fetched;
+	    last if $fetched >= $num_href_prefetches;
+	    $urls{$href}++, &Clib_Async_Fetch(&canonicalize($href,$url),
+		$headers) unless $urls{$href};
+	}
+    }
+    &message(sprintf("Prefetching: %s", join(',',(keys(%urls)))));
+}
+
+sub DistillerMain {
+    my($data,$hdrs,$type,%args) = @_;
+    my $para;
+    my @rsrc = ();
+    my @pa;
+    my $str = '';
+    my $url = &get_my_url($hdrs);
+    my $status = 0;                         # what eventually gets returned as
+                                            # distiller status                       
+    # pilot's screen width pixels
+    $SCREEN_WIDTH = ($args{$FRONT_CLI_VERSION} >= $CLI_VERSION_HORIZSCROLL)
+			? 156 : 160;
+    
+    &message("Request for $url");
+
+    # clear out the array of cached converted images
+    %Images = ();
+
+    # strip out NULs from input data
+    #$data =~ tr/\0//d;
+    
+    # start prefetching any inline images, etc. so they'll be ready later
+    &prefetch_images($data,$url,$args{$FRONT_NOCACHE});
+
+    # parse_main does all the work of "generic layout" and parsing
+    ($status,@pa) = &parse_main($data, $hdrs, $type, %args);
+
+    &message("Collecting pieces");
+    foreach $para (@pa) {
+        next unless ref($para) eq 'Para';
+        $nextpiece = make_stringy_piece($para);
+        push(@rsrc, $nextpiece) if $nextpiece;
+    }
+
+    if (scalar @rsrc == 0) {
+        # no blocks successfully laid out, bummer
+        &message("$url: No blocks could be laid out");
+        return('', '', 'application/x-wingman', 8); # distBadInput
+    }
+    # pack as much as we have room for on the Pilot
+    ($str,@rsrc) = &make_rsrc_from_pieces($MAXSIZE, @rsrc);
+    if (@rsrc) {
+        &message( "Warning: page overflowed $MAXSIZE bytes");
+        # BUG::should cache the remaining pages here, and add a link at the
+        # bottom of the one we deliver.
+    }
+    &message("Wingman returns status $status");
+    return ($str, "HTTP/1.0 200 Ok\r\nContent-Type: application/x-wingman\r\nLocation: $url\r\n", 'application/x-wingman', $status);
+}
+
+1;

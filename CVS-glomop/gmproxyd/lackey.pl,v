@@ -1,0 +1,168 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.12.17.04.22.17;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Added the lackey, which required minor changes to util.pl (to make unique
+file names really unique when forking is involved).  Also added
+beginnings of an autoconf script and a Makefile.in.
+@
+text
+@#
+#  The gmproxyd lackey.  It serves LWP requests asynchronously and provides a
+#  "barrier" operation.  Each outstanding request is represented by a token; a
+#  barrier consists of waiting for the completion of the set of requests
+#  represented by an arbitrary set of tokens.
+#
+
+=head1 NAME
+
+lackey - provide asynchronous request and rendezvous/barrier for gmproxyd
+
+=head1 SYNOPSIS
+
+ $lk = new lackey;
+
+ $tok = $lk->async_request($reqObj, $cvt_proc, $client, $prefs);
+ @@responses = $lk->waitfor($tok1, [$tok2, ...])
+
+=head1 DESCRIPTION
+
+The lackey provides an asynchronous interface for satisfying LWP (e.g. HTTP,
+FTP, etc.) requests.  You pass the lackey the request object, a handle to the
+conversion (e.g. distillation) procedure and arguments to that procedure,
+and call it back later to get the results.
+
+Implementation is naive: the lackey forks a copy of itself to handle the
+request, and barriers are implemented by checking the contents of a file 
+the lackey writes when it's done.  When Perl becomes multithreaded, this will
+be done using threads instead.
+    
+=cut
+
+package lackey;
+
+sub new {
+    bless { "ua" => new LWP::UserAgent }
+}
+sub ua { $_[0]->{"ua"} }
+
+sub async_request {
+    my $self = shift @@_;
+    my(@@args) = @@_;
+    # must generate unique filename before forking, to make sure it's
+    # really unique!
+    my $outname = &util::mktemp;
+    my $tmpname = &util::mktemp;
+
+    unless (fork()) {
+        # this is the child
+        unless (fork()) {
+            # this is the grandchild
+            &util::debug('lackey', "Spawning request for " . $args[0]->url);
+            &lackey::do_request($self,$tmpname,$outname,@@args); # long-running
+            exit(0);
+        }
+        exit(0);                            # child is reaped quickly
+    }
+    wait;                                   # wait for first child
+    return $outname;
+}
+
+#
+# Routine to actually do the request.  Use the lackey's user-agent to handle
+# the request, and if success, package the results into a chunk and call the
+# conversion procedure.  If there is an error at any point, the chunk's
+# mime_type field is set to "error" and the data field is set to an error
+# message.
+#
+
+sub do_request {
+    my ($self,$tmpname,$outname,$req,$cvtproc,$cli,$prefs) = @@_;
+    my $retval = undef;                     # error
+
+    # note that we can use alarm() even though we use sleep() in the waitfor
+    #   function (alarm and sleep usually don't coexist well).  the reason is
+    #   that this function is always called from a *different* process, since
+    #   it's after the fork() point in async_request(), above.
+    $self->ua->use_alarm(1);
+
+    $resp = $self->ua->request($req);
+    my $ch  = new chunk ('', undef, 0, 0, '', '', undef, undef, undef);
+    my $newch;
+    
+    if ($resp->is_success) {
+        &util::debug('lackey', "Request " . $req->url .
+                     " success, calling $cvtproc");
+        $ch->mime_type($resp->header("content-type"));
+        $ch->data($resp->content);
+        # call the conversion function...
+        eval { $newch = &{$cvtproc}($ch, $cli, $prefs) };
+        if ($@@ || !defined($newch)) {
+            # error occurred!
+            &util::debug('lackey', "Cvtproc failed: $@@");
+            $ch->mime_type("error");
+            $ch->data("Error calling $cvtproc: $@@");
+        } else {
+            &util::debug('lackey', "Cvtproc succeeded, dumping to $outname");
+            # success!  return $newch as the actual result.
+            $retval = 1;
+            &util::dump($newch->packed(), $tmpname);
+        }
+    } else {
+        # error in user-agent fetch
+        &util::debug('lackey', "Request " . $req->url  . " failed: " .
+                     $resp->message);
+        $ch->mime_type("error");
+        $ch->data($resp->message);
+        &util::dump($ch->packed(), $tmpname);
+    }
+    # atomically move the tmpname to the real name expected by the barrier,
+    # and then remove the old file.
+    link($tmpname,$outname) && unlink $tmpname;
+    return $retval;
+}
+        
+#
+#  here is the waitfor routine.  It waits for all the outstanding requests to
+#    be completed.  Note that they may complete with failure status.  It
+#    returns a list of chunks, one per completed request, which are composed by
+#   reading the packed chunk data out of the corresponding files.
+#
+
+sub waitfor {
+    my $self = shift;
+    my @@files = @@_;
+    my @@chunks = ();
+    
+    for (@@files) {
+        &util::debug('lackey', "Waiting for $_");
+        sleep 1 until -r $_;
+        push(@@chunks, (fromfile chunk $_));
+    }
+    if (wantarray) {
+        return @@chunks;
+    }
+    if ((scalar @@chunks) > 1) {
+        &util::log("*** Warning! lackey::waitfor called in scalar ".
+                   " context with >1 arg!");
+    }
+    return $chunks[0];
+}
+
+1;
+@

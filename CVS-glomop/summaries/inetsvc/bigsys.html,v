@@ -1,0 +1,156 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.05.03.20.18.21;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+Case Studies of CIRRUS and TWA Reservations
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Case Studies: The CIRRUS Banking Network and TWA Reservations System
+</h1>
+<strong>
+David Gifford and Alfred Spector
+</strong>
+
+<p><b>One-line summary:</b>
+Case studies of two mission-critical, fault-tolerant distributed
+systems; some ruminations by this researcher on implications for
+building big systems and how they jibe with systems I've already built.
+</p>
+
+<h2>TWA Overview</h2>
+
+<ul>
+  <li> Primary DB: complete seating inventory; secondary: reservations
+       that point into the seating inventory.  Dangling-pointer problem
+       from inconsistency is usually fixed offline by analysis scripts,
+       or by human being who realizes a seat was sold but the
+       reservation record pointing to it was lost in the crash.  Quote
+       from article:
+       <blockquote>
+       <B>Gifford:</b> What you're saying, then, is that you're willing
+       to tolerate a certain amount of inconsistency if you can get a
+       large transaction volume and high availability in return.<br>
+       <b>Buckley:</b> It's the only way we know to maintain the
+       transacation rate and availability we need...a 90% utilization
+       rate would make it impossible for us to log all our transactions
+       the way IMS does.
+       </blockquote>
+  <li> Duplicate booking analysis: done offline with heuristics!
+       No easy way to catch
+       it online, because duplicate bookings arent usually within the
+       same airline.  <i>This is one way in which "end user semantics"
+       are taken into account for a design decision: online analysis
+       wouldn't capture the common case.</i>
+  <li> Single-CPU (IBM 9083 w/ACP OS) system, full duplicate CPU and
+       DB.  ACP's DB support includes disk striping, which works well in
+       practice to uniformly distribute data and avoid hotspots.
+  <li> Preserving availability: when moving data to bigger disks, they
+       pipelined the whole operation, marking records that got modified
+       after being captured and copied over.  System was online
+       essentially the whole time.
+  <li> Preserving availability by incremental deployment:
+       When new record format was introduced, old records
+       were lazily migrated (took ~1 yr before old-format support could
+       be removed).
+  <li> Reliability: ACP OS is much more stable than apps, because apps
+       were constantly changing to maintain TWA's competitive edge in
+       dynamic industry where pricing changes constantly.  Development
+       on Internet time!
+  <li> Don't use a multiprocessor for fear of having a disk or CPU die
+       while holding transaction locks.
+</ul>
+
+<h2>CIRRUS Network Main Points</h2>
+
+<ul>
+  <li> Think of CIRRUS as a network-manageable "smart switch" that can
+       log network messages 
+       between ATM's and member banks.
+  <li> 2-phase commit for cash withdrawal:
+       <ol>
+         <li> Withdrawal request
+         <li> "Xact in progress" logged at Bank
+         <li> Cash dispensed, confirmation sent from ATM via CIRRUS
+              switch
+         <li> Ack returned from Bank
+       </ol>
+  <li> Non-obvious failure mode #1:
+       <ul>
+         <li> CIRRUS switch continues resending #3 until a reply is
+              eventually received
+         <li> If reply indicates error, manual cleanup needed
+       </ul>
+  <li> Non-obvious failure mode #2: Cash is dispensed, but CIRRUS switch
+       never sees message #3 from ATM
+       <ul>
+         <li> Notify bank: cash was <i>not dispensed</i>
+         <li> "Reboot" ATM-to-CIRRUS net
+         <li> Query net log to see if net thinks #3 was sent; if so,
+              <i>and</i> #3 arrived before end of business day, create
+              <i>Adjustment record</i> at both sides
+         <li> Otherwise, resolve out-of-band using physical evidence of
+              xact (tape logs, video cam, etc)
+       </ul>
+       Note use of end-user semantics for picking design point for auto
+       recovery (end of business day) as well as out-of-band resolution
+       mechanisms.
+  <li> Non-obvious failure mode #3: mailicious bank fakes message #3.
+       <i>Not caught or handled!</I>  "In practice, this won't go
+       unnoticed in the banking industry and/or by our customers."  
+       Reliance on user semantics!  (Murray sez: Another example of this
+       is if you don't receive your cash, you'll pick up the phone and
+       call the bank; out-of-band resolution relies on end user
+       behaviors like this.)
+  <li> Any msg can time out at any node
+  <li> CIRRUS switch is Tandem NonStop system; logs are "hot swapped"
+       daily.
+</ul>
+
+<h2>Relevance</h2>
+
+Various lessons from the points above on:
+<ul>
+  <li> Trading consistency for volume/performance and availability
+  <li> Considering user semantics in design decisions, and how
+       predictable user actions can be exploited (or must be accounted
+       for) in recovery procedures (e.g. expecting user to call bank if
+       cash wasn't received)
+  <li> Reliability of apps developed on "Internet time"
+  <li> Role of things like <a href="../osstruc/nbs.html">nonblocking synchronization</a>
+       in building robust systems
+</ul>
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> How hard would it be to replace TWA's system with today's COTS
+       high-performance DB's?  A lot of the problems they hand-solved
+       have been generalized (multi-transaction commit, etc.)
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

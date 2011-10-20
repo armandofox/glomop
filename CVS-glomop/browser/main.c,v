@@ -1,0 +1,952 @@
+head	1.26;
+access;
+symbols
+	v15b:1.26
+	v10b3:1.24
+	v10b2:1.18
+	v10b1:1.16;
+locks; strict;
+comment	@ * @;
+
+
+1.26
+date	97.11.15.00.26.09;	author aspolito;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.11.09.21.43.26;	author iang;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.10.29.22.07.30;	author aspolito;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.10.28.19.24.24;	author iang;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.10.28.16.49.23;	author iang;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.10.25.19.50.25;	author iang;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.10.24.03.30.29;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.10.23.20.38.07;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.10.21.21.08.11;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.10.21.03.30.29;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.06.17.57.19;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.25.00.47.01;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.24.19.20.42;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.19.22.27.15;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.19.22.22.56;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.18.00.24.05;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.14.23.41.10;	author lcddave;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.14.21.31.59;	author lcddave;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.12.21.46.09;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.12.17.30.10;	author aspolito;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.10.02.44.25;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.08.00.24.30;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.28.01.16.25;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.09.00.10.20;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.08.00.10.29;	author lcddave;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.28;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.26
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@/* UI and Data Processing Code for Top Gun Wing Man
+   (a proxy based WWW browser for the USRobotics Pilots)
+   See the README file for copyright/licensing terms */
+
+#include <Pilot.h>
+#include "globals.h"
+#include "start.h"
+#include "stop.h"
+#include "prefs.h"
+#include "cache.h"
+#include "history.h"
+#include "mainform.h"
+#include "urlform.h"
+#include "aggform.h"
+#include "hotlist.h"
+#include "pagedisplay.h"
+#include "offlineform.h"
+#include "splashform.h"
+#include "metadata.h"
+#include "notify.h"
+#include "loaddb.h"
+#include "main.h"
+
+Boolean ApplicationHandleEvent(EventPtr e)
+{
+  FormPtr frm;
+  Word    formId;
+  Boolean handled = false;
+  
+  switch (e->eType) {
+
+  case frmLoadEvent:
+    formId = e->data.frmLoad.formID;
+    frm = FrmInitForm(formId);
+    FrmSetActiveForm(frm);    
+
+    switch(formId) {
+    case MainForm:
+      FrmSetEventHandler(frm, MainFormHandleEvent);
+      break;
+    case PrefsForm:
+      FrmSetEventHandler(frm, PrefsFormHandleEvent);
+      break;
+    case SplashForm:
+      FrmSetEventHandler(frm, SplashFormHandleEvent);
+      break;
+    case URLForm:
+      FrmSetEventHandler(frm, URLFormHandleEvent);
+      break;
+    case AggForm:
+      FrmSetEventHandler(frm, AggFormHandleEvent);
+      break;
+    case HotListForm:
+      FrmSetEventHandler(frm, HotListHandleEvent);
+      break;
+    case OfflineCacheForm:
+      FrmSetEventHandler(frm, OfflineCacheHandleEvent);
+      break;
+    case LoadDatabaseForm:
+      FrmSetEventHandler(frm, LoadDatabaseHandleEvent);
+      break;      
+    case EditHotlistURLForm:
+      FrmSetEventHandler(frm, EditHotlistURLHandleEvent);
+      break;      
+    case EditOLCacheForm:
+      FrmSetEventHandler(frm, EditOLCacheHandleEvent);
+      break;      
+    }
+    handled = true;
+    break;
+  
+  case transNewChunk: 
+    {      
+      ChunkPtr c;      
+      transEventPtr te = (transEventPtr) e;
+      
+      frm = FrmGetActiveForm();
+      if (curChunk) {
+	Err err;
+	err = DestroyChunk(curChunk);
+      }
+      
+      if (hPage) {
+	  hPage = NULL;
+	  UpdateHiLiPiece(-2, NULL, 0, 0);
+	  ScrollReset();
+      }
+      curChunk = te->data.newChunk.chunkHand;
+      
+      c = (ChunkPtr) MemHandleLock(curChunk);
+      if (c->requestID == currRequestID || c->requestID & 0x8000000) {
+        CheckAggList(c->metaHand);
+        switch(GetPageType(c->metaHand)) {
+	VoidHand hDBtoLoad;
+
+        case PageTypeRegular:
+	    hPage = c->dataHand;
+	    UpdateHiLiPiece(-2, NULL, 0, 0);
+	    ScrollReset();
+	    MemHandleUnlock(curChunk);
+	    if (hPage && transURL) {
+	      char * url;
+	      VoidHand data;
+		    
+	      if (curURL) {
+		MemHandleFree(curURL);
+	      }
+	      
+	      curURL = transURL;
+	      curURLLength = transURLLength;
+	      
+	      if (tcurHistory != -1) {
+		curHistory = tcurHistory;			
+		tcurHistory = -1;	
+	      }
+
+	      PutInHistory(curURL, curURLLength);
+	      
+	      transURL = NULL;
+	      transURLLength = 0;
+
+	      url = MemHandleLock(curURL);
+	      data = InCache(url, curURLLength, offlineInfoDB, offlineDB);
+	      if (data) {
+		AddToCache(url, curURLLength, 
+			   (char *) MemHandleLock(hPage), c->dataSize, 0,
+			   offlineInfoDB, offlineDB);
+	      } else {
+		AddToCache(url, curURLLength, 
+			   (char *) MemHandleLock(hPage), c->dataSize, 
+			   ExprTime(c->metaHand), cacheInfoDB, cacheDB);
+	      }
+	      MemHandleUnlock(hPage);
+	      MemHandleUnlock(curURL);
+	    } 
+	    break;
+
+	case PageTypeDatabase:
+	    /* Save the given database */
+	    hDBtoLoad = c->dataHand;
+	    hPage = NULL;
+
+	    /* Do something useful with hDBtoLoad */
+	    DatabaseLoad(hDBtoLoad);
+
+	    /* Now we probably want to reshow the current URL (though we'll
+	       jump to the top...) */
+	    if ((curHistory == -1) || MoveInHistory(0)) {
+		EraseMainWindow();
+		ScrollReset();
+		if (hPage) {
+		    WinDrawProxyString(hPage, currXPosOffset, currYPosOffset);
+		}
+	    }
+	    break;
+
+	default:
+	    break;
+	}
+	handled = true;
+      }
+      if (hPage && (frm->formId == MainForm)) {
+        EraseMainWindow();
+	ScrollReset();
+        WinDrawProxyString(hPage, currXPosOffset, currYPosOffset); 
+      }
+      break;
+    }
+  default:
+    break;
+  }
+  return handled;
+}
+
+
+static Boolean TopLevelHandleEvent(EventPtr e) {
+  FormPtr frm;
+  Boolean handled = false;
+
+  frm = FrmGetActiveForm();
+  if (e->eType == keyDownEvent) {
+    switch (e->data.keyDown.chr) {
+    case hard2Chr: 
+    case hard3Chr: 
+      if (remap) {
+	handled = true;
+	if (frm->formId == MainForm) {
+	  if (MoveInHistory(e->data.keyDown.chr == hard2Chr ? 1 : -1)) { 
+	    EraseMainWindow();
+	    ScrollReset();
+	    if (hPage) {
+	      WinDrawProxyString(hPage, currXPosOffset, currYPosOffset);
+	    }
+	  }
+	}
+      }
+      break;
+    default:
+      break;
+    }      
+  }
+  return handled;
+}
+
+/* The main event loop */
+static void EventLoop(void)
+{
+  Word err;
+  EventType e;
+  do {
+    if (conID != -1) {
+      CheckNetwork();
+    }
+    EvtGetEvent(&e, 200); /* why does -1 work anyway? */
+    if (!TopLevelHandleEvent(&e))
+      if (! SysHandleEvent (&e))
+	if (! MenuHandleEvent (NULL, &e, &err))
+	  if (! ApplicationHandleEvent (&e))
+	    FrmDispatchEvent (&e);
+  } while (e.eType != appStopEvent);
+}
+
+/* Main entry point; it is unlikely you will need to change this except to
+   handle other launch command codes */
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+  Word err;
+  if (cmd == sysAppLaunchCmdNormalLaunch) {
+    err = StartApplication();    
+    if (err) return err;
+    EventLoop();
+    StopApplication();
+
+  } else {
+    return sysErrParamErr;
+  }
+
+  return 0;
+}
+
+@
+
+
+1.25
+log
+@Recover from CVS repository crash.  Changes include:
+o Editing of entries in hotlist and storage
+o Server-side imagemaps
+o Recognition of ImageViewer .pdb files
+@
+text
+@d111 5
+@
+
+
+1.24
+log
+@*** empty log message ***
+@
+text
+@d62 6
+@
+
+
+1.23
+log
+@Fixed up some memory problems
+@
+text
+@d22 1
+d24 1
+a24 1
+static Boolean ApplicationHandleEvent(EventPtr e)
+d59 3
+d137 1
+a137 1
+	    if (MoveInHistory(0)) {
+@
+
+
+1.22
+log
+@Prepare for database downloading
+@
+text
+@a84 1
+	SWord *ptmp;
+d124 1
+a124 1
+	    /* Save the given database and replace it with a blank page */
+d126 1
+a126 6
+	    c->dataHand = MemHandleNew(2);
+	    ErrFatalDisplayIf(!c->dataHand, "Out of memory!");
+	    ptmp = MemHandleLock(c->dataHand);
+	    *ptmp = 0xFFFF;
+	    MemHandleUnlock(c->dataHand);
+	    hPage = c->dataHand;
+a130 1
+	    MemHandleFree(hDBtoLoad);
+@
+
+
+1.21
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@d21 1
+d84 3
+d125 22
+a146 1
+	    /* Anthony gets to put stuff here */
+@
+
+
+1.20
+log
+@Added a scroll bar
+@
+text
+@a72 1
+	  currYPosOffset = 0;
+d74 1
+a74 1
+	  UpdateHiLiPiece(-2, NULL, 0);
+d85 1
+a85 1
+	    UpdateHiLiPiece(-2, NULL, 0);
+a130 1
+        currYPosOffset = 0;
+d132 1
+a132 1
+        WinDrawProxyString(hPage, currYPosOffset); 
+a156 1
+	    currYPosOffset = 0;
+d159 1
+a159 1
+	      WinDrawProxyString(hPage, currYPosOffset);
+@
+
+
+1.19
+log
+@.
+@
+text
+@d20 1
+d76 1
+d87 1
+d133 1
+d160 1
+@
+
+
+1.18
+log
+@Store the received agglist in preferences.  _Using_ those prefs still doesn't
+work...
+@
+text
+@d71 5
+a82 5
+	    if (hPage) {
+	      currYPosOffset = 0;
+	      hPage = NULL;
+	      UpdateHiLiPiece(-2, NULL, 0);
+	    }
+a115 5
+	    if (hPage && (frm->formId == MainForm)) {
+	      EraseMainWindow();
+	      currYPosOffset = 0;
+	      WinDrawProxyString(hPage, currYPosOffset); 
+	    }
+d117 5
+d126 5
+@
+
+
+1.17
+log
+@Added support for non-page pages (agglists and prcs)
+@
+text
+@d75 1
+a120 2
+	    break;
+	case PageTypeAgglist:
+@
+
+
+1.16
+log
+@Added the aggregator form
+@
+text
+@a65 5
+      if (hPage) {
+	currYPosOffset = 0;
+	hPage = NULL;
+	UpdateHiLiPiece(-2, NULL, 0);
+      }
+d75 20
+a94 13
+	hPage = c->dataHand;
+	UpdateHiLiPiece(-2, NULL, 0);
+	MemHandleUnlock(curChunk);
+	if (hPage && transURL) {
+	  char * url;
+	  VoidHand data;
+	  	
+	  if (curURL) {
+	    MemHandleFree(curURL);
+	  }
+	  
+	  curURL = transURL;
+	  curURLLength = transURLLength;
+d96 4
+a99 4
+	  PutInHistory(curURL, curURLLength);
+	  
+	  transURL = NULL;
+	  transURLLength = 0;
+d101 24
+a124 18
+	  url = MemHandleLock(curURL);
+	  data = InCache(url, curURLLength, offlineInfoDB, offlineDB);
+	  if (data) {
+	    AddToCache(url, curURLLength, 
+		       (char *) MemHandleLock(hPage), c->dataSize, 0,
+		       offlineInfoDB, offlineDB);
+	  } else {
+	    AddToCache(url, curURLLength, 
+		       (char *) MemHandleLock(hPage), c->dataSize, 
+		       ExprTime(c->metaHand), cacheInfoDB, cacheDB);
+	  }
+	  MemHandleUnlock(hPage);
+	  MemHandleUnlock(curURL);
+	} 
+	if (hPage && (frm->formId == MainForm)) {
+	  EraseMainWindow();
+	  currYPosOffset = 0;
+	  WinDrawProxyString(hPage, currYPosOffset); 
+@
+
+
+1.15
+log
+@o Fixed a bug that gets tickled when the pen is being held on a link at the
+  time a new page appears.
+o Added URLs to the status bar when you hold down on a link
+@
+text
+@a4 2
+#pragma pack(2)
+
+d14 1
+d46 3
+@
+
+
+1.14
+log
+@Removed space and backspace commands
+@
+text
+@d67 1
+d79 1
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@d133 3
+a135 3
+      handled = true;
+    case backspaceChr:
+      if (remap || e->data.keyDown.chr == backspaceChr) {
+d137 1
+a137 2
+	  handled = true;
+	  if (MoveInHistory(1)) { 
+d147 2
+a148 16
+    case hard3Chr:
+      handled = true;
+    case spaceChr:
+      if (remap || e->data.keyDown.chr == spaceChr) {
+	if (frm->formId == MainForm) {
+	  handled = true;
+	  if (MoveInHistory(-1)) {
+	    EraseMainWindow();		  
+	    currYPosOffset = 0;
+	    if (hPage) {
+	      WinDrawProxyString(hPage, currYPosOffset);
+	    }	  
+	  }
+	}
+      }
+      break;	
+@
+
+
+1.12
+log
+@FIXED UGLY BUG
+@
+text
+@d133 1
+d137 1
+a145 1
+	handled = true;
+d149 1
+d153 1
+a161 1
+	handled = true;
+@
+
+
+1.11
+log
+@PutInHistory now does some sanity checking
+@
+text
+@d127 2
+d130 6
+a135 7
+  if (frm->formId == MainForm) {
+    Boolean handled = false;
+    if (e->eType == keyDownEvent) {
+      switch (e->data.keyDown.chr) {
+      case hard2Chr: 
+      case backspaceChr:
+	if (remap || e->data.keyDown.chr == backspaceChr) {
+a142 1
+	  handled = true;
+d144 7
+a150 4
+	break;
+      case hard3Chr:
+      case spaceChr:
+	if (remap || e->data.keyDown.chr == spaceChr) {
+d156 1
+a156 1
+	    }
+a157 1
+	  handled = true;
+d159 4
+a162 4
+	break;	
+      }      
+    }
+    return handled;
+d164 1
+a164 1
+  return false;
+@
+
+
+1.10
+log
+@Following has been added
+
+1. Stop/cancel load functionality (but buggy, transport layer state not reset)
+
+2. Moved PutInHistory to only when a new page is loaded
+   (this is a consequence of the cancel function/otherwise URL is
+    put in history even if cancel is hit; this lead to history
+    errors.)
+
+3. changed event loop to drop every 200 ticks; my pilot batteries go dead
+   way to fast
+
+4. can now move back and forward by backspace/space
+@
+text
+@a94 2
+	  curHistory = 0;
+
+@
+
+
+1.9
+log
+@fixed scroll value reset problem
+ (scroll was reset to 0 even though user could still operate current
+  web page)
+eliminated most unnecessary "erase/redraw" locations
+ (however, one still exits when your leave a form; this has to do with
+  a frmgotofrm and winenter being done at the same time; unsure how to
+  resolve)
+@
+text
+@d89 2
+d135 8
+a142 6
+	handled = true;
+	if (MoveInHistory(1)) { 
+	  EraseMainWindow();
+	  currYPosOffset = 0;
+	  if (hPage) {
+	    WinDrawProxyString(hPage, currYPosOffset);
+d144 1
+d148 8
+a155 5
+	if (MoveInHistory(-1)) {
+	  EraseMainWindow();		  
+	  currYPosOffset = 0;
+	  if (hPage) {
+	    WinDrawProxyString(hPage, currYPosOffset);
+d157 1
+a157 1
+
+a158 1
+	handled = true;
+d176 2
+a177 2
+    EvtGetEvent(&e, 100); /* why does -1 work anyway? */
+    if (!remap || (!TopLevelHandleEvent(&e)))
+@
+
+
+1.8
+log
+@o UI fixed up: scroll bar at bottom.  It goes all black when the page is
+  requested, and disappears when the page has arrived completely.  The
+  view area is now 150 pixels high.
+o Various bugfixes
+@
+text
+@d111 1
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d110 1
+a110 1
+	  WinEraseWindow();
+d134 1
+a134 1
+	  WinEraseWindow();
+d143 1
+a143 1
+	  WinEraseWindow();		  
+@
+
+
+1.6
+log
+@lots.  I dont remember
+@
+text
+@d79 1
+a79 1
+	if (hPage && curURL) {
+d82 7
+d90 5
+d108 1
+a108 1
+	}
+@
+
+
+1.5
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@d20 1
+d87 1
+a87 1
+		       (char *) MemHandleLock(hPage), c->dataSize, 
+d92 1
+a92 1
+		       cacheInfoDB, cacheDB);
+@
+
+
+1.4
+log
+@OFFLINE MODE WORKS
+@
+text
+@a11 1
+#include "proxy.h"
+d19 1
+d41 3
+a46 3
+    case ProxyForm:
+      FrmSetEventHandler(frm, ProxyFormHandleEvent);
+      break;
+d155 1
+a155 1
+    EvtGetEvent(&e, 100);
+@
+
+
+1.3
+log
+@bug fixes and offline cache
+@
+text
+@d135 1
+d152 3
+a154 1
+    CheckNetwork(conID);
+d170 1
+a170 1
+    err = StartApplication();
+a171 3
+#ifdef DEBUG
+    /* StartDebug(); */
+#endif
+@
+
+
+1.2
+log
+@Fixed click memory bug. Implemented a possible catch to down server
+bug that destorys the pilot.
+@
+text
+@d19 1
+a19 30
+
+#ifdef DEBUG
+long data_start, bss_start;
+static void StartDebug(void)
+{
+  extern void start ();
+  DWord romVersion;
+  FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+  if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+  }
+
+  asm("
+       lea data_start(%%a4),%%a1
+       move.l %%a1,%%d2
+       lea bss_start(%%a4),%%a1
+       move.l %%a1,%%d1
+       lea start(%%pc),%%a0
+       move.l %%a0,%%d0
+       sub.l #start, %%d0
+       move.l #0x12BEEF34, %%d3
+       trap #8
+       move.l #0, %%d3
+       move.l #0, %%d0
+       move.l #0, %%d1
+       move.l #0, %%d2
+      " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+}
+#endif
+
+d50 3
+d79 15
+a93 2
+	  AddToCache((char *) MemHandleLock(curURL), curURLLength, 
+		     (char *) MemHandleLock(hPage), c->dataSize);
+a94 1
+	  MemHandleUnlock(hPage);
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d20 30
+d101 14
+a114 11
+      hPage = c->dataHand;
+      MemHandleUnlock(curChunk);
+      if (hPage && curURL) {
+	AddToCache((char *) MemHandleLock(curURL), curURLLength, 
+		   (char *) MemHandleLock(hPage), c->dataSize);
+	MemHandleUnlock(curURL);
+	MemHandleUnlock(hPage);
+      }
+      if (hPage && (frm->formId == MainForm)) {
+	WinEraseWindow();
+	WinDrawProxyString(hPage, currYPosOffset); 
+a115 1
+      handled = true;
+d183 3
+a185 1
+
+@

@@ -1,0 +1,194 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.20.09.55.25;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added adaptive credit based flow control
+@
+text
+@<html>
+<title>
+Adaptive Credit Based Flow Control
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Credit-Based Flow Control for ATM Networks: Credit Update Protocol,
+Adaptive Credit Allocation, and Statistical Multiplexing
+</h1>
+<strong>
+H.T. Kung, Trevor Blackwell, Alan Chapman, Harvard Univ. and Bell
+Northern Research
+</strong>
+
+<p><b>One-line summary:</b>
+Per-VC credit-based flow control in which credit and bandwidth
+allocations adapt dynamically to offered load.  The use of
+adaptive flow control for statistical multiplexing of traffic through a
+switch keeps switch buffer requirements modest (RTT&nbsp;x&nbsp;O(1), as
+opposed to RTT&nbsp;x&nbsp;peak&nbsp;BW) and cell loss low.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Why to use credit based flow control per VC (virtual ckt):
+       <ul>
+         <li> "fill in" traffic to use surplus capacity after guaranteed
+              traffic has been scheduled
+         <li> Data to be used for "fill in" must be "drawn" to switches
+              with excess capacity early enough to fill in the excess,
+              but don't want to draw excess traffic (resulting in
+              droppage)
+         <li> congestion control via backpressure per VC doesn't affect
+              throughput of noncongested VC's
+       </ul>
+  <li> The "N23" credit-based flow control scheme:
+       <ul>
+         <li> Roughly, N2 is amount of "steady state" buffering
+              available per VC at receiving switch; N3 is
+              &quot;overflow&quot; buffering for excess traffic.  N2
+              generally stays fixed, N3 may be varied over life of VC.
+              The larger N2 is, the more resilient the VC is to
+              short-term load fluctuations.
+         <li> N3 chosen as B<sub>vc</sub>&nbsp;x&nbsp;RTT, where
+              B<sub>vc</sub> is targeted average bandwidth of this VC.
+         <li> When sender receives &quot;credit update&quot; C from
+              receiver, new credit is computed as C-E, where E is number
+              of cells sent in last RTT (i.e. number of cells in flight
+              when update received)
+       </ul>
+  <li> Properties of N23 scheme:
+       <ul>
+         <li> No data overflow, as long as corrupted credit updates can
+              be detected
+         <li> Self-repairing as long as corrupted credit updates are
+              eventually retransmitted
+         <li> Average BW achievable over one RTT is at most
+              (N2+N3)/(RTT+N2)
+       </ul>
+  <li> Credit update protocol (CUP): a simple hardware implementation of
+       N23.
+       <ul>
+         <li> Receiver sends credit update; sender computes new credit
+              as N2+N3-(Vs-Vr), where Vs is number of 
+              cells sender has forwarded or dropped, and Vr is number of
+              cells receiver has forwarded (enclosed in update).
+         <li> Note Vs+Vr=B+E, where B is the number of cells in the
+              receiver's buffer when update leaves receiver, and E is as
+              above.
+         <li> Each receiver also keeps running total U of all data cells it
+              has received.  &quot;Periodically&quot; (an engineering
+              choice) each sender transmits its current Vs, and the
+              receiver computes the number of lost cells as Vs-U, then
+              increments U and Vr by this value.
+       </ul>
+  <li> Adaptive credit allocation:
+       <ul>
+         <li> Size of shared buffer pool is r&nbsp;x&nbsp;RTT, where
+              r&gt;1.
+         <li> Each VC wants to get C=B&nbsp;x&nbsp;RTT, where C is its
+              credit and B its operating bandwidth over some measurement
+              interval M (paper assumes M=RTT for simplicity).
+         <li> Each VC's credit allocation is always strictly larger than
+              its operating credit by a factor of r'&gt;=r&gt;1 (to
+              allow &quot;headroom&quot; for fast credit growth).
+         <li> Suppose the shared buffers are not completely full when
+              credit reallocation occurs.  VC's experiencing ramp-up in
+              bandwidth can grow their share of allocation by a factor
+              of up to r per reallocation, i.e. exponential ramp up
+              (like TCP slow start).
+         <li> Suppose shared buffers <i>are</i> completely full when
+              reallocation occurs: so we should consider only the
+              shared buffer size minus the in-flight cells.
+         <li> Parameter r can be reduced dynamically as each VC's
+              operating credit approaches its target bandwidth.  There
+              is also a parameter a that defines the cutoff of a
+              low-pass filter, which insulates N3 from rapid
+              fluctuations in bandwidth.  The choice of both of these is
+              "an engineering choice" -- no details are given.
+         <li> Adaptation can be sender- or receiver-based.  Receiver
+              based allows quick adjustment of N3: since N3 is a
+              receiver-only parameter it can just be changed locally as
+              desired.  But receiver-oriented implies that ramp-up will
+              be delayed by about 1 RTT.
+       </ul>
+  <li> Per-VC flow control enables statistical multiplexing of the
+       shared buffer, helping to  minimize its size.  Under low to
+       moderate congestion, very few cells lost; under heavy congestion,
+       cells get lost.
+  <li> Simulations:
+       <ul>
+         <li> Assumption: all N  VC's have identical loads, involving
+              bursts of B cells with exponentially distributed
+              inter-burst times.
+         <li> Assumption: shared buffer pool size is
+              M=b&nbsp;x&nbsp;N&nbsp;x&nbsp;B cells, where b&lt;1 is the
+              "memory reduction factor" due to statistical multiplexing.
+         <li> Simulation 1: link utilization, number of cell delays, and
+              number of dropped cells as function of  N3, with B=172,
+              N=100, M=4096, offered load=0.95, RTT=3200 cell times.
+              Result: link
+              utilization quickly reaches 1.0 and stays there; at about
+              N3=100, number of dropped cells starts to climb, since
+              statistical multiplexing starts to break down.
+         <li> Simulation 2: same, but with unlimited memory size, also
+              plotting max memory usage as function of N3.  Result:
+              same, but memory usage grows slowly up to about N3=80,
+              then slope takes off, again as statistical multiplexing
+              begins to fail.
+         <li> Simulation 3: goal is to show that the same throughput
+              and rate of cell loss can be achieved with less memory
+              (i.e. lower b) if per-VC flow control is used than if it
+              is not.  Duh.  Result is that adaptive FC can pin b to
+              about 3.
+         <li> Simulation 4: shows fast adaptation.  N3 value at
+              receiving switch tracks N3 at sending switch with a delay
+              of about 4000-5000 cell times, i.e. about 1.5 RTT, as
+              expected.
+       </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+How to use fast adaptive credit based FC to get proportional share
+credit allocation (and therefore capacity/BW utilization) for multiple
+VC's.  Implementation requires 3 state counters per VC and is robust to
+corrupted credit cells.
+
+<h2>Flaws</h2>
+
+
+<ul>
+  <li> The parameters r and a, and the manner and frequency with which
+       they can be varied over time, seem critical to the stability and
+       responsiveness of the algorithm, yet all the authors say is that
+       they are "engineering choices".  Bah.
+  <li> &quot;Burstiness at all timescales&quot; calls simulated load
+       assumptions 
+       into question.
+  <li> Are the counters required by their implementation soft or hard
+       state?  If soft state, how is the credit computed at time
+       t=0, and what effect on the VC (and other VC's) is seen if the
+       state is lost
+       during the connection?
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

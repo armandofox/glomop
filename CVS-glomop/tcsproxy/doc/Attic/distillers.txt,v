@@ -1,0 +1,141 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.02.05.03.56.58;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	97.01.06.05.43.26;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@all "run" targets now put their programs in the background.
+run_frontend redirects stderr to "frontend.errs", but ideally we
+shouldn't have to rely on fprintf(stderr) at all.
+html and gif distillers no longer spew debugging output to stderr.
+Monitor now prints to stderr if the monitor object has the sentinel
+value MON_USE_STDERR.
+in doc directory, distillers.txt is now distillers.pod.  Use pod2* to
+make it into HTML,LaTEX, etc.
+@
+text
+@------------------------
+HOW TO WRITE A DISTILLER:
+------------------------
+
+You will write a file containing four functions to perform distillation
+duties.  Then you'll link this file against a front-end library, which
+connects your distiller to the rest of the proxy system.
+
+Use the template Makefile in the gif_munger or html_munger
+subdirectories to get the appropriate magic lines for linking with the
+distiller library and to get the appropriate compiler arguments for
+finding include files, etc.
+
+WRITING THE FUNCTIONS:
+---------------------
+
+You need to include "distinterface.h", which provides protos for the
+following functions that you must write:
+
+   DistillerStatus DistillerInit(void);
+
+Perform one-time initialization, such as memory allocation, etc.
+Possible return values are distOk and distFatalError.
+
+   void DistillerCleanup(void);
+
+Called when distiller is about to exit.  Free memory, etc. here.  No
+more calls into your code will occur after this one returns.  Be nice
+about freeing memory, etc., since this call doesn't necessarily mean the
+whole process is exiting.
+
+
+   DistillerStatus
+   DistillerMain(Argument *args, int numberOfArgs,
+	      void     *input,  UINT32 inputLength,
+	      void     **output,UINT32 *outputLength,
+	      gm_Bool     *freeOutputBuffer);
+
+The main routine called to perform a single distillation.
+    input:  Pointer to input data buffer
+    inputLength:  Length of data in buffer
+    output: set this to point to your output buffer.  You can allocate
+        one yourself using DistillerMalloc() (same proto as malloc()),
+        or overwrite the input buffer if you're sure the output is
+        no larger than the input.
+    outputLength: set this to the length of the output.
+    freeOutputBuffer: set to gm_True (gm_False) to indicate that the
+        caller should (should not) call DistillerFree() on the output
+        buffer, i.e. set to gm_True if you had to DistillerMalloc() the
+        output buffer yourself.  YOU MUST SET THIS TO SOME VALUE; IT IS
+        NOT PRE-INITIALIZED.
+    numberOfArgs: the number of arguments in the arg list.
+    args: the arg list.  Each arg is a (pointer to a) structure of type
+        Argument.  Each argument has a 32-bit ID and a value, which may
+        be a string, float, or 32-bit int.  Arg ID space is global, so
+        you should pick ID's that won't be likely to collide with others.
+        
+        You can use the following macros/functions to access the
+        arguments: 
+
+    Argument *getArgumentFromId(Argument *args, int numberOfArgs, UINT32 id);
+
+        If an argument with the given ID is in your argument list,
+        return a pointer to it, else NULL.
+
+    ARG_ID(arg), ARG_STRING(arg), ARG_INT(arg), ARG_DOUBLE(arg)
+
+        Return an arg's ID (UINT32), string value (char *), int value (INT32),
+        float value (double).  An arg may only have one value at a
+        time.  It's up to you to decide which value to access, based on
+        the arg ID.
+
+DistillerStatus
+ComputeDistillationCost(Argument *args,   int    numberOfArgs,
+			void     *input,  UINT32 inputLength, 
+			DistillationCost *cost);
+
+Same argument semantics as DistillerMain(), but you should just estimate
+the latency cost of performing the operation and leave that result in
+DistillationCost. 
+
+TESTING THE DISTILLER:
+---------------------
+
+[TBD]
+
+USING IT WITH THE REST OF THE PROXY SYSTEM:
+------------------------------------------
+
+[TBD] How to add the right MIME type to a config file, etc.
+
+@
+
+
+1.1
+log
+@Added doc/distillers.txt, which explains how to write your own
+distiller.  Gifmunger should now do the right thing even on extremely
+large images.  Default args for gifmunger are more sane (16 colors,
+scale 0.5 per axis), but output still looks sucky - not sure why the
+quantize phase picks such crappy colors.  "test_http" program has been
+officially renamed "frontend".  Fixed the "run" targets in toplevel
+Makefile.  Added line to configure.in to create a Makefile from
+Makefile.in for gui.
+@
+text
+@@

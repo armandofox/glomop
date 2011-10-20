@@ -1,0 +1,158 @@
+=head1 How to Write a Distiller
+
+This file tries to describe how to write a distiller for the scalable
+proxy system.
+
+This file is in Pod format.  You can use the translators
+F<pod2html>, F<pod2latex>, F<pod2man>, etc. to convert it to something
+more palatable to you.
+
+You will write a file containing four functions to perform distillation
+duties.  Then you'll link this file against a front-end library, which
+connects your distiller to the rest of the proxy system.  To test the
+distiller, you can link against a "dummy" library that lets you run
+arbitrary test inputs through the distiller.
+
+If you're writing in Perl (recommended), the job is much easier.  Look
+at the sample "null" distiller F<distiller.pl> supplied with the
+distribution.  The keyword-highlighting examples (used in class) are
+also available as F<kwhilite.pl.1> thru F<kwhilite.pl.4>, in the
+F<perl_dir> subdirectory of the common area of the distribution.
+
+=head1 Distiller Operation Model
+
+Distillers receive as input:
+
+=over 4
+
+=item o
+
+The input data, in a memory buffer.
+
+=item o
+
+The MIME type of the input data, e.g. "image/gif".  The proxy can
+be set up to insure that only specific MIME types get routed to a given
+distiller, so it's OK for the distiller to throw an error if presented
+with a MIME type it doesn't understand.
+
+=item o
+
+Optionally some arguments to control distillation.  The arguments
+can come from the user's preferences or from elsewhere in the proxy
+system.  The distiller may observe the arguments, but it doesn't have to.
+
+=back
+
+The distiller provides as output:
+
+=over 4
+
+=item o
+
+The output data, again in a memory buffer.  The distiller may
+allocate its own buffer using C<DistillerMalloc>, or it may overwrite
+the input buffer if it is sure the output will be no larger than the
+input. 
+
+=item o
+
+The MIME type of the output data, which can be different for
+different requests.
+
+=back
+
+=head1 Functions You Must Provide
+
+You need to include F<distinterface.h>, which provides protos for the
+following functions that you must write.  This file is located in the
+subdirectory F<ptm/include> of the code distribution; you should poke
+around in it while reading the following.
+
+=over 3
+
+=item Initialization Function
+
+  DistillerStatus DistillerInit(C_DistillerType distType, 
+			      int argc, const char * const * argv);
+
+Perform one-time initialization, such as memory allocation, etc.
+Possible return values are distOk and distFatalError.  You may set up
+static variables, etc. here.  C<distType> has a name field that contains
+the symbolic name of this distiller (see L<"/Adding the Distiller to the
+Proxy System">.  C<argc> and C<argv> are from the command line that was
+used to start the distiller, in case it wants to parse specific
+command-line arguments; usually you shouldn't need to look at them.
+
+=item Cleanup Function
+
+  void DistillerCleanup(void);
+
+Called when distiller is about to exit.  Free memory, etc. here.  No
+more calls into your code will occur after this one returns.  Be nice
+about freeing memory, etc., since this call doesn't necessarily mean the
+whole process is exiting.
+
+=item Main Function
+
+   DistillerStatus
+   DistillerMain(Argument *args, int numberOfArgs,
+              const DistillerInput *input,             
+              DistillerOutput *output);
+
+The main routine called to perform a single distillation, with the
+following arguments:
+
+    input:  Pointer to input data structure, which is defined in
+    F<distinterface.h> as follows:
+
+    typedef struct DistillerData {
+      DistillerBuffer data;
+      DistillerBuffer metadata;
+      char mimeType[];
+    } DistillerData;
+
+    Each C<DistillerBuffer> is a data structure that holds a glob of
+    bytes, a maximum size count for the glob, and an actual size count
+    for the glob.  A variety of macros are provided in
+    F<distinterface.h> to set and access the members of C<DistillerData>
+    structures.  Note that the C<data> and C<metadata> fields typically
+    correspond to the HTTP headers and the content, respectively.
+
+    output: pointer to an output structure, which you should fill in.
+        It currently has the same definition as the input structure.
+        You should set C<data> to point to your output buffer; you can allocate
+        one yourself using DistillerMalloc() (same proto as malloc()),
+        or overwrite the input buffer if you're sure the output is
+        no larger than the input.  Set C<length> to the length of the
+        output, and C<mimeType> to the MIME type of the output.
+
+    Note that you need to use the C<DataNeedsFree()> and
+    C<MetadataNeedsFree()> macros to tell the caller of C<DistillerMain>
+    whether it should free the buffers in your output data structure.
+    You should set this to C<gm_True> if yes (e.g. because you used
+    DistillerMalloc() to allocate memory), C<gm_False> otherwise.
+    B<YOU MUST SET THIS TO SOME VALUE; IT IS NOT PRE-INITIALIZED.>
+
+    numberOfArgs: the number of arguments in the arg list.
+
+    args: the argument list.  Each arg is a (pointer to a) structure of type
+        Argument.  Each argument has a 32-bit ID and a value, which may
+        be a string, float, or 32-bit int.  Arg ID space is global, so
+        you should pick ID's that won't be likely to collide with others.
+        See L<"/Library Functions You Can Use"> below for more information.
+        
+
+=item Cost Estimation Function
+
+  DistillerStatus
+  ComputeDistillationCost(Argument *args,   int    numberOfArgs,
+           const DistillerInput *input, DistillationCost *cost);
+
+Same argument semantics as DistillerMain(), but you should just estimate
+the latency cost of performing the operation and leave that result in
+DistillationCost as a scalar (for now.)  At the moment it's safe to
+return any nonzero value.
+
+=back
+

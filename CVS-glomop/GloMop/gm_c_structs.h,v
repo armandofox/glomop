@@ -1,0 +1,273 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     98.01.29.19.46.23;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.01.29.19.46.23;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
+ *  Data structures and symbolic definitions used by client side
+ */
+
+/*
+ *  A GM_ConnectId is returned to the client after issuing a
+ *  GM_ConnectProxy call.  This ConnectId is used in all future GloMop
+ *  function calls to identify a proxy and session.
+ */
+
+typedef unsigned short GM_ConnectId;
+
+/*
+ *  The GM_auth structure is used to provide client authentication
+ *  information to the GloMop layer during a GM_ConnectProxy call.
+ *  The username and password fields are self-explanatory.  The style
+ *  field indicates what style of authentication (eg. Kerberos, ...)
+ *  should be used between the GloMop layer and the proxy.
+ */
+
+typedef unsigned short GM_authstyle;
+#define GM_KERBEROS_AUTH  1
+#define GM_MATRIX_AUTH    2
+#define GM_PLAINTEXT_AUTH 3
+typedef struct _auth {
+  char username[];
+  char password[];
+  GM_authstyle style;
+} GM_auth;
+
+/*
+ *  GM_PProto identifies the protocol the proxy should use when
+ *  retrieving a particular document (FTP, HTTP, others...)
+ */
+typedef unsigned short GM_PProto;
+#define GM_FTP_PROTO  1
+#define GM_HTTP_PROTO 2
+#define GM_MH_PROTO   3
+#define GM_POP_PROTO  4
+
+/*
+ *  GM_DocType identifies document types.  A document can be complex
+ *  and composed of a number of chunks of particular subtypes (ie.
+ *  a web page, consisting of HTML and inlined images), or it can be
+ *  "simple" and be composed of a single subtype.
+ */
+
+typedef unsigned short GM_DocType;
+#define GM_WEBPAGE_DOCTYPE     1      /* HTML plus inlines */
+#define GM_MAILFOLDER_DOCTYPE  2      /* A number of mail messages */
+#define GM_MAILMESSAGE_DOCTYPE 3      /* Headers and MIME inclusions */
+#define GM_SIMPLE_DOCTYPE      4      /* A single subtype */
+
+/*
+ *  GM_DocSubType identifies a particular subtype.  It is used by the
+ *  client when providing a list of acceptable chunk subtypes, and by
+ *  the proxy to identify returned chunk types.
+ */
+typedef unsigned short GM_DocSubType;
+#define GM_GIF_SUBTYPE        1
+#define GM_JPEG_SUBTYPE       2
+#define GM_PICT_SUBTYPE       3
+#define GM_PNM_SUBTYPE        4       /* PBM, PGM, or PNM */
+#define GM_PLAINTEXT_SUBTYPE  5
+#define GM_HTML_SUBTYPE       6
+#define GM_RTF_SUBTYPE        7
+#define GM_POSTSCRIPT_SUBTYPE 8
+#define GM_BLOB_SUBTYPE       9      /* ie. opaque binary data */
+
+/*
+ *  Document ID's identify adaptive-pipe connections.  A document ID is
+ *  returned immediately by the async GetDocument call, and passed later
+ *  to a callback proc to identify which document is arriving.
+ */
+
+typedef unsigned short GM_DocId;
+
+/*
+ *  Chunk ID's identify chunks within a given document.  A 
+ *  (GM_DocID, GM_ChunkID) pair is unique among all chunks and documents.
+ */
+
+typedef unsigned int GM_ChunkId;
+
+/*
+ *  Binary large objects and chunks of a document
+ */
+typedef void *BlobPtr;
+
+
+/*
+ *  Some abstract priority scale, to be used in the GM_QosPrefs
+ *  structure.  This field probably will remain unimplemented for
+ *  the first GloMop version.
+ */
+
+typedef unsigned short GM_Priority;
+#define GM_PRIORITY_MIN 0
+#define GM_PRIORITY_MAX 255
+
+/*
+ *  QOS parameters requested per-document by the client.  The Network
+ *  Mgmt layer reconciles these with the per-NI models for latency,
+ *  reliability, eff. bandwidth, power consumption, and cost.
+ */
+
+typedef struct _qos {
+    GM_Priority qos_prio;       /* on some abstract scale */
+    unsigned qos_reliability;   /* on a "scale" from TCP to UDP */
+    unsigned qos_latency;       /* max tolerable wall-clock latency */
+    unsigned qos_cost;          /* max tolerable (monetary) cost */
+    unsigned qos_power;         /* max tolerable power consumption */
+} GM_QosPrefs;
+
+/*
+ *  A DocLocator tells the proxy how to retrieve a document from the
+ *  "wired network".  The doc_path field is interpreted relative to the
+ *  protocol.  Some example pairs might be:
+ *     doc_protocol                     doc_path
+ *     HTTP                             URL of document
+ *     FTP                              ftp host, path
+ *     Local file                       pathname on local disk
+ *  The ClientData field can hold additional info needed for retrieval
+ *  (e.g., username & password for non-anonymous FTP).
+ *  Some additional fields are filled in for proxy-supplied embedded
+ *  document references: doc_reqid (the ID by which the object can be
+ *  requested), doc_size (size in bytes), doc_type.  The idea is that
+ *  the embedded reference can be passed directly to CGetDoc.
+ */
+
+typedef struct _DocLocator {
+    GM_PProto doc_protocol;     /* protocol number */
+    char doc_path[];            /* protocol-specific */
+    char doc_clientdata[];      /* additional protocol-specific stuff */
+    size_t doc_size;            /* size of object in bytes */
+    GM_DocType doc_type;        /* document's type */
+    GM_DocId doc_id;            /* proxy is prefetching this for us */
+} GM_DocLocator;
+
+/*
+ *  A list of types and subtypes acceptable to the client.
+ */
+
+typedef struct _TypeList {
+    int numTypes;
+    GM_DocType types[];          /* addressable as an array */
+    int numSubTypes;
+    GM_DocSubType subtypes[];    /* addressable as an array */
+} TypeList;
+
+
+/*
+ *  Each chunk of a document contains a chunk_id unique within that
+ *  document.  The doc_id of the document in which the chunk lives
+ *  is provided for reference.  The refine_id field is a document ID
+ *  that should be used to request refinements of this chunk.
+ *
+ *  Each chunk of a document also contains a Document Reference Table,
+ *  which gives DocID's for other documents embedded in this chunk.
+ *
+ *  EXAMPLE: A MIME-encoded mail message is a chunk consisting of plain
+ *  text whose Document Reference Table points to the MIME objects, each
+ *  of which must be fetched with a separate CGetDoc
+ *  connection.
+ *  EXAMPLE: A Web page is a chunk consisting of HTML whose
+ *  Document Reference Table contains references to inlined graphics,
+ *  and  possibly also references to other HTML pages accessed as
+ *  links.
+ *
+ *  Since each reference in the DRT is a GM_DocLocator, it can
+ *  be passed directly to CGetDoc to fetch the corresponding document on
+ *  a new pipe.  The subtype of the BLOB data is specified by the
+ *  subtype field.
+ */
+
+typedef struct _DocChunk {
+    GM_ChunkId chunk_id;        /* the chunk ID within this document */
+    GM_DocId   doc_id;          /* the document in which this chunk lives */
+    GM_DocId   refine_id;       /* docID used for refinements of the chunk */
+    int chunk_nrefs;            /* number of references in DRT */
+    GM_DocLocator chunk_refs[]; /* and here they are */
+    GM_DocSubType subtype;      /* the subtype of this chunk */
+    BlobPtr chunk_obj;          /* this is the actual chunk data */
+} GM_DocChunk;
+
+/*
+ *  Callback procedure for when a document is arriving.  Docid
+ *  identifies the document; type gives the datatype; numChunksAvail
+ *  specifies the number of (possibly noncontiguous) chunks arriving;
+ *  theChunks is an array of pointers to these chunks (actually all
+ *  pointers into a contiguous buffer); clientOwnsBuffer is nonzero iff
+ *  it is the application's responsibility to manage and eventually free
+ *  the buffer (i.e. the network manager guarantees that this buffer
+ *  space will not be overwritten unless the client explicitly passes
+ *  the pointer in a future Get call).
+ */
+
+typedef void \
+(GM_DocCallbackProcPtr *)(GM_DocId docid,
+                          GM_DocType type,
+                          unsigned numChunksAvail,
+                          unsigned totalChunks,
+                          GM_DocChunk theChunks[],
+                          Boolean clientOwnsBuffer);
+
+/*
+ *  chunk deltas: Used when setting the threshold at which the next
+ *  callback should occur.  Semantics are similar to lseek();
+ *  GM_RELATIVE and GM_ABSOLUTE are followed by another argument, the
+ *  numeric value.
+ */
+
+#define GM_ALL_CHUNKS  1        /* don't call me till all chunks are in */
+#define GM_AS_MANY_AS_POSSIBLE 2
+#define GM_NEXT_CHUNK  2        /* call when next chunk is ready */
+#define GM_RELATIVE    3        /* call after next N chunks arrive */
+#define GM_ABSOLUTE    4        /* call when the N'th chunk arrives */
+#define GM_ANYTIME     5        /* call whenever it's convenient */
+                                /* (e.g. from load balancing standpoint) */
+
+/*
+ *  Callback procedure for when a network property of interest changes.
+ */
+
+typedef void \
+(GM_EventCallbackProcPtr *)(GM_EventType event,
+                            ClientData *clientdata);
+
+/*
+ *  A declaration for the error code set by some procedures
+ */
+
+extern GM_Error cErrno;
+extern char cErrString[];
+@
+
+
+1.1.1.1
+log
+@GloMOp bibliographies, meetings, etc, re-imported into GloMop CVS
+archive on full-sail
+@
+text
+@@

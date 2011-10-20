@@ -1,0 +1,1256 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@% @;
+
+
+1.1
+date	99.10.13.00.14.15;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@\documentclass[11pt]{article}
+\usepackage{fullpage}
+\newtheorem{theorem}{Theorem}
+\newtheorem{corollary}{Corollary}
+\newtheorem{lemma}{Lemma}
+\newtheorem{definition}{Definition}
+\newenvironment{remark}{{\noindent \bf Remark.} }{\vskip 0.1in}
+\newenvironment{proof}{{\noindent \em Proof.} }{\vskip 0.1in}
+\newcommand{\qed}{$\Box$}
+
+%\documentclass{llncs2e}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{comment}
+\newcommand{\K}{{\cal K}}
+\newcommand{\X}{{\cal X}}
+\newcommand{\Y}{{\cal Y}}
+\newcommand{\Z}{{\mathbb Z}}
+\renewcommand{\H}{{\cal H}}
+\newcommand{\Adv}{\textrm{Adv}\,}
+\newcommand{\des}{\textrm{DES}}
+\newcommand{\topic}[1]{\vskip 0.05in \noindent {\sc #1.}}
+\title{Proofs of security for the Unix password hashing algorithm
+(Extended Abstract)}
+%\fbox{------ DRAFT ------}}
+\author{David Wagner \qquad Ian Goldberg \\
+{\em University of California, Berkeley} \\
+{\tt \{daw,iang\}@@cs.berkeley.edu}}
+%\institute{}
+\begin{document}
+\maketitle
+\begin{abstract}
+We give the first explicit, quantitative analysis of the security
+of the Unix password hashing algorithm, showing concrete lower bounds
+on its strength.
+Our results show that it is very good at extracting
+almost all of the available strength from the underlying cryptographic
+primitive and provide good reason for confidence in the Unix construction.
+\end{abstract}
+
+\section{Introduction}
+
+This paper examines the security of the Unix password hashing algorithm,
+the core of the Unix password authentication protocol.
+Although the algorithm has been conjectured cryptographically secure,
+after two decades of analysis and
+deployment in millions of systems worldwide it still has not been
+proven to resist attack.
+In this paper, we provide the first practical proof of security
+(under some reasonable cryptographic assumptions) for the Unix algorithm.
+
+The hashing algorithm is a fairly simple application of DES,
+perhaps the best-known block cipher available to the public.
+Since DES has seen many man-years of analysis, in an ideal world
+we might hope for a proof (via some reduction)
+that the Unix password hash is secure if DES is.
+However, so far no such proof has appeared in the literature.
+
+In earlier work,
+Luby and Rackoff presented strong theoretical evidence that the basic
+approach found in the Unix algorithm is likely to be sound \cite{LR87,LR89}.
+However, their proofs have three serious limitations:
+the abstract model they analyze omits some important features of
+the real algorithm; they assume a uniform distribution on passwords;
+and their proofs of security are asymptotic, and so do not directly apply
+to real (necessarily finite) instantiations of the construction.
+Therefore, we feel that, from a practical point of view,
+the security of the real Unix password hash remains an open question.
+
+In this paper, we take a further step towards justifying the
+design of the Unix password hash.
+Our primary contributions are twofold:
+\begin{itemize}
+\item First, we show how to analyze the {\em real} Unix construction,
+removing the need to abstract away features of the algorithm.
+This removes the gap between what has been analyzed and
+what is currently in use.
+\item Second, we provide explicit, {\em quantitative} security measures,
+instead of asymptotic estimates.
+As a result, our proofs can be directly applied to the real
+(finite) Unix algorithm, rather than an idealized asymptotic model.
+\end{itemize}
+As a result, we are able to show surprisingly good lower
+bounds on the security of the Unix password hash construction.
+
+More generally, we are able to show that a simple construction
+of one-way functions from block ciphers can be simultaneously very
+efficient and strongly security-preserving.
+This result may be of independent interest.
+
+The main practical shortcoming of our aforementioned proof techniques is that,
+for best results,
+we---like Luby and Rackoff---must assume that the passwords
+are uniformly distributed.  However, we---unlike Luby and Rackoff---have
+also developed alternative techniques that yield poorer results
+but do generalize to the non-uniform case.
+
+In general, the security issues associated
+with non-uniformly distributed keying
+material appear to be under-represented in the literature.
+In Section~\ref{sec:nonuniform},
+we make some initial progress on this problem,
+presenting a formal model that we hope may serve as a foundation
+for future exploration in this area.
+Using this model, we are able to show relatively good lower bounds
+on the security of the Unix algorithm when used with non-uniformly
+distributed passwords; this is already a useful result, but our
+results here are not as strong as we would like, and so we leave this
+as an open question for further research.
+
+%Using this model and some alternative techniques,
+%we are able to show that the Unix algorithm
+%is relatively good at hashing even non-uniformly distributed passwords, if
+%we are willing to assume that DES does not have any serious weaknesses
+%when used with uniformly-distributed keys. 
+%This is already a useful result.
+%However, our proof methods are not powerful enough to rule out
+%the possibility that weaknesses in DES might be magnified by
+%the Unix construction (a possibility practitioners seem to consider
+%unlikely), so there remains some room for improvement in this area.
+
+This paper is structured as follows.
+We recall the definition of the Unix password hash in
+Section~\ref{sec:descr} and then summarize the results of our analysis in
+Section~\ref{sec:results}.
+The remainder of the paper is dedicated to the theoretical analysis:
+Section~\ref{sec:ideas} outlines the main ideas from a high level,
+Section~\ref{sec:defn} gives some important definitions, and
+Section~\ref{sec:analysis} dives into the details of the proofs.
+Also, Section~\ref{sec:nonuniform} gives an formal model for security
+with non-uniformly distributed passwords and presents some initial results in
+this area.
+Finally, in Section~\ref{sec:conc} we conclude the paper.
+Due to lack of space in this extended abstract,
+the proofs of all our results are deferred to
+the appendix.
+
+
+
+\section{The Unix algorithm}
+\label{sec:descr}
+
+We briefly recount the definition of the Unix password hashing
+function.
+The function---let us call it $H$---is built out of a 25-fold
+iterated version of DES, in the following way.
+Let $\des_k(x)$ denote the DES encryption of plaintext $x$
+under key $k$ and $\des_k^n(x) = \des_k(\des_k^{n-1}(x))$
+denote the $n$-fold iteration of $\des_k$.
+Then the hash $H(k)$ of the 8-character password $k$ may be defined as
+\[ H(k) = \des_k^{25}(0). \]
+
+When a new user account is created, the hash $H(k)$ of
+the user's initial password is stored with
+the user's id in the (world-readable)
+system password file {\tt /etc/passwd}.
+When the user attempts to log on with password $k'$, 
+the system computes $H(k')$ and compares the result
+to the value stored in the password file, allowing the user
+to log on only if $H(k') = H(k)$.
+
+Until now our description of the Unix password scheme has omitted one
+important feature of the construction: the salt.
+In fact, when the user register his password $k$ for the first time,
+a random 12-bit salt $s$ is generated, and the system computes
+the salted hash $H_s(k)$ from $k$ and $s$.
+The salted hash is defined as $H_s(k) = \des_{k,s}^{25}(0)$,
+where $\des_{k,s}(x)$ refers to the DES encryption of plaintext $x$
+under key $k$ and salt $s$.
+Internally, the salt affects the DES encryption by modifying the
+DES round function.
+
+Salting was added to deter dictionary attacks, and to ensure that
+if two users have the same password this will not be apparent from
+their hashed passwords.
+For simplicity of exposition, we will ignore the salt for most of
+this paper, and analyze the unsalted construction.
+This simplification does not come at any loss of generality;
+we show later how to add the effects of the salt back in
+and thereby analyze the salted algorithm.
+
+\section{Results}
+\label{sec:results}
+
+The main result of our analysis is the following theorem.
+\begin{theorem}\label{th:main}
+If DES is a $(t,25,e)$-secure block cipher, then the Unix password
+hashing function $H$ is a
+$(t',p)$-secure password hashing function,
+where $t' \approx t$ and $p \approx (1+1/255) e$.
+\end{theorem}
+
+Some interpretation of this analytical result is clearly in order.
+Formal definitions of $(t,q,e)$-security for block ciphers and
+$(t',p)$-security for hash functions will be provided later in
+Section~\ref{sec:defn}, but for now we just sketch the intuition.
+Roughly speaking, the theorem says
+that if DES is secure against all attacks
+using at most 25 chosen plaintexts, and if the password is chosen
+uniformly at random, then the Unix construction is secure
+against password guessing attacks.
+
+In fact, the result is even better than this, because it gives
+us {\em concrete} security measures.
+In other words, it allows us to quantify the resources an adversary
+would need to break the Unix password algorithm.
+
+Of course, nothing comes for free.
+Since the hashing algorithm is built out of DES, we must make some
+cryptographic assumptions on the security of DES
+to prove anything about the Unix scheme.
+In the words of other workers on provable security,
+``you can't make good wine
+from bad grapes'' \cite{BCK96}.
+
+In the spirit of quantitative analysis, we will measure
+the security of the Unix hash algorithm as a function of
+the (quantitative) security level of DES.
+We show that the construction is strongly security-preserving:
+the Unix hash is almost as strong as DES.
+Conversely, any serious weakness in the Unix hash would imply the
+existence of a weakness in DES of comparable severity.
+Our analysis requires only very weak assumptions of security for DES,
+and as a result, our results will still be relevant even if DES is found
+to have some small weakness.
+
+One alternative might be to base our proof of security on the assumption
+that DES behaves like an ideal cipher, but such an approach
+would say nothing about whether a small imperfection in DES
+might be magnified by the Unix
+construction into a fatal flaw for a hashing function.
+In this paper, we prove that this magnification effect cannot occur;
+the Unix construction is robust.
+
+
+\topic{An example}
+Let us try to estimate the resources needed to reverse the Unix
+hash function.
+We start by estimating the concrete security level afforded by DES.
+The best attack reported in the open literature for breaking DES
+with 25 chosen plaintexts is exhaustive keysearch; differential and
+linear cryptanalysis do not help with such a small number of chosen texts.
+If we try $t$ keys, the probability of success for exhaustive
+keysearch\footnote{We assume the adversary exploits the DES complementation
+property, and thus $e = t/2^{55}$, not $t/2^{56}$ as one might naively
+expect.}
+is $e = t/2^{55}$.
+Therefore, if the cryptanalytic results reported in the
+open literature are representative,
+we may conclude that DES forms a $(t,25,t/2^{55})$-secure block cipher.
+Theorem~\ref{th:main} then says that the Unix scheme is
+$(t,p)$-secure
+%for $t \approx t'$
+%and $e = 256/255 (e' + 3 \cdot 25^2/2^{65})$,
+%or approximately when $e > (1 + 1/255) \cdot (t+1.831)/2^{55}$.
+%Thus, we have an approximate bound $e \le 1.004 e'$ relating the
+%success probabilities for attacking the Unix hash and for attacking DES.
+for $p \approx (1 + 1/255) t/2^{55}$, which is only larger
+than the corresponding success probability for attacking DES
+by the small multiplicative factor of $1 + 1/255$.
+This conclusion is worth repeating:
+\begin{quote}
+For an adversary with a given set of resources,
+the chances of breaking the Unix password hash are at most only
+slightly higher---less than 1\% higher---than the chances of breaking DES
+with the same resources.
+\end{quote}
+This is a very strong result, for it shows that the Unix construction
+has excellent security-preserving properties.
+
+%For comparison, exhaustive keysearch will break the
+%Unix hashing algorithm with probability $t/2^{56}$ after $t$
+%trial hash computations.
+%This is close to the proven lower bounds (we lose a factor of two
+%due to the DES complementation property).
+This lower bound is also relatively close to the best-known attack
+(exhaustive search) on the Unix hashing algorithm.
+In other words, according to our best current knowledge of DES,
+an adversary attacking the Unix password hashing function simply
+cannot do very much better than brute-force exhaustive search.
+
+Note that our security proofs require only very mild assumptions
+on the properties of DES.
+To break the Unix algorithm, the adversary must
+have some way to break DES with only 25 chosen plaintexts,
+which is likely to be a very difficult task.
+Furthermore, even the existence of such an attack on DES is no guarantee
+of success at breaking the Unix hash function, since it seems to
+be very difficult to control the internal values of the hash computation.
+Therefore, we expect that the Unix hash function is likely to be
+even stronger than our lower bounds would suggest.
+
+\topic{Generalizations}
+Theorem~\ref{th:main} actually assumes very little
+about the properties of DES, and in fact it is proved by
+first proving a corresponding result for a generic block cipher.
+The only special property we need is that the output length is larger
+than the key size.
+A similar result allows us to build an efficient and secure
+one-way function from any pseudorandom function (PRF)
+or any stream cipher, so long as the output length is larger than
+the key size\footnote{Of course, the effective block length can
+always be cheaply lengthened if necessary, so this restriction is
+not limiting in practice.  A typical block-lengthening construction
+is $G(k) = \langle F_k(1), \ldots, F_k(n) \rangle$, and this can
+be easily proven secure if $F$ is a secure PRF or block cipher.}.
+%Also, see Section~\ref{???} for an efficient construction that
+%works for any block cipher, PRF, or stream cipher, even if the
+%output size is smaller than the key size.
+
+\topic{A pitfall}
+A proof of security for the Unix password hash function is
+deceptively difficult.
+Naively one might think that the proof should be trivial; however,
+there is a trap for the unwary which makes the problem more
+difficult than it might seem at first glance.
+
+%An obvious line of approach might go like this (stated informally).
+Consider a simple, informal attempt to prove that the one-way function
+$h(k) = E_k(0)$ is secure if $E$ is a secure block cipher.
+At first glance, it might seem as though
+any algorithm to break the one-way function, i.e., any
+algorithm that can
+recover $k$ from $y = h(k) = E_k(0)$, can also be used to
+break the cipher $E$ with a simple trick.
+The idea is to first request the encryption of
+the chosen plaintext 0, then recover $k$ from the resulting
+ciphertext using the algorithm for breaking $h$,
+and finally use $k$ to decrypt the rest of
+the traffic enciphered using that key.
+
+However, this reasoning is flawed:
+the informal nature of the argument hides a gap in the proof.
+Breaking a one-way function $h$ does not require the ability
+to recover $k$ from $y=h(k)$: a much weaker condition suffices.
+If we can recover some
+$k'$---possibly different from $k$---such that $h(k') = y$,
+then such a $k'$ will allow access to the system just as well
+as the original password $k$, since the system has no way to
+distinguish between the two cases.
+However, knowledge of $k'$ (different from $k$)
+with $E_{k'}(0) = E_k(0)$ might not be any help in decrypting
+additional traffic enciphered under $k$.
+
+This example illustrates the need for formal, rigorous proofs
+of security (and careful definitions).
+%Therefore, it is not entirely obvious that an algorithm for
+%breaking the one-way function can be converted into an algorithm
+%that breaks the block cipher.
+%The possibility of key-collisions renders the naive line
+%of approach unworkable, and some more sophisticated observations
+%are needed to fill the gap.
+%
+In this paper, we formally prove that in fact the simple construction of
+a one-way function as $h(k) = E_k(0)$ is indeed secure, even though
+the naive line of argument sketched above doesn't work.
+Providing a correct and tight proof of security is one of the major
+contributions of this paper.
+
+%\topic{Related work}
+%\ldots % XXX
+
+\topic{Non-uniformity}
+In practice, passwords are rarely chosen uniformly at random from
+the entire 56-bit keyspace.
+However, our proofs of security for the Unix hash function assume
+that passwords are chosen according to the uniform distribution.
+This is a serious limitation of our result, since real
+users usually pick patterned passwords.
+
+We do not know how to prove a robust lower bound for the security
+of the Unix password hash scheme when used with
+non-uniformly distributed passwords, even if we make additional
+assumptions about the security of DES with non-uniformly distributed keys.
+Still, we have some initial progress
+on the problem, showing a trivial construction that allows us to
+prove some good results; the disadvantage is that it requires relatively
+strong assumptions about DES.
+In Section~\ref{sec:nonuniform}, we provide
+formal definitions of security for the problem and present our result,
+showing upper and lower bounds for a trivial construction.
+
+We leave it as an interesting open question to find better constructions;
+this problem does not seem to have been formally addressed before in
+the cryptographic literature.
+
+%\topic{Other notes.}
+%Additional discussion on the impact of
+%salting and iteration in the Unix hash has been
+%deferred to Appendix~\ref{a:disc}, due to space limitations.
+
+\topic{Salting}
+Another practical consideration is the use of salting.
+The Unix password hashing algorithm uses salts to prevent
+economies of scale from accruing to the adversary.
+Without salting, the attacker can test a guess at a passphrase
+against all accounts on the system at the cost of a single
+hash-computation, and thus he would gain a speedup
+linear in the number of users on the system.
+Using a different salt for each user prevents this attack.
+
+In this paper, we do not analyze the effectiveness of salts
+at eliminating economies of scale.
+Such an analysis would seem to require a deep ad-hoc investigation
+into the internal structure of (salted) DES, which is outside
+the scope of a theory paper.
+
+Still, we can show that if salting does not hurt DES,
+salting does not hurt the one-wayness of the Unix construction.
+One merely needs to assume that the salted cipher $x \mapsto \des_{k,s}(x)$
+is as secure as unsalted DES,
+and then the security of the salted Unix hash follows immediately
+with no change in the argument.
+
+\topic{Iteration}
+A second technique used in the Unix password hash is the use
+of iteration.
+Iteration was primarily intended to increase the cost of dictionary
+attacks by decreasing the rate at which adversaries can test potential
+passwords for correctness: each guess requires 25 DES operations
+to test.
+
+We do not know whether this feature
+of the Unix hashing algorithm achieves its goal.
+Our security bounds for the iterated hash are no better than
+those for an unitererated variant.
+In other words, we can only prove that breaking the Unix hash is
+as hard as breaking DES,
+not that it is $25 \times$ harder than breaking DES.
+As a result, in practice our lower bounds are 25 times
+worse than one might hope for if iteration indeed does its job properly
+(since a brute-force search over all possible passwords
+takes $25 \times 2^{55}$ DES operations).
+While this is still a respectable result, it would be nice to
+close the gap somehow; we leave it as another open question
+to justify the effectiveness of iteration in the Unix hashing algorithm.
+
+Though we cannot prove that `iteration' is better than `no iteration',
+we do show that iteration can't hurt.
+This is a real contribution.
+In comparison, previous work \cite{LR89} has avoided the complexity
+associated with iteration by analyzing only uniterated
+variants of the construction.
+
+
+
+%Thanks to more than two decades of intensive analysis,
+%DES is probably better-understood
+%than any other modern encryption algorithm\footnote{At least in the
+%open community, anyway.}.
+%Since the Unix password hashing function
+%is built out of DES in a relatively simple way,
+%one might optimistically hope that it might be possible to
+%apply all the research on the security of DES to it.
+%This paper shows that this hope is in fact achievable,
+%and moreover that very strong lower bounds on the security
+%of the Unix algorithm are available.
+%
+%For the bulk of this paper, we shall ignore the salting mechanism.
+%\ldots
+%
+%We rely heavily on the formal techniques of concrete security analysis
+%developed in \cite{?} \ldots
+
+
+\section{An outline of the analysis}
+\label{sec:ideas}
+
+Our analysis of the Unix hash uses essentially only two new ideas:
+an observation about close ties between the Unix hash and
+the CBC-MAC construction,
+and some new results on the construction of a one-way function
+as $h(k) = E_k(0)$.
+In the remainder of this section, we give a high-level sketch of
+these two fundamental observations.
+
+\topic{Relevance of the CBC-MAC}
+First, we show that the Unix password hashing algorithm
+is just a special case of the more general and better-studied DES-CBC-MAC
+construction \cite{BKR94}.
+Consequently, we can take advantage of well-known results on the security
+of DES-CBC-MAC.
+
+Let $\mbox{$f$-CBC-MAC}(x)$ denote the CBC-MAC
+of the message $x$ under the function $f$.
+Recall that the $\mbox{$f$-CBC-MAC}$ of a $n$-block message $x$
+under function $f$ is defined as
+\[
+\mbox{$f$-CBC-MAC}(x) =
+f(x_n \oplus  \cdots f(x_2 \oplus f(x_1))\cdots ).
+\]
+Then it is not hard to see that we get a close relation between
+$n$-fold iterated encryption and the CBC-MAC on a $n$-block message:
+\[ f^n(x) = \mbox{$f$-CBC-MAC}(\langle x,0,0,\ldots,0 \rangle). \]
+This observation may be of independent interest, because it gives
+a simple and powerful way to analyze iterated encryption.
+
+Using this trick, we observe that the Unix password
+hashing algorithm can be related to the DES-CBC-MAC by
+\[ \mbox{Unix-hash}(k) = \mbox{DES-CBC-MAC}_k(\langle 0,\ldots,0 \rangle). \]
+%where $\langle 0 \rangle$ is the all-zeros message with 25 blocks.
+This is the basis for our treatment of iteration in the Unix
+password hash.
+
+\topic{New results on construction of one-way functions}
+Next, we establish some new results on the construction
+of a one-way function as $h(k) = E_k(0)$,
+and use these results to relate the security of the Unix password
+hashing algorithm to the security of DES-CBC-MAC.
+This observation involves some technical analysis:
+we show that every pseudorandom generator (``stream cipher'')
+is a good one-way function,
+using a counting argument to bound the number of keys
+which are bad for hashing.
+See Section~\ref{sec:analysis} for the details.
+
+Along the way, we will find that
+we have established a strong bound on the security
+of the construction of a one-way function $h$ as $h(k) = F_k(0)$,
+where $F$ is an arbitrary pseudorandom function or block cipher,
+or as $h(k) = g(k)$ where $g$ is an arbitrary stream cipher.
+We show that the construction preserves the security of $F$ (or $g$)
+with very little degradation.
+
+This security analysis of constructions for one-way functions
+may be of independent interest, as it shows that one can
+simultaneously achieve simplicity, excellent performance,
+and minimal degradation of security.
+
+\topic{Finishing up}
+With these two ideas in hand, everything else is standard.
+Bellare et. al show that DES-CBC-MAC is a secure PRF if DES is
+secure \cite{BKR94}.
+It is not hard to show that $g(k) = \mbox{DES-CBC-MAC}_k(0)$ is
+a secure pseudorandom generator if DES-CBC-MAC is a secure PRF.
+Then, our counting argument shows that $H(k) = g(k)$ is a secure
+one-way function, under mild assumptions on the security of DES.
+
+\section{Definitions}
+\label{sec:defn}
+
+Definitions of concrete security are parametrized
+by a measure of the resources needed to break the cryptographic primitive.
+In general, we say that an attack $R$-breaks a crypto primitive if
+the algorithm succeeds in breaking the primitive with resources specified
+by $R$, and we say that a crypto primitive is $R$-secure if there is no
+algorithm\footnote{We may assume without loss of generality
+that all adversarial algorithms behave deterministically, since any
+probabilistic adversary can be de-randomized using standard techniques.}
+to $R$-break it.
+In the definitions to follow, we elaborate on the measure of
+an adversary's resources.
+
+%Due to lack of space, we are forced to defer the formal
+%definitions of security to Appendix~\ref{a:defn}; please refer
+%there for a precise statement of the concepts.
+%For now, we will merely mention a rough summary:
+%$(t,q,e)$-security will refer
+%to security against adversaries limited to performing $t$ steps of
+%offline computation, requesting $q$ chosen-input
+%queries against the cryptographic primitive, and distinguishing
+%the cryptographic primitive from a truly-random version with
+%advantage at most $e$;
+%also, for unkeyed primitives, $(t,p)$-security means no adversary
+%performing at most $t$ steps of computation can succeed in breaking
+%the primitive with more than probability $p$.
+
+First, we formally define the concept of a pseudorandom function (PRF).
+Let $F : \K \times \X \to \Y$ be a keyed function.
+We say that the oracle algorithm $A$ is an adversary which
+$(t,q,e)$-breaks the alleged-PRF $F$ if $A$ runs in time $t$,
+makes at most $q$ queries to its oracle,
+and has advantage $\Adv A = e$.
+The adversary's advantage $\Adv A$ is defined to be
+\[ \Adv A = \left| \Pr[A^{F_k} = 1] - \Pr[A^R = 1] \right|, \]
+where the probability is taken over the choice of $k$ and $R$,
+and where the random variable $k$ is drawn from the uniform distribution
+over $\K$ and $R : \X \to \Y$ is a random function.
+We say that $F$ is a $(t,q,e)$-secure PRF if there is no adversary
+which $(t,q,e)$-breaks $F$.
+
+A $(t,q,e)$-secure pseudorandom permutation (PRP)
+$E : \K \times \Y \to \Y$ is a pseudorandom function
+where each $E_k$ forms a permutation.
+We ask that $E_k$ be indistinguishable from a random
+permutation $\pi : \Y \to \Y$ chosen uniformly at random from the set of
+all permutations on $\Y$, when $k$ is drawn uniformly at random from $\K$.
+The advantage of an adversary $A$ is defined as
+$\Adv A = \left| \Pr[A^{E_k,E_k^{-1}} = 1] - \Pr[A^{\pi,\pi^{-1}} = 1] \right|$.
+
+A pseudorandom generator (PRG) is a function $g : \K \to \Y$
+which stretches a short seed (from $\K$) into a long, random-looking output.
+The advantage of an adversary for $g$ is defined to be
+$\Adv A = \left| \Pr[A(g(k)) = 1] - \Pr[A(u_Y) = 1] \right|$,
+where the random variables $k$ and $u_Y$ are chosenly randomly according
+to the uniform distributions on $\K$ and $\Y$ (resp.).
+In the case of pseudorandom generators, normally one insists
+that the output be longer than the seed,
+i.e., that $|\Y| > |\K|$.
+
+Also, it is useful to have the concept of a one-way function (OWF).
+Let $h : \K \to \Y$ be an unkeyed function.
+An adversary $B$ attacking $h$ is a 
+algorithm with input $y \in \Y$
+which outputs a symbol in $\K \cup \{\bot\}$,
+and which is {\em correct};
+$B$ is correct when $y \in \Y, B(y) \ne \bot$ implies $h(B(y)) = y$.
+We say that an adversary $B$ $(t,p)$-breaks the alleged-OWF $h$
+if $B$ runs in time $t$ and succeeds with probability
+$p = \Pr[B(h(k)) \ne \bot]$,
+where the probability is taken over the choice of $k \in \K$,
+and the random variable $k$ is drawn from the uniform distribution.
+Finally, we say that $g$ is a $(t,p)$-secure OWF
+if there is no adversary which $(t,p)$-breaks it.
+
+Note that the notion of a one-way function exactly captures the
+security properties we need from a password hashing function.
+In particular, if $g$ is a $(t,p)$-secure OWF, then the success
+probability of any adversary running in time $t$ is at most $p$.
+
+
+\section{Analysis}\label{sec:analysis}
+
+The main result is a proof that any pseudorandom generator
+is a good one-way function.
+
+\begin{theorem}\label{th:prg2owf}
+Let $g : \K \to \Y$ be a $(t,e)$-secure pseudorandom generator,
+with $|\Y| > |\K|$.
+Then $g$ is a $(t',p)$-secure one-way function, where
+$p = e / (1 - |\K|/|\Y|)$ and $t' \approx t$.
+\end{theorem}
+\begin{remark} To be more precise, we show that $g$ is
+$(t',p)$-secure, where $t'=t-c$ and
+$c$ is a universal constant which depends only on the machine model.
+However, in practice $c$ is extremely small compared to $t$,
+so for simplicity of exposition in this paper we omit
+these tiny constants and summarize the situation
+by writing $t' \approx t$.  \end{remark}
+%\begin{remark} When $\kappa \ge \eta$, the theorem says nothing useful.
+%Nonetheless, very effective techniques are still available to construct
+%a useable one-way function with not too much loss in security.
+%For example, if $F$ is $(t'',m,e'')$-secure,
+%we may use the construction of Theorem~\ref{th:prf2prf} to build
+%a new $(t'',1,e'')$-secure PRF
+%$\bar{F} : \Z_2^{\nu-m} \times \Z_2^{\kappa} \to \Z_2^{m\eta}$ with
+%outputs $m$ times as wide as $F$,
+%and then apply Theorem~\ref{th:prf2owf} to $\bar{F}$ to obtain a
+%$(t''-c,e''/(1-2^{\kappa-m\eta})$-secure one-way function $g$ as
+%$g(x) = \bar{F}_x(0)$.
+%For typical PRF algorithms that arise in practice,
+%it is often possible to get quite close to the best possible result
+%with an appropriate choice of $m$.  \end{remark}
+
+
+\begin{theorem}
+If $\des$ is a $(t,25,e)$-secure pseudorandom permutation,
+then the Unix construction
+is a $(t',p)$-secure password hashing function, where
+$p = (1+1/255) e + (1+1/255) \cdot 25^2/2^{63} \approx (1+1/255) e$
+and $t' \approx t$.
+\end{theorem}
+A reminder: see Appendix~\ref{a:proofs} for the proofs.
+
+
+\section{Non-uniformly distributed secrets}
+\label{sec:nonuniform}
+
+So far our proofs of security have assumed that all passwords
+are uniformly distributed.
+In practice, though, such an assumption is often far from the mark.
+This section tackles the issue of security for non-uniform distributions.
+
+  In this section, we introduce a new security model,
+  {\em passphrase-based cryptography}, where keying material and
+  other cryptographic secrets are derived from human-entered passphrases
+  and thus are likely to have a highly non-uniform distribution.
+  This is a significant departure from the standard model, where
+  the very definitions of security assume a uniform distribution on the keys.
+  A second important difference is that passphrases are typically relatively
+  short, so the secret entropy in them is a scarce resource
+  which we must not waste.
+  We show that the standard approaches to smoothing non-uniform
+  distributions are unsuitable for practical use
+  because they waste too much entropy.
+  Therefore, new techniques are needed.
+
+Let us start by developing formal definitions of security for
+passphrase-based cryptography.  We need a small amount of background.
+
+%\begin{definition}
+Let $D$ be a distribution on $\K$ which assigns the
+probability $D(k)$ to each $k \in \K$, and let $D(S) = \sum_{k \in S} D(k)$
+for all $S \subset \K$.
+In this paper, we define
+\[ \chi_D(t) = \max \{D(S) : S \subset \K, |S| \le t\}. \]
+%\end{definition}
+This definition is motivated by the following upper bound on the
+security of hashing inputs with distribution $D$:
+\begin{theorem}\label{th:dictionary}
+For all one-way hash functions $f$,
+all distributions $D$, and all time bounds $t$,
+there is a generic attack, called the {\em dictionary attack},
+which $(t,\chi_D(t))$-breaks $f$.
+\end{theorem}
+Therefore, $\chi_D$ describes the effectiveness of the optimal
+dictionary-search attack against $D$:
+no matter what we do,
+{\em every} one-way hash function with
+inputs chosen according to $D$ can be broken with probability
+$\chi_D(t)$ and time $t$.
+
+There is no way to avoid the dictionary attack.
+This motivates our definition of security for a one-way hash function
+that operates on inputs with a non-uniform distribution:
+\begin{definition}
+We say that the one-way function $f$ is {\em ideally-secure} 
+for distribution $D$ if
+$f$ is $(t,\chi_D(t))$-secure (for all $t$)
+when its inputs are distributed according to $D$.
+\end{definition}
+Intuitively speaking, a one-way function is ideally-secure
+if the dictionary attack is the best attack.
+
+We are able to show that any one-way function that is sufficiently 
+strong for uniformly distributed inputs will also be relatively good
+for other distributions.
+\begin{theorem}\label{th:nonunif}
+Let $f$ be a one-way function that is $(t,p)$-secure for uniformly-distributed
+inputs.
+Then, for every distribution $D$ on $\K$,
+$f$ is a $(t,\chi_D(p|\K|))$-secure one-way hash function for $D$.
+\end{theorem}
+
+\begin{corollary}
+If the one-way function $f$ is ideally-secure for the uniform distribution,
+then it is also ideally-secure for all other distributions as well.
+\end{corollary}
+As always, see Appendix~\ref{a:proofs} for the proofs.
+
+
+%if $f$ is $(t,\alpha(t))$-secure for all $t$,
+%then $g$ is $(\alpha^{-1}(\chi^{-1}(p')/|\K|),p')$-secure for all $p',D$.
+% conjecture: for DES, \alpha(t)=t/2^55
+
+\topic{Applications to Unix password hashing}
+%The above results may be used to prove lower bounds on the
+%security of the Unix password hashing algorithm when used with
+%patterned passwords, if we are willing to assume that DES is
+%sufficiently strong when used with uniformly-distributed keys.
+%If we assume that DES is sufficiently strong (when used with
+%uniformly-distributed keys), then we may be assured that the
+%Unix hash is strong (even for non-uniformly distributed passwords).
+%
+We can show that the Unix hash is good at
+hashing even non-uniformly distributed passwords, under
+assumptions on DES that appear to be reasonable (albeit stronger
+than one might like).
+
+In Section~\ref{sec:results}, we argued that DES appears
+to be $(t,25,t/2^{55})$-secure, if the cryptanalysis results
+reported in the open literature do indeed represent the best
+attacks on DES (as many researchers believe).
+This assumption implies that the Unix hash $H$ is a
+$(t',t/2^{56})$-secure one-way function
+when its inputs are uniformly distributed,
+where $t' = (1 - 2^{-8}) (t/2 - 25^2/2^8) \approx (1 + 2^{-8})t/2$.
+Thus, Theorem~\ref{th:nonunif} allows us to conclude that the
+Unix hash is $(t',\chi_D(t))$-secure---i.e., nearly
+$(t/2,\chi_D(t))$-secure---for every distribution $D$.
+
+This lower bound only differs from Theorem~\ref{th:dictionary}'s upper bound
+by a factor of about two\footnote{If we consider that the Unix hash internally
+iterates DES 25 times and thus costs 25 times as much to compute as does
+a single DES trial encryption, the gap between the upper and lower bounds
+becomes a factor of about 50, which is still quite small.}.
+Roughly speaking, this means that the Unix hash appears to be
+nearly ideally-secure for all distributions $D$:
+no shortcut attack can do much better than the dictionary attack.
+
+Whether this result is useful in practice will depend on several
+factors.
+One disadvantage is that the approach requires relatively strong assumptions
+about DES---that there are no shortcut attacks on DES that reduce
+the workfactor of exhaustive keysearch by more than a small factor when
+the key is uniformly distributed---and
+as a result, the result is not as robust as we would like.
+For example, if small weaknesses are present in DES,
+our proof techniques cannot rule out the possibility that these
+weaknesses might be greatly magnified when one uses DES with
+patterned passwords, even though such a worst-case scenario is
+considered unlikely by practitioners.
+
+However, it is interesting to point out that we obtain a proof of
+security for the Unix hash of patterned passwords starting only with
+the assumption that DES is secure for uniformly-distributed keys.
+In particular, we make no assumptions whatsoever about the behavior
+of DES when keyed from a non-uniform distribution.
+%, and yet we still
+%end up with results for non-uniformly distributed passwords.
+%%However, it is interesting to point out that there is no need to assume
+%%that DES is secure when used with non-uniformly distributed keys to obtain
+%%our results on the security of the Unix hash for patterned passwords.
+Consequently, we can take advantage of the decades of analysis on DES
+(which has all been premised on the assumption of uniformly-distributed keys)
+to gain confidence in the security of the Unix algorithm.
+
+\topic{Applications to other crypto primitives}
+It is also worth noting that Theorem~\ref{th:nonunif} can also be
+generalized to many other keyed cryptographic primitives, such as block
+ciphers, stream ciphers, and PRF's, using the same style of proof.
+This suggests that our results may have broader applications
+to the entire field of passphrase-based cryptography.
+
+\topic{Tightness}
+One can show that our lower bound (given in Theorem~\ref{th:nonunif})
+on the security of $f$ for non-uniform distributions is essentially tight.
+In other words, it is unlikely that one can do much better without either
+making additional assumptions on $f$
+or finding a better construction.
+%Due to lack of space, we defer the analysis to Appendix~\ref{a:tight}.
+
+The following simple example is due to David Zuckerman \cite{Zuc99}.
+Let $g : \K_1 \to \Y_1$ be an ideally-secure one-way function with keyspace
+$\K_1$ and output space $\Y_1$.
+We construct $f : \K \to \Y$ as
+$f( \langle x,y \rangle ) = \langle g(x),y \rangle$,
+where $\K = \K_1 \times \K_2$ and $\Y = \Y_1 \times \K_2$.
+Note that $f$ is $(t,t/|\K_1|)$-secure (for all $t$) for
+the uniform distribution on $\K$.
+
+Next consider the uniform distribution $D$ on $S \times \K_2$
+for some $S \subset \K_1$, i.e.,
+$D(\langle x,y \rangle) = 1/(|S| \cdot |\K_2|)$ for all
+$\langle x,y \rangle  \in S \times \K_2$
+and $D(\langle x,y \rangle)=0$ for $x \notin S$.
+Theorem~\ref{th:nonunif} implies $f$ is
+$(t,p)$-secure for $D$, where
+%\[ p = \chi_D({t \over |\K_1|} |\K|) = \chi_D(t |\K_2|)
+%  = {t |\K_2| \over |S| \cdot |\K_2|} = t/|S|. \]
+\[ p = \chi_D\left(\frac{t}{|\K_1|} |\K|\right) = \chi_D(t |\K_2|)
+  = \frac{t \cdot |\K_2|}{|S| \cdot |\K_2|} = t/|S|. \]
+At the same time, one may clearly $(t,t/|S|)$-break $f$
+using a dictionary attack when its inputs are
+distributed according to $D$ (see Theorem~\ref{th:dictionary}).
+This shows that Theorem~\ref{th:nonunif} is tight.
+
+% XXX: one possibility for improvement is to try to show that,
+% if f is (t,p)-secure for the uniform distribution,
+% then f is e.g. (t,\chi_D(np|K|)/n)-secure for some n>1.
+% this is what I'd like to believe simple key-whitening
+% has a hope of achieving, but it's not at all clear to prove it.
+
+\topic{The power of stronger assumptions}
+%If we are willing to make a stronger assumption
+%(that DES is secure for all distributions on the key input),
+%we can build a modified hashing algorithm with better proofs of security.
+%Due to lack of space, this result is presented in Appendix~\ref{a:power}.
+%However, due to the strong assumptions and to the need to change
+%the hash algorithm, we do not feel these results are as interesting.
+%
+One alternative approach is to start from the assumption that
+DES is secure (up to the possibility of dictionary attacks)
+no matter what distribution the key is drawn from.
+Then we may attempt to prove that the Unix hash is secure for
+passwords with distribution $D$ if DES is secure for keys with
+distribution $D$.
+
+The following theorem, which forms a nice example of this
+approach, is due to M. Bellare (and was stated as a homework
+problem in \cite{GB99}):
+\begin{theorem}\label{th:bellare}
+If $g : \K \to \Y$ is a $(t,e)$-secure pseudorandom generator
+for seeds distributed according to $D$, then $g$ is a $(t,p)$-secure
+one-way function for $D$, where $p = e + |\K|/|\Y|$.
+\end{theorem}
+\begin{remark}
+Of course, we may take $D$ to be the uniform distribution in the above;
+however, this gives strictly weaker bounds than Theorem~\ref{th:nonunif}'s
+dedicated proof.
+\end{remark}
+While this result may be useful in some contexts, it doesn't
+give terribly useful lower bounds for the security of the Unix hash.
+For the Unix algorithm, we have $|\K|/|\Y|=2^{-8}$, so we won't
+be able to rule out the possibility that there exists an
+algorithm that succeeds in breaking $1/256$ of all passwords
+in constant time.
+Such a result is not terribly reassuring.
+
+One could attempt to repair the flaw by defining a new hash
+construction, e.g., $\mbox{New-hash}(k) = \langle\des_k(0),\des_k(1)\rangle$.
+Such an approach would work---if one is willing to deploy an
+updated implementation of the password hashing algorithm on
+millions of machines around the world!---but
+it would still require strong assumptions
+about the security of DES when used with non-uniformly distributed keys.
+Since DES has not received as much scrutiny in this setting
+(where the key is non-uniformly distributed), it becomes
+harder to gain much confidence that the necessary
+assumptions are indeed satisfied.
+
+Therefore, we conclude that this approach does not seem to yield
+security bounds that are as meaningful as those that can be achieved
+with Theorem~\ref{th:nonunif}.
+
+
+\topic{Comparison to entropy smoothing}
+Another alternative approach to dealing with patterned passwords
+is to smooth out the non-uniformity in the distribution.
+A well-known result called the {\em leftover hash lemma} \cite{HILL99,IZ89}
+shows that universal hash functions are good at entropy smoothing:
+if $h$ is selected uniformly at random from a family of universal
+hash functions with $m$-bit outputs,
+and if $k$ is drawn from a distribution with at least $3m$ bits
+of Renyi entropy, the random variable $\langle h,h(k) \rangle$
+will be approximately uniformly distributed.
+
+The disadvantage with the leftover hash lemma is that it wastes at least
+two-thirds of the entropy of the password $k$: if we want to feed the
+smoothed bits into the Unix hash function
+(e.g., $\mbox{New-hash}(k) = \langle h,\mbox{Unix-hash}(h(k)) \rangle$),
+we need a passphrase with at least $3 \times 56 = 168$ bits of
+entropy.
+This would require that
+passphrases consist of hundreds of characters, which is
+too difficult for most mere mortals to memorize.
+When we consider that, in the real world, one is lucky to find a password
+with more than 25--35 bits of entropy, it becomes clear that the leftover
+hash lemma is thoroughly insuitable for practical use.
+
+%Another (lesser)
+%problem is that the leftover hash lemma requires Renyi entropy,
+%which may not match our intuition of password
+%entropy (`unguessability') very well.
+
+The problem is that universal hash functions (and their generalizations,
+e.g., extractors) are designed for use in de-randomization,
+where the scarce resource is uniformly-distributed randomness,
+and non-uniformly distributed bits are very cheap.
+In contrast, for passphrase-based cryptography,
+{\em secret randomness} (e.g., passwords, passphrases, etc.)
+should be considered a very precious resource that must be conserved
+at all costs, whereas {\em public randomness}
+(even uniformly-distributed public randomness) is nearly free.
+This suggests that new approaches may be required, and we leave
+this as an interesting challenge for further study.
+
+
+\section{Conclusions}
+\label{sec:conc}
+
+We have shown explicit lower bounds on the security of the Unix
+password hashing algorithm and demonstrated that, under reasonable
+cryptographic assumptions, the construction appears to be well-designed
+and very strong.
+This gives the first realistic proof of security for the Unix hash function.
+
+Our work provides yet another piece of evidence that concrete security
+analysis is a powerful technique for understanding cryptographic primitives
+and that concrete security analysis
+can be an effective tool for analyzing pre-existing constructions found in
+real-world, widely-deployed systems.
+
+% XXXXXXXXXXXX: add to final paper
+%\section{Acknowledgements}
+%We would like to gratefully acknowledge the contributions of
+%Mihir Bellare and Phil Rogaway (for their helpful observations
+%and careful commentary), Dan Boneh (who pointed out the
+%relevance of the leftover hash lemma), David Zuckerman (who contributed
+%the simplified example used in showing the tightness of
+%Theorem~\ref{th:nonunif}), and Umesh Vazirani (for helpful discussions
+%on extractors and entropy smoothing).
+%% XXX: also thank Vazirani.
+%%We are indebted to Mihir Bellare, Ran Canetti, and Hugo Krawczyk
+%%for the wonderful analogy to winemaking \cite{BCK96}.
+
+\begin{thebibliography}{9}
+\bibitem{BKR94} M. Bellare, J. Kilian, P. Rogaway,
+``The Security of the Cipher Block Chaining Message Authentication Code,''
+{\em CRYPTO '94}, Springer-Verlag, 1994.
+
+\bibitem{BCK96} M. Bellare, R. Canetti, H. Krawczyk,
+``Keying hash functions for message authentication,'',
+{\em CRYPTO '96}, Springer-Verlag, 1996.
+
+\bibitem{GB99} S. Goldwasser, M. Bellare,
+``Lecture Notes on Cryptography,'' available online from
+\verb+http://www-cse.ucsd.edu/users/mihir/papers/gb.html+.
+
+\bibitem{HILL99} J. Hastad, R. Impagliazzo, L.A. Levin, M. Luby,
+``A pseudorandom generator from any one-way function,''
+{\em SIAM Journal on Computing}, vol.28 no.4, 1999.
+
+\bibitem{IZ89} R. Impagliazzo and D. Zuckerman, 
+``How to Recycle Random Bits,'' {\em FOCS '89}, IEEE Press, 1989.
+
+\bibitem{LR87} M. Luby, C. Rackoff, ``A study of password security,''
+{\em CRYPTO '87}, Springer-Verlag, 1988.
+
+\bibitem{LR89} M. Luby, C. Rackoff, ``A study of password security,''
+{\em J. Cryptology}, vol. 1 no. 3, 1989.
+
+\bibitem{Zuc99} D. Zuckerman, personal communication, July 1999.
+\end{thebibliography}
+
+\appendix
+%\section{Additional discussion}\label{a:disc}
+%We present here additional discussion on the relevance of our results.
+
+
+%\section{The power of stronger assumptions}\label{a:power}
+
+%\section{Definitions of security}\label{a:defn}
+
+
+\section{Proofs}\label{a:proofs}
+\setcounter{theorem}{1}
+\setcounter{lemma}{0}
+\setcounter{corollary}{0}
+
+\begin{theorem}
+Let $g : \K \to \Y$ be a $(t,e)$-secure pseudorandom generator,
+with $|\Y| > |\K|$.
+Then $g$ is a $(t',p)$-secure one-way function, where
+$p = e / (1 - |\K|/|\Y|)$ and $t' \approx t$.
+\end{theorem}
+\begin{proof}%[of Theorem~\ref{th:prg2owf}]
+We prove the contrapositive.
+Let $h=g$ be our alleged one-way function.
+Suppose that there is an adversary $B$ which $(t,p)$-breaks $h$
+(viewed as a one-way function).
+We construct an adversary $A$ against $g$ (viewed as a PRG), defined by
+$$A(y) = \left\{ \begin{array}{ll}
+	1\qquad	&\mbox{if }B(y) \ne \bot \\
+	0	&\mbox{otherwise.}
+	\end{array} \right.$$
+Our claim is that $A$ $(t,e)$-breaks $g$ (the pseudorandom generator),
+i.e., that $\Adv A \ge (1 - |\K|/|\Y|) \cdot p$.
+A bit of notation: we let $k$ stand for a random variable
+uniformly distributed over $\K$, and $u_Y$ for a r.v. that
+is uniform over $\Y$.
+All probabilities are calculated with respect to $k$.
+
+Let $V = \{y \in \Y : B(y) \ne \bot\}$ be the set of outputs of $h$ where
+$B$ succeeds.
+Also, let $W = \{k \in \K : h(k) \in V\}$ be the set of inputs to $h$
+which are not secure against $B$.
+We see that $p = \Pr[h(k) \in V] = \Pr[k \in W]$.
+
+Next, we observe that $|V| \le |W|$.
+The argument goes like this.
+We may view $B$ as a deterministic function
+(by standard de-randomization results).
+We examine $B'$, the restriction of $B$ to the domain $V$.
+This restriction is well-defined, since when $v \in V$,
+$B(v)$ is a well-defined element of $K$.
+Moreover, using the correctness of $B$, we have
+$g(B(v)) = v \in V$ for all $v \in V$,
+so that $B(v) \in W$ for all $v \in V$.
+Thus we may consider $B'$ as
+a function with signature $V \to W$.
+Also, if $v,v' \in V$ and $B(v) = B(v')$, we find that
+$v = g(B(v)) = g(B(v')) = v'$;
+therefore, $B'$ is one-to-one.
+In summary, we have exhibited a one-to-one function from $V$ to $W$,
+which demonstrates that $|V| \leq |W|$.
+
+Finally, we are ready to calculate the advantage of the adversary $A$.
+First,
+\[ \Pr[A(g(k)) = 1] = \Pr[B(h(k)) \ne \bot] = \Pr[h(k) \in V] = p. \]
+%%since $F'_j(0)$ is uniformly distributed when $j$ is, we see that
+Also $|W| = |\K| \cdot \Pr[k \in W] = |\K| \cdot p$ and $|V| \le |W|$, so
+\[ \Pr[A(u_Y) = 1] = \Pr[u_Y \in V] = |V|/|\Y|
+   \le |W|/|\Y|  = |\K|/|\Y| \cdot p. \]
+Plugging into the definition of $\Adv A$ gives
+\[ \Adv A \ge \left| p - |\K|/|\Y| \cdot p \right|
+  = (1 - |\K|/|\Y|) \cdot p = e. \]
+To recap, under the assumption that there is an adversary $B$
+which $(t,p)$-breaks $h$,
+we obtain an adversary $A$ which shows that $g$ is not
+$(t,e)$-secure, and this is the desired result.
+\hfill\qed
+\end{proof}
+
+\begin{lemma}\label{th:prp2prf}
+A $(t,q,e)$-secure PRP  $E : \K \times \Y \to \Y$
+is a $(t,q,e+q^2/2|\Y|)$-secure PRF.
+\end{lemma}
+\begin{proof}
+This lemma is a well-known consequence of the birthday paradox.
+For a full proof, see, e.g., \cite{BKR94}.
+\hfill\qed
+\end{proof}
+
+\begin{lemma}\label{th:cbc}
+If $F: \K \times \Y \to \Y$ is a $(t,q,e)$-secure PRF, then $F^n$ is a
+$(t',q/n,e')$-secure PRF, where
+$t'=t-q \log_2 |\Y|$ and $e' = e + 1.5 q^2/|\Y|$.
+\end{lemma}
+\begin{proof}
+Recall that $F_k^n(x)=F_k(\cdots(F_k(x))\cdots)$
+is a $F_k$-CBC-MAC on the message $\langle x,0,0,\ldots,0 \rangle$,
+as noted in Section~\ref{sec:ideas}.
+Now invoke \cite[Lemma 4.1]{BKR94} to show that the $F_k$-CBC-MAC
+is a secure PRF.
+%of Bellare, Kilian, and Rogaway's analysis of
+%the CBC-MAC \cite{BKR94}.
+\hfill\qed
+\end{proof}
+
+\begin{lemma}\label{th:prf2prg}
+If $F$ is a $(t,1,e)$-secure PRF, then $g(k)=F_k(0)$ is a $(t,e)$-secure PRG.
+\end{lemma}
+\begin{proof}
+Immediate from the definitions.
+\hfill\qed
+\end{proof}
+
+\begin{theorem}
+If $\des$ is a $(t,25,e)$-secure pseudorandom permutation,
+then the Unix construction
+is a $(t',p)$-secure password hashing function, where
+$p = (1+1/255) e + (1+1/255) \cdot 25^2/2^{63} \approx (1+1/255) e$
+and $t' \approx t$.
+\end{theorem}
+\begin{proof}
+Applying Lemmas~\ref{th:prp2prf} and \ref{th:cbc},
+we see that $x \mapsto \des_k^{25}(x)$ is a
+$(\tau,1,\epsilon)$-secure PRF, where
+$\tau = t - 25 \times 64$ and $\epsilon = e + 2q^2/|\Y|$.
+Lemma~\ref{th:prf2prg} then shows that the Unix algorithm
+is a $(\tau,\epsilon)$-secure PRG.
+Finally, Theorem~\ref{th:prg2owf} assures us that the Unix
+construction is a $(t',p)$-secure one-way function,
+where $t' = \tau - c = t - 25 \times 64 - c \approx t$
+and $p = \epsilon/(1 - 2^{-8}) = (1+1/255) \epsilon$.
+As discussed above, this is exactly the notion needed to show
+that the Unix password hashing algorithm is secure when
+used with uniformly-distributed passwords.
+\hfill\qed
+\end{proof}
+
+\begin{theorem}
+For all one-way hash functions $f$,
+all distributions $D$, and all time bounds $t$,
+there is a generic attack, called the {\em dictionary attack},
+which $(t,\chi_D(t))$-breaks $f$.
+\end{theorem}
+\begin{proof}
+The dictionary attack proceeds by trying the $t$ elements of $D$
+with the $t$ largest probabilities.
+(Each guess can be easily checked with a single computation of $f$.)
+If we write the $D$-probabilities in decreasing order,
+$d_1 \ge d_2 \ge d_3 \ge \cdots$, we can see that the
+success probability of the dictionary attack is
+$d_1 + d_2 + \cdots + d_t$;
+furthermore, this quantity is precisely $\chi_D(t)$.
+\hfill\qed
+\end{proof}
+
+\begin{theorem}
+Let $f$ be a one-way function that is $(t,p)$-secure for uniformly-distributed
+inputs.
+Then, for every distribution $D$ on $\K$,
+$f$ is a $(t,\chi_D(p|\K|))$-secure one-way hash function for $D$.
+\end{theorem}
+\begin{proof}
+Let $A$ be an adversary which $(t,p')$-breaks $f$ for $D$,
+where $p' \ge \chi_D(p|\K|)$.
+We will show that $A$ also $(t,p)$-breaks $f$ (for uniformly
+distributed inputs), and then taking the contrapositive
+will yield the desired result.
+
+Let $S = \{k \in \K : A(f(k)) \ne \bot\}$
+be the set of $f$-inputs which are not safe against $A$.
+Note that $p' = D(S)$,
+and moreover that
+$\chi_D(|S|) \ge D(S)$ (by the definition of $\chi_D$),
+so we have
+\[ \chi_D(|S|) \ge D(S) = p' \ge \chi_D(p|\K|). \]
+Since $\chi_D(t)$ is a monotonically increasing function of $t$,
+we may conclude that $|S| \ge p|\K|$.
+
+Now we may prove that $A$ indeed works well, not just for the distribution
+$D$, but also for the uniform distribution.
+Note that
+\[ \Pr[A(f(k)) \ne \bot] = \Pr[k \in S] = |S|/|\K| \ge p \]
+when $k$ is drawn from the uniform distribution on $\K$.
+Therefore, $A$ is an adversary that $(t,p)$-breaks $f$ (for the uniform
+distribution), as claimed, and the theorem follows.
+\hfill\qed
+\end{proof}
+
+\begin{corollary}
+If the one-way function $f$ is ideally-secure for the uniform distribution,
+then it is also ideally-secure for all other distributions as well.
+\end{corollary}
+\begin{proof}
+For the uniform distribution $U$ on $\K$,
+we have $\chi_U(t) = t/|\K|$, so by assumption
+$f$ is $(t,t/|\K|)$-secure for all $t$.
+Now Theorem~\ref{th:nonunif} assures us that $f$ is
+$(t,\chi_D(t))$-secure for all distributions $D$,
+since $\chi_D((t/|\K|) \cdot |\K|) = \chi_D(t)$.
+\hfill\qed
+\end{proof}
+
+\begin{theorem}
+If $g : \K \to \Y$ is a $(t,e)$-secure pseudorandom generator
+for seeds distributed according to $D$, then $g$ is a $(t,p)$-secure
+one-way function for $D$, where $p = e + |\K|/|\Y|$.
+\end{theorem}
+\begin{proof}
+Use the same notation as in the proof of Theorem~\ref{th:prg2owf},
+and define the adversary $A$ in the same way.
+Note that $\Pr[A(u_Y)=1] \le |\{g(k):k \in \K\}|/|\Y| \le |\K|/|\Y|$,
+and $\Pr[A(g(k))=1] = p$ as before, so we get
+\[\Adv A
+= \left|\Pr[A(g(k))=1] - \Pr[A(u_Y)=1]\right|
+\ge \left|p - |\K|/|\Y|\right| = e.\]
+In other words, if there is an adversary $B$ to
+$(t,p)$-break $g$ as a one-way function, then there is another
+adversary $A$ to $(t,e)$-break $g$ as a pseudorandom generator,
+and the theorem follows.
+\hfill\qed
+\end{proof}
+
+%\section{Tightness of Theorem~\ref{th:nonunif}}\label{a:tight}
+%We show that Theorem~\ref{th:nonunif} is essentially tight.
+
+
+
+\end{document}
+@

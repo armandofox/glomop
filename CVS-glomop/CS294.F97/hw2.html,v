@@ -1,0 +1,469 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	97.10.02.05.52.19;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.30.07.08.09;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.30.04.51.35;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.30.03.50.43;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.29.21.27.51;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@<html> <head>
+<title>CS294-6 Homework 2</title>
+</head>
+
+<body>
+<h1>Easy Problem Set #2: Write a Simple Filter</h1>
+
+<center>
+<font size=+3 color=red>Note: the software and documentation required
+for this assignment may not be accessible online until Wednesday
+10/1.</font></center>
+
+<p>
+In this homework you'll write a simple filter, exercising some of the
+features similar to those illustrated last week in class with the
+Keyword Highlighter example.<p>
+
+This is our first attempt at exporting the "development interface" for
+TranSend to other people, and a few bumps along the way are certainly
+possible, so please bear with us.  The bumps we fix now will
+enable final projects to proceed more smoothly.<p>
+
+You can write your filter in C or Perl.  (C++ is indirectly supported,
+but the function prototypes for the workers are in C; you'll have to
+create the appropriate C/C++ glue code.)  If your filter expects
+to do <i>any</i> nontrivial text parsing, we <i>strongly</i> urge you to
+use Perl, partially because it's a better language for such tasks and
+partially because we have a huge library of useful HTML and text parsing
+subroutines (which don't exist in C, and probably never will).
+If you don't know Perl, we <i>strongly</i> urge you to learn
+it <i>now</i>.  This is a good an opportunity as any.  The
+Java worker infrastructure is not officially supported right now: its
+test harness is primitive, its long-term use is unexplored, your mileage
+may vary, etc. etc.  Caveat programmer: if you're squeamish and/or less
+than thoroughly familiar with Java, you probably don't want to use it
+for this assignment.  (Using it for final projects will be fine.)  If
+you do want to use it, contact <a
+href="mailto:mikechen@@cs.berkeley.edu">Mike Chen</a> directly -- he has
+graciously volunteered to do the work of getting the Java infrastructure
+into shape and I'm sure he'd welcome assistance.
+
+<h3>Contents</h3>
+
+<ul>
+  <li> <a href="#due">Due date, submission, <b>written assignment</B></a>
+  <li> <a href="#sw">Software</a>
+  <li> <a href="#doc">Documentation</a>
+  <li> <a href="#prob">Writing a filter</a>
+  <li> <a href="#idea">Some  ideas for simple filters</a>
+</ul>
+
+<a name="due"><h2>Due Date, Written Assignment</h2></a>
+
+The assignment is due Monday, 10/13.  It's nominally a one-week
+assignment and you'll have nearly two weeks to do it, so if you ask for
+an extension at the last minute, be sure you have a  compelling
+reason.  (Software breakage that is our fault is considered compelling,
+though we'll do our best to stay on top of these problems so they don't
+impede people's progress.) <p>
+
+Submission instructions for the code are TBA.  The submission process will
+involve installing your filter so that it's world-usable.  In the
+meantime, get your code working with the test harnesses.  If your code
+needs to do something the harnesses don't support (e.g. call other
+distillers as a subroutine), there are instructions here for deploying
+your distiller in a single-node "developer copy" of TranSend.<p>
+
+<b>Submit answers to the following by email by 10/13:</b>
+
+<ol>
+  <li> <b>Open question.</b>  There is no "right answer" to
+       the following; demonstrate your understanding of the problem
+       space by describing the
+       basic issues and proposing some possible areas of exploration. 
+       About half a page of text, and certainly no more than a
+       full page.  <b>Question:</b> What will happen to
+       advertisement-supported sites and ad revenue if aggregation
+       agents become widespread?  If most of your web surfing is done by
+       a program that presents the final results to you, that program
+       certainly won't "click  through" the ads to sites like
+       doubleclick.com.
+       <br>
+       <br> And now some questions about your filter...
+       <br>
+       <br>
+  <li> Briefly describe what your filter does, and how it accomplishes
+       it.  Did you have to use URL munging to pass state around?  If
+       so, what state?  Would your filter compose well with other
+       filters?  etc.
+  <li>  Briefly describe how your filter fits into the TACC model: what
+       are the specific transformation and/or aggregation operations?
+       What support is expected from the cache?  What is customizable,
+       and how is the customization used by the worker(s)?
+  <li> Are there any fundamental new capabilities provided by your filter
+       that could be re-used by other filters in the future?
+  <li> What abilities/support would have been useful in writing the
+       filter or making it re-usable?  (i.e. what should we add to the
+       TACC programming model
+       or the TACC libraries that would have made your job easier?)
+</ol>
+
+<a name="sw"><h2>Software</h2></a>
+
+To do this homework you'll need login ability on the NOW cluster: the
+Sparc 20's (dawn0-dawn31) or the UltraSparcs (u0-u99).  Most of these
+machines support logins via (insecure) <i>telnet</i> or <i>rlogin</i>,
+Kerberos <i>rlogin</i>, and <i>ssh</i>.  If you can't login after
+following the published procedure for getting access (in my email), <a
+href="mailto:fraser@@cs.berkeley.edu">email Eric Fraser</a> and explain
+that you are taking Prof. Brewer's CS294 and need a NOW login.  <p>
+
+The TranSend "developer build" is located at
+<tt>/disks/barad-dur/now/pythia/cs294-6/tcsproxy</tt>.
+(Various doc files refer to this as the "common area" of the
+distribution; it contains a bunch of read-only files, some of which may
+be usefule as sample code while you develop your filter.)
+<p>
+
+You need to do a little
+configuration to make it run:
+
+<ol>
+  <li> Make a copy of
+       <tt>distiller.tar.gz</tt> and un-tar it into a working directory of your
+       choice.  (Your working directory must be NFS-visible, not a local
+       disk.)  We'll refer to this working directory as "the proxy's
+       home directory".  The untar process will create some symlinks and
+       some local copies of stuff.
+  <li> Edit the <tt>gm_options</tt> file.  You <i>must</i> uncomment and
+       edit the following parameters or nothing will work:
+       <ul>
+         <li> proxy.home: full pathname of the directory where you 
+              un-tar'ed the tarfile containing this file.
+         <li> ptm.multicast: multicast channel that carries
+              announcements of the load balancer's ("PTM") existence.
+              Set this to a randomly-chosen multicast address and port
+              number.  The safe range for port numbers is
+              about 7000 through 65535; multicast addresses look like
+              <i>w.x.y.z</i>, where w&gt;=224 and 1&lt;=x,y,z&lt;=254.
+         <li> Monitor.listen: multicast channel that carries status
+              messages to the GUI interface.  You can use the same
+              multicast address as for ptm.multicast, but with a
+              different port number.
+         <li> frontend.http_listen_port: the TCP port on which the proxy
+              will accept HTTP connections.  You should set this to a
+              random port number, to avoid "colliding" with someone else
+              who may be developing on the same machine as you.  This is
+              the port you'll set as your "HTTP proxy" port in the
+              Netscape configuration dialog.
+       </ul>
+  <li> Test that everything is working, by firing up the proxy and
+       pointing your browser at it.  The procedure is described in the
+       <a href="#doc">documentation</a>.
+       The proxy as configured runs the simple "null distiller" when you
+       fire it up.
+  <li> If you can't get it to work, recheck everything twice, and find
+       out if your peers have had similar problems.  If you're convinced
+       the problem is the software and not you, send email to <a
+       href="mailto:tkimball@@uclink4.berkeley.edu">Tim Kimball</a> with
+       a <i>detailed</i> description of the problem, the symptoms, your
+       environment, etc. so he can help you out. (Please don't just say
+       "It doesn't work" since that is not useful.  Be as specific
+       and detailed as possible to maximize your chances of getting help
+       quickly.)
+</ol>
+
+<a name="doc"><h2>Documentation</h2></a>
+
+One of the symlinks created in step 2 above should be "doc", a link to a
+documentation subdirectory.  This subdirectory is filled with <i>pod</i>
+files (a simple documentation format) and a few <i>man</i> pages. The
+pod files can be converted to HTML, LaTeX, or man pages using the
+programs <i>pod2html</i>, etc.  I've converted a couple of the most
+commonly used doc files to HTML and linked to them from here for your
+convenience, but note that these doc files periodically get  augmented
+or fixed, and the versions linked from here are not guaranteed to be the
+most recent.  (The versions in the doc subdirectory <i>are</i>
+guaranteed to be fresh.)
+
+<ul>
+  <li> <a href="running.html"><b>running.pod</b></a>:
+       how to start up and shut down the system;
+       what to do if things don't seem to work; general information
+       about administering the system.
+  <li> <a href="distillers.html"><b>distillers.pod</b></a>:
+       how to write a simple "distiller"
+       (historical term; it just means "worker"), of the filter
+       variety; how to use the test harnesses to test them offline.
+  <li> <a href="TACCutils.html"><b>TACCutils.3</b></a>:
+       a man page that describes the useful library
+       functions in the <i>TACCutils</i> file for Perl distillers.
+       These functions help in writing the filter itself. You need to
+       include the line <tt>use&nbsp;TACCutils</tt> in your Perl script
+       to get these functions.
+  <li> <a href="clib.html"><b>clib.3</b></a>: a man page describing the communication interfaces
+       to the rest of the TACC system: caches, other workers, and the
+       GUI monitor.  You need to include the line <tt>use&nbsp;clib</tt>
+       in your Perl script to get these functions.
+  <li> If you're programming in C, look at the files
+       <tt>include/clib.h</tt> and <tt>include/distinterface.h</tt> to
+       see the C prototypes of these functions.
+</ul>
+
+<a name="prob"><h2>Writing a Filter</h2></a>
+
+You'll find sample code for "null filters" in Perl and C in the
+subdirectories <tt>perl_dir</tt> and <tt>c_stub</tt>
+respectively.    (Java stuff isn't ready yet.)  C filters need to be
+compiled; Perl filters can be run directly.  It's a good exercise to
+try to compile and instantiate the "null filter" (or a very simple
+filter) before you launch into writing your own.<p>
+
+As a general strategy, get the <i>functionality</i> of your filter
+working first, <i>before</i> you try to integrate it into the system.
+Do as much "content debugging" as possible; then use the test harnesses
+to do additional debugging, and finally try to deploy your distiller
+into the running proxy.<p>
+
+Note that some of the functions in <b>clib</b> (above) are inherently not
+implementable in an offline test harness, since they involve direct
+communication with other parts of the system.  The Perl test harness
+automatically emulates a few of these (for example, it can actually
+fetch URL's from remote servers, and simulates a local cache by creating
+a directory in /tmp), but not all (calling <tt>Distill</tt> is not
+implemented, for example).  The C harness is "bare bones"
+and doesn't support emulation of any of the functions in <b>clib</b>;
+you'll have to stub these functions yourself in some appropriate way.<p>
+
+While writing the filter, you'll probably need to do some processing on
+the headers, get the URL of the request you're being asked to filter,
+look for salient features of the HTML, etc.  Before writing your own
+Perl code to do these, check TACCutils to see if what you want
+already exists.  (If you're writing in C, you're on your own for
+now, though if you end up "rolling your own" we'd really like it if you
+make the code reusable for the benefit of others down the road.)
+
+<a name="idea"><h2>Some Ideas for Simple Filters</h2></a>
+
+<ul>
+  <li> WordBot:
+  <li> Server side macro processor for "HTML-poor" legacy browsers:
+       get the feature list from HotBot's implementation
+  <li> HotBot hit highlighting: do a search using HotBot (or your
+       favorite search engine).  When user clicks through any link on
+       the results list to get to a found page, the found page will have
+       highlighted the original words the user was searching for.
+  <li> Web Traffic Lights: insert red or green lights next to links (or
+       color the links different text colors) depending on whether the
+       targets of the links are in the cache.  <b>Hint:</b> Watch out
+       for relative URL's.
+</ul>
+
+<hr>
+<address>fox@@cs.berkeley.edu</address>
+<!-- hhmts start -->
+<!-- hhmts end -->
+</body> </html>
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d19 1
+a19 1
+TranSend to other people, so a few bumps along the way are certainly
+d23 3
+a25 1
+You can write your filter in C, Perl, or Java.  If your filter expects
+d31 1
+a31 1
+it <i>now</i>.  This is a good an opportunity as any.  Note that the
+d36 5
+a40 1
+for this assignment.  (Using it for final projects will be fine.)
+d56 1
+a56 1
+an extension at the last minute, be sure you have a really compelling
+d62 5
+a66 1
+involve installing your filter so that it's world-usable.<p>
+d85 1
+a85 1
+
+d94 2
+d97 2
+a98 1
+       filter?  (i.e. what should we add to the TACC programming model
+d114 5
+d124 1
+a124 1
+       <tt>developer.tar.gz</tt> and un-tar it into a working directory of your
+d127 2
+a128 4
+       home directory".
+  <li> In the proxy's home directory, run the script "INSTALL.sh", which
+       will create symlinks to various subdirectories in the "main
+       install" area.
+d154 2
+a155 2
+       The proxy as configured behaves a lot like
+       TranSend.
+d162 3
+a164 2
+       "It doesn't work" since that is useful to nobody.  Be as specific
+       and detailed as possible to maximize your chances of getting help.)
+d173 6
+a178 1
+programs <i>pod2html</i>, etc.
+d181 2
+a182 1
+  <li> <b>running.pod</b>: how to start up and shut down the system;
+d185 2
+a186 1
+  <li> <b>distillers.pod</b>: how to write a simple "distiller"
+d188 3
+a190 2
+       variety.
+  <li> <b>TACCutils.3</b>: a man page that describes the useful library
+d195 1
+a195 1
+  <li> <b>clib.3</b>: a man page describing the communication interfaces
+d206 4
+a209 4
+You'll find sample code for "null filters" in Perl, C and Java in the
+subdirectories <tt>perl_stub</tt>, <tt>c_stub</tt>, and
+<tt>java_stub</tt> respectively.  (Java and C filters need to be
+compiled; Perl filters can be run directly.)  It's a good exercise to
+d213 5
+a217 3
+The pod files also contain information on using the test harnesses,
+which allow you to (pretty thoroughly) test your workers offline before
+trying to run them inside the system.<p>
+d219 1
+a219 1
+Note that the functions in <b>clib</b> (above) are inherently not
+d225 2
+a226 2
+implemented, for example).  The Java and C harnesses are "bare bones"
+and don't support emulation of any of the functions in <b>clib</b>;
+d233 1
+a233 1
+already exists.  (If you're writing in C or Java, you're on your own for
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d11 1
+a11 1
+10/1.</font>
+d39 1
+a39 1
+  <li> <a href="#due">Due date and submission</a>
+d46 1
+a46 1
+<a name="due"><h2>Due Date</h2></a>
+d61 15
+d210 1
+a210 1
+<a name="idea"><h2>Some Ideas for Simple Filters</a>
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d8 6
+d18 5
+d48 6
+a53 2
+Submission instructions TBA.  The submission process will involve
+installing your filter so that it's world-usable.<p>
+d55 2
+d58 1
+a58 1
+<b>Submit answers to the following by email:</b>
+d61 4
+d77 6
+a82 8
+Sparc 20's (dawn0-dawn31) or the UltraSparcs (u0-u99).  I've tried to
+arrange this for everyone on the class roster, but you should check
+immediately.  Most of these machines support logins via (insecure)
+<i>telnet</i> or <i>rlogin</i>, Kerberos <i>rlogin</i>, and <i>ssh</i>.
+If you can't login, <a href="mailto:fraser@@cs.berkeley.edu">email Eric
+Fraser</a>
+and explain that you are taking Prof. Brewer's CS294 and need a NOW login.
+<p>
+d85 2
+a86 1
+<tt>/usr/now/share/cs294-6/tcsproxy</tt>.  You need to do a little
+d92 1
+a92 1
+       choice.  (The working directory must be NFS-visible, not a local
+d122 1
+a122 1
+       Developer Manual (see <a href="#doc">Documentation</a>).
+d152 1
+a152 1
+       These functions help to write the filter itself. You need to
+d159 3
+d185 9
+a193 1
+you'll have to stub these functions yourself in some appropriate way.
+d201 8
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d38 14
+a51 1
+installing your filter so that it's world-usable.
+d132 7
+d143 21
+d166 5
+@

@@ -1,0 +1,506 @@
+head	1.10;
+access;
+symbols
+	Yatin-final:1.10
+	Yatin:1.10.0.2
+	pre-yatin-merge:1.10
+	transend-beta2:1.7
+	fox-dev:1.7;
+locks; strict;
+comment	@# @;
+
+
+1.10
+date	97.09.12.03.13.51;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.12.01.10.20;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.06.01.08.57;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.09.03.59.47;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.09.02.46.18;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.03.18.07.19;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.06.23.10.24.22;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.23.08.48.57;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.23.04.06.07;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.23.01.59.02;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Optimizations to Pilot distiller:
+- 'wx' and 'string_width' optimized, since profiler indicated a lot of
+time was being spent there.
+- postprocessed images are now cached during processing of the same
+page, so addditional instances of an inline image are free.
+- Clib_Async_Fetch is now used in the distiller to prefetch images, so
+they'll be in the cache when we're ready to distill them.
+Also: added 'canonicalize' routine (to TACCutils) for canonicalizing
+relative urls, fixed some perl warnings in PilotFonts and SimpleFont.
+@
+text
+@#  -*- perl -*- support for simple fonts on small clients
+#
+
+=head1 NAME
+
+Font.pm - simple font support for non-scalable (bitmapped) fonts
+
+=head1 SYNOPSIS
+
+To be filled in
+
+=head1 DESCRIPTION
+
+This package provides a framework for specifying metrics for simple bitmapped
+fonts.  Such font metrics are used by the L<Para> object, which defines
+a set of simple font flags (bold, underline, etc.), to do
+device-independent text layout and formatting.
+
+Each device for which font metrics are provided needs to override this
+framework.  For example, 'use PilotFonts' will give you the Palm Pilot
+font metrics in the SimpleFont framework.
+
+Each such package typically has an C<init_fonts> call that takes as an
+argument the directory where font metric information for that device may
+be found.
+
+=cut
+
+package SimpleFont;
+require Exporter;
+@@ISA = qw(Exporter);
+
+sub instvars {
+    my $class = shift;
+    foreach $var (@@_) {
+        if ($var =~ /(\S+):r/) {
+            # read-only variable
+            $var = $1;
+            $action = qq!carp "Can't set instance variable `$var' this way, ignored"!;
+        } else {
+            $action = qq!\$self->{"$var"} = shift!;
+        }
+        eval "sub ${class}::${var}"  . qq!{
+            my \$self = shift;
+            $action if defined \$_[0];
+            return \$self->{"$var"}; }! ;
+    }
+}
+
+=head2 CONSTRUCTOR
+
+=over 3
+
+=item $result = &init_fonts($fontDir);
+
+Initialize the font information for the given device, from the metrics
+files in directory $fontDir.  Returns a true value on success; on
+failure, may either C<die> or return a non-true value.
+
+=item $fn = new SimpleFont ($name,$type,$first,$last,$maxwidth,$kernmax,$descent,$fwidth,$fheight,$offset,$ascender,$descender,$leading,$rowwords, $wx)
+
+Create a new SimpleFont with the given metrics.  $wx should be a
+reference to a 256-element array containing the pixel widths of the
+characters in the ISO-8859-1 character set.  It is OK for characters not
+in the font to have a width of C<undef>.  You shouldn't normally need to
+do this by hand, because the C<init_fonts> call for a particular device
+should create the appropriate SimpleFonts for you and export their
+names.  Unfortunately, the way this is done varies from device to
+device; see, for example, L<PilotFonts>.
+
+=back
+
+=cut
+
+sub new {
+    my($name,$type,$first,$last,$maxwidth,$kernmax,$descent,
+       $fwidth,$fheight,$offset,$ascender,$descender,$leading,
+       $rowwords, $wx) = @@_;
+    bless {
+        'name' => $name,
+        'type' => $type,
+        'first' => $first,
+        'last' => $last,
+        'maxwidth' => $maxwidth,
+        'kernmax' => $kernmax,
+        'descent' => $descent,
+        'fwidth' => $fwidth,
+        'fheight' => $fheight,
+        'offset' => $offset,
+        'ascender' => $ascender,
+        'descender' => $descender,
+        'leading' => $leading,
+        'rowwords' => $rowwords,
+        'wx' => $wx,
+    };
+}
+
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $h = $fn->height;
+
+Return the height of a line of text, which is obtained by adding the
+descender and ascender.
+
+=cut
+
+sub height {
+    my $self = shift;
+    return $self->descender + $self->ascender;
+}
+
+=item @@wx = $fn->wx;   $wxref = $fn->wx;
+
+Return the array of character widths for the font.  Not as useful as the
+other methods, below.  If the caller wants an array, one is returned, otherwise
+a reference to one is returned.  Caveat caller.
+
+=cut
+
+sub wx {  wantarray ? @@{(shift @@_)->{'wx'}} : shift->{'wx'};  }
+
+=item $w = $fn->string_width($str);
+
+Return the width in pixels of $str if it were rendered in font $fn.
+Each character's width is determined from the width table.
+
+=cut
+
+sub string_width {
+    my $self = shift @@_;
+    my $wx = $self->wx;
+    my $len = 0;
+    $_ = shift @@_;                          # the string
+    $len += $wx->[ord chop] while $_;
+    $len;
+}
+
+=item @@lines = $fn->split_string($str,$width[,$break[,$squeeze]])
+
+Splits a string so that each line will fit in a space $width pixels wide.
+Returns an array of substrings, one per line.  Characters
+where the string is broken (spaces, etc.) are not included in the substrings,
+so the concatenation of the substrings may not be identical to the original
+string. 
+If $break is given, it should be a regexp that matches the legal
+break characters; by default, space and hyphen are break characters.  
+
+Each element of the returned array will be a string containing at least one
+character, even if the widest character in the string won't fit on one line.
+
+=cut
+
+sub split_string {
+    my $self = shift;
+    my $wx = $self->wx;
+    my $str = shift || return ();
+    my $origlen = length($str);
+    my $width = shift;
+    my $widest = $self->maxwidth;
+    my $breaks = shift || ' ';
+    my @@lines = ();
+    my ($lastbreak,$nextch);
+    my ($est,$est_width);
+
+    # while there is still text to be split, estimate the width of the string
+    # that will fill the line, and keep adding chars until we actually hit the
+    # boundary.  remember where the last breakable char was seen.
+
+    $width = $widest if $width < $widest;
+    $lastlength = 0;
+    while (1) {
+        $lastbreak = -1;
+        $est = ($width / $widest)-1;
+        $est_width = $self->string_width(substr($str,0,$est));
+        while ($est_width <= $width
+               && $est <= length($str)) {
+            $nextch = substr($str,$est,1);
+            $est++;
+            $est_width += $wx->[ord $nextch];
+            $lastbreak = $est if $nextch =~ /$breaks/;
+        }
+        if ($est <= length($str)) {
+            # ok, we went over.  
+            # If a break char was seen while scanning, break there.
+            # Otherwise, break here.
+            $est--;
+            $lastbreak = $est if ($lastbreak == -1);
+            #push(@@lines, substr($str,0,$lastbreak));
+            push(@@lines, substr($str,0,$lastbreak));
+            $str = substr($str,$lastbreak);
+            # skip over leading break chars
+            #$str =~  s/^${breaks}+//;
+        } else {
+            # this is the end, woohoo!
+            #push(@@lines, $origlen);
+            push(@@lines, $str);
+            last;
+        }
+    }
+    return @@lines;
+}
+
+&SimpleFont::instvars('SimpleFont',
+                      qw(type first last maxwidth kernmax descent
+                         fwidth fheight offset ascender descender
+                         leading rowwords));
+
+sub init_fonts {
+    die "init_fonts: I must be overridden by a subclass";
+}
+
+=back
+
+=head1 BUGS
+
+The array of widths should probably (also) be provided as a hash table,
+where the keys are the ISO-8859-1 names of the characters.
+
+=head1 COPYRIGHT
+
+Copyright (C) 1997 by the Regents of the University of California.
+This software is distributed under the terms of the GNU General Public
+License, version 1.0 or greater.
+
+=cut
+
+1;
+@
+
+
+1.9
+log
+@speeded up wx
+@
+text
+@d162 1
+a164 1
+    my $widest = $self->maxwidth;
+d167 1
+a167 1
+    
+d176 1
+a176 1
+        $est = int($width / $widest)-1;
+@
+
+
+1.8
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@d115 1
+a115 1
+=item @@wx = $fn->wx;
+d118 2
+a119 1
+other methods, below.
+d123 1
+a123 1
+sub wx {  @@{(shift @@_)->{'wx'}}  }
+d134 1
+a134 1
+    my @@wx = $self->wx;
+d137 1
+a137 1
+    $len += $wx[ord chop] while $_;
+d158 1
+a158 1
+    my @@wx = $self->wx;
+d182 1
+a182 1
+            $est_width += $wx[ord $nextch];
+@
+
+
+1.7
+log
+@layout works, fixed bugs in transend.text.piml
+@
+text
+@d12 15
+d50 1
+a50 1
+=head1 CONSTRUCTOR
+d54 6
+d65 5
+a69 1
+in the font to have a width of C<undef>.
+d210 2
+a211 2
+sub read_from_file {
+    die "read_from_file: I must be overridden by a subclass";
+@
+
+
+1.6
+log
+@minor changes to Layout to fix line break problems - still significant breakage in flowing text aroudn images.  HTML regexp is more robust now
+@
+text
+@d166 1
+a166 1
+            push(@@lines, substr($str,0,$lastbreak-1));
+d169 1
+a169 1
+            $str =~  s/^${breaks}+//;
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d117 7
+a123 6
+Return an array of non-newline-terminated lines such that the concatenation
+of all of them gives $str, and each one will fit on a line $width pixels
+wide.  If $break is given, it should be a regexp that matches the legal
+break characters; by default, space and hyphen are break characters.  If
+$squeeze is given, characters matching the regexp will be squeezed out at the
+beginning of each line; default is not to do squeezing.
+d139 1
+a139 1
+    my ($lastbreak,$nextch,$lastlength);
+d166 1
+a166 2
+            push(@@lines, $lastbreak + $lastlength);
+            $lastlength += $lastbreak;
+d169 1
+a169 3
+            if ($squeeze) {
+                $str =~  s/^($squeeze)//;
+            }
+d172 2
+a173 1
+            push(@@lines, $origlen);
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d174 1
+a174 1
+            push(@@lines, $origlen-1);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d15 1
+a15 1
+
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d131 1
+d133 1
+d138 2
+a139 2
+    my $lastbreak;
+    my $est;
+d146 1
+d149 8
+a156 5
+        for ( $est = int($width / $widest)-1;
+             ($self->string_width(substr($str,0,$est)) <= $width
+              && $est <= length($str));
+             $est++) {
+            $lastbreak = $est if substr($str,$est,1) =~ /$breaks/;
+d164 3
+a166 1
+            push(@@lines, substr($str,0,$lastbreak));
+d174 1
+a174 1
+            push(@@lines, $str);
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d78 12
+d115 1
+a115 1
+=item @@lines = $fn->split_string($str,$width[,$break])
+d120 3
+a122 1
+break characters; by default, space and hyphen are break characters.
+d133 1
+a133 1
+    my $breaks = shift || '-|\s+';
+d161 3
+a163 1
+            $str =~  s/^($breaks)//;
+a172 1
+
+d181 15
+@

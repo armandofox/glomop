@@ -1,0 +1,850 @@
+head	1.2;
+access;
+symbols
+	start:1.1.1.1
+	soda445:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.06.11.22.36.44;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.13.22.39.22;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.05.13.22.39.22;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@/* Main code for Top Gun Telnet
+   See the README file for copyright/licensing terms */
+
+#pragma pack(2)
+
+#include <Pilot.h>
+#include "netlib.h"
+
+#include "clean4x6.h"
+#include "clean5x6.h"
+#include "clean6x8.h"
+
+#define MainForm 1000
+#define AboutForm 1100
+#define KField 3002
+#define PField 3004
+#define PHField 3005
+#define CField 3007
+#define MethodList 4001
+#define CHField 3008
+#define openBtn 2001
+#define sendBtn 2002
+#define sendCRBtn 2003
+
+#define fontMenu4x6 200
+#define fontMenu5x6 201
+#define fontMenu6x8 202
+#define widthMenu26 300
+#define widthMenu32 301
+#define widthMenu40 302
+#define widthMenu80 303
+#define widthMenu132 304
+#define aboutMenuAbout 400
+
+static UInt nlref = 0;
+static Int cursock = -1;
+
+#define FieldHeight 114
+#define FieldVisWidth 160
+static UInt FieldWidth=160;
+
+static UInt COLS=40;
+static UInt ROWS=19;
+static UInt VISCOLS=40;
+static UInt HSCROLL=0;
+static FontPtr curfont = (FontPtr)clean4x6;
+
+static VoidHand txthandle = NULL;
+static unsigned char *txtbuf = NULL;
+static r = 0;
+static c = 0;
+static int munge_telnet = 0;
+static int do_naws = 0;
+static FontPtr origfont6 = NULL;
+
+#define TIMEOUT 1000
+
+void clear_buff(void)
+{
+    int i,j;
+    unsigned char *p;
+    unsigned char startchar = ' ';
+
+    if (!txthandle) {
+	FormPtr frm = FrmGetActiveForm();
+	FieldPtr cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+
+	txthandle = MemHandleNew((ROWS+1)*(COLS+1)+1);
+	txtbuf = MemHandleLock(txthandle);
+	FldSetTextHandle(cfld, (Handle)txthandle);
+	startchar = ' ' + 0x80;
+    }
+
+    p = txtbuf;
+
+    for(i=0;i<ROWS+1;++i) {
+	for(j=0;j<COLS;++j) {
+	    *(p++) = ' ';
+	}
+	*(p++) = '\n';
+    }
+    *p = '\0';
+
+    r = 0;
+    c = 0;
+    txtbuf[r*(COLS+1)+(c)] = startchar;
+}
+
+void scroll_buf(void)
+{
+    MemMove(txtbuf, txtbuf+COLS+1, ROWS*(COLS+1));
+}
+
+void show_buff(void)
+{
+    FieldPtr cfld;
+    FormPtr frm;
+
+    frm = FrmGetActiveForm();
+    cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+    FldSetTextHandle(cfld, (Handle)txthandle);
+    FldDrawField(cfld);
+}
+
+void draw_xtra_form()
+{
+    RectangleType scroller;
+
+    scroller.topLeft.y = 124;
+    scroller.extent.y = 3;
+    scroller.topLeft.x = HSCROLL * FieldVisWidth / COLS;
+    scroller.extent.x = VISCOLS * FieldVisWidth / COLS;
+    WinDrawRectangle(&scroller, 0);
+    WinDrawLine(0,125,160,125);
+    WinDrawLine(0,141,160,141);
+}
+
+void redraw_field(int newsize)
+{
+    FormPtr frm = FrmGetActiveForm();
+    FieldPtr cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+    RectangleType rect;
+
+    FldGetBounds(cfld, &rect);
+    rect.extent.x = FieldWidth;
+    rect.topLeft.x = -HSCROLL*(curfont->fRectWidth);
+    FldSetUsable(cfld, 0);
+    FldSetBounds(cfld, &rect);
+    if (newsize) {
+	ULong ret;
+	unsigned char naws[9] = { 255, 250, 31,
+	    COLS >> 8, COLS & 0xff, ROWS >> 8, ROWS & 0xff,
+	    255, 240 };
+        if (txthandle) {
+	    MemHandleUnlock(txthandle);
+	    MemHandleFree(txthandle);
+	    txthandle = NULL;
+	    clear_buff();
+	}
+	if (nlref && cursock >= 0 && munge_telnet && do_naws) {
+	    NetLibSend(nlref, cursock, naws, 9, 0, NULL, 0, TIMEOUT, &ret);
+	}
+    }
+    FrmEraseForm(frm);
+    FldSetUsable(cfld, 1);
+    FrmUpdateForm(MainForm, frmRedrawUpdateCode);
+}
+
+void new_font(FontPtr fnt)
+{
+    int newsize = 0;
+    UInt newROWS;
+
+    /* We may have to change FieldWidth, ROWS, VISCOLS, and HSCROLL.
+       COLS will not change */
+    if (fnt == curfont) return;
+
+    newROWS = FieldHeight / fnt->fRectHeight;
+    if (ROWS != newROWS) {
+	newsize = 1;
+	ROWS = newROWS;
+    }
+    VISCOLS = FieldVisWidth / fnt->fRectWidth;
+    FieldWidth = COLS * fnt->fRectWidth;
+    if (FieldVisWidth % fnt->fRectWidth) FieldWidth += fnt->fRectWidth;
+    if (HSCROLL > COLS-VISCOLS) HSCROLL = COLS-VISCOLS;
+    if (HSCROLL < 0) HSCROLL = 0;
+    curfont = fnt;
+    UIFontTable[6] = curfont;
+    redraw_field(newsize);
+}
+
+void new_width(UInt width)
+{
+    /* We may have to change FieldWidth, COLS, and HSCROLL. */
+    if (width == COLS) return;
+
+    COLS = width;
+    FieldWidth = COLS * curfont->fRectWidth;
+    if (HSCROLL > COLS-VISCOLS) HSCROLL = COLS-VISCOLS;
+    if (HSCROLL < 0) HSCROLL = 0;
+    redraw_field(1);
+}
+
+void push_str(char *str)
+{
+    int l = StrLen(str);
+    static int state = 0;
+    static int standout = 0;
+    if (!txthandle) clear_buff();
+
+    txtbuf[r*(COLS+1)+(c)] ^= 0x80;
+
+    while(*str) {
+	switch(state) {
+	case 0:  /* Regular output */
+	    if (*str == '\033') {
+		/* beginning of escape sequence */
+		state = 1;
+	    } else if (*str == '\t') {
+		int i;
+		char spaces[9];
+		for (i=0;i<8-(c%8);++i) spaces[i]=' ';
+		spaces[i] = '\0';
+		push_str(spaces);
+	    } else if (*str == '\b') {
+		if (c > 0) {
+		    --c;
+		}
+	    } else if (*str == '\r') {
+		c = 0;
+	    } else if (*str == '\a') {
+		SndPlaySystemSound(sndInfo);
+	    } else if (c == COLS || *str == '\n') {
+		r++;
+		if (r == ROWS) {
+		    scroll_buf();
+		    r--;
+		}
+		if (*str != '\n') {
+		    c = 0;
+		    if (*str < ' ' || *str >= 0x7f) {
+			txtbuf[r*(COLS+1)+(c++)] = '.' + standout;
+		    } else {
+			txtbuf[r*(COLS+1)+(c++)] = *str + standout;
+		    }
+		}
+	    } else if (*str < ' ' || *str >= 0x7f) {
+		txtbuf[r*(COLS+1)+(c++)] = '.' + standout;
+	    } else {
+		txtbuf[r*(COLS+1)+(c++)] = *str + standout;
+	    }
+	    break;
+	case 1:  /* saw ESC */
+	    if (*str == 'c') {
+		state = 0;
+		clear_buff();
+	    } else if (*str == 'm') {
+		state = 2;
+	    } else if (*str == 'b') {
+		standout = 0x80;
+		state = 0;
+	    } else if (*str == 'B') {
+		standout = 0;
+		state = 0;
+	    } else {
+		state = 0;
+	    }
+	    break;
+	case 2: /* saw ESC 'm' */
+	    if (*str != '~') {
+		r = (*str)-' ';
+		if (r>=ROWS) r=ROWS-1;
+	    }
+	    state = 3;
+	    break;
+	case 3: /* saw ESC 'm' r */
+	    if (*str != '~') {
+		c = (*str)-' ';
+		if (c>=COLS) c=COLS-1;
+	    }
+	    state = 0;
+	    break;
+	}
+	++str;
+    }
+    txtbuf[r*(COLS+1)+(c)] ^= 0x80;
+    show_buff();
+}
+
+void close_conn(void) {
+    ULong ret;
+
+    NetLibSocketClose(nlref,cursock,TIMEOUT,&ret);
+    cursock = -1;
+    push_str("\r\n-- Closed --");
+}
+
+int ctoh(char c) {
+    if (c >= '0' && c <= '9') return c-'0';
+    if (c >= 'a' && c <= 'f') return c-'a'+10;
+    if (c >= 'A' && c <= 'F') return c-'A'+10;
+    return 0;
+}
+
+void move_right(int numchars) {
+    FormPtr frm = FrmGetActiveForm();
+    Word index = FrmGetObjectIndex(frm,CField);
+    SWord x,y;
+    UInt oldHSCROLL = HSCROLL;
+    UInt oldleft, newleft, oldright, newright;
+    
+    if ((Int)HSCROLL + numchars < 0) HSCROLL = 0;
+    else if ((Int)HSCROLL + numchars > COLS - VISCOLS)
+	HSCROLL = COLS - VISCOLS;
+    else HSCROLL = (Int)HSCROLL + numchars;
+    if (HSCROLL == oldHSCROLL) return;
+
+    /* Redraw the scrollbar */
+    oldleft = oldHSCROLL * FieldVisWidth / COLS;
+    newleft = HSCROLL * FieldVisWidth / COLS;
+    oldright = oldleft + VISCOLS * FieldVisWidth / COLS - 1;
+    newright = newleft + VISCOLS * FieldVisWidth / COLS - 1;
+    if (newleft > oldright || oldleft > newright) {
+	WinEraseLine(oldleft, 124, oldright, 124);
+	WinEraseLine(oldleft, 126, oldright, 126);
+	WinDrawLine(newleft, 124, newright, 124);
+	WinDrawLine(newleft, 126, newright, 126);
+    } else if (oldleft+1 < newleft) {
+	WinEraseLine(oldleft, 124, newleft-1, 124);
+	WinEraseLine(oldleft, 126, newleft-1, 126);
+	WinDrawLine(oldright+1, 124, newright, 124);
+	WinDrawLine(oldright+1, 126, newright, 126);
+    } else if (oldleft > newleft+1) {
+	WinEraseLine(newright+1, 124, oldright, 124);
+	WinEraseLine(newright+1, 126, oldright, 126);
+	WinDrawLine(newleft, 124, oldleft-1, 124);
+	WinDrawLine(newleft, 126, oldleft-1, 126);
+    }
+
+    /* Move the text field */
+    FrmGetObjectPosition(frm,index,&x,&y);
+    FrmSetObjectPosition(frm,index,-((Int)HSCROLL)*((Int)curfont->fRectWidth),y);
+    FrmShowObject(frm,index);
+}
+
+void send_buf_append(char *append, int appendlen) {
+    FormPtr frm = FrmGetActiveForm();
+    FieldPtr pfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,PField));
+    CharPtr ptxt = FldGetTextPtr(pfld);
+    VoidHand phnd;
+    CharPtr s,d;
+    Err err;
+    ULong ret;
+
+    if (!ptxt) ptxt="";
+    if (ptxt[0]) {
+	/* Compact the send buffer */
+	unsigned char *s, *d;
+
+	d = ptxt;
+	for(s=ptxt;*s;++s) {
+	    if (*s == '\\' && s[1] != '\0') {
+		switch(s[1]) {
+		case '\\':
+		    *d = '\\'; ++s; break;
+		case 'c':
+		    if (s[2]) {
+			*d = (s[2]&0x1f); s+=2;
+		    }
+		    break;
+		case 'x':
+		    if (s[2] && s[3]) {
+			*d = ctoh(s[2])<<4 + ctoh(s[3]); s+=3;
+		    }
+		    break;
+		case 'e':
+		    *d = '\033'; ++s; break;
+		case 'b':
+		    *d = '\b'; ++s; break;
+		case 'r':
+		    *d = '\r'; ++s; break;
+		case 'n':
+		    *d = '\n'; ++s; break;
+		case '^':
+		    *d = '^'; ++s; break;
+		default:
+		    *d = '\\'; break;
+		}
+	    } else if (*s == '^' && s[1] != '\0') {
+		*d = (s[1]&0x1f); ++s;
+	    } else {
+		*d = *s;
+	    }
+	    ++d;
+	}
+	*d = *s;
+	err = NetLibSend(nlref, cursock, ptxt, StrLen(ptxt), 0, NULL, 0, TIMEOUT, &ret);
+    }
+    if (append) {
+	err = NetLibSend(nlref, cursock, append, appendlen, 0, NULL, 0, TIMEOUT, &ret);
+    }
+
+    phnd = MemHandleNew(1);
+    ptxt = MemHandleLock(phnd);
+    ptxt[0] = '\0';
+    MemHandleUnlock(phnd);
+    FldSetTextHandle(pfld, (Handle)phnd);
+    FldDrawField(pfld);
+}
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    static FieldPtr curfld = NULL;
+    Boolean handled = false;
+    FormPtr frm;
+    ListPtr lstp;
+    FieldPtr kfld, pfld, phfld, cfld, chfld;
+    ControlPtr obtn, sbtn, scrbtn;
+    CharPtr ktxt, ptxt, phtxt, ctxt, chtxt;
+    VoidHand phnd, phhnd, chnd, chhnd;
+    int plen, clen;
+    struct hostent *h;
+    struct hostent *hres;
+    struct sockaddr_in sockaddr;
+    /* char f2[2048]; */
+    ULong ret;
+    CharPtr port, colon;
+    unsigned short portno;
+    Err err;
+    UInt addrlen;
+    ULong **addrp;
+    int i;
+    static int recurse = 0;
+    static Int scrollfrom = -1;
+
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	kfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,KField));
+	cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+	pfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,PField));
+	if (UIFontTable[6] != (FontPtr)clean4x6) origfont6 = UIFontTable[6];
+	UIFontTable[6] = curfont = (FontPtr)clean4x6;
+	FldSetFont(kfld, 6);
+	FldSetFont(cfld, 6);
+	FldSetFont(pfld, 6);
+	draw_xtra_form();
+	handled = true;
+	break;
+
+    case frmUpdateEvent:
+	if (e->data.frmUpdate.updateCode == frmRedrawUpdateCode) {
+	    FrmUpdateForm(MainForm, 1);
+	} else if (e->data.frmUpdate.updateCode == 1) {
+	    draw_xtra_form();
+
+	    handled = true;
+	}
+	break;
+
+    case frmCloseEvent:
+	UIFontTable[6] = origfont6;
+	/* NO handled = true here */
+	break;
+
+    case fldEnterEvent:
+	curfld = e->data.fldEnter.pField;
+	break;
+
+    case keyDownEvent:
+	if (!nlref || cursock < 0) {
+	    break;
+	}
+
+	handled = true;
+	switch(e->data.keyDown.chr) {
+	    case pageUpChr: send_buf_append("\x0b", 1); break;
+	    case pageDownChr: send_buf_append("\x0c", 1); break;
+	    default: handled = false; break;
+	}
+    	break;
+
+    case penDownEvent:
+	/* Check if we need to do some scrolling */
+	if (scrollfrom == -1 && e->screenY >= 124 && e->screenY <= 126) {
+	    /* Where is the scrollbox? */
+	    if (e->screenX >= HSCROLL * FieldVisWidth / COLS
+		&& e->screenX <= HSCROLL * FieldVisWidth / COLS
+		    + VISCOLS * FieldVisWidth / COLS) {
+		scrollfrom = e->screenX;
+	    } else if (e->screenX <
+			HSCROLL * FieldVisWidth / COLS) {
+		move_right(-VISCOLS);
+	    } else {
+		move_right(VISCOLS);
+	    }
+	    handled = true;
+	}
+	break;
+
+    case penUpEvent:
+	if (scrollfrom >= 0) {
+	    Int diff = ((Int)e->screenX - scrollfrom) * (Int)COLS
+		/ (Int)FieldVisWidth;
+	    move_right(diff);
+	    scrollfrom = -1;
+	    handled = true;
+	}
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	case fontMenu4x6:
+	    new_font((FontPtr)clean4x6);
+	    break;
+	case fontMenu5x6:
+	    new_font((FontPtr)clean5x6);
+	    break;
+	case fontMenu6x8:
+	    new_font((FontPtr)clean6x8);
+	    break;
+	case widthMenu26:
+	    new_width(26);
+	    break;
+	case widthMenu32:
+	    new_width(32);
+	    break;
+	case widthMenu40:
+	    new_width(40);
+	    break;
+	case widthMenu80:
+	    new_width(80);
+	    break;
+	case widthMenu132:
+	    new_width(132);
+	    break;
+	case aboutMenuAbout:
+	    frm = FrmInitForm(AboutForm);
+            FrmDoDialog(frm);
+	    FrmDeleteForm(frm);
+	    break;
+	}
+
+	frm = FrmGetActiveForm();
+	FrmSetFocus(frm, FrmGetObjectIndex(frm,PField));
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	frm = FrmGetActiveForm();
+	kfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,KField));
+	pfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,PField));
+	cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+	obtn = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,openBtn));
+	sbtn = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,sendBtn));
+	scrbtn = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,sendCRBtn));
+
+	switch(e->data.ctlEnter.controlID) {
+	case openBtn:
+	    /* Maybe open the library */
+	    if (!nlref) {
+		UInt foo;
+
+		err = SysLibFind("Net.lib", &nlref);
+		ErrFatalDisplayIf (err, "Cannot locate network library");
+		err = NetLibOpen(nlref, &foo);
+		ErrFatalDisplayIf(err, "NetLibOpen failed");
+	    }
+
+	    /* Close the existing connection */
+	    if (cursock >= 0) {
+		close_conn();
+		CtlSetEnabled(sbtn, 0);
+		CtlSetEnabled(scrbtn, 0);
+		CtlSetLabel(obtn, "Open");
+		handled = true;
+		break;
+	    }
+
+	    /* Open a new connection */
+	    ktxt = FldGetTextPtr(kfld);
+	    if (!ktxt) ktxt="";
+	    if (ktxt[0] == 0) {
+		handled = true;
+		break;
+	    }
+	    port = ktxt;
+	    while(*port && *port != ':') ++port;
+	    if (*port == ':') {
+		*port = '\0';
+		colon = port;
+		portno = StrAToI(port+1);
+	    } else {
+		portno = 23;
+		colon = NULL;
+	    }
+	    h = (struct hostent*)MemPtrNew(sizeof(struct hostent));
+	    hres = NetLibGetHostByName(nlref, ktxt, h, 3*TIMEOUT, &ret);
+	    if (colon) *colon = ':';
+	    if (!hres) {
+		push_str("\r\n-- Bad hostname --\r\n");
+		handled = true;
+		break;
+	    }
+	    sockaddr.sin_family = 2;
+	    sockaddr.sin_port = htons(portno);
+	    sockaddr.sin_addr.s_addr = INADDR_ANY;
+	    for(addrp=(ULong **)h->h_addr_list;*addrp;++addrp) {
+		ULong a = htonl(**addrp);
+		if (a != INADDR_ANY) {
+		    sockaddr.sin_addr.s_addr = a;
+		    break;
+		}
+	    }
+	    MemPtrFree(h);
+	    cursock = NetLibSocketOpen(nlref,2,1,0,TIMEOUT,&ret);
+	    ErrFatalDisplayIf(cursock < 0, "SocketOpen failed!");
+	    err = NetLibSocketConnect(nlref, cursock,
+		(struct sockaddr*)&sockaddr, 0, 1000, &ret);
+	    if (err) {
+		push_str("\r\n-- Failed --\r\n");
+		NetLibSocketClose(nlref,cursock,TIMEOUT,&ret);
+		cursock = -1;
+	    } else {
+		push_str("\r\n-- Connected --\r\n");
+		munge_telnet = (portno == 23);
+		CtlSetEnabled(sbtn, 1);
+		CtlSetEnabled(scrbtn, 1);
+		CtlSetLabel(obtn, "Close");
+		FrmSetFocus(frm, FrmGetObjectIndex(frm,PField));
+	    }
+	    handled = true;
+	    break;
+
+	case sendBtn:
+	    if (!nlref || cursock < 0) {
+		handled = true;
+		break;
+	    }
+
+	    send_buf_append(NULL, 0);
+	    handled = true;
+	    break;
+
+	case sendCRBtn:
+	    if (!nlref || cursock < 0) {
+		handled = true;
+		break;
+	    }
+
+	    send_buf_append("\r\n", 2);
+	    handled = true;
+	    break;
+	}
+	break;
+    }
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e)
+{
+    FormPtr frm;
+    FieldPtr pfld;
+    Word    formId;
+    Boolean handled = false;
+
+    if (e->eType == frmLoadEvent) {
+	formId = e->data.frmLoad.formID;
+	frm = FrmInitForm(formId);
+	FrmSetActiveForm(frm);
+
+	switch(formId) {
+	case MainForm:
+	    FrmSetEventHandler(frm, MainFormHandleEvent);
+	    break;
+	}
+	handled = true;
+    }
+
+    return handled;
+}
+
+/* Read some data from the socket */
+void get_data(void)
+{
+    unsigned char buf[65];
+    UInt amt;
+    ULong ret;
+    int i,j;
+    struct sockaddr sockaddr;
+    UInt addrlen = sizeof(sockaddr);
+
+    amt = NetLibReceive(nlref, cursock, buf, 64, 0,
+	(struct sockaddr*)&sockaddr, &addrlen, TIMEOUT, &ret);
+    
+    if (amt <= 0) {
+	/* Close up */
+	FormPtr frm = FrmGetActiveForm();
+	ControlPtr obtn = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,openBtn));
+	ControlPtr sbtn = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,sendBtn));
+	ControlPtr scrbtn =
+	    FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,sendCRBtn));
+
+	close_conn();
+	CtlSetEnabled(sbtn, 0);
+	CtlSetEnabled(scrbtn, 0);
+	CtlSetLabel(obtn, "Open");
+	return;
+    }
+
+    /* Compact buffer */
+    j=0;
+    for(i=0;i<amt;++i) {
+	/* If telnet, turn IAC IAC into IAC, etc. */
+	if (munge_telnet) {
+	    if (buf[i] == 255) {
+		if (i+1 < amt && buf[i+1] == 255) {
+		    ++i;
+		} else if (i+2 < amt && (buf[i+1] == 251 || buf[i+1] == 252)) {
+		    /* IAC WILL/WONT x : send IAC DONT x */
+		    buf[i+1] = 254;
+		    NetLibSend(nlref, cursock, buf+i, 3, 0, NULL, 0, TIMEOUT, &ret);
+		    i+=2;
+		    continue;
+		} else if (i+2 < amt && (buf[i+1] == 253 || buf[i+1] == 254)) {
+		    /* IAC DO/DONT x : send IAC WONT x unless it was
+		       IAC DO NAWS, in which case send IAC WILL NAWS, and
+		       follow up with a IAC SB NAWS */
+		    if (buf[i+1] == 253 && buf[i+2] == 31) {
+			unsigned char naws[12] = { 255, 251, 31, 255, 250, 31,
+			    COLS >> 8, COLS & 0xff, ROWS >> 8, ROWS & 0xff,
+			    255, 240 };
+			do_naws = 1;
+			NetLibSend(nlref, cursock, naws, 12, 0, NULL, 0, TIMEOUT, &ret);
+		    } else if (buf[i+1] == 254 && buf[i+2] == 31) {
+			do_naws = 0;
+			buf[i+1] = 252;
+			NetLibSend(nlref, cursock, buf+i, 3, 0, NULL, 0, TIMEOUT, &ret);
+		    } else {
+			buf[i+1] = 252;
+			NetLibSend(nlref, cursock, buf+i, 3, 0, NULL, 0, TIMEOUT, &ret);
+		    }
+		    i+=2;
+		    continue;
+		}
+	    }
+	}
+
+	/* Remove NUL */
+	if (buf[i] == '\0') {
+	    continue;
+	}
+
+	buf[j++] = buf[i];
+    }
+    buf[j] = '\0';
+
+    push_str(buf);
+}
+
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+  short err;
+  EventType e;
+  ULong ret;
+  Word s;
+  int i;
+  ULong addr[4];
+  UInt addrlen;
+  unsigned char data[20];
+
+  if (cmd == sysAppLaunchCmdNormalLaunch) {
+
+    FrmGotoForm(MainForm);
+
+    do {
+      Long timeout = evtWaitForever;
+      /* Check if there's data available */
+      if (cursock >= 0) {
+	UInt ok;
+	fd_set reads;
+	FD_ZERO(&reads);
+	FD_SET(FD_EVENT,&reads);
+	FD_SET(cursock,&reads);
+	ok = NetLibSelect(nlref, cursock+1, &reads, NULL, NULL, 10, &ret);
+	if (FD_ISSET(cursock,&reads)) {
+	    get_data();
+	}
+	if (!FD_ISSET(FD_EVENT, &reads)) timeout=10;
+      }
+      EvtGetEvent(&e, timeout);
+      if (! SysHandleEvent (&e))
+	  if (! MenuHandleEvent (NULL, &e, &err))
+	      if (! ApplicationHandleEvent (&e))
+		  FrmDispatchEvent (&e);
+    } while (e.eType != appStopEvent);
+
+    FrmCloseAllForms();
+
+    if (cursock >= 0) {
+	NetLibSocketClose(nlref,cursock,TIMEOUT,&ret);
+    }
+    if (nlref) {
+	err = NetLibClose(nlref, 0);
+	ErrFatalDisplayIf(err, "NetLibClose failed");
+    }
+  } else {
+    return sysErrParamErr;
+  }
+  return 0;
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d323 1
+a323 1
+    FrmSetObjectPositon(frm,index,-((Int)HSCROLL)*((Int)curfont->fRectWidth),y);
+@
+
+
+1.1.1.1
+log
+@TCP-aware programs for the Pilot
+@
+text
+@@

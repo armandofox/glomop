@@ -1,0 +1,177 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.20.19.41.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From davidwu@@cs.berkeley.edu  Fri Nov 20 11:24:32 1998
+Return-Path: davidwu@@cs.berkeley.edu
+Received: from linus.cs.berkeley.edu (davidwu@@linus.CS.Berkeley.EDU [128.32.131.168]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id LAA17043 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 11:24:31 -0800
+Received: from localhost (davidwu@@localhost) by linus.cs.berkeley.edu (8.8.5/8.6.9) with SMTP id LAA05889 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 11:24:46 -0800
+X-Authentication-Warning: linus.cs.berkeley.edu: davidwu owned process doing -bs
+Date: Fri, 20 Nov 1998 11:24:45 -0800 (PST)
+From: David Wu <davidwu@@cs.berkeley.edu>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw3
+In-Reply-To: <Pine.BSF.3.96.981113003227.14018A-100000@@dilbert.cs.berkeley.edu>
+Message-ID: <Pine.LNX.3.95.981120112421.5872A-100000@@linus.cs.berkeley.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+
+David Wu (davidwu@@cs.berkeley.edu)
+CS 261 Homework #3
+Nov. 6, 1998
+
+(Question 1)
+
+1. Using tmpname is unsecure since the filename can be easily guessed. The
+problem here is that you can then ln -s /etc/passwd to the guessed name
+and use this to overwrite /etc/passwd, for example.
+
+2a. vi is run as root. I think you can execute shell commands from vi or even
+bring up a shell from vi. Terrible security hole here!
+
+2b. vi can be used to look at root owned, non-world readable files.
+
+2c. vi can be used to write root owned, non-world writeable files.
+
+3. Race condition in looksok(). You can actually put in a shell escapes right
+after the looksok() check if you can beat the program to rename().
+
+(Question 2)
+
+1. The security problem here is that the mobile code can make the packet
+route in an infinite loop.  For example the mobile code can specify that the
+interface to use is the same as the interface used to receive the packet for
+this router.  One way to solve this is to disallow selection of the incoming
+interface as the outgoing interface.  But, this is not enough (consider a
+cycle of routers).  So, it's probably best to use the IP time to live field
+and decrement until zero and kill the packet.
+
+2. The security problem here is that there may not be any authentication on
+the mobile code. You better have authentication on that mobile code 
+because otherwise, an adversary can fake some mobile code claiming to be 
+your flow and divert the flow to go through its routers, thereby 
+allowing her to snoop your date.
+
+3. The security problem here is that the mobile code can go in to infinite
+loops.  This is really bad since it can eat up precious cycles.  You can
+apply a timer (I think either exo-Kernel or SPIN does this) and have it
+timeout and kill the code to fix this... but that's probably not a very
+scalable solution.
+
+4. The security problem here is that if the mobile code is allowed to write to
+any of the fields, then all bets are off.  It can write to the TTL, therefore
+creating a packet that never dies.  If you add this to the ability to change
+the source and destination addresses, you can't prevent cycles from occurring.
+This is really, really bad.  I think to solve this you will need to restrict
+the ability to write packets to only the data portion of the packet and
+disallow writing to the IP headers.
+
+5. The security problem here is that a denial of service attack can occur by
+creating lots of flows, each consuming state memory in the router.  To solve
+this, you probably want some resource reservation protocol (admission control?)
+and combine that with authentication.
+
+6. The security problem here is just the same as 4 but magnified.  Now, it's
+possible to create new mobile code and ship that everywhere (like a virus/worm
+that infects a lot of routers?)  To fix this, you should probably just
+disallow this feature.  You could build the MTU fragmentation operation as
+a "system call" that is safe and allow the mobile code to call that (or better
+yet, put in the fragmentation code right in the special operation to send so
+it is transparent).  The idea is to actually avoid unchecked access to
+allocate new packets.
+
+7. With a JVM and utility libraries, now you need to trust quite a few
+components (are the utility library securely written?)  We've seen in class
+how Java can be exploited.  There's just too much functionality to get it
+secure right now (i.e. your trusted computing base is now very large).  
+Again, the best way to fix this is to just not do Java.
+
+(Question 3)
+
+1. One way is to have a HTML parser on the firewall that strips out APPLET
+and EMBED tags (to avoid Java and ActiveX as well as plug-ins), or you
+can detect Java applets (I think it has a magic header of 0xcafebabe), and
+similarily for Windows/DOS executables (looks for MZ in the beginning)and
+disallow them fetching them, you can disallow ftp (to avoid binaries), 
+and maybe even 
+disallow non-printable text (i.e. binary data) when doing a HTTP fetch 
+(to prevent HTTP download of binaries). 
+The problem is that this is a very expensive process, so
+it probably won't scale well. Also, there's just way too many ways executable
+code can be shipped. Stopping Java applets and ActiveX can probably be
+easily done by parsing out the HTML, but there's no guarantees (what if the
+HTML is part of an E-Mail message? You have to strip that out too). Detecting
+magic markers won't work all the time since the file could have come from
+a JAR or ZIP (i.e. compressed) archive.  Lastly, some web sites will not
+function without ActiveX or Java.
+
+2. The problem is that it is hard to detect what is good mobile code and
+what is not.  Furthermore, it could be annoying to the user if certain
+safe mobile code always gets blocked.  Here's my proposed solution to this
+that I think is somewhat novel: run the mobile code outside of the firewall.
+This is probably feasible.  Consider that most mobile code (I'm thinking about
+Java applets in particular) are usually implementating some visual code,
+it could be possible to build a "JVM server" that runs outside of the
+firewall.  Then, when the browser encounters mobile code, it ships the
+code to the "JVM server" and instructs the "JVM server" to run it.  The
+output (i.e., windows) are sent back to the user's browser and rendered (so
+this is something like X-windows, where the browser hosts the display, but
+the "JVM server" does the computation). Of course, this works for Java only.
+ActiveX gives you full reign to the OS (so it could do some trickery with
+COM interfaces to the browser, for example), so the chances of doing the
+same for ActiveX probably won't work.  As for any executable binaries, you
+can somewhat implement this by always running outside executables on a
+machine outside of the firewall (and with no important information).
+
+Another tactic is to have a list of "known" good mobile code and before running
+the code, check the list. This is pretty much like having code signed, except
+you are the signer that these codes are good.  Obviously, there's a scalability
+problem here because you can't possible check all of the mobile code out
+there.  You could just trust the certificates on the mobile code (but not
+all mobile code is signed and just because it is signed doesn't mean the
+mobile code is safe).
+
+3. When web sites won't work without ActiveX or Java, the blame should be
+placed on the end host web site. Web sites shouldn't be designed to force
+people to use ActiveX or Java.
+
+When good mobile code is blocked, it is the fault of the firewall. Firewalls
+tend to play on the safe side, so it may be overly paranoid.
+
+When mobile code is not signed, it is the fault of the end host (or rather
+the mobile code originator).  If it is not signed, there's even less security
+(as if there really were any to begin with if the code is only signed) to
+trust to run the code.
+
+If the mobile code can't be run on a "mobile code server" as proposed above 
+and gets denied access to execute, it is the fault of the firewall.  
+Again, the mobile code could have been good code, but because of the 
+difficulty in running on a "mobile code server", the firewall has to be
+conservative in disallowing other mobile code.
+
+The scalability issues can be blamed on the firewalls, to some extent.  Since
+the firewalls can handle the scale and has to deny (possible good code), it
+is the fault of the firewall that this problem occurs.
+
+
+@

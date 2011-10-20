@@ -1,0 +1,67 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+#
+
+DISTLIB = -L../lib -ldist -lclib -lmon
+LIBS = @LIBS@
+OTHERLIBS = @LIBTHREAD@
+
+################# end site variables #################
+
+ifdef DEBUG
+	OPTFLAGS = -DDEBUG -g
+endif
+
+INCLUDEPATH = @INCLUDEPATH@
+INCLUDES = $(patsubst %,-I%,$(INCLUDEPATH) .)
+LDFLAGS = @LDFLAGS@
+CPPFLAGS = @CPPFLAGS@ $(INCLUDES) @DEFS@ 
+CFLAGS = @CFLAGS@
+CFLAGS += $(OPTFLAGS)
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef DEBUGGING
+CFLAGS += -DDEBUGGING
+endif
+
+TARGETS = gif_munger
+
+all: $(TARGETS)
+
+install: ../sbin/gif_munger
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+MYOBJS = gif_munge.o giftopnm.o pnmscale.o ppmpad.o ppmquant.o ppmtogif.o
+MYLIBS = -lpnm -lppm -lpgm -lpbm -lm
+MYTYPE = image/gif
+
+gif_munger: $(MYOBJS) ../ptm/libdist.a
+	$(LD) $(LDFLAGS) -o $@ $^ $(DISTLIB) $(MYLIBS) $(LIBS) $(OTHERLIBS)
+
+test: $(MYOBJS) test_main.o 
+	$(CC) -DTEST $(LDFLAGS) -o $@ $^ $(MYLIBS) $(LIBS)
+
+../ptm/libdist.a:
+	cd ../ptm && $(MAKE) libdist.a
+
+%.o: src/%.c src/gif_munge.h src/ARGS.h ../config_tr.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -c -o $@
+
+tags:
+	find . -name \*.[ch] -print | etags -
+
+clean:
+	rm -f *.o *~ gif_munger
+
+distclean: clean
+	rm -f Makefile

@@ -1,0 +1,265 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.08;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	ByteStreamTest
+#
+#	Version:	1						July 23, 1995
+#
+#------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+#include "Modem.h"
+
+/* --------------------------------------------------------------------
+	Here's the empty main() routine that is needed for the linker.  Don't 
+	put any code here!
+*/
+
+main() {}
+
+/* Indexical definitions */
+#define ipTelenumber					MakePackageIndexical(25, 1)
+#define ipPhoneField					MakePackageIndexical(25, 2)
+#define ipModemConnectButton			MakePackageIndexical(25, 3)
+#define ipStatusAnnounce				MakePackageIndexical(25, 4)
+#define ipIncomingTextBox				MakePackageIndexical(25, 5)
+#define ipSendTextBox					MakePackageIndexical(25, 6)
+#define ipTesterStamp					MakePackageIndexical(25, 7)
+#define ipGetGraphicActor				MakePackageIndexical(25, 8)
+#define ipPhoneSendButton				MakePackageIndexical(25, 9)
+
+#define ipConnectingText				MakePackageIndexical(26, 1)
+#define ipConnectedText					MakePackageIndexical(26, 2)
+#define ipDisconnectingText				MakePackageIndexical(26, 3)
+#define ipDisconnectedText				MakePackageIndexical(26, 4)
+
+#undef CURRENTCLASS
+#pragma segment ByteStreamSegment
+
+
+#define CURRENTCLASS PhonEditButton
+
+Method void PhonEditButton_Action(ObjectID self)
+{
+   #pragma unused(self)
+   Dot position;
+   
+   /* Get position of text field so spout points to it */
+   Origin(ipPhoneField, &position);
+   
+   /* Edit phone number */
+   EditAttribute(iPhoneLabelEditSteps, ipTelenumber, ipPhoneField, &position);
+}
+ 
+#undef CURRENTCLASS
+#define CURRENTCLASS PhonSendButton
+
+Method void PhonSendButton_Action(ObjectID self)
+{
+    Str255  writeText;
+	Unsigned myAmountB;
+	
+	TextToString(ipSendTextBox, &writeText);
+	myAmountB = writeText[0];
+	Write(iModem, (Pointer) &(writeText[1]), myAmountB);
+	writeText[1] = '\r';
+	Write(iModem, (Pointer) &(writeText[1]), (Unsigned) 1);
+    DeleteText(ipIncomingTextBox);
+    TryAndGetText();
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS TestMakeGraphicButton
+
+
+
+Method void TestMakeGraphicButton_Action(ObjectID self)
+{
+   	ObjectID gActor;
+	
+	gActor = DirectID(ipGetGraphicActor);   /*** Test if actor already running or not... ***/
+	if (!HasObject(gActor)) {
+		gActor = NewTransient(GetGraphicActor_, nil);
+		SetIndexical(ipGetGraphicActor, gActor);
+	}
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS ModemConnectButton
+
+Private void UpdateStatusAndForceRedraw(ObjectID announcement, ulong amount)
+{
+    UpdateStatusIndicator(announcement, amount);
+	RedrawNow();
+}
+
+Private void TryAndGetText(void)
+{
+   Unsigned ichars = 0;
+   Str255   mychars, mapchars;
+   int j;
+ 
+   ichars = CountReadPending(iModem);
+   if (ichars > 254)
+	  ichars = 254;
+   if (ichars > 0)
+   {
+      ReadAll(iModem, (Pointer) &(mychars[0]), ichars);
+	  mychars[ichars] = '\0';
+	  Log( (mychars) );
+      
+	  /*for (j=0; j<ichars; j++)
+	     if ((mychars[j] < 32) || (mychars[j] > 127))
+		    mychars[j] = 32;*/
+	  
+      ReplaceTextWithLiteral(ipIncomingTextBox, mychars);
+      RedrawNow();
+   }
+}
+
+Method void ModemConnectButton_Action(ObjectID self)
+{
+   ObjectID modemException;
+   Str255	phoneNumber;
+   
+   LocalizedWithCallingCard(ipTelenumber, phoneNumber);
+   Announce(ipStatusAnnounce);
+   
+   if (MConnected() == true)
+   {  
+      /* We are connected, user wants us to disconnect. */
+	  SetName(self, "\pConnect");
+	  SetMConnected(false);
+	  
+	  ReplaceText(ipStatusAnnounce, ipDisconnectingText);
+	  UpdateStatusAndForceRedraw(ipStatusAnnounce, 75);
+	  
+	  Disconnect(iModem);
+	  Close(iModem);
+	  
+	  ReplaceText(ipStatusAnnounce, ipDisconnectedText);
+	  UpdateStatusAndForceRedraw(ipStatusAnnounce, 100);
+	  Retract(ipStatusAnnounce);
+   }
+   else
+   {
+      /* We are disconnected, user wants us to attempt to connect */
+	  if ((modemException = Try()) == nilObject)
+	  {
+	     ReplaceText(ipStatusAnnounce, ipConnectingText);
+	     UpdateStatusAndForceRedraw(ipStatusAnnounce, 25);
+
+	     OpenPort(iModem);
+		 if (ConnectToNumber(iModem, phoneNumber) == ZERROR)
+		    Fail(commHardwareError);
+         
+		 ReplaceText(ipStatusAnnounce, ipConnectedText);
+	     UpdateStatusAndForceRedraw(ipStatusAnnounce, 75);
+
+		 SetName(self, "\pDisconnect");
+	     SetMConnected(true);
+		 
+		 TryAndGetText();   /*** TRULY A TEMPORARY FUNCTION ***/
+		 
+		 Retract(ipStatusAnnounce);
+	     Commit();  /* Success! */
+	  }
+	  else
+	  {  
+	     /* attempted connect, failure in modemException */
+		 ReplaceText(ipStatusAnnounce, ipDisconnectingText);
+	     UpdateStatusAndForceRedraw(ipStatusAnnounce, 75);
+
+         Disconnect(iModem);
+		 Close(iModem);
+		 
+		 ReplaceText(ipStatusAnnounce, ipDisconnectedText);
+	     UpdateStatusAndForceRedraw(ipStatusAnnounce, 100);
+	     Retract(ipStatusAnnounce);
+		 ReplaceText(ipStatusAnnounce, ipConnectingText);
+		 
+		 Fail(modemException);
+	  }
+
+   }
+}
+
+Method void ModemConnectButton_Install(ObjectID self)
+{   
+   /* Assume modem is not connected when "Install" is called */
+   SetFieldOf(ClassGlobals(), ModemConnectButtonGlobals_mConnected, false);
+   SetName(ipModemConnectButton, "\pConnect");
+   
+   /* Clear all text inside the terminal window */
+   DeleteText(ipIncomingTextBox);
+}
+
+IntrinsicMethod Boolean ModemConnectButton_MConnected(void)
+{
+   return FieldOf(ClassGlobals(), ModemConnectButtonGlobals_mConnected);
+}
+
+IntrinsicMethod Boolean ModemConnectButton_SetMConnected(Boolean newValue)
+{
+   SetFieldOf(ClassGlobals(), ModemConnectButtonGlobals_mConnected, newValue);
+   return FieldOf(ClassGlobals(), ModemConnectButtonGlobals_mConnected);
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS GetGraphicActor
+
+
+IntrinsicMethod void
+GetGraphicActor_GetSoundFromStream(ObjectID theStream)
+{
+
+}
+
+Method void
+GetGraphicActor_Main(ObjectID self, Parameters *parameters)
+{
+    GetSoundFromStream(iModem);
+}
+
+#undef CURRENTCLASS@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

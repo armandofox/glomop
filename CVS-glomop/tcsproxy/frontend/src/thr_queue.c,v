@@ -1,0 +1,1267 @@
+head	1.29;
+access;
+symbols
+	Yatin-final:1.29
+	Yatin:1.29.0.2
+	pre-yatin-merge:1.29
+	transend-beta2:1.28
+	fox-dev:1.28.4.2
+	frontend-ng:1.26
+	transend-beta-latest:1.26
+	Aggregators:1.25
+	NoAggregators:1.25
+	iang:1.24.0.2
+	alt-redispatch:1.23
+	transend-beta:1.22.0.2
+	SOSP:1.20
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.29
+date	97.08.30.21.34.28;	author fox;	state Exp;
+branches;
+next	1.28;
+
+1.28
+date	97.07.24.18.50.08;	author fox;	state Exp;
+branches
+	1.28.4.1;
+next	1.27;
+
+1.27
+date	97.07.15.02.43.08;	author fox;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	97.06.04.01.16.44;	author fox;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.05.01.00.54.59;	author yatin;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.04.28.19.03.49;	author fox;	state Exp;
+branches
+	1.24.2.1;
+next	1.23;
+
+1.23
+date	97.04.28.03.14.23;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.04.09.01.31.35;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.04.07.00.26.25;	author yatin;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.03.09.09.08.12;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.03.06.07.18.16;	author yatin;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.03.04.04.31.25;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.03.23.36.47;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.03.22.38.51;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.27.03.10.55;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.16.05.52.45;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.10.20.02.15;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.05.06.23.54;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.05.00.33.00;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.04.05.37.24;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.29.04.13.23;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.28.23.49.29;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.28.03.57.44;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.24.02.17.45;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.06.05.43.29;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.05.01.12.27;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.01.50.46;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.28.02.06.02;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.25.20;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.25.20;	author fox;	state Exp;
+branches;
+next	;
+
+1.24.2.1
+date	97.05.06.23.49.38;	author iang;	state Exp;
+branches;
+next	;
+
+1.28.4.1
+date	97.08.11.04.12.59;	author fox;	state Exp;
+branches;
+next	1.28.4.2;
+
+1.28.4.2
+date	97.08.15.03.43.06;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.29
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  thr_queue.c
+ *  Cache of running threads that are spin-blocked waiting on a
+ *  condition.  When we need a new thread to do some work, we select one
+ *  by signaling its condition variable.
+ */
+
+#include "config_tr.h"
+#include "thr_cntl.h"
+#include "debug.h"
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <time.h>
+
+static pthread_t        *threadids; /* array of thread id's */
+static pthread_t        threadid_mon;
+static task_t *         *task_queue;
+pthread_key_t           index_key;
+
+/*
+ *  Visible from other files
+ */
+int                     tasks_done;
+Monitor                 *gMon = NULL;
+Inst                    *thread_inst = NULL;
+int                     nthreads;
+
+#define DEFAULT_CONDATTR (const pthread_condattr_t *)NULL
+#define DEFAULT_MTXATTR (const pthread_mutexattr_t *)NULL
+
+#define QUEUE_EMPTY() (qhead == qtail)
+#define QUEUE_FULL()  ((qtail+1) % nthreads == qhead)
+
+/*
+ *  Queue head and queue tail protected by mutex
+ */
+static pthread_mutex_t   mtx_queue;
+static pthread_cond_t    cond_queue;
+static int               qhead, qtail;
+
+/*
+ *  private forward declarations
+ */
+
+static void *   thread_go_proc(void *thrindex_cast_to_void);
+static void     thread_cleanup(void *dummy_arg);
+static void     thread_cleanup_sighnd(int sig);
+static task_t * get_task(int thrindex);
+/*
+ *  make_threads
+ *  Args: none
+ *  Returns: 0 success, otherwise error code from errno.h
+ *  Description:
+ *    Create a condition variable, a bunch of threads, a task queue
+ *  (circular FIFO) protected by a mutex.
+ *  The dispatcher will add a task to the queue under mutex and signal
+ *  the queue's condition variable.  A thread will wake up and remove work
+ *  from the queue, and signal a different condition variable to put its
+ *  result on the result queue.
+ */
+
+int
+make_threads(int nth, int report_interval)
+{
+  int i;
+  pthread_attr_t default_thread_attr;
+  extern void *thread_mon_proc(void *arg);
+  /*pthread_t max_index=0;
+    int *tmp_index_array;*/
+
+  tasks_done = nth;
+  /*
+   *  Useful log info
+   */
+
+  nthreads = nth;
+#ifdef PTHREAD_THREADS_MAX
+  if (nthreads > PTHREAD_THREADS_MAX) {
+    MON_SEND_3(MON_ERR,"Warning: num threads pinned to %d from %d\n",
+               PTHREAD_THREADS_MAX, nth);
+    nthreads = PTHREAD_THREADS_MAX;
+  }
+#endif /* ifdef PTHREAD_THREADS_MAX */
+
+  threadids = SAFEMALLOC(nthreads, pthread_t);
+  task_queue = SAFEMALLOC(nthreads, task_t *);
+  thread_inst = SAFEMALLOC(nthreads, Inst);
+  inst_init();                  /* initialize the instrumentation buffers.
+                                   Perhaps sadly, both thread_inst and nthreads
+                                   are declared extern there. */
+            
+
+  /*
+   *  create the queue.
+   *  Queue invariants:
+   *  - qhead is index of slot containing next task to be done
+   *  - qtail is index of slot beyond which there are no more tasks
+   *  - if qhead==qtail, there are no tasks to be done.
+   *  - if (qhead+1)%qsize==qtail, the queue is full; a task must be
+   *  removed before one can be added.
+   */
+
+  qhead = qtail = 0;
+
+  THR_OP("attr init", pthread_attr_init(&default_thread_attr));
+  THR_OP("attr set",
+         pthread_attr_setscope(&default_thread_attr, PTHREAD_SCOPE_SYSTEM));
+  THR_OP("condinit queue", pthread_cond_init(&cond_queue, DEFAULT_CONDATTR));
+  THR_OP("mtxinit queue", pthread_mutex_init(&mtx_queue, DEFAULT_MTXATTR));
+  THR_OP("index key", pthread_key_create(&index_key, NULL));
+
+  for (i=0; i < nthreads; i++) {
+    THR_OP("Thread create",
+           pthread_create(&threadids[i], &default_thread_attr,
+           thread_go_proc,
+           (void *)i));
+    /*if (threadids[i] > max_index) max_index = threadids[i];*/
+  }
+  /*tmp_index_array = SAFEMALLOC(((unsigned)max_index)+1, int);
+  for (i=0; i < nthreads; i++) {
+    tmp_index_array[(unsigned)threadids[i]] = i;
+  }
+  index_array__ = tmp_index_array;*/
+
+  proxy_debug_3(DBG_THREAD, "Created %d threads", (void *)nthreads);
+  /*
+   *  Create the monitoring thread
+   */
+
+  if (report_interval) {
+    THR_OP("set detached for monitor thread",
+           pthread_attr_setdetachstate(&default_thread_attr,
+                                       PTHREAD_CREATE_DETACHED));
+    THR_OP("create monitor thread",
+           pthread_create(&threadid_mon, &default_thread_attr,
+                          thread_mon_proc, (void *)report_interval));
+    proxy_errlog_2("Statistics reporting every %d seconds", report_interval);
+  }
+  return 0;
+}
+
+/*
+ *  thread_go_proc is the entry point for all threads.  A thread will
+ *  enter this routine, spin on a condition variable which is signaled
+ *  when there's work for the thread to do, wake up and do its work,
+ *  then reblock on the condition variable.  The arg is the index (0 to
+ *  nthreads-1) of this worker thread.
+ */
+
+static void *
+thread_go_proc(void *arg)
+{
+  int thrindex = (int)arg;
+  task_t *curr_task;
+
+  /* initialize the thread id for this thread */
+  pthread_setspecific(index_key, (void*)thrindex);
+					 
+#ifdef PTHREAD_CANCEL_ENABLE
+  THR_OP("make cancellable",
+         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL));
+#endif
+#ifdef PTHREAD_CANCEL_ASYNCHRONOUS
+  THR_OP("async cancellable",
+         pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL));
+#endif
+
+  (void)signal(SIGPIPE, SIG_IGN);
+  (void)signal(SIGTERM, thread_cleanup_sighnd);
+  while (1) {
+    
+    /* wait for a task to become available */
+    
+    INST_set_thread_state(thrindex, THR_IDLE);
+    curr_task = get_task(thrindex);
+
+    INST_set_thread_state(thrindex, THR_ACCEPTED);
+    proxy_debug_4(DBG_THREAD, "Thread %d working on task %lu...",
+                  thrindex, TASK_ID(curr_task));
+
+    /* to work on a task, call its go proc. */
+
+    pthread_cleanup_push(thread_cleanup, TASK_DATA(curr_task));
+    CALL_TASK_GO_PROC(curr_task);
+    pthread_cleanup_pop(0);
+
+    /*
+     *  Done working, requeue ourselves after freeing task structure
+     */
+
+#if 0
+    if ((UINT32)(curr_task->task_result_ptr)) {
+      /* more work to be done....requeue for next stage */
+      dispatch(curr_task);
+    } else {
+      release_task(curr_task);
+      /*    curr_task->task_result_ptr = (void *)(curr_task->task_id); */
+    }
+#else
+    release_task(curr_task);
+#endif
+    proxy_debug_3(DBG_THREAD, "Thread %d rejoining pool", thrindex);
+  }
+  /* should never get here */
+  /*NOTREACHED*/
+  return ((void *)0);
+}
+
+/*
+ *  thread_cleanup
+ *
+ *  Called when the proxy is killed or shutdown: each thread that is
+ *  working will try to shutdown its socket in an orderly way.  Note
+ *  that some of the shutdown's may be spurious, but who cares, we are
+ *  exiting anyway.  The arg is a socket filedescriptor number.
+ */
+
+void
+thread_cleanup_sighnd(int sig)
+{
+  extern void proxy_shutdown(int sig);
+  thread_cleanup((void *)0);
+  proxy_shutdown(sig);
+}
+
+void
+thread_cleanup(void *arg)
+{
+  if (arg) {
+    shutdown((int)arg,2);
+    close((int)arg);
+  }
+}
+
+/*
+ *  get_task
+ *  Under mutex, check the queue for work; if no work, sleep and wait
+ *  for dispatcher to signal condition variable indicating that there is
+ *  new work.
+ *  When work is found, move the qhead under mutex to dequeue the task,
+ *  and return the pointer to the new task structure.
+ */
+
+static task_t *
+get_task(int thrindex)
+{
+  task_t *task = NULL;
+
+  THR_OP("lock to check queue", pthread_mutex_lock(&mtx_queue));
+  tasks_done--;
+  while (QUEUE_EMPTY()) {
+    /* no work to do */
+    proxy_debug_3(DBG_THREAD, "Thr %d Waiting for work", thrindex);
+    THR_OP("waiting for work", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_EMPTY());
+  tasks_done++;
+  task = task_queue[qhead++];
+  qhead %= nthreads;
+  /*
+   *  Signal condition variable in case other threads want to grab it,
+   *  or in case dispatcher is waiting for a queue slot.
+   */
+  THR_OP("signal queue", pthread_cond_signal(&cond_queue));
+  THR_OP("unlock queue", pthread_mutex_unlock(&mtx_queue));
+  assert(task != (task_t *)NULL);
+  task->thrindex = thrindex;
+  return(task);
+}
+
+/*
+ *  dispatch
+ *  Args: task ID
+ *  Returns: 0 success, otherwise errno
+ *  Thread-safe: yes
+ *  Description:
+ *    Put a new task in the work queue, and signal an available thread
+ *    to pick up the task.  
+ *  If no threads are available, wait for one to become available (it
+ *  will signal the condition variable protected by the same mutex that
+ *  protects the threads-available counter).
+ *    When the thread completes or exits, it will free the task structure.
+ */
+
+int
+dispatch(task_t *task_state)
+{
+  /*
+   *  Should periodically check the value of did_stall to determine how
+   *  many consecutive thread-dispatches had to wait for a thread to be
+   *  available; when it exceeds some threshold, spawn a new thread.
+   */
+
+  THR_OP("dispatcher lock queue", pthread_mutex_lock(&mtx_queue));
+  while (QUEUE_FULL()) {
+    /* no queue slots available! wait for a thread to complete */
+    proxy_debug_2(DBG_THREAD, "dispatcher waiting for queueslot");
+    THR_OP("dispatcher wait for q", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_FULL());
+  assert(task_state != (task_t *)NULL);
+  /*
+   *  put the task in the queue and signal any idling threads
+   */
+
+  task_queue[qtail++] = task_state;
+  qtail %= nthreads;
+  
+  /* signal a thread - somebody will wake up to do the work. */
+  proxy_debug_3(DBG_THREAD, "task %lu queued, signaling a thread...\n",
+                task_state->task_id);
+  THR_OP("signal wakeup", pthread_cond_signal(&cond_queue));
+  THR_OP("Unlock queue", pthread_mutex_unlock(&mtx_queue));
+  return (0);
+}
+
+@
+
+
+1.28
+log
+@debugging/monitoring function interface in frontend cleaned up.  change to xs/Makefile.PL.in to avoid spurious double initialization of stuff in libdist.a when clib.so was dynamically loaded.
+@
+text
+@d8 1
+a8 1
+#include "proxy.h"
+d176 1
+a176 1
+    inst_set_thread_state(thrindex, THR_IDLE);
+d179 1
+a179 1
+    inst_set_thread_state(thrindex, THR_ACCEPTED);
+d223 1
+@
+
+
+1.28.4.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d8 1
+a8 1
+#include "config_tr.h"
+d176 1
+a176 1
+    INST_set_thread_state(thrindex, THR_IDLE);
+d179 1
+a179 1
+    INST_set_thread_state(thrindex, THR_ACCEPTED);
+@
+
+
+1.28.4.2
+log
+@*** empty log message ***
+@
+text
+@a222 1
+  extern void proxy_shutdown(int sig);
+@
+
+
+1.27
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@a76 1
+  proxy_errlog_2("PID of main() is %lu", (unsigned long)getpid());
+d81 2
+a82 2
+    proxy_errlog_3("Warning: num threads pinned to %d from %d\n",
+                   PTHREAD_THREADS_MAX, nth);
+@
+
+
+1.26
+log
+@merged changes from head of transend-beta branch
+@
+text
+@d172 1
+a172 1
+  (void)signal(SIGHUP, thread_cleanup_sighnd);
+@
+
+
+1.25
+log
+@Use pthread_get/setspecific to get at the thrindex for the thread within
+the PTM stub
+@
+text
+@a29 2
+static int _res;                /* for reporting errors;used by THR_OP macro */
+
+@
+
+
+1.24
+log
+@distiller chaining is alive sort of
+@
+text
+@d20 1
+a20 1
+int *index_array__=NULL;
+d72 2
+a73 2
+  pthread_t max_index=0;
+  int *tmp_index_array;
+d115 1
+d122 1
+a122 1
+    if (threadids[i] > max_index) max_index = threadids[i];
+d124 1
+a124 1
+  tmp_index_array = SAFEMALLOC(((unsigned)max_index)+1, int);
+d128 1
+a128 1
+  index_array__ = tmp_index_array;
+d161 3
+@
+
+
+1.24.2.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@d20 1
+a20 1
+pthread_key_t           index_key;
+d72 2
+a73 2
+  /*pthread_t max_index=0;
+    int *tmp_index_array;*/
+a114 1
+  THR_OP("index key", pthread_key_create(&index_key, NULL));
+d121 1
+a121 1
+    /*if (threadids[i] > max_index) max_index = threadids[i];*/
+d123 1
+a123 1
+  /*tmp_index_array = SAFEMALLOC(((unsigned)max_index)+1, int);
+d127 1
+a127 1
+  index_array__ = tmp_index_array;*/
+a159 3
+  /* initialize the thread id for this thread */
+  pthread_setspecific(index_key, (void*)thrindex);
+                                       
+@
+
+
+1.23
+log
+@alternate redispatch mechanism: requeue to new thread
+@
+text
+@d192 1
+a192 1
+#if 1
+@
+
+
+1.22
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d192 9
+d202 1
+a202 2
+    /*    curr_task->task_result_ptr = (void *)(curr_task->task_id); */
+
+@
+
+
+1.21
+log
+@Removed debugging information from the PTM code.
+Removed the setspecific/getspecific calls from frontend code
+@
+text
+@d9 2
+@
+
+
+1.20
+log
+@fixed memory leak due to strtok_finish not being called, and signal handling so frontend now dies gracefully
+@
+text
+@d18 1
+a18 1
+pthread_key_t           thread_index_key__;
+d70 2
+a113 1
+  pthread_key_create(&thread_index_key__, NULL);
+d119 1
+d121 5
+a157 1
+  pthread_setspecific(thread_index_key__, arg);
+@
+
+
+1.19
+log
+@Modified the frontend and libptmstub to provide a more detailed "blinking
+light" view of the stuff being done inside the Distill() call
+@
+text
+@a162 1
+
+d207 1
+@
+
+
+1.18
+log
+@got Makefile dependencies in order
+@
+text
+@d18 1
+a18 1
+
+d112 1
+d151 1
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@d8 1
+a8 1
+#include <proxy.h>
+@
+
+
+1.16
+log
+@added stuff to do timestamp monitoring at various interesting points in
+a worker thread's lifetime.  also split out monitoring stuff into its
+own file thr_mon.c.
+@
+text
+@d89 4
+@
+
+
+1.15
+log
+@added frontend reqs/sec meter, retries for distConnectionBroken
+@
+text
+@d18 1
+a18 2
+static int              nthreads;
+static thread_state_t   *thread_state;
+d25 2
+a47 1
+static void *   thread_mon_proc(void *report_interval);
+d69 1
+d88 1
+a88 1
+  thread_state = SAFEMALLOC(nthreads, thread_state_t);
+d162 1
+a162 1
+    set_thread_state(thrindex, THR_IDLE);
+d165 1
+a165 1
+    set_thread_state(thrindex, THR_ACCEPTED);
+a294 116
+/*
+ *  Thread queue monitoring function.  Periodically wakes up and reports
+ *  some thread queue statistics via the reporting interface.
+ *
+ *  ARGS:  number specifying how many seconds between reports.  If
+ *  negative, specifies (negative) reciprocal of this value, i.e. -4
+ *  means 4 reports per second, but +2 means a report every 2 seconds.
+ *  RETURNS: never
+ *  REENTRANT: no (monitors global variables related to thread queue)
+ */
+
+#define NUM_ASYMPTOTE 5
+
+static void *
+thread_mon_proc(void *arg)
+{
+  int report_interval = (int) arg;
+
+  extern Monitor *gMon;
+
+  /* for thread status reporting */
+  char *msg=NULL;
+  char args[50];
+  register int i, len;
+  int asymptote=0, j, max_msg_len=0;
+  unsigned char changed;
+  unsigned char report_this_time = 0;
+  thread_state_t *old_thread_state;
+
+  /* for computing EWMA of requests/sec */
+  int reqs_sec, old_reqs_sec;
+  extern UINT32 nreqs;
+  UINT32 old_nreqs;
+  double w = 0.9;
+
+  reqs_sec = old_reqs_sec = 0;
+  old_nreqs = 0;
+
+  old_thread_state = SAFEMALLOC(nthreads, thread_state_t);
+  for (i=0; i<nthreads; i++)
+    old_thread_state[i] = thread_state[i];
+  max_msg_len = (nthreads + NUM_ASYMPTOTE)*8;
+  msg = SAFEMALLOC(max_msg_len + 1, char);
+
+  sprintf(args, "Array %d %d", nthreads, THREAD_STATE_MAX);
+  while (1) {
+    if (report_interval >= 1)
+      sleep(report_interval);
+    else
+      usleep(-1000000/report_interval);
+
+    /*
+     *  compute Exponentially Weighted Moving Average (EWMA) of requests
+     *  per second using:
+     *  Average(t) = w * Measurement(t) + (1-w) * Average(t-1)
+     *
+     *  We use delta_t = every other report, w = 0.9.
+     */
+
+    if (report_this_time) {
+      int reqs_sec_this_period;
+
+      if (report_interval >= 1)
+        reqs_sec_this_period = (nreqs - old_nreqs) / (report_interval<<1);
+      else
+        reqs_sec_this_period = ((nreqs - old_nreqs) * -(report_interval>>1));
+
+      reqs_sec = (w * reqs_sec_this_period) + ((1-w) * old_reqs_sec) + 0.5;
+      /* note, add 0.5 to round rather than truncate.  */
+      old_nreqs = nreqs;
+      old_reqs_sec = reqs_sec;
+
+      MON_STATS("Requests/sec EWMA", reqs_sec);
+    }
+    report_this_time ^= 1;      /* toggle this flag */
+    /*
+     *  Generate thread state "deltas" vector
+     */
+    len =  0;
+    changed = 0;
+    for (i=0; i<nthreads; i++) {
+      if (thread_state[i] != old_thread_state[i]) {
+        len += sprintf(msg+len, "%d=%d,", i, thread_state[i]);
+        old_thread_state[i] = thread_state[i];
+        changed = 1;
+      }
+    }
+
+    /* 
+     * send at least the asymptote information, even if no threads have 
+     * changed state
+     */
+    for (i=0; i<NUM_ASYMPTOTE; i++) {
+      j = (asymptote + i) % nthreads;
+      len += sprintf(msg+len, "%d=%d,", j, thread_state[j]);
+    }
+    asymptote = (asymptote+NUM_ASYMPTOTE) % nthreads;
+    
+    msg[len-1] = 0;
+    MonitorClient_Send(gMon, "Thread State", msg, args);
+  }
+}
+
+/*
+ *  Set the run state of a thread.  Could optionally insert
+ *  instrumentation here to record each state change, but for now we
+ *  simply allow the thread_mon_proc function to periodically read and
+ *  dump out the entire state array.
+ */
+
+void
+set_thread_state(int thrindex, thread_state_t state)
+{
+  assert(thrindex >= 0 && thrindex < nthreads);
+  thread_state[thrindex] = state;
+}
+@
+
+
+1.14
+log
+@Modified thread_mon_proc to use a dynamically allocated msg buffer
+and to do the "asymptote" thing correctly
+@
+text
+@d24 1
+a24 1
+int                     tasks_done = 0;
+d298 3
+a300 1
+ *  ARGS:  number specifying how many seconds between reports
+d310 5
+a314 1
+  int diff, report_interval = (int) arg;
+a316 1
+  extern Monitor *gMon;
+d322 10
+a331 1
+  
+d340 1
+a340 1
+    if (report_interval < 1)
+d343 9
+a351 1
+      usleep(500000);
+a352 1
+    /* "coarse" status info is reported less frequently than thread state */
+d354 13
+a366 3
+      diff = (nthreads + qtail-qhead) % nthreads;
+      MON_LOAD(msg,"Queue Length", diff);
+      MON_STATS(msg,"Requests Served", tasks_done);
+@
+
+
+1.13
+log
+@Fixed up thr_queue.c so that it has asymptotic convergence on
+thread status reporting..
+@
+text
+@d309 1
+a309 1
+  char msg[500];
+d312 2
+a313 2
+  register int i,len;
+  int    asymptote=0, j;
+d321 2
+a349 6
+    if (changed) {
+      for (i=0; i<NUM_ASYMPTOTE; i++) {
+	j = (asymptote + i) % nthreads;
+	len += sprintf(msg+len, "%d=%d,", i, thread_state[j]);
+      }
+      asymptote = asymptote % nthreads;
+d351 7
+a357 2
+      msg[len-1] = 0;
+      MonitorClient_Send(gMon, "Thread State", msg, args);
+d359 4
+@
+
+
+1.12
+log
+@reporting for "gross stats" now only happens half as often as for thread
+state; ideally, the two parameters should be separate
+@
+text
+@d303 2
+d313 1
+d349 6
+@
+
+
+1.11
+log
+@added thread-monitoring stuff to frontend, fixed thread-monitoring procs in GUI, added proxy autoconfig file target to toplevel Makefile
+@
+text
+@d13 1
+d310 3
+a312 2
+  register int i,len,skip;
+  int changed;
+d314 1
+a314 1
+
+d321 12
+a332 9
+    /*    sleep(report_interval); */
+    usleep(500000);
+    diff = (nthreads + qtail-qhead) % nthreads;
+    proxy_errlog_2("(tok) num_tasks %d", tasks_done);
+    MON_STATS(msg,"Tasks Done", tasks_done);
+    MON_LOAD(msg,"Queue Length", diff);
+    proxy_errlog_4("(tok) number of entries in queue: %d (%d free of %d)", diff,
+		   nthreads-diff, nthreads);
+
+d336 1
+a336 2
+    len = 0;
+    skip = 0;
+@
+
+
+1.10
+log
+@thread state logging added to frontend
+@
+text
+@d306 2
+a307 1
+  char msg[50];
+d309 9
+a317 1
+  
+d319 2
+a320 1
+    sleep(report_interval);
+d324 1
+d327 18
+a344 6
+    MON_ARRAY(msg,"Thread State", nthreads, thread_state);
+#if 1
+    MON_LOAD(msg,"Queue Length", diff);
+#else
+    MON_STATS(msg,"Queue Length", diff);
+#endif
+@
+
+
+1.9
+log
+@changed distiller interface to use struct DistillerInput/DistillerOutput in frontend,gif_munge,html_munge
+@
+text
+@d14 1
+a14 1
+static pthread_t        *threadids;
+d18 5
+d86 1
+d159 2
+a160 1
+
+d163 1
+d243 1
+d316 1
+d323 14
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d19 1
+a19 1
+Monitor                 *gMon;
+@
+
+
+1.7
+log
+@frontend now uses monitor for logging
+@
+text
+@d19 1
+d43 1
+d147 3
+d189 6
+d197 4
+a200 2
+  shutdown((int)arg,2);
+  close((int)arg);
+a202 1
+
+d302 1
+a302 4
+    diff = qtail-qhead;
+    if (diff < 0)
+      diff += nthreads;
+
+d304 1
+a304 3
+    sprintf(msg, "%d", tasks_done);
+    MON_STATS("Tasks Done", msg);
+
+d307 2
+a308 3
+#if 0
+    sprintf(msg, "diff=%d,red", diff);
+    MonitorClient_Send(gStatsMonitor, "Queue Length", msg, "TimeChart");
+d310 1
+a310 2
+    sprintf(msg, "%d", diff);
+    MON_STATS("Queue Length", msg);
+@
+
+
+1.6
+log
+@Added #ifdef wrappers around a couple of pthread operations that aren't
+defined on linux pthreads.  (sigh)
+@
+text
+@d285 3
+a287 1
+
+d293 1
+a293 1
+    
+d295 3
+d300 7
+@
+
+
+1.5
+log
+@Added doc/distillers.txt, which explains how to write your own
+distiller.  Gifmunger should now do the right thing even on extremely
+large images.  Default args for gifmunger are more sane (16 colors,
+scale 0.5 per axis), but output still looks sucky - not sure why the
+quantize phase picks such crappy colors.  "test_http" program has been
+officially renamed "frontend".  Fixed the "run" targets in toplevel
+Makefile.  Added line to configure.in to create a Makefile from
+Makefile.in for gui.
+@
+text
+@d136 1
+d139 2
+d143 1
+@
+
+
+1.4
+log
+@Fixed some performance bugs in the frontend, took out some tracing variable
+code, and added priority change for accept thread in test_harvest.c.
+@
+text
+@d10 1
+d41 1
+d136 5
+d148 1
+a148 1
+                  thrindex, curr_task->task_id);
+d152 1
+d154 1
+d166 1
+d169 17
+@
+
+
+1.3
+log
+@configure script now generates include path automatically
+@
+text
+@d17 1
+d60 1
+d175 1
+d182 1
+d253 12
+@
+
+
+1.2
+log
+@HTTPd thread can accept socket connections, queue them to be handled,
+and have them successfully picked up, done and deallocated.
+@
+text
+@d10 1
+d14 1
+d38 1
+d54 1
+a54 1
+make_threads(int nth)
+d59 5
+d67 1
+a67 1
+    proxy_errlog_4("Warning: num threads pinned to %d from %d\n",
+d102 13
+d175 1
+a175 1
+    proxy_debug_3(DBG_THREAD, "Thr %d Waiting for work\n", thrindex);
+d237 13
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d12 3
+a14 2
+static pthread_t        threadids[MAX_THREADS];
+static task_t *         task_queue[MAX_THREADS];
+d22 1
+a22 1
+#define QUEUE_FULL()  ((qtail+1) % MAX_THREADS == qhead)
+d51 1
+a51 1
+make_threads(void)
+d56 12
+a67 1
+  
+d86 1
+a86 1
+  for (i=0; i < MAX_THREADS; i++) {
+d93 1
+a93 1
+  proxy_debug_3(DBG_THREAD, "Created %d threads", (void *)MAX_THREADS);
+d99 1
+a99 1
+ *  enter this routine, block on a condition variable which is signaled
+d102 1
+a102 1
+ *  MAX_THREADS-1) of this worker thread.
+d110 1
+a110 1
+  
+d119 4
+a122 5
+    {
+      int i;
+      for (i = 0; i < 15e6; i++)
+        ;
+    }
+d125 1
+a125 1
+     *  Done working, requeue ourselves
+d128 2
+a129 1
+    curr_task->task_result_ptr = (void *)(curr_task->task_id);
+d159 1
+a159 1
+  qhead %= MAX_THREADS;
+d174 1
+a174 1
+ *  Thread-safe: no
+d176 2
+a177 1
+ *    There is some work to do, so pick an available thread to do it.
+d181 1
+a181 1
+ *
+d206 1
+a206 1
+  qtail %= MAX_THREADS;
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

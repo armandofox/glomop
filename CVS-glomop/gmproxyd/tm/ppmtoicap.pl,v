@@ -1,0 +1,482 @@
+head	1.3;
+access;
+symbols
+	current:1.3;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	96.08.23.19.37.33;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.07.26.20.33.10;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.07.26.20.32.21;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  ppmtoicap: converts images from PPM to ICAP objects, but with
+#             the constraint that it follows the 4 colour
+#             restriction of the GI set-top-box.
+# $Id: ppmtoicap.pl,v 1.9 96/08/22 18:44:25 glomop Exp $
+
+package doc::ppmtoicap;
+
+#  Hacks: name of 256 entry Wink colormap
+$Cmap256 = &util::configfile("cmap256.ppm");
+$Cmap16 = &util::configfile("cmap16.ppm");
+
+@@parsedcmap256 = &parse_colormap($Cmap256);
+@@parsedcmap16 = &parse_colormap($Cmap16);
+@@parsedcmap = @@parsedcmap16;
+
+# Euclidean distance calculation
+sub euclid_dist {
+    my($r1, $g1, $b1, $r2, $g2, $b2) = @@_;
+    my $dist;
+
+    $dist = ($r1-$r2)*($r1-$r2) + ($g1-$g2)*($g1-$g2) + ($b1-$b2)*($b1-$b2);
+    return $dist;
+}
+
+sub parse_colormap {
+    my($ppmfname) = @@_;
+    my @@triplets;
+    my $nextline;
+
+    # suck in colormap file
+    open(CMAP, "$ppmfname") or die "cannot open colormap $ppmfname ($!)";
+    local($/) = undef;
+    $nextline = <CMAP> or die "cannot read in colormap ($!)";
+    close(CMAP);
+
+    # strip off any comments in the colormap
+    $nextline =~ s/^(\s*)\#(.*)$//mg;
+
+    # throw away the 4 useless header tokens
+    @@triplets = split(/\s+/,$nextline);
+    splice(@@triplets,0,4);
+
+    return @@triplets;
+}
+
+sub parse_histogram {
+    my($histfilename) = @@_;
+    my $nextline;
+    my @@hist;
+
+    # suck in histogram file
+    open(HISTFILE, "$histfilename") or die "cannot open histfile $hist ($!)";
+    local($/) = undef;
+    local($,) = " ";
+    $nextline = <HISTFILE> or die "cannot read in histfile ($!)";
+    close(HISTFILE);
+
+    # split up the histogram into easily parsable tokens
+    @@hist = split(/\s+/,$nextline);
+
+    # throw away "P3", "# color map", "x y".
+    splice(@@hist,0,6);
+
+    # capture the colormap depth
+    my $depth = shift @@hist;
+    &util::debug("icapimage", "histogram color depth: $depth\n");
+
+    # throw away titles spit out byu ppmhist
+    splice(@@hist,0,11);
+
+    # throw away lum and count components of histogram
+    my $numels = scalar(@@hist);
+    if ($numels == 0) {
+        return @@hist;
+    }
+    my $i;
+    for ($i=0; $i<$numels/6; $i++) {     # 6 as 6 fields per line now
+        splice(@@hist, 3*$i+3, 3);
+    }
+
+    # now scale all components so that they are in the range 0-255
+    for ($i=0; $i<$numels/6; $i++) {
+	$hist[$i] = int($hist[$i] * (255/$depth));
+    }
+            
+    return @@hist;
+}
+
+sub force_one_to_black {
+    my @@rgbin = @@_;
+    my @@rgbout;
+    my ($numels, $i, $mini, $min, $dist);
+
+    $numels = scalar(@@rgbin)/3;
+    $min = -1;
+    $mini = 0;
+
+    # figure out which is closest to black
+    for ($i=0; $i<$numels; $i++) {
+        $dist = euclid_dist(0,0,0,$rgbin[$i*3],$rgbin[$i*3+1],$rgbin[$i*3+2]);
+        if (($dist < $min) || ($min == -1)) {
+            $min = $dist;
+            $mini = $i;
+        }
+    }
+
+    # build array with two furthest from black
+    for ($i=0; $i<$numels; $i++) {
+        if ($i != $mini) {
+            push(@@rgbout, ($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2]));
+        }
+    }
+    return @@rgbout;
+}
+
+sub to_wink_entry {
+    my $rin = shift;
+    my $gin = shift;
+    my $bin = shift;
+    my @@wink_cmap = @@_;
+    my ($numels, $i, $mindist, $mini, $dist);
+    my @@retarr;
+
+    $numels = scalar(@@wink_cmap)/3;
+
+    $mindist = -1;
+    $mini = 0;
+    for ($i=0; $i<$numels; $i++) {
+        $dist = euclid_dist($rin, $gin, $bin,
+                            $wink_cmap[3*$i], $wink_cmap[3*$i+1],
+                            $wink_cmap[3*$i+2]);
+        if (($dist < $mindist) || ($mindist == -1)) {
+            $mindist = $dist;
+            $mini = $i;
+        }
+    }
+    push(@@retarr, ($wink_cmap[3*$mini], $wink_cmap[3*$mini+1],
+                   $wink_cmap[3*$mini+2]));
+    return @@retarr;
+}
+
+sub remove_cmap_entry {
+    my ($rval, $gval, $bval, $rgbin) = @@_;
+    my $i;
+    my $arrlen = scalar(@@$rgbin)/3;
+    
+    local($,) = " ";
+    &util::debug("icapimage", "looking to eliminate $rval $gval $bval");
+    &util::debug("icapimage", "input rgbin - @@$rgbin");
+  SRCHLOOP:
+    for ($i=0; $i<$arrlen; $i++) {
+	if (($$rgbin[3*$i] == $rval) &&
+	    ($$rgbin[3*$i +1] == $gval) &&
+	    ($$rgbin[3*$i +2] == $bval)) {
+	    &util::debug("icapimage", "splicing - $i.");
+	    splice(@@$rgbin, 3*$i, 3);
+	    last SRCHLOOP;
+	}
+    }
+    &util::debug("icapimage", "output rgbin - @@$rgbin");
+}
+sub to_wink_cmap {
+    my @@rgbin = @@_;
+    my ($numels,$i,$has,$outstr);
+    my @@winkrgb;
+
+    # checks to make sure input RGB triples don't have black; if so, suppresses
+    # dup blacks
+    $has = 0;
+    $numels = scalar(@@rgbin)/3;
+
+    @@winkrgb = @@parsedcmap;
+
+    # run through, converting to wink colormap entries
+    for ($i=0; $i<$numels; $i++) {
+        my @@nextarrval;
+        
+        ($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2]) =
+            to_wink_entry($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2],
+                          @@winkrgb);
+
+        if (($rgbin[3*$i] == 0) && ($rgbin[3*$i+1] == 0) &&
+            ($rgbin[3*$i+2]==0)) {
+            $has = 1;
+        }
+
+	&remove_cmap_entry($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2],
+		      \@@winkrgb);
+    }
+    if ($has == 0) {
+        push(@@rgbin, (0,0,0));
+    }
+
+    # ok - now build output string
+    $numels = scalar(@@rgbin)/3;
+    $outstr = "P3 $numels 1 255\n";
+    for ($i=0; $i<$numels; $i++) {
+        $outstr = "$outstr $rgbin[$i*3] $rgbin[$i*3+1] $rgbin[$i*3+2]\n";
+    }
+
+    return $outstr;
+}
+
+# Convert function.  Convert image to PPM of at most 4 colors using the
+# fixed Wink 16 color palette.  Distillation has already been done on
+# this image.
+# 
+# Pack the whole thing into a single chunk whose type is "image/icap-bitmap".
+# The TOC won't matter for this, but who cares.
+
+
+sub convert {
+    my ($chunk, $client, $prefs) = @@_;
+    my $doc_id = $chunk->doc_id;
+    my $ppmdata = $chunk->data;
+    my ($width,$height);
+
+    my $tmp55 = &util::mktemp;
+    local($,) = " ";
+    local($/) = undef;
+
+    # figure out how many colors to have
+    my $numcolors;
+
+    if ($client->shortname eq "winkGI") {
+	$numcolors = 3;
+    } else {
+	$numcolors = 2**($client->bpp);
+	if ($numcolors > 256) {
+	    $numcolors = 256;
+	}
+    }
+
+    # Do color quantization first - pick best $numcolors
+    my $firstpasscmd = "| $PPMquant $numcolors > $tmp55"; # 
+    open(DATAF, "$firstpasscmd") or die "couldn't do $firstpasscmd ($!)";
+    print DATAF "$ppmdata";
+    close DATAF;
+    $firstpasscmd = "$PPMhist -map $tmp55 |";
+    @@rgbs = parse_histogram($firstpasscmd);
+    local($,) = " ";
+    &util::debug("icapimage", "0th pass histogram - @@rgbs\n");
+    
+    # convert one to black - special case for winkGI
+    if ($client->shortname eq "winkGI") {
+	if (scalar(@@rgbs) > 6) {
+	    # 3 or more colors in gif;  time to force one to be black
+	    @@rgbs = force_one_to_black(@@rgbs);
+	    &util::debug("icapimage", "1st pass histogram - @@rgbs\n");
+	}
+    }
+
+    # pick a colormap - hack hack hack
+    if ($numcolors <= 16) {
+	@@parsedcmap = @@parsedcmap16;
+    } else {
+	@@parsedcmap = @@parsedcmap256;
+    }
+
+    # now do the real dumping
+    my $secondpasshist;
+    $secondpasshist = to_wink_cmap(@@rgbs);
+    &util::debug("icapimage", "2nd pass colormap - $secondpasshist\n");
+
+    my $tmp2 = &util::mktemp;
+    open(HIST, ">$tmp2") or die "Couldn't open histogram file $tmp2 ($!)";
+    print HIST $secondpasshist;
+    close HIST;
+
+    $ppmdata =~ /(\S+)\s+(\d+)\s+(\d+)/m
+        or die "Can't parse width/height in ". substr($ppmdata,0,40);
+    ($width,$height) = ($2,$3);
+
+    my $maxx = &prefs::get("IcapImage4colour","maxx");
+    my $maxy = &prefs::get("IcapImage4colour","maxy");
+    my $scalep = &prefs::get("IcapImage4colour","scale") / 100.0;
+
+    my $hypofactor = &util::min($maxx/$width, $scalep,
+				$maxy/$height, 1);
+
+    &Mon::doc_status($doc_id, "Scaling image by $hypofactor ($scalep asked)");
+    my $tmpfile = &util::mktemp;
+    my $scale_cmd = "| $Scalecmd $hypofactor > $tmpfile";
+
+    open(SCALECMDP, $scale_cmd)
+	or die "SCALECMDP: $!";
+    print SCALECMDP $ppmdata;
+    close SCALECMDP;
+
+    # record the new dimensions (after scaling) in the metadata field.  account
+    # for client aspect ratio if necessary.
+
+    my ($realwidth,$realheight) = ($width * $hypofactor,
+                                   $height * $hypofactor);
+    my $asp = $client->{"aspect"};
+    if (defined($asp) && $asp != 1.0) {
+        if ($asp < 1.0) {
+            # image will take up more vertical space
+            $realheight /= $asp;
+        } else {
+            # image will take up more horizontal space
+            $realwidth *= $asp;
+        }
+    }
+    my $metadata = sprintf("%dx%d", $realwidth, $realheight);
+
+    # now that we've done scaling, let's reapply the colormap
+    my $tmp5 = &util::mktemp;
+    if (system("$PPMquant -map $tmp2 $tmpfile | $PNMdepth 255 > $tmp5")) {
+        die "PPMquant 2nd phase failed ($?>>8)";
+    }
+
+    my $icap;
+    my $tmp7 = &util::mktemp;
+    my $syscommand;
+
+    # call ppmtoicap - this is horribly special-cased right now.
+
+    if ($client->shortname eq "winkGI") {
+	$syscommand = "$PPMtoicap -ifp $tmp5 -ofp $tmp7 -colors 4";
+    } elsif ($numcolors <= 4) {
+	$syscommand = "$PPMtoicap -ifp $tmp5 -ofp $tmp7 -colors 4";
+    } elsif ($numcolors <= 16) {
+	$syscommand = "$PPMtoicap -ifp $tmp5 -ofp $tmp7 -colors 16";
+    } else {
+	$syscommand = "$PPMtoicap -ifp $tmp5 -ofp $tmp7 -colors 256";
+    }
+
+    my $sysreturn = system("$syscommand") >> 8;
+    if ($sysreturn) {
+        warn "ppmtoicap: exit " . ($?>>8);
+    }
+    $icap = &util::slurp($tmp7);
+    my $chunk = new chunk ("image/icap-bitmap",
+                           undef,
+                           $doc_id,
+                           1,
+                           $icap,
+			   # $tmp7. "\0",
+                           undef,
+                           undef,
+                           "ICAP image chunk",
+                           $metadata);
+    return $chunk;
+}
+
+$bindir = "/usr/sww/bin";
+
+$Cutprog = "$bindir/pnmcut";
+$Scalecmd = "$bindir/pnmscale";
+$FromGif = "$bindir/giftopnm";
+$ToGif = "$bindir/ppmtogif";
+$Gifmunch = "/disks/barad-dur/now/pythia/release/bin/gifmunch_s.SunOS";    
+$PPMquant = "$bindir/ppmquant";
+$PPMhist = "$bindir/ppmhist";
+$PPMtoicap = "$bindir/ppmtoicap";
+$PNMdepth = "$bindir/pnmdepth";
+1;
+@
+
+
+1.2
+log
+@these files are Wink-specific, so i removed them from the repository.
+wink can manage them in their local repository if they want.
+@
+text
+@d5 1
+d10 6
+a15 1
+$Cmap16 = "./tm/cmap16.ppm";
+d37 3
+d90 1
+a90 1
+sub scale_to_2_plus_black{
+d143 20
+d173 1
+a173 1
+    @@winkrgb = parse_colormap($Cmap16);
+d179 4
+d187 3
+a189 3
+        ($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2]) =
+            to_wink_entry($rgbin[$i*3], $rgbin[$i*3+1], $rgbin[$i*3+2],
+                          @@winkrgb);
+d223 14
+a236 2
+    # Do color quantization first - pick best 3
+    my $firstpasscmd = "| ppmquant 3 > $tmp55"; # 
+d240 1
+a240 1
+    $firstpasscmd = "ppmhist -map $tmp55 |";
+d245 14
+a258 5
+    # convert one to black
+    if (scalar(@@rgbs) > 6) {
+        # 3 or more colors in gif;  time to scale down to 2 colors plus black
+        @@rgbs = scale_to_2_plus_black(@@rgbs);
+        &util::debug("icapimage", "1st pass histogram - @@rgbs\n");
+a269 4
+    my $tmp3 = &util::mktemp;
+    if (system("ppmquant -map $tmp2 $tmp55 | pnmdepth 255 > $tmp3")) {
+        die "ppmquant 2nd phase failed ($?>>8)";
+    }
+a270 3
+    # ok - tmp3 has the right color map.  Now do scaling.
+    # parse size from ppm data
+    $ppmdata = &util::slurp($tmp3);
+d281 1
+d285 1
+d291 17
+d310 2
+a311 2
+    if (system("ppmquant -map $tmp2 $tmpfile | pnmdepth 255 > $tmp5")) {
+        die "ppmquant 2nd phase failed ($?>>8)";
+d316 3
+d320 12
+a331 2
+    if (system("ppmtoicap -ifp $tmp5 -ofp $tmp7 -colors 4 -comp")) {
+#    if (system("ppmtoicap -ifp $tmp5 -ofp $tmp7 -colors 4")) {
+d339 2
+a340 2
+                           # $icap,
+			   $tmp7. "\0",
+d343 2
+a344 1
+                           "ICAP image chunk");
+d348 11
+a358 5
+$Cutprog = "/staff/glomop/bin/pnmcut";
+$Scalecmd = "/staff/glomop/bin/pnmscale";
+$FromGif = "/staff/glomop/bin/giftopnm";
+$ToGif = "/staff/glomop/bin/ppmtogif";
+$Gifmunch = "/staff/glomop/bin/gifmunch_s";    
+@
+
+
+1.1
+log
+@WebPage can now actually parse web pages, sort of.... html_parser was
+moved (perhaps unwisely?) to gmproxyd main directory.
+@
+text
+@@

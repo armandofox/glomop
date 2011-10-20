@@ -1,0 +1,134 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.18.18.08.00;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added selinger
+@
+text
+@<html>
+<title>
+System R Query Optimization
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Access Path Selection in a Relational DBMS
+</h1>
+<strong>
+P.G. Selinger, M.M. Astrahan, D.D> Chamberlin, R.A. Lorie, T.G. Price
+</strong>
+
+<P>
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Optimize queries by selecting from a tree of possible query step
+orderings, by using statistics of existing relations, <i>selectivity
+factors</i> that estimate how many tuples will be returned by a
+predicate, and appropriately weighted CPU and disk costs of accessing
+tuples. 
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Degrees of freedom for optimization: Permutations of join orders
+       and method of joining; evaluation order among query blocks.
+  <li> Accessing tuples via RSS:
+       <ul>
+         <li> Segment scan: scan group of disk pages, which may contain
+              tuples from many relations; return only those tuples from
+              a desired relation.
+         <li> Index scan (if this relation has an index which maps keys
+              to tuple-ID's containing that key): scan the leaf pages of
+              the index B-tree, then get the tuple corresponding to each
+              TID.  The index is <i>clustered</i> if this can be done
+              without scanning any tuple page more than once.
+       </ul>
+  <li> Scans can take a set of predicates used to filter out some
+       tuples.  A <i>sargable predicate</i> is one that can be put into
+       the form "column-name  rel-op  value", e.g. "Salary &lt; 2000".
+  <li> <b>Overall cost</b> being optimized is:<br>
+       (page fetches) + W * (RSI I/O's), where W is a weighting factor
+       between CPU and disk.
+  <li> Optimizer uses the following stats, which are kept for each
+       relation T and index I:
+       <ul>
+         <li> NCARD(T): cardinality of T
+         <li> TCARD(T): number of pages that hold tuples of T
+         <li> P(T): fraction of data pages in a segment that hold tuples
+              of T, i.e. TCARD(T)/(no. of pages in segment)
+         <li> ICARD(I): number of distinct keys in index
+         <li> NINDX(I): number of pages in index
+       </ul>
+  <li> <b>Selectivity factor:</b> An estimate of what fraction of input
+       tuples will be returned by a relation.  Table 1 shows how to
+       estimate F for various query elements ("column = value", "column
+       between val1 and val2", "expr1 OR expr2", etc.).  As shown in the
+       table, if not enough is known about the query element to estimate
+       its F, a "rule of thumb constant" is used (e.g. 1/10).
+  <li> QCARD(Q): Query cardinality is computed as the product of the
+       cardinalities of the query's FROM list and the selectivity
+       factors of the query block's Boolean factors.
+  <li> Number of expected RSI calls is product of relation cardinalities
+       and selectivity factors of the sargable predicates.
+  <li> <b>Join ordering.</b>  A tuple order is <i>interesting</i> if it
+       is specified by the query.  Some queries may specify no
+       interesting orders (i.e. return results unordered).  To optimize
+       join cost, need to choose between cheapest method that produces
+       an interesting order and cheapest method that produces unordered
+       result plus cost of sorting.  Note that multiway joins can be
+       pipelined. 
+  <li> Heuristic: find best join order for successively larger subsets
+       of tables.  (Justification: once you've joined the first <i>k</i>
+       relations, joining the result to the <i>k</i>+1st relation is
+       independent of the order of joining the first <i>k</i>.)
+  <li> To reduce search space, only consider join orders that have join
+       pro=edicates relating the inner relation to <i>other relations
+       already joined</i>.  E.g. if T1 and T2 are joined on column C1,
+       and T2 and T3 are joined on column C2, then the orderings
+       {T1&nbsp;T3&nbsp;T2} and {T3&nbsp;T1&nbsp;T2} will be ignored.
+  <li> <b>Cost of nested loop join or merge join</b> is:<br>
+       (Outer-cost(path1) + N * Inner-cost(path2)), where outer-cost and
+       inner-cost are the cost of scanning a tuple (applying all
+       applicable predicates) from the respective paths, and N is the
+       product of the cardinalities and selectivity factors of all
+       relations joined so far (i.e. a product-of-products).
+  <li> Observation: nested-loop and merge join costs are the same
+       formula!  Merging is sometimes better because inner-cost may be
+       much less.
+</ul> 
+
+<h2>Relevance</h2>
+
+The seminal work on query optimization relying on table
+       statistics and a model of CPU and disk utilization.
+
+<h2>Flaws</h2>
+
+Cost models used were adequate for the hardware of the day, but probably
+simplistic given today's multiheaded CPU's and synchronous nonblocking
+I/O subsystems.  (Compilers have the same problem in trying to optimize
+code for hairy new architectures; seems like there would be many
+parallels between query optimization and the back end of a compiler.)
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

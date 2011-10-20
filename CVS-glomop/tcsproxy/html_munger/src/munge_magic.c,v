@@ -1,0 +1,1219 @@
+head	1.22;
+access;
+symbols
+	Yatin-final:1.22
+	Yatin:1.22.0.2
+	pre-yatin-merge:1.22
+	transend-beta2:1.22
+	fox-dev:1.22
+	html_munger-ng:1.22
+	transend-beta-latest:1.22
+	Aggregators:1.21
+	NoAggregators:1.21
+	iang:1.20.0.2
+	transend-beta:1.19.0.2
+	SOSP:1.11;
+locks; strict;
+comment	@ * @;
+
+
+1.22
+date	97.06.04.01.37.51;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.05.08.21.02.49;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.30.07.55.25;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.04.27.03.48.48;	author fox;	state Exp;
+branches
+	1.19.2.1;
+next	1.18;
+
+1.18
+date	97.04.11.21.43.11;	author aspolito;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.04.09.02.59.24;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.04.08.20.53.03;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.04.08.08.21.06;	author aspolito;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.06.20.49.23;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.03.31.23.40.33;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.03.13.00.52.31;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.03.09.05.19.46;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.03.04.19.26.47;	author aspolito;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.27.04.12.20;	author aspolito;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.27.04.01.42;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.27.03.31.37;	author aspolito;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.26.22.30.05;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.26.22.18.38;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.26.05.23.51;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.25.09.57.26;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.24.22.36.35;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.21.07.35.13;	author fox;	state Exp;
+branches;
+next	;
+
+1.19.2.1
+date	97.04.29.01.20.01;	author fox;	state Exp;
+branches;
+next	1.19.2.2;
+
+1.19.2.2
+date	97.04.29.23.57.05;	author fox;	state Exp;
+branches;
+next	1.19.2.3;
+
+1.19.2.3
+date	97.05.08.21.03.26;	author fox;	state Exp;
+branches;
+next	1.19.2.4;
+
+1.19.2.4
+date	97.05.13.21.39.41;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.22
+log
+@'Merged changes from head of transend-beta branch'
+@
+text
+@/*
+ *  munge_magic.c
+ *
+ *  Support for HTML munger to insert magic into/remove magic from URL's
+ *  as it's munging HTML. 
+ */
+
+#include "munge.h"
+#include "url_magic.h"
+#include "distinterface.h"
+#include "../../frontend/include/ARGS.h"
+#include <ctype.h>
+#include <stdio.h>
+
+/*#define DistillerRealloc(x,y) realloc(x,y)*/
+
+char * check_size(int, int *, char *);
+static int is_http_get(char *url);
+
+/*
+ *  returns 1 if the url in question is a partial url or if it is http://
+ */
+int is_http_get(char *url) {
+  if (strstr(url, "://")) {
+    if (!strncasecmp(url, "http://", 6)) {return 1;}
+    else {return 0;}
+  }
+  return 1;
+}
+
+/*
+ *  Return the index for a given tag in the attribs array, or -1 if
+ *  the attribute isn't specified. 
+ */
+
+static int attrib_index(char *attrib_name, struct HtmlTagDescr attribs[],
+                        int nattribs)
+
+{
+  int i;
+
+  for (i=0; i<nattribs; i++) {
+    if (strcasecmp(attrib_name, attribs[i].attr_name) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+/*
+ * Process a <INPUT declaration.  Recieves arguments just like proccess_tag.
+ * Basically a sub function of process_tag made to handle the special cases
+ * of form inputs used in the changeprefs page.  It looks for the keywords
+ * TRANSENDID and TRANSENDVAL.  If you have a button and if you have an
+ * arguement of type TRANSENDID with value TRANSENDVAL then make it checked.
+ * If you have text box of value TRANSENDID then add a VALUE="x" tag where
+ * x equals the value of the argument TRANSENDID.
+ */
+
+void
+handle_form_field(char *tagname, struct HtmlTagDescr attribs[],
+            int nattribs, OutputInfo *di, Argument *args, int nargs)
+{
+  /*
+   * dump form information and at the same time scan for TRANSENDVAL
+   * TRANSENDID tags.
+   */ 
+  
+  char *val = NULL;
+  char *id = NULL;
+  char *tmp;
+  char type;
+  int argid;
+
+  int i, ivalue;
+  double dvalue;
+  int button = 0;
+  int tmp_size=100;
+
+  append_string(di, tagname, -1);
+
+  tmp = DistillerMalloc(tmp_size);
+  for (i = 0; i<nattribs; i++) {
+    /* dump the info */
+    if (attribs[i].attr_val[0] != '\0') {
+      tmp = check_size ((strlen(attribs[i].attr_name) + 
+			 strlen(attribs[i].attr_val)) + 5, &tmp_size, tmp);
+      if (attribs[i].attr_val[0] != '\'') {
+	sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		attribs[i].attr_name, attribs[i].attr_val);
+      }
+      else {
+	sprintf(tmp, "%s%s=%s", (i==0 ? "" : " "),
+		attribs[i].attr_name, attribs[i].attr_val);
+      }
+    } else {
+      tmp = check_size (strlen(attribs[i].attr_name) + 7, &tmp_size, tmp);
+      sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+	      attribs[i].attr_name);
+    }
+    append_string(di, tmp, -1);
+
+    /* do we have a TYPE tag?  If so see if it is a button or not */
+    if ((strlen (attribs[i].attr_name) >= 4) && 
+	!strcasecmp(attribs[i].attr_name, "TYPE")) {
+       button = strcasecmp(attribs[i].attr_val, "text");
+    } else if ((strlen (attribs[i].attr_name) >= 11) && 
+	    !strcasecmp(attribs[i].attr_name, "TRANSENDVAL")) {
+      /* or do we have a TRANSENDVAL tag? */
+      if  (attribs[i].attr_val[0] != '\0') {
+	val = attribs[i].attr_val;
+      }
+      
+    } else if ((strlen (attribs[i].attr_name) >= 10) && 
+	    !strcasecmp(attribs[i].attr_name, "TRANSENDID")) {
+      /*   or do we have a TRANSENDID tag?  */
+      /* (needs to be at least 2 chars long) */
+      if (strlen(attribs[i].attr_val) >= 2) {
+	id = attribs[i].attr_val;
+      }
+    }
+  }
+
+  /* 
+   * now if we found TRANSENDID tags, put in the CHECKED or VALUE 
+   * fields 
+   *
+   */
+  if (id) {
+
+    /* find out if we have the arguement in question */
+    
+    type = id[0];
+    argid = atoi(id+1);
+
+    for (i = 0; i < nargs; i++) {
+      if (ARG_ID(args[i]) == argid) {
+	/* if we have that argument */
+	append_string(di, &type, 1);
+	if (!button) {
+	  /* if we have an ID tag and we are a text form */
+	  append_string(di, " VALUE=\"", 8);
+	  switch (type) {
+	  case 'i':
+	    sprintf(tmp, "%ld", ARG_INT(args[i]));
+	    break;
+	  case 's':
+	    sprintf(tmp, "%s", ARG_STRING(args[i]));
+	    break;
+	  case 'd':
+	    sprintf(tmp, "%f", ARG_DOUBLE(args[i]));
+	    break;
+	  default:
+	    tmp[0]=0;
+	    break;
+	  }
+	  append_string(di, tmp, -1);
+	  append_string(di, "\"", 1);
+	} else if (val) {
+	  /* if we have an ID tag and a val tag and are a button */
+	  switch(type) {
+	  case 'i':
+
+	    ivalue = atoi(val);
+	    if (ivalue == ARG_INT(args[i])) {
+	      append_string(di, " CHECKED", 8);
+	    }
+	    break;
+	  case 's':
+	    if (strlen(ARG_STRING(args[i])) == strlen(val) && 
+		 !strcmp(ARG_STRING(args[i]), val)) {
+	      append_string(di, " CHECKED", 8);	      
+	    }
+	    break;
+	  case 'd':
+	    sscanf(val, "%lf", &dvalue);
+	    if (dvalue == ARG_DOUBLE(args[i])) {
+	      append_string(di, " CHECKED", 8);
+	    }
+	    break;
+	  } 
+	}
+	/* handled, don't keep doing it */
+	break;	
+      }
+    }
+  }
+  append_string(di, ">", 1);    /* tag close! */
+  DistillerFree(tmp);
+}
+      
+/*
+ *  Process a tag declaration.  We receive the tag name (actually includes
+ *  the opening "<" or "</"), an array of  HtmlTagDescr with the attribute
+ *  names, values, and original verbatim values already parsed, and the
+ *  distiller output buffer info so we can write the tag to the output
+ *  the opening "<" or "</"), an array of  HtmlTagDescr with the attribute
+ *  names, (possibly having modified it, etc.)
+ *
+ * If you send it a tagname of NULL then it treats that as an init call
+ * telling it a new apge was started.  (damn state)
+ *
+ * The calls to checksize tend to add a semi-arbitrary number to the 
+ * actual size needed.  (For instance... 
+ *  tmp = check_size((strlen (attribs[i].attr_name) + 
+ *     strlen(attribs[i].attr_val) + 10), &tmp_size, tmp);
+ *  is done before 
+ *  sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+ *     attribs[i].attr_name, attribs[i].attr_val);
+ *  This was basically done so I could change one or two characters 
+ *  and everything would work.  In one case it could be a problem
+ *  
+ */
+
+void
+process_tag(char *tagname, struct HtmlTagDescr attribs[],
+            int nattribs, OutputInfo *di, Argument *args, int nargs,
+	    int *where_string)
+{
+  int i;
+  static int in_link = 0;
+  static int queue_size = 0, queue_max_size = 0;
+  ArgumentList al;
+  char *tmp;
+  char *src_url = NULL;
+  int tmp_size = MAX_URL_SIZE;
+  static char **image_queue;
+  int is_map = 0;
+  char *magic_src_url;
+  int s;
+  
+#ifdef INST
+  extern FILE *Log;
+#endif
+  
+  if (tagname == NULL) {
+    in_link = 0;
+    return;
+  }
+
+  if ((strncasecmp (tagname, "<INPUT", 2) == 0) && 
+      (strlen(tagname) >= 6) && (!isalpha(tagname[6]))) {
+    handle_form_field(tagname, attribs, nattribs, di, args, nargs);
+    return;
+  }
+
+  tmp = (char *) DistillerMalloc(tmp_size);
+  if ((strncasecmp (tagname, "<A", 2) == 0) && 
+      (strlen(tagname) >= 2) && (!isalpha(tagname[2]))) {
+    for (i=0; i <  nattribs; i++) {
+      if (!strcasecmp (attribs[i].attr_name, "HREF")) {
+	in_link = 1;
+      }
+    }
+  }
+  if ((strncasecmp (tagname, "</A", 3) == 0) && 
+      (strlen(tagname) >= 3) && (!isalpha(tagname[3]))) {
+    in_link = 0;
+  }
+  s = attrib_index("src",attribs,nattribs);
+  if ((strncasecmp (tagname, "<IMG", 4) == 0) &&
+      (strlen(tagname) >= 4) && !isalpha(tagname[4]) && 
+      is_http_get(attribs[s].attr_val)) {
+    
+#ifdef INST
+    int q = attrib_index("src",attribs,nattribs);
+    if (q != -1) {
+      fprintf(Log, "%s ", attribs[q].attr_val);
+    }
+#endif
+
+    /* magify the src tag if it exists */
+    if ((s != -1) && is_http_get(attribs[s].attr_val)) {
+      /* are we an image map of some sort? */
+      if ((attrib_index("ismap",attribs,nattribs) != -1) || 
+	  (attrib_index("usemap",attribs,nattribs) != -1) ) {
+	
+	is_map = 1;
+	magic_src_url = DistillerMalloc
+	  (strlen(attribs[s].attr_val) + 50);
+	al.nargs = 1;
+	SET_ARG_ID(al.arg[0], FRONT_ISMAP);
+	SET_ARG_INT(al.arg[0], 1);
+	to_magic(magic_src_url, attribs[s].attr_val, &al);
+	DistillerFree(attribs[s].attr_val);
+	attribs[s].attr_val = magic_src_url;
+      }
+      
+      /* do we not have width or height attributes? */
+      if ( (attrib_index("width",attribs,nattribs) == -1) &&
+	   (attrib_index("height",attribs,nattribs) == -1) ) {
+	magic_src_url = DistillerMalloc
+	  (strlen(attribs[s].attr_val) + 50);
+	al.nargs = 1;
+	SET_ARG_ID(al.arg[0], FRONT_RESIZE);
+	SET_ARG_INT(al.arg[0], 1);
+	to_magic(magic_src_url, attribs[s].attr_val, &al);
+	DistillerFree(attribs[s].attr_val);
+	attribs[s].attr_val = magic_src_url;
+ 
+      }
+    }
+
+    if (in_link) {
+      queue_size++;
+      if (queue_size > queue_max_size) {
+	image_queue = (char **) DistillerRealloc(image_queue, 
+						queue_size * sizeof (char *));
+	image_queue[queue_size-1] = NULL;
+	queue_max_size = queue_size;
+      }
+
+      append_string(di, tagname, -1);
+      for (i = 0; i<nattribs; i++) {
+	if (attribs[i].attr_val[0] != '\0') {
+	  tmp = check_size((strlen (attribs[i].attr_name) + 
+		      strlen(attribs[i].attr_val) + 10), &tmp_size, tmp);
+	  if (attribs[i].attr_val[0] != '\'') {
+	    sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+	  else {	    
+	    sprintf(tmp, "%s%s=%s", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+	}
+	else {
+	  tmp = check_size(strlen(attribs[i].attr_name) + 3, &tmp_size, tmp);
+	  sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		  attribs[i].attr_name);
+	}
+	if (strcasecmp (attribs[i].attr_name, "src") == 0)
+	  src_url = attribs[i].attr_val;
+	append_string(di, tmp, -1);
+      }
+      append_string(di, ">", 1); /* tag close */
+      if (src_url) {
+	/***********************************************************/
+	/* Make sure there is enough space in tmp to allow for the */
+	/* magic url because there exist 5k urls out there         */
+	/* THIS COULD BE A PROBLEM IF MAGIC CHANGES OR SOMETHING   */
+	/* 50 CHARACTERS COULD BE TOO LITTLE                       */
+	/***********************************************************/
+	image_queue[queue_size-1] = 
+	  (char *) DistillerMalloc(strlen(src_url) + 50);
+	/* get rid of any magic in the url, cleaner that way */
+	tmp = check_size(strlen(src_url) + 50, &tmp_size, tmp);
+	from_magic(src_url, tmp, &al);
+	al.nargs = 1;
+	SET_ARG_ID(al.arg[0], FRONT_NO_DISTILL);
+	SET_ARG_INT(al.arg[0], 1);	
+	to_magic(image_queue[queue_size-1], tmp, &al);	
+      }
+      else {
+	queue_size--;
+      }
+    } else {
+      /* first find the url and put in the <A href=magicurl>*/
+      for (i = 0; i<nattribs; i++) {
+	if (strcasecmp (attribs[i].attr_name, "src") == 0)
+	  src_url = attribs[i].attr_val;
+      }  
+      if (src_url) {
+	char * t;
+	tmp = check_size(strlen(src_url)+50, &tmp_size, tmp);
+	t = DistillerMalloc(strlen(src_url)+50);
+	from_magic(src_url, t, &al);
+	al.nargs = 1;
+	SET_ARG_ID(al.arg[0], FRONT_NO_DISTILL);
+	SET_ARG_INT(al.arg[0], 1);
+	to_magic(tmp, t, &al);
+	append_string (di, "<A href=\"",9);
+	append_string (di, tmp,-1);
+	append_string (di, "\">",2);
+	append_string(di, tagname, -1);
+	append_string(di, " border=0 ", 10);
+	DistillerFree(t);
+      } else {
+	append_string(di, tagname, -1);
+      }
+      for (i = 0; i<nattribs; i++) {
+	if (strcmp (attribs[i].attr_val, "")) {
+	  tmp = check_size ((strlen(attribs[i].attr_name) + 
+		      strlen(attribs[i].attr_val) + 5), &tmp_size, tmp);
+	  if (attribs[i].attr_val[0] != '\'') {
+	    sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+	  else {
+	    sprintf(tmp, "%s%s=%s", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+	}
+	else {
+	  tmp = check_size (strlen(attribs[i].attr_name) + 3, &tmp_size, tmp);
+	  sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		  attribs[i].attr_name);
+	}
+	append_string(di, tmp, -1);
+      }
+      append_string(di, "></a>", 5);
+    }
+  } else {
+    /* not an image */
+    append_string(di, tagname, -1);
+    for (i = 0; i<nattribs; i++) {
+      if (attribs[i].attr_val[0] != '\0') {
+	tmp = check_size ((strlen(attribs[i].attr_name) + 
+			   strlen(attribs[i].attr_val)) + 5, &tmp_size, tmp);
+	if (attribs[i].attr_val[0] != '\'') {
+	  sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		  attribs[i].attr_name, attribs[i].attr_val);
+	}
+	else {
+	  sprintf(tmp, "%s%s=%s", (i==0 ? "" : " "),
+		  attribs[i].attr_name, attribs[i].attr_val);
+	}
+      } else {
+ 	tmp = check_size (strlen(attribs[i].attr_name) + 7, &tmp_size, tmp);
+	sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		attribs[i].attr_name);
+      }
+      append_string(di, tmp, -1);
+    }
+    append_string(di, ">", 1);    /* tag close! */
+  }
+  if (queue_size && !in_link
+      && (attrib_index("norefine", attribs,nattribs) == -1)) {
+    for (i = 0; i < queue_size; i++) {
+      append_string(di, "<A href=\"", 9);
+      append_string(di, image_queue[i], -1);
+      append_string(di, "\">&#164;</A>",12);
+      DistillerFree(image_queue[i]);
+      image_queue[i] = NULL;
+    }
+    queue_size = 0;
+  }
+  DistillerFree (tmp);
+
+  /* handle adding the ICON_STRING if needed */
+  if ((*where_string == after_head) && !(strncasecmp(tagname, "</HEAD", 6))) {
+    *where_string = no_icon;
+    append_string(di, ICON_STRING, -1);
+  } else if ((*where_string == in_body) && !(strncasecmp(tagname,"<BODY",5))){
+    *where_string = no_icon;
+    append_string(di, ICON_STRING, -1);
+  } else if ((*where_string == in_noframes) && \
+	     !(strncasecmp(tagname, "<NOFRAMES", 9))) {
+    *where_string = no_icon;
+    append_string(di, ICON_STRING, -1);
+  }
+}
+
+
+void
+append_string(OutputInfo *di, const char *str, int len)
+{
+  if (len <= 0) {
+    len = strlen(str);
+  
+    if (di->html_buflen + len >= di->html_bufsize) {
+      di->html_buf = DistillerRealloc(di->html_buf, 
+			     di->html_buflen + (di->html_buflen >> 2));
+    }
+    strcpy(di->html_buf + di->html_buflen, str);
+  }
+  else {
+    if (di->html_buflen + len >= di->html_bufsize) {
+      di->html_buf = DistillerRealloc(di->html_buf, 
+			     di->html_buflen + (di->html_buflen >> 2));
+    }
+    bogon_strncpy(di->html_buf + di->html_buflen, str, len);
+  }
+  di->html_buflen += len;
+}
+
+
+/* 
+ * checks to see if new_size is > buf_size and if so reallocs buf to
+ * to new_size and sets buf_size to new_size.  It returns the return of
+ * the realooc or the original buf depending on wether it realloc or not
+ */
+char * check_size(int new_size, int *buf_size, char * buf) {
+  if (*buf_size < new_size) {
+    *buf_size = new_size;
+    return ((char *) DistillerRealloc(buf, new_size));
+  } else {
+    return buf;
+  }
+}
+
+
+/*
+ *  Here is a strncpy that correctly adds a terminating null even if the
+ *  source string doesn't have one in the right place, provided we know
+ *  the length of the source string.
+ */
+
+char *
+bogon_strncpy(char *dst, const char *src, size_t n)
+{
+  strncpy(dst, src, n);
+  dst[n] = '\0';
+  return dst;
+}
+@
+
+
+1.21
+log
+@fixed bug where absolute urls in IMG tags did not get refinement links put around them
+@
+text
+@d25 1
+a25 1
+    if (!strncasecmp(url, "http://",6)) {return 1;}
+d428 1
+a428 1
+    && (attrib_index("norefine", attribs,nattribs) == -1)) {      
+@
+
+
+1.20
+log
+@frontend and ptm changes for new distiller api
+@
+text
+@d25 1
+a25 1
+    if (!strcasecmp(url, "http://")) {return 1;}
+@
+
+
+1.19
+log
+@fixed bug: dont put a newline after the inserted refine-buttons
+@
+text
+@d231 1
+a231 1
+
+a260 1
+
+d427 2
+a428 1
+  if (queue_size && !in_link) {
+@
+
+
+1.19.2.1
+log
+@added NOREFINE attribute to IMG tags in prefs.html and ICON_STRING; modified munge_magic.c to respect this attribute, which avoids placing the refinement link in html
+@
+text
+@d231 1
+a231 1
+  
+d261 1
+d428 1
+a428 2
+  if (queue_size && !in_link
+      && (attrib_index("norefine", attribs,nattribs) != -1)) {
+@
+
+
+1.19.2.2
+log
+@bug in norefine mechanism fixed
+@
+text
+@d428 1
+a428 1
+      && (attrib_index("norefine", attribs,nattribs) == -1)) {
+@
+
+
+1.19.2.3
+log
+@fixed bug whereby absolute urls in IMG tags did not become links to the refined image
+@
+text
+@d25 1
+a25 1
+    if (!strncasecmp(url, "http://", 6)) {return 1;}
+@
+
+
+1.19.2.4
+log
+@fixed some errors that were cause the branch not to compile
+@
+text
+@d261 4
+a264 4
+  if (s != -1) {
+    if ((strncasecmp (tagname, "<IMG", 4) == 0) &&
+	(strlen(tagname) >= 4) && !isalpha(tagname[4]) && 
+	is_http_get(attribs[s].attr_val)) {
+d266 4
+a269 4
+      int q = attrib_index("src",attribs,nattribs);
+      if (q != -1) {
+	fprintf(Log, "%s ", attribs[q].attr_val);
+      }
+a270 1
+    }
+@
+
+
+1.18
+log
+@ftp:// images are not magicifed nor do they have refinment added
+@
+text
+@d432 1
+a432 1
+      append_string(di, "\">&#164;</A>\n",13);
+@
+
+
+1.17
+log
+@HTML munger changes for the TS logo with frames
+fe_checker waits for 30 seconds before re-pinging
+@
+text
+@d18 12
+d35 1
+d38 1
+d260 1
+d263 2
+a264 1
+      (strlen(tagname) >= 4) && !isalpha(tagname[4])) {
+a271 1
+    s = attrib_index("src",attribs,nattribs);
+d274 1
+a274 1
+    if (s != -1) {
+@
+
+
+1.16
+log
+@Fixed pref page bugs on html form; changed ICON_STRING in html munger to
+position top-right and force clear at both margins.  ie prefs retrieval
+and setting now works correctly.  still to do: ICON_STRING needs to
+reflect correct url to prefs (transend.cs...etc), along with arg that
+means "don't show the logo on that page" and "don't distill anything on
+that page".
+@
+text
+@d13 1
+d426 2
+a427 2
+  if ((*where_string == 2) && !(strncasecmp(tagname, "</HEAD", 6))) {
+    *where_string = 0;
+d429 6
+a434 2
+  } else if ((*where_string == 3) && !(strncasecmp(tagname, "<BODY", 5))) {
+    *where_string = 0;
+a436 1
+
+@
+
+
+1.15
+log
+@now adds ICON_STRING (in munge.h) to the top of every web page.
+@
+text
+@d130 1
+a130 1
+	    sprintf(tmp, "%li", ARG_INT(args[i]));
+@
+
+
+1.14
+log
+@Now if both height and width attributes missing, FRONT_RESIZE is set.
+(Before it was if _either_ height _or_ width missing.)
+@
+text
+@d34 142
+d202 2
+a203 1
+            int nattribs, OutputInfo *di)
+d226 6
+d245 1
+d423 10
+@
+
+
+1.13
+log
+@added support for magifing the src tags of images based on the image tag.
+@
+text
+@d110 2
+a111 2
+      if (attrib_index("ismap",attribs,nattribs) != -1 || 
+	  attrib_index("usemap",attribs,nattribs) != -1) {
+d125 2
+a126 2
+      if (attrib_index("width",attribs,nattribs) == -1 || 
+	  attrib_index("height",attribs,nattribs) == -1) {
+@
+
+
+1.12
+log
+@did I fix a memory leak?
+seems to be gone
+@
+text
+@d14 1
+a14 3
+#ifdef TEST
+#define DistillerRealloc(x,y) realloc(x,y)
+#endif
+d70 3
+d84 2
+a85 4
+  al.nargs = 1;
+  SET_ARG_ID(al.arg[0], FRONT_NO_DISTILL);
+  SET_ARG_INT(al.arg[0], 1);
+  if ((strncasecmp (tagname, "<A", 2) == 0) && (!isalpha(tagname[2]))) {
+d92 2
+a93 1
+  if ((strncasecmp (tagname, "</A", 3) == 0) && (!isalpha(tagname[3]))) {
+d96 3
+a98 2
+  if (strncasecmp (tagname, "<IMG", 4) == 0) {
+
+d105 33
+a139 4
+      /*      if (image_queue == NULL) {
+	image_queue =  (char **) DistillerMalloc
+	  (queue_max_size * sizeof(char *));
+      }*/
+d181 7
+a187 1
+	to_magic(image_queue[queue_size-1], src_url, &al);	
+d199 8
+a206 2
+	tmp = check_size(strlen(src_url), &tmp_size, tmp);
+	to_magic(tmp, src_url, &al);
+d212 1
+@
+
+
+1.11
+log
+@added simple -DINST to dump out urls of image tags
+@
+text
+@d66 1
+a66 1
+  static int queue_size, queue_max_size = 5;
+d71 1
+a71 1
+  static char **image_queue= NULL;
+d106 1
+a106 1
+      if (image_queue == NULL) {
+d109 1
+a109 1
+      }
+d211 1
+a211 1
+	tmp = check_size (strlen(attribs[i].attr_name) + 7, &tmp_size, tmp);
+d264 1
+a264 1
+    return buf = (char *) DistillerRealloc(buf, new_size);
+@
+
+
+1.10
+log
+@arrays of statically allocated string buffers bad for text manipulation.
+Malloc good.
+@
+text
+@d73 4
+d97 8
+@
+
+
+1.9
+log
+@I shouldn't be editing one file twice
+I accidentally committed the wrong version
+@
+text
+@d44 14
+d71 7
+a77 2
+  static char * image_queue= NULL;
+  
+d83 5
+a87 1
+    in_link = 1;
+d89 1
+a89 1
+  if ((strncasecmp (tagname, "</A", 3) == 0) && (!isalpha(tagname[3]))) 
+d91 1
+d95 2
+a96 2
+	image_queue =  (char *) DistillerMalloc
+	  (MAX_URL_SIZE * queue_max_size);
+d100 3
+a102 2
+	image_queue = (char *) DistillerRealloc(image_queue, 
+						MAX_URL_SIZE * queue_size);
+d131 9
+a139 1
+	to_magic(image_queue+((queue_size-1) * MAX_URL_SIZE), src_url, &al);
+d151 1
+d210 4
+a213 2
+      append_string(di, image_queue+i*MAX_URL_SIZE, -1);
+      append_string(di, "\">[]</A>\n",9);
+@
+
+
+1.8
+log
+@oops, lame error
+@
+text
+@d144 1
+a147 1
+      }
+d155 9
+a163 9
+		    strlen(attribs[i].attr_val)) + 5, &tmp_size, tmp);
+	  if (attribs[i].attr_val[0] != '\'') {
+	    sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+	  else {
+	    sprintf(tmp, "%s%s=%s", (i==0 ? "" : " "),
+		    attribs[i].attr_name, attribs[i].attr_val);
+	  }
+@
+
+
+1.7
+log
+@change html_munger to use dynamic memory allocation so it solves the problem
+of buffers being overwritten by extreme urls.
+@
+text
+@d153 1
+a153 1
+      if (strcmp (attribs[i].attr_val, "")) {
+d165 1
+a165 1
+	tmp = check_size (strlen(attribs[i].attr_name) + 3, &tmp_size, tmp);
+a167 1
+	append_string(di, tmp, -1);
+d169 1
+a169 1
+      append_string(di, ">", 1);    /* tag close! */
+d171 1
+@
+
+
+1.6
+log
+@emacs is magically reinserting these bugs.  Should be killed now
+@
+text
+@d18 2
+d54 3
+a56 2
+  char * src_url = NULL;
+  char tmp[MAX_URL_SIZE];
+d59 4
+a68 4
+    /*    append_string(di,"IMG!", 4);*/
+    al.nargs = 1;
+    SET_ARG_ID(al.arg[0], FRONT_NO_DISTILL);
+    SET_ARG_INT(al.arg[0], 1);
+d83 3
+a85 1
+	if (strcmp (attribs[i].attr_val, "")) {
+d90 1
+a90 1
+	  else {
+d95 5
+a99 2
+	else sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		     attribs[i].attr_name);
+d123 1
+a123 1
+	append_string(di, " border=0 ", -1);
+d129 2
+d140 4
+a143 2
+	else sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		     attribs[i].attr_name);
+d147 1
+d150 1
+d154 2
+d164 7
+a170 4
+	}
+	else sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		     attribs[i].attr_name);
+      append_string(di, tmp, -1);
+a171 1
+    append_string(di, ">", 1);    /* tag close! */
+d181 1
+d206 16
+@
+
+
+1.5
+log
+@fixed dumb bug that was missed
+@
+text
+@a138 1
+      char tmp[80];
+@
+
+
+1.4
+log
+@fixed several bugs in the refinement code
+@
+text
+@d14 4
+@
+
+
+1.3
+log
+@append_string does checking to make sure it doesn't write over the
+length of the output buffer and reallocs if it needs to.
+proccess_tag tries to put in a link to see the original
+image of a distilled image.  This part doesn't work too well
+but the bugs in append_string needed to be fixed so I commited
+anyway.
+@
+text
+@d12 1
+d45 2
+a46 1
+  static int in_link;
+d49 8
+a56 5
+  static char tmp[MAX_URL_SIZE];
+
+
+  if (strncasecmp (tagname, "<A", 2) == 0) in_link = 1;
+  if (strncasecmp (tagname, "</A", 3) == 0) in_link = 0;
+d58 1
+a58 1
+    
+d63 11
+d76 10
+a85 3
+	if (strcmp (attribs[i].attr_val, "")) 
+	  sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		  attribs[i].attr_name, attribs[i].attr_val);
+d92 1
+d94 4
+a97 6
+	append_string(di, "><A href=", 9);
+	to_magic(tmp, src_url, &al);
+	append_string(di, tmp, -1);
+	append_string(di, ">ORI</a>", 6);
+      } else {
+	append_string(di, ">", 1);
+d107 1
+a107 1
+	append_string (di, "<A href=",8);
+d109 1
+a109 1
+	append_string (di, ">",1);
+d116 10
+a125 3
+	if (strcmp (attribs[i].attr_val, "")) 
+	  sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		  attribs[i].attr_name, attribs[i].attr_val);
+d136 12
+a147 5
+      if (strcmp (attribs[i].attr_val, "")) 
+	sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+		attribs[i].attr_name, attribs[i].attr_val);
+      else sprintf(tmp, "%s%s", (i==0 ? "" : " "),
+		   attribs[i].attr_name);
+d152 8
+a159 1
+
+d170 1
+a170 2
+      /* USE REALLOC, SHOULD USE DISTILLERREALLOC BUT IT DOESN'T EXIST */
+      di->html_buf = realloc(di->html_buf, 
+d177 1
+a177 2
+      /* USE REALLOC, SHOULD USE DISTILLERREALLOC BUT IT DOESN'T EXIST */
+      di->html_buf = realloc(di->html_buf, 
+@
+
+
+1.2
+log
+@added functionality in dispatch.c to bypass too-small content. added new
+function get_header_value which returns the value of a MIME header (or
+NULL if the header doesn't exist), and (temporarily) duplicated the
+getArgumentById code in order to search for the FRONT_MTU arg, which is
+used as the cutoff for distillation.
+Made larger default buffer in munge_magic.c "generic process tag"
+routine to avoid stupid segfaults (thanks Purify!)
+@
+text
+@d10 2
+d35 2
+a36 1
+ *  the opening "<" or "</"), an array of  HtmlTagDescr with the attribute names, *  (possibly having modified it, etc.)
+d44 71
+a114 7
+  char tmp[1024];
+  
+  append_string(di, tagname, -1);
+  for (i = 0; i<nattribs; i++) {
+    sprintf(tmp, "%s%s=\"%s\"", (i==0 ? "" : " "),
+            attribs[i].attr_name, attribs[i].attr_val);
+    append_string(di, tmp, -1);
+d116 1
+a116 1
+  append_string(di, ">", 1);    /* tag close! */
+d119 1
+d123 1
+a123 3
+  if (len >= 0) {
+    bogon_strncpy(di->html_buf + di->html_buflen, str, len);
+  }   else {
+d125 6
+d132 8
+@
+
+
+1.1
+log
+@Fixed the lexer interface for digesting HTML tag constructs; some
+changes to Makefile to support this, added a source file munge_magic.c.
+Also modified test_main.c in gif_munger to make it a more portable test
+harness for distillers - still some work to be done on this.  HTML
+munger still works normally but uses better interface.  Next: magic URL's.
+@
+text
+@d41 1
+a44 1
+    char tmp[80];
+d75 1
+@

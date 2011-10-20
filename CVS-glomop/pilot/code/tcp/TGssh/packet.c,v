@@ -1,0 +1,356 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.11.22.49.21;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.11.22.49.21;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include "Pilot.h"
+#include "ssh.h"
+#include "crc32.h"
+#include "rand.h"
+#include "callback.h"
+
+void ssh_crypto_setup(ssh_cipher_type cipher, ssh_state *state, Erf erf,
+    void *erfp)
+{
+    switch(cipher) {
+    case SSH_CIPHER_3DES:
+	state->encrypt = ssh_3des_encrypt;
+	state->decrypt = ssh_3des_decrypt;
+	state->cryptclean = ssh_3des_clean;
+	state->encryptstate = ssh_3des_encryptstate(state,erf,erfp);
+	state->decryptstate = ssh_3des_decryptstate(state,erf,erfp);
+	break;
+    
+    case SSH_CIPHER_IDEA:
+	state->encrypt = ssh_idea_encrypt;
+	state->decrypt = ssh_idea_decrypt;
+	state->cryptclean = ssh_idea_clean;
+	state->encryptstate = ssh_idea_encryptstate(state,erf,erfp);
+	state->decryptstate = ssh_idea_decryptstate(state,erf,erfp);
+	break;
+    
+    default:
+	ssh_fatal("Unknown cipher type");
+	return;
+    }
+}
+
+long ssh_write_type(ssh_msg_type type, unsigned char *data, long len,
+    void *state_, Erf erf, void *erfp)
+{
+    unsigned char *sendbuf;
+    unsigned long crc;
+    int padlen;
+    long olen;
+    long ret;
+    ssh_state *state = state_;
+
+    /* Is this supposed to be packetized? */
+    if (type == SSH_MSG_NONE) {
+	return (state->down_write)(data, len, state->down_state, erf, erfp);
+    }
+
+    /* Allocate the buffer that will be sent */
+    padlen = 8 - ((len+5)%8);
+    sendbuf = MemPtrNew(len+9+padlen);
+    if(!sendbuf) {
+	ssh_fatal("Out of mem");
+	return -1;
+    }
+
+    /* Padding */
+    if (state->encrypt) {
+	/* random pad */
+	RAND_bytes(sendbuf+4,padlen);
+    } else {
+	/* zero pad */
+	MemSet(sendbuf+4,padlen,0);
+    }
+
+    /* Type */
+    sendbuf[4+padlen] = type;
+
+    /* Data */
+    MemMove(sendbuf+5+padlen, data, len);
+
+    /* CRC */
+    crc = do_crc(sendbuf+4, padlen+len+1);
+    sendbuf[padlen+len+8] = crc & 0xff; crc >>= 8;
+    sendbuf[padlen+len+7] = crc & 0xff; crc >>= 8;
+    sendbuf[padlen+len+6] = crc & 0xff; crc >>= 8;
+    sendbuf[padlen+len+5] = crc & 0xff;
+
+    /* Crypt it */
+    if (state->encrypt) {
+	(state->encrypt)(sendbuf+4, sendbuf+4, padlen+len+5,
+			    state->encryptstate);
+    }
+
+    /* Insert the length */
+    olen = len+5;
+    sendbuf[3] = olen & 0xff; olen >>= 8;
+    sendbuf[2] = olen & 0xff; olen >>= 8;
+    sendbuf[1] = olen & 0xff; olen >>= 8;
+    sendbuf[0] = olen & 0xff;
+
+    /* Send it away */
+    ret = (state->down_write)(sendbuf, padlen+len+9, state->down_state,
+	    erf, erfp);
+    if (ret > padlen + 9) ret-=padlen-9;
+
+    MemPtrFree(sendbuf);
+
+    return ret;
+}
+
+long ssh_write(unsigned char *data, long len, void *state_,
+    Erf erf, void *erfp)
+{
+    unsigned char *newdata;
+    long ret, totret = 0;
+    ssh_state *state = state_;
+
+    CALLBACK_PROLOGUE
+
+    if (len < 0) {
+	/* Send the closing message */
+	ssh_write_type(SSH_MSG_DISCONNECT, "\0\0\0\x16User closed connection",
+			26, state_, erf, erfp);
+
+	/* Clean up */
+	if (state->dispatchpkt) MemPtrFree(state->dispatchpkt);
+	if (state->term) MemPtrFree(state->term);
+	if (state->connid) MemPtrFree(state->connid);
+	if (state->cryptclean) (state->cryptclean)(state);
+
+	(state->down_write)(data,len,state->down_state,erf,erfp);
+
+	MemPtrFree(state);
+	totret = -1;
+	goto sshwrite_out;
+    }
+
+    /* If we're not in interactive mode, dump the data */
+    if (state->protophase != SSH_PHASE_INTERACTIVE) {
+	totret = 0;
+	goto sshwrite_out;
+    }
+
+    while (len) {
+	long olen, piece;
+
+	/* Write the data in pieces of size at most MAX_SSH_PACKET_LEN-20 */
+	if (len > MAX_SSH_PACKET_LEN-20) {
+	    piece = MAX_SSH_PACKET_LEN-20;
+	} else {
+	    piece = len;
+	}
+	newdata = MemPtrNew(piece+4);
+	if (!newdata) {
+	    ssh_fatal("Out of mem");
+	    totret = -1;
+	    goto sshwrite_out;
+	}
+	MemMove(newdata+4, data, piece);
+	olen = piece;
+	newdata[3] = olen & 0xff; olen >>= 8;
+	newdata[2] = olen & 0xff; olen >>= 8;
+	newdata[1] = olen & 0xff; olen >>= 8;
+	newdata[0] = olen & 0xff;
+
+	ret = ssh_write_type(SSH_CMSG_STDIN_DATA,newdata,piece+4,state,
+				erf,erfp);
+	if (ret < piece+4) {
+	    if (ret < 0) totret = ret;
+	    else if (ret > 4) totret += ret-4;
+	    break;
+	}
+	totret += ret-4;
+
+	MemPtrFree(newdata);
+
+	data += piece;
+	len -= piece;
+    }
+
+sshwrite_out:
+    CALLBACK_EPILOGUE
+    return totret;
+}
+
+static void ssh_handle_data(unsigned char *pkt, long size, ssh_state *state,
+    Erf erf, void *erfp)
+{
+    unsigned long crc, crc_recv;
+    long padsize = size + 8 - (size % 8);
+
+    if (size < 5) {
+	ssh_fatal("Short packet received");
+	return;
+    }
+
+    /* First we'll have to decrypt it */
+    if (state->decrypt) {
+	(state->decrypt)(pkt, pkt, padsize, state->decryptstate);
+    }
+
+    /* Now check the CRC */
+    crc = do_crc(pkt, padsize-4);
+    crc_recv = pkt[padsize-4]; crc_recv <<= 8;
+    crc_recv += pkt[padsize-3]; crc_recv <<= 8;
+    crc_recv += pkt[padsize-2]; crc_recv <<= 8;
+    crc_recv += pkt[padsize-1];
+    if (crc_recv != crc) {
+	ssh_fatal("Packet failed CRC");
+	return;
+    }
+
+    pkt += 8 - size%8;
+
+    /* Handle the packet */
+    ssh_handle_packet_type(pkt[0], pkt+1, size-5, state, erf, erfp);
+}
+
+/* This function is called when data arrives */
+void ssh_dispatch(unsigned char *data, long len, void *state_, Erf erf,
+    void *erfp)
+{
+    ssh_state *state = state_;
+
+    CALLBACK_PROLOGUE
+
+    if (len < 0) {
+	/* The connection was closed; pass on the info */
+	goto ssh_dispatch_out;
+    }
+
+    /* Is this supposed to be depacketized? */
+    if (state->protophase == SSH_PHASE_VERSION_WAIT) {
+	int i;
+	int piece;
+
+	/* Collect until we see a \n */
+	if (!state->dispatchpkt) {
+	    state->dispatchpkt = MemPtrNew(80);
+	    state->dispatchread = 0;
+	}
+	piece = len;
+	if (piece > 80 - state->dispatchread) {
+	    piece = 80 - state->dispatchread;
+	}
+	for(i=1;i<piece && data[i-1]!='\n';++i) ;
+	/* data+i-1 now points to \n if there was one, or the end of the
+	   received data if not */
+	MemMove(state->dispatchpkt+state->dispatchread, data, i);
+	data += i;
+	len -= i;
+	state->dispatchread += i;
+
+	if (state->dispatchread == 80 ||
+	    state->dispatchpkt[state->dispatchread-1] == '\n') {
+	    ssh_handle_packet_type(SSH_MSG_NONE, state->dispatchpkt,
+				    state->dispatchread, state, erf, erfp);
+	    MemPtrFree(state->dispatchpkt);
+	    state->dispatchpkt = NULL;
+	    state->dispatchread = 0;
+	    state->dispatchsize = 0;
+	    state->dispatchpadamt = 0;
+	    state->dispatchsizeread = 0;
+	} else {
+	    goto ssh_dispatch_out;
+	}
+    }
+
+    while(len) {
+	/* See if we need to complete an existing partial packet */
+	if (state->dispatchsize + state->dispatchpadamt) {
+	    /* Yes; how much more to read? */
+	    long left = (state->dispatchsize + state->dispatchpadamt)
+			    - state->dispatchread;
+	    if (left > len) left = len;
+
+	    MemMove(state->dispatchpkt+state->dispatchread, data, left);
+	    state->dispatchread += left;
+	    data += left;
+	    len -= left;
+
+	    if ((state->dispatchsize + state->dispatchpadamt) ==
+		    state->dispatchread) {
+		/* We've got the whole thing now */
+		ssh_handle_data(state->dispatchpkt, state->dispatchsize,
+				    state, erf, erfp);
+		state->dispatchsize = 0;
+		state->dispatchpadamt = 0;
+		MemPtrFree(state->dispatchpkt);
+		state->dispatchpkt = NULL;
+	    }
+	} else {
+	    /* We're waiting for (some, possibly all) of the next packet
+		size */
+	    long left = 4 - state->dispatchsizeread;
+	    if (left > len) left = len;
+
+	    MemMove(state->dispatchsizebuf+state->dispatchsizeread, data,
+			left);
+	    state->dispatchsizeread += left;
+	    data += left;
+	    len -= left;
+
+	    if (state->dispatchsizeread == 4) {
+		/* We have the whole length now */
+		state->dispatchsize = state->dispatchsizebuf[0];
+		state->dispatchsize <<= 8;
+		state->dispatchsize += state->dispatchsizebuf[1];
+		state->dispatchsize <<= 8;
+		state->dispatchsize += state->dispatchsizebuf[2];
+		state->dispatchsize <<= 8;
+		state->dispatchsize += state->dispatchsizebuf[3];
+		state->dispatchsizeread = 0;
+		state->dispatchpadamt = 8 - (state->dispatchsize % 8);
+		state->dispatchpkt = MemPtrNew(state->dispatchsize +
+						state->dispatchpadamt);
+		state->dispatchread = 0;
+		if (!state->dispatchpkt) {
+		    ssh_fatal("Out of mem");
+		    goto ssh_dispatch_out;
+		}
+	    }
+	}
+    }
+
+ssh_dispatch_out:
+    CALLBACK_EPILOGUE
+}
+@
+
+
+1.1.1.1
+log
+@Top Gun ssh
+@
+text
+@@

@@ -1,0 +1,220 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.02.23.30.27;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From mds@@ic.EECS.Berkeley.EDU  Fri Oct  2 13:48:33 1998
+Return-Path: mds@@ic.EECS.Berkeley.EDU
+Received: from ic.EECS.Berkeley.EDU (ic.EECS.Berkeley.EDU [128.32.168.7]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA10910 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 13:48:32 -0700
+Received: (from mds@@localhost)
+	by ic.EECS.Berkeley.EDU (8.8.8/8.8.8) id NAA24385;
+	Fri, 2 Oct 1998 13:45:28 -0700 (PDT)
+Date: Fri, 2 Oct 1998 13:45:28 -0700 (PDT)
+From: "Mark D. Spiller" <mds@@EECS.Berkeley.EDU>
+Message-Id: <199810022045.NAA24385@@ic.EECS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw1
+Cc: mds@@ic.EECS.Berkeley.EDU
+Status: RO
+
+
+
+Mark D. Spiller
+CS 261 HW #1
+
+I tried to be brief... - But I ended up saying much more than intended
+on a lot of the questions...
+
+Note: I discussed the problems and possible solutions with Chen-Nee
+Chuah.
+
+
+***
+*1*
+***
+
+(I took "principles" to mean the ones mentioned in the first paper...)
+
+1.1. ftpd/gnutar:  
+Economy of mechanism - beware feature creep!  Simple modules.
+
+Fail-safe defaults & least privilege - specify what CAN do, not what
+can't, and everything not specified is not allowed.
+
+Separation of Privilege - require authentication to allow rsh & other
+programs. 
+
+One would need to build more of a hierarchy of account permissions and
+capabilities.  The ftp account doesn't NEED rsh at all, it could be
+completely disabled.  One could have various levels of access rights
+and capabilities, i.e. nobody/guest (nothing), or a user who can
+*only* run these X (some list, in this case ls, cd, tar) programs.
+Make it a formal requirement that new programs must give a list of
+capabilities that they need and deny everything else - some way is
+needed to remove the burden from the admin, who can't look through
+EVERY program installed.
+
+1.2. Sendmail alias expansion/program execution 
+Economy of mechanism - too many features!  Want to have this happen in
+one place, so that we can confirm that it is done right...
+Complete mediation - too many checks necessary.
+
+Even if sendmail wasn't checking for programs, it would still need to
+check for valid addresses, so one always has to check anyway.  Write a
+central function that always gets called to check every address.  Make
+anything that requires a new address take only the "new address"
+struct, and make that function the only way to get that struct, and
+make that the only place where program execution for alias expansion
+can occur.  That way, addresses have to have gone through the
+function, otherwise they fail.  Make the compiler work for you.
+
+1.3. Complete mediation in Java
+Economy of mechanism - put the checks in one place... 
+
+One could use the same technique as above.  Have a security class that
+takes as an argument that command to be run.  Don't allow the commands
+to be run as they are any more, have them be run as members of the
+security class, and have all functions in that class do the security
+check.  This way, at least you only have to look in ONE place to
+confirm that it was done right.
+
+1.4. Tractorbeaming wu-ftpd
+least privilege & fail-safe defaults - need to separate out root
+privileges so that the need for one piece of functionality does not
+allow potential access to all functionalities.
+
+As in 1.1, need to have individual capabilities that provide a cleaner
+separation of power.  A single super-user is not robust enough.  Tough
+part is making this efficient...  Turning off interrupts when running
+in the critical section as root is a good general rule, too.
+
+
+
+***
+*2*
+***
+
+A Java applet has found confidential information on the client -
+what are covert channels that it can use to get this info out?
+   
+2.1. Connect back to the host that the applet was downloaded from.
+Even if the attacker doesn't own the web server and have something
+running to accept the connection, the applet could connect to and/or
+break other ports on that machine, such as the sendmail port (as an
+applet on my home page does, to send me email when people hit my page
+:) The tcp connection could also be intercepted/hijacked by the
+attacker.
+
+2.2. I know that at one point there was a browser redirect call in
+Netscape Java that would let the applet go to a new page.  The applet
+could generate a URL that contains sensitive information as described
+in class (http://www.mds.org/attack_at_midnight) and send it to a
+special http server.
+
+2.3. I'm not sure if this is still true, but applets used to be able
+to get information about machine resources (even though Java is
+supposed to be platform independent).  An applet could potentially use
+this and the ability to get time information to figure out what the
+load on the machine is, and to try to send covert data at specific
+times that might be meaningful.  Additionally, the applet has access
+to machine resources, such as CPU, memory, and network, that it could
+adversely affect at specifc times.  Some of these could signal
+information to the outside - i.e. a machine pinging the client might
+see the pings slow down due to the applet overwhelming the network
+stack with requests at a predetermined time... 
+
+2.4. Not sure of details, but there are interfaces that allow applets
+to talk to each other.  Applets could transfer their data to other
+applets downloaded from other servers, which would in turn send that
+data to THAT server.
+
+2.5. Have never looked into Java RMI - would it be possible to send
+secure data in a remote call legally this way?  Java is geared to
+never allow access to data, doesn't seem at all geared to keeping the
+data in.  Seems like once the data is found, getting it out isn't tough.
+
+2.6. Weakly-set browser security may allow for Java system exec calls. 
+
+
+
+***
+*3*
+***
+
+3.1.  With authentication only done at the beginning of the TCP
+session, there is still a great deal of vulnerability.  Most of the
+TCP hijacking attacks can still be executed.  Attackers can still
+eavesdrop on, modify, and insert packets after the authentication has
+been completed.  Main benefit: at the beginning, at least, the
+valid participants know that they are not connecting to an IP spoofer.
+
+3.2. Better.  Attackers can't see the data (assume 3-DES secure).
+But, since this is in ECB mode, eavesdroppers can see packets with the
+same data repeating themselves, and substitute chunks of data (since
+there is no chaining...), based on observed structure and the nature/guesses
+of traffic.
+
+3.3. This looks pretty good.  Denial of service attacks will still
+work if the attacker is a middleman and substitutes things, or sends a
+barrage, or ...  Other than that, all that I can think of is traffic
+monitoring (source and destination, and number of packets sent).
+
+3.4. I don't see any way to block DOS other than a secure line.  The
+session could be fully encrypted and set to occupy a set bandwidth,
+with random noise sent when data is not actually being sent, to reduce
+the effects of traffic monitoring.  Each packet would be authenticated
+(signed), with a application-level sequence number and data count, so
+that both ends can keep track of everything securely.
+
+
+
+***
+*4*
+***
+
+4.1.  The only weaknesses I can see are DOS, with an attacker that
+sees a DNS packet go by sending a negative response before the real
+DNS server can send a reply.  The attacker might can use this to set
+up an attack (i.e. broadcast a better route to the address requested
+by the DNS lookup).  If one assumes that lookups will be retried,
+sending a negative response would allow time to set up this attack.
+
+Potentially, if the attacker can send negative responses for all of
+the top level domains (edu, gov, org, etc.), the client will be
+totally hosed and unable to see the outside world.  This might force a
+drop back into normal un-authenticated DNS, especially if negative
+responses are cached with a poor implementation.
+
+A general weakness - the whole scheme requires a large-scale means of
+proving to the DNS routers that you are who you are and that the
+address that you are providing them is valid.  Big policy/political
+issue, potentially, as the number of DNS hosts grows.  Who do you
+trust?  An untrusted foreign DNS server can still try to send you a
+signed but invalid DNS packet.
+
+4.2.  Attackers might replace valid DNS packets with previously sent
+authenticated negative responses (assuming DNS still UDP & no time
+stamp or sequence # etc. used).  An issue is that negative responses
+be cached only for a certain amount of time, so that past attacks and
+network failures go away eventually.  Some sort of a
+timer/time-to-live/timestamp mechanism would be required to make sure
+that eventually the lookup will be required.
+
+@

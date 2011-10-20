@@ -1,0 +1,137 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.31.18.56.26;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@R* papers.
+@
+text
+@<html>
+<title>
+R<sup>*</sup> Optimizer
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+R<sup>*</sup> Optimizer Validation and Performance Evaluation for
+Distributed Queries
+</h1>
+<strong>
+Lothar F. Mackert and Guy M. Lohman
+</strong>
+
+<P>
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Measurement experiments affirming the efficacy of the R* query optimizer,
+access path selector, and cost models;  for cross-site joins, the strategy
+of shipping the inner relation to the outer relation site was optimal in
+nearly all situations, and performing bloom-joins (hashed joins)
+consistenly outperformed semijoins.
+</p>
+
+<h2>Relevance</h2>
+Modeling the cost of a distributed query is difficult, and of course
+mistakes in access path selection could be exceedingly expensive.  This
+study is sorely needed, although I don't think it was adequately broad or
+deep.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> the synthetic workloads were extremely limited in scope - too
+	  bad.  Some discussion of how people use distributed databases
+	  would be nice to verify their workload.
+     <li> what about n-table joins for n>2?
+     <li> what if there is cross-traffic on backbone network?
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> See the <a href="r_star.html">R<sup>*</sup> summary</a> for a
+	  description of the R* distributed compilation and optimization
+	  strategies.  Differences from that paper include:
+	  <ul>
+	       <li> message cost component of cost function now split into
+		    number of messages and number of bytes.
+	       <li> semi-join join strategy outlined in more detail:  for
+		    each outer tuple, project outer table tuple to join
+		    columns and ship to inner table site.  At inner site,
+		    find tuples that match value sent and project them to
+		    needed columns.  Ship copy of projected matching inner
+		    tuples back to join site (either inner, outer, or third
+		    site) and do the join.
+	  </ul>
+     <li> <B>Instrumentation</B>: new SQL commands added
+	  <ul>
+	       <li> EXPLAIN - writes to a table information describing
+		    access plan chosen by optimizer
+	       <li> COLLECT COUNTERS - writes to a table the values of 40
+		    internal R* counters (e.g. number of disk reads/writes,
+		    buffer lookups, etc.).
+	       <li> FORCE OPTIMIZER - forces optimizer to pick a specific
+		    plan.
+	       <li> All queries performed at night on two totally unloaded
+		    machines with 40 buffer pages of 4K each, connected by
+		    high speed channel.  Join values drawn randomly from
+		    domain of 3000 integer values when generating synthetic
+		    test tables.  Tuples in tables were 66 bytes long (can
+		    store 50 on a page).
+	       <li> Cost of measurement was nicely subtracted out of
+		    measurements.
+	  </ul>
+     <li> <B>Distributed Join results</B>
+	  <ul>
+	       <li> Inner table transfer strategy: ship-whole inner table
+		    beat out fetching matching inner tuples, even more
+		    drastically on a medium-speed (WAN) network.
+	       <li> Fetching matches only (as opposed to shipping the whole
+		    table) only dominates if outer is very small, and join
+		    cardinality is less than inner cardinality.  In this
+		    situation, shipping outer table to inner site, doing
+		    merge join at the inner, and then returning result to
+		    outer is best strategy.
+	       <li> Distributed joins are more efficient than local-only
+		    joins in general, due to exploitation of parallelism -
+		    you essentially have 2 CPUs crunching away on problem
+		    instead of just one, and twice the amount of buffer
+		    space.  Shipping outer table to inner
+		    site helps, as can pipeline shipping a bunch of tuples
+		    to inner site and performing join on previous bunch of
+		    tuples at inner site.
+	       <li> Bloomjoin was found to be even more efficient than any
+		    of the R* strategies.  Bloomjoin:  build bloom filter
+		    on outer tuple.  Send filter to inner site.  Filter
+		    inner tuples based on bloom filter, send matching
+		    tuples back to outer for join.
+	       <li> local processing is dominant cost in high-speed
+		    network, less so (but still significant) in medium
+		    speed network.
+	  </ul>
+     <li> R* cost model was found to be very accurate - within 2 percent of
+	  actual cost when cardinality was well known.  If cardinality not
+	  well-known, as bad as non-distributed models.
+</ul>
+
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

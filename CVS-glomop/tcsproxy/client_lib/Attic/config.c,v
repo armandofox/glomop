@@ -1,0 +1,281 @@
+head	1.2;
+access;
+symbols
+	steve:1.1.1.1
+	steve:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	96.10.27.23.44.33;	author gribble;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.23.51.44;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.23.51.44;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Great!  Pretty much everything works now.  I'm still a little worried about
+blocking vs. non-blocking.
+@
+text
+@/*
+ * File:          config.c
+ * Purpose:       Configuration file loading/parsing
+ * Author:        Steve Gribble
+ * Creation Date: October 23rd, 1996
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <sys/errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "config.h"
+
+extern int errno;
+ll config_list = NULL;  /* list of name-value pairs in config file */
+
+char *name_tokens[] = { "partition", "owner", NULL };
+
+int get_next_token(FILE *file, char **token);
+int is_name_tok(char *tok);
+
+/** 
+**  config_parse:  this function accepts a filename as an argument, and
+**  attempts to parse that filename as though it were a configuration file.
+**  Configuration files have name/value pairs.  A name is a white-space
+**  separated token that (case insensitively) matches one of the tokens
+**  in the name_tokens[] array.  A value is a sequence of white-space
+**  separated tokens that follows a name, and preceeds another value.
+**  Comments can be embedded in the configuration file;  the rest of a line
+**  is ignored after a '#' character.
+**
+**  The global linked list "config_list" is appended with cfg_nv structures,
+**  representing the name/value pairs.  This implies that:
+**   THIS FUNCTION IS NOT THREAD-SAFE.  IT SHOULD BE CALLED ONCE AND
+**   ONLY ONCE AT THE BEGINNING OF THE EXECUTION OF SOME PROCESS USING
+**   THIS LIBRARY.
+**
+**  The function returns CLIB_OK on success, and some other error value
+**  in case of trouble.
+**/
+
+clib_response config_parse(char *filename)
+{
+  FILE    *cfg_file = NULL;
+  cfg_nv  *cur = NULL;
+  char    *tok, *tmp;
+  int      toklen;
+
+  cfg_file = fopen(filename, "r");
+  if (cfg_file == NULL) {
+    fprintf(stderr, "Couldn't open configuration file '%s'\n", filename);
+    return CLIB_NO_CONFIGFILE;
+  }
+
+  /* Grab very first token - presumably a name */
+  if ((toklen = get_next_token(cfg_file, &tok)) == 0) {
+      fclose(cfg_file);
+      return CLIB_OK;
+  }
+
+  while (1) {  /* repeat once for each name/value pair */
+
+    while(1) {  /* repeat once for each token */
+
+      /* Is the current token a name value? */
+      if (is_name_tok(tok)) {
+	if (cur != NULL) {
+	  /* need to add previous nv pair */
+	  if (ll_add_to_end(&config_list, (void *) cur) != 1) {
+	    free(cur);
+	    fclose(cfg_file);
+	    return CLIB_CONFIG_ERROR;
+	  }
+	}
+	/* Allocate a new nv pair */
+	cur = (cfg_nv *) calloc(1, sizeof(cfg_nv));
+	if (cur == NULL) {
+	  fprintf(stderr, "Out of memory in config_parse (1)\n");
+	  exit(1);
+	}
+	/* Stuff in the name value */
+	cur->name = tok;
+      } else {
+	/* it's a value.  special case the first value */
+	if (cur->value == NULL)
+	  cur->value = tok;
+	else {
+	  tmp = realloc(cur->value, strlen(cur->value) + toklen + 1);
+	  if (tmp == NULL) {
+	    fprintf(stderr, "Out of memory in config_parse (2)\n");
+	    exit(1);
+	  }
+	  strcat(tmp, " ");
+	  strcat(tmp, tok);
+	  cur->value = tmp;
+	}
+      }
+      if ((toklen = get_next_token(cfg_file, &tok)) == 0) {
+	if (cur != NULL) {
+	  /* need to add previous nv pair */
+	  if (ll_add_to_end(&config_list, (void *) cur) != 1) {
+	    free(cur);
+	    fclose(cfg_file);
+	    return CLIB_CONFIG_ERROR;
+	  }
+	}
+	fclose(cfg_file);
+	return CLIB_OK;
+      }
+    }
+    cur = NULL;
+  }
+  fclose(cfg_file);
+  return CLIB_OK;
+}
+
+/** 
+**  get_next_matching: given a string representing a name token, and a
+**  pointer to an element "last_value" in the linked list, this
+**  function will find and return a pointer to the first cfg_nv
+**  structure in the list after the "last_value" element that has a name
+**  that matches (case-insensitively) "name".  It returns a pointer to the
+**  cfg_nv structure and a pointer to the linked list element containing
+**  that structure on success, and NULL on failure.
+**
+**  This procedure IS THREAD SAFE.
+**/  
+
+cfg_nv *get_next_matching(char *name, ll *last_value)
+{
+  ll      cur_val = *last_value;
+  cfg_nv *data;
+
+  while (cur_val != NULL) {
+    data = (cfg_nv *) cur_val->data;
+    if (strcasecmp(data->name, name) == 0) {
+      *last_value = cur_val;
+      return data;
+    }
+    cur_val = cur_val->next;
+  }
+  *last_value = NULL;
+  return NULL;
+}
+
+int get_next_token(FILE *file, char **token)
+{
+  int nextc;
+  int toklen = 0;
+  char nextline[1024], *tmp;
+
+  *token = (char *) malloc(sizeof(char));
+  if (*token == NULL) {
+    fprintf(stderr, "Out of memory in get_next_token.\n");
+    exit(1);
+  }
+  *token = '\0';
+
+  while(1) {
+    /* Get next character, add it to the token */
+    nextc = fgetc(file);
+    if (nextc == EOF) {
+      if (toklen == 0)
+	return 0;
+      return toklen;
+    }
+
+    switch(nextc) {
+    case ' ':
+    case '\t':
+    case '\n':
+    case '\r':
+      if (toklen == 0)
+	continue;
+      return toklen;
+      break;
+    case '#':
+      /* read until end of line */
+      while (1) {
+	if (fgets(nextline, 1024, file) == NULL) {
+	  return toklen;
+	}
+	if (nextline[strlen(nextline)-1] == '\n')
+	  break;
+      }
+      break;
+    default:
+      /* we have a real character - append it to the token */
+      tmp = realloc(*token, toklen+2);
+      if (tmp == NULL) {
+	fprintf(stderr, "Out of memory in get_next_token.\n");
+	exit(1);
+      }
+      *token = tmp;
+      *(tmp + toklen) = nextc;
+      *(tmp + toklen + 1) = '\0';
+      toklen++;
+      break;
+    }
+  }
+  return 0;
+}
+
+int is_name_tok(char *tok)
+{
+  int i=0;
+
+  while(name_tokens[i] != NULL) {
+    if (strcasecmp(name_tokens[i], tok) == 0)
+      return 1;
+    i++;
+  }
+
+  return 0;
+}
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@Client-library for talking with the partitioned harvest cache subsystem.
+@
+text
+@@

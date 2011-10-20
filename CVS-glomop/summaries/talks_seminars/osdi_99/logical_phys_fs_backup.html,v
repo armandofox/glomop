@@ -1,0 +1,144 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	99.02.26.17.30.06;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@more good stuff - osdi 1999
+@
+text
+@<html> <head>
+<title>Logical vs. Physical File System Backup</title>
+</head>
+
+<body>
+<h2>Logical vs. Physical File System Backup<p>
+Norm Hutchinson and Network Appliance</h2>
+
+<h3>Paper summary</h3>
+<ul>
+     <li> Motivation: datasize getting bigger, so backup harder.  Backup
+	  needed - even with fault tolerant FS, can't protect against
+	  stupid people.
+     <li> Logical backup:  file-oriented, well-known archival format.
+	  Portable.  (Dump, tar, cpio, ...)
+     <li> Physical backup:  exactly copy physical medium.  Sequential
+	  access to media (fast).  Highly non-portable, but keeps all
+	  arcane semantics of fs, e.g. dump not supporting ACLs.
+	  (dd, Plan 9, ...)
+     <li> Goal:  evaluate two strategies for NetApp.  Methodology:  start
+	  with level playing field (hardware, software, implementation
+	  strategy, optimization effort, ...)
+     <li> Platform:  WAFL (write anywhere file layout).  Log-based file
+	  system.  NV-RAM to reduce latency.  Custom thin OS.  Everything
+	  in kernel address space (including backup/restore).
+	  <ul>
+	       <li> Block map file - generalization of free bit-map.  What
+		    blocks are being used for what purposes?  Alive,
+		    snapshot version, kind of block, ...
+	       <li> Snapshots: read-only image of FS.  Maintained via
+		    copy-on-write. Blocks never over-written while
+		    referenced by snapshot.
+	       <li> Take snapshot before begin backup (consistency!).
+		    Critical for physical dump.
+	  </ul>
+     <li> Logical backup implementation
+	  <ul>
+	       <li> BSD dump-based.  Portable.
+	       <li> Recursive find.  Sequential i-node traversal (custom
+		    pre-fetch policy) for historical reasons.  Makes easy
+		    to do prefetch policy.
+	       <li> Restore:  creates virtual directory tree to avoid
+		    creating unnecessary directories.
+	  </ul>
+     <li> Physical backup implementation
+	  <ul>
+	       <li> Walk blockmap file sequentially - write all blocks
+		    referenced by the backup snapshot.
+	       <li> bypass file system for speed.
+	       <li> incremental backup - &quot;set difference&quot; between
+		    snapshots.
+	       <li> restore - need to cleanup.  Bag-o-bits that looks like
+		    FS, but cleanup loose ends (very quick to do).
+	  </ul>
+     <li> Setup
+	  <ul>
+	       <li> 500 MHz alpha, 512 MB RAM, 32 MB NVRAM, 56 9-Gbyte
+		    fibre-channel disks, 4 DLT-7000 tapes.
+	       <li> Used aged file systems.  (engineering FS at NetApp.
+	  </ul>
+     <li> observations:  both logical backup and restore require big chunks of
+	  CPU, but physical is factor of 3-6 less.  (20-40% logical, 5-10%
+	  physical).  Physical is tape-speed limited.  Logical nearly so.
+     <li> How can go faster?  Multiple backup devices in parallel.
+	  <ul>
+	       <li> Logical:  difficult to do, as dependencies in order of
+		    what you write in order to interpret on restore.  Do 4
+		    dumps in parallel for disjoint subsets of FS
+	       <li> Physical:  easy, as all blocks are independent.
+	       <li> observations:
+		    <ul>
+			 <li> logical:  CPU pegged at 90%, especially in
+			      logical restore.  No longer running as fast
+			      as tapes deliver - doing about 20 MB/s (tapes
+			      can handle 32 MB/s).
+			 <li> physical: CPU at about 30%, limited by tape
+			      bandwidth.
+		    </ul>
+	  </ul>
+     <li> Conclusions:  physical backup wins, as simple, and effectively
+	  parallizes.  Logical pegs CPU, and does random disk access (inode
+	  order).  But, logical is more flexible (can restore single file,
+	  for example).
+     <li> To get logical fast:
+	  <ul>
+	       <li> inode renumbering.  (gets tricky with incrementals -
+		    must preserve mapping across incrementals, and mapping
+		    is really big)
+	       <li> less restrictive output formats (separate mapping info
+		    from data)
+	       <li> Avoid NVRAM on restore.
+	  </ul>
+     <li> Making physical backup more flexible
+	  <ul>
+	       <li> single file restore:  separate meta info from data
+	       <li> backup subset of file system: traveral to set
+		    "snapshot" bits
+	       <li> swizzling: deal with differing sizes / geometries.
+	  </ul>
+</ul>
+
+<h3>Questions from audience</h3>
+<ul>
+     <li> Rob Pike:  but Plan 9 solved all this!  And, why can't you
+	  restore a single file from physical backup?  Don't you have all
+	  the metadata on tape that you need?
+     <li> Margo: claimed that phys fast because can read disk blindingly
+	  fast.  But what happens when file system activity and backup are
+	  colliding, since can't take down most file systems for backup?
+	  Answer: probably ok.  Bursts of reads, then wait for tape to
+	  consume data.  Will see some hiccups, but shouldn't be so bad.
+</ul>
+
+<hr>
+<address><a href="http://www.cs.berkeley.edu/~gribble/">Steve
+Gribble</a> / <i><a   
+HREF="mailto:gribble@@cs.berkeley.edu">gribble@@cs.berkeley.edu</a></i></address>
+<!-- hhmts start -->
+Last modified: Thu Feb 25 09:31:53 1999
+<!-- hhmts end -->
+</body> </html>
+@

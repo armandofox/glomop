@@ -1,0 +1,390 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.7
+date	97.04.18.23.35.08;	author fox;	state dead;
+branches;
+next	1.6;
+
+1.6
+date	97.04.18.01.05.10;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.04.09.02.59.22;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.07.22.42.07;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.04.07.20.33.04;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.04.07.02.11.38;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.07.01.55.25;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@#!/bin/sh
+# I'm using this hack so that I can rely on the system using the PATH
+# environment variable to locate wish
+#
+# the exec restarts using wish which in turn ignores
+# the command because of this backslash: \
+exec tclsh "$0" "$@@"
+
+
+
+
+proc periodic_check { } {
+    global V
+
+    if { $V(dont_ping_count) > 0 } {
+	set V(dont_ping_count) [expr $V(dont_ping_count) -1 ]
+    } else {
+	if { $V(waiting_for_response) } {
+	    # I'm still waiting for a response from the front-end
+	    # the FE must be dead
+	    set waiting_for_response 0
+	    if { $V(socket) != {} } { 
+		close $V(socket) 
+		set V(socket) {}
+	    }
+	    fe_dead
+	} else {
+	    send_ping
+	}
+    }
+
+    after $V(ping_interval_ms) periodic_check 
+}
+
+
+
+
+proc send_ping { } {
+    global V
+
+    #puts stderr "Sending ping"
+    # try to connect
+    if [catch { set V(socket) [socket $V(host) $V(port)] } ] {
+	# an error occurred
+	set V(socket) ""
+	set V(waiting_for_reponse) 0
+	puts stderr "*********************************************************"
+	puts stderr "Could not connect to $V(host)/$V(port)"
+	puts stderr "*********************************************************"
+	fe_dead
+	return
+    }
+    
+    # send the HTTP request
+    puts $V(socket) "GET http://www.cs.berkeley.edu/ HTTP/1.0\n\n"
+    flush $V(socket)
+
+    # wait for response
+    set V(waiting_for_response) 1
+    fileevent $V(socket) readable got_response
+}
+
+
+proc got_response { } {
+    global V
+
+    if { $V(heard_from_fe)==0 } {
+	puts stderr "I got a response from the new frontend!"
+    }
+
+    set V(heard_from_fe) 1
+    set V(fe_restart_count) 0
+    gets $V(socket)
+    if [eof $V(socket)] {
+	puts stderr "*********************************************************"
+	puts stderr "The socket was closed on me!"
+	puts stderr "*********************************************************"
+	close $V(socket)
+	set V(socket) ""
+	return
+    }
+
+    set V(waiting_for_response) 0
+    close $V(socket)
+    set V(socket) ""
+}
+
+
+proc fe_dead { } {
+    global V
+
+    if { $V(heard_from_fe)==1 } {
+	# I had heard from an FE previously; it must have died; 
+	# I must save its state
+	puts stderr "*********************************************************"
+	puts stderr "Boo hoo: FE is dead!"
+	puts stderr "*********************************************************"
+	notify_humans fe_dead [save_fe_state]
+    }
+
+    if { $V(fe_restart_count)==1 } {
+	puts stderr "*********************************************************"
+	puts stderr "FE didn't restart!"
+	puts stderr "*********************************************************"
+	notify_humans restart_failure
+    }
+
+    if { $V(command) != {} } {
+	set V(dont_ping_count) [expr int(double($V(new_fe_wait_ms))/ \
+		double($V(ping_interval_ms)) + 0.5)]
+
+	set  V(heard_from_fe) 0
+	incr V(fe_restart_count)
+	puts stderr "Trying to restart the FE on $V(host)"
+	set pwd [pwd]
+	cd ..
+	if { $V(host)!="127.0.0.1" } {
+	    set cmd "rsh $V(host) \";\" cd [pwd] \";\" $V(command)"
+	} else {
+	    set cmd $V(command)
+	}
+
+	eval exec $cmd &
+	cd $pwd
+    }
+}
+
+
+proc save_fe_state { } {
+    # assuming that this script has been invoked from the frontend directory
+    set saveDir "saved_state.[clock seconds]"
+    if [catch { exec mkdir $saveDir }] {
+	# error creating the directory
+	set saveDir "(error)"
+    } else {
+	cd $saveDir
+	catch { exec mv ../core ./fe_core }
+	catch { exec mv ../../ptm/core ./ptm_core }
+	catch { exec mv ../frontend.errs ./frontend.errs }
+	cd ..
+    }
+    return $saveDir
+}
+
+
+proc notify_humans { what args } {
+    global V
+    if { ![info exists V(sendmail)] } {
+	locate_sendmail
+    }
+    set    mail "From: Front-end-checker\n"
+    append mail "To: transend-bugs@@latte.cs.berkeley.edu\n"
+
+    if { $what=="fe_dead" } {
+	set saveDir [lindex $args 0]
+	append mail "Subject: -- URGENT: FE crash --\n"
+	append mail "\n"
+	append mail "Frontend crashed: [clock format [clock seconds]]\n"
+	append mail "FE state has been saved in directory frontend/$saveDir\n"
+    } elseif { $what=="restart_failure" } {
+	append mail "Subject: -- URGENT: FE didn't restart --\n"
+	append mail "\n"
+	append mail "Could not restart the frontend!\n"
+    }
+
+    exec echo $mail | $V(sendmail) -t
+    puts stderr "*********************************************************"
+    puts stderr "$V(sendmail): Trying to send mail"
+    puts stderr "*********************************************************"
+}
+
+
+proc locate_sendmail { } {
+    global V
+    set libs { /usr/sbin /usr/bin /usr/lib /usr/etc }
+    foreach lib $libs {
+	set file "$lib/sendmail"
+	if { [file executable $file] } {
+	    set V(sendmail) $file
+	    return
+	}
+    }
+
+    puts stderr "*********************************************************"
+    puts stderr "Could not locate sendmail: looked in $libs"
+    puts stderr "*********************************************************"
+}
+
+
+
+
+
+
+set V(host)             [lindex $argv 0]
+set V(port)             [lindex $argv 1]
+set V(ping_interval_ms) [lindex $argv 2]
+set V(command)          [lindex $argv 3]
+set V(waiting_for_response) 0
+set V(heard_from_fe) 0
+set V(fe_restart_count) 0
+set V(socket) ""
+set V(new_fe_wait_ms) 60000
+set V(dont_ping_count) 0
+
+periodic_check
+set dummy 0
+vwait dummy
+@
+
+
+1.6
+log
+@possible bug fix
+@
+text
+@@
+
+
+1.5
+log
+@HTML munger changes for the TS logo with frames
+fe_checker waits for 30 seconds before re-pinging
+@
+text
+@d22 4
+a25 1
+	    if { $V(socket) != {} } { close $V(socket) }
+@
+
+
+1.4
+log
+@More bug fixes: using sendmail instead of mail; sending mail if the fe
+fails to restart
+@
+text
+@d199 1
+a199 1
+set V(new_fe_wait_ms) 20000
+@
+
+
+1.3
+log
+@Bug fixes
+@
+text
+@d14 3
+a16 6
+    if { $V(waiting_for_response) } {
+	# I'm still waiting for a response from the front-end
+	# the FE must be dead
+	set waiting_for_response 0
+	if { $V(socket) != {} } { close $V(socket) }
+	fe_dead
+d18 9
+a26 1
+	send_ping
+d38 1
+d44 1
+a44 1
+	puts "************************************************************"
+d46 1
+a46 1
+	puts "************************************************************"
+d69 1
+d72 1
+a72 1
+	puts "************************************************************"
+d74 1
+a74 1
+	puts "************************************************************"
+d92 1
+a92 1
+	puts "************************************************************"
+d94 9
+a102 2
+	puts "************************************************************"
+	save_fe_state
+d106 5
+a110 1
+	set V(heard_from_fe) 0
+d139 11
+d151 16
+a166 1
+    notify_humans $saveDir
+d170 14
+a183 4
+proc notify_humans { saveDir } {
+    set body "Frontend crashed: [clock format [clock seconds]]\nFE state has been saved in directory frontend/$saveDir"
+    catch {exec echo $body | mail -s "--- URGENT: FE crash ---" \
+	    transend-bugs@@latte.cs.berkeley.edu &}
+d190 5
+a194 3
+set V(host)    [lindex $argv 0]
+set V(port)    [lindex $argv 1]
+set V(command) [lindex $argv 2]
+d197 1
+d199 2
+a200 2
+set V(ping_interval_ms) 30000
+
+@
+
+
+1.2
+log
+@Changed yatin@@cs to transend-bugs@@latte
+@
+text
+@d128 1
+a128 1
+    catch {exec echo $body | mail -s "*** URGENT: FE crash ***" \
+@
+
+
+1.1
+log
+@fe_check: the frontend process-pair
+changed Makefile to default NTHREADS to 350
+@
+text
+@d38 1
+d40 1
+d58 4
+d65 1
+d67 1
+a72 1
+    puts stderr "Got a response"
+d85 1
+d87 1
+d93 1
+a93 1
+	puts stderr "Trying to restart the FE"
+d129 1
+a129 1
+	    yatin@@cs.berkeley.edu &}
+@

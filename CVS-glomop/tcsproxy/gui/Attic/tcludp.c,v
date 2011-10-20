@@ -1,0 +1,238 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	96.12.11.01.12.20;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.21.23.25.08;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.21.23.25.08;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#include "tcl.h"
+
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <errno.h>
+#include <string.h>
+
+#define MAXPROCNAMELEN 80    
+#define MAXARGS 256             /* max # strings in a single UDP dgram */
+
+typedef struct {
+  Tcl_Interp *cb_interp;
+  int cb_sock;
+  char cb_procname[MAXPROCNAMELEN];
+} CB;
+
+/*
+ *  Forward prototypes
+ */
+
+static int   TUDP_UdpListenCmd  _ANSI_ARGS_((ClientData cd, Tcl_Interp *i,
+                                         int argc, char *argv[]));
+static int   TUDP_UdpForgetCmd  _ANSI_ARGS_((ClientData cd, Tcl_Interp *i,
+                                         int argc, char *argv[]));
+static Tcl_FileProc TUDP_ReceiveDgram;
+
+/*
+ *  TUDP_UdpListenCmd
+ *
+ *  This procedure is invoked to handle the "udp_listen" command.  It
+ *  expects a UDP port number and the name of a callback function.  It
+ *  sets up the event-based callback to TUDP_ReceiveDgram, and sets
+ *  interp->result to the filehandle of the socket.
+ */
+
+static int
+TUDP_UdpListenCmd(dummy, interp, argc, argv)
+     ClientData dummy;
+     Tcl_Interp *interp;
+     int argc;
+     char *argv[];
+{
+  int port;
+  int sock;
+  Tcl_File tclsock;
+  int protonum;
+  struct protoent *pr;
+  struct sockaddr_in inaddr;
+  CB callback_info;
+
+  if (argc != 3) {
+    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
+                     " portnum callbackproc\"", (char *) NULL);
+    return TCL_ERROR;
+  }
+  if (strlen(argv[2]) > MAXPROCNAMELEN-1) {
+    Tcl_AppendResult(interp, "callback proc name too long", (char *)NULL);
+    return TCL_ERROR;
+  }
+
+  port = atoi(argv[1]);
+  if (port > 65535) {
+    Tcl_AppendResult(interp, "Port must be <65535", (char *)NULL);
+    return TCL_ERROR;
+  }
+
+  if ((pr = getprotobyname("udp")) == NULL) {
+    Tcl_AppendResult(interp, "getprotobyname: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+  protonum = pr->p_proto;
+
+  if ((sock = socket(PF_INET, SOCK_DGRAM, protonum)) < 0) {
+    Tcl_AppendResult(interp, "socket: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+
+  inaddr.sin_family = AF_INET;
+  inaddr.sin_addr.s_addr = INADDR_ANY;
+  inaddr.sin_port = port;
+  if (bind(sock, (struct sockaddr *)&inaddr, sizeof(inaddr)) < 0) {
+    Tcl_AppendResult(interp, "bind: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+  if (listen(sock, 2) < 0) {
+    Tcl_AppendResult(interp, "listen: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+  /*
+   *  now register the callback
+   */
+  strcpy(callback_info.cb_procname, argv[2]);
+  tclsock = Tcl_GetFile((ClientData)sock, TCL_UNIX_FD);
+  callback_info.cb_interp = interp;
+  callback_info.cb_sock = sock;
+  Tcl_CreateFileHandler(tclsock, TCL_READABLE|TCL_EXCEPTION,
+                        TUDP_ReceiveDgram, (ClientData)&callback_info);
+  sprintf(interp->result, "%d", sock);
+  return TCL_OK;
+}
+
+static int
+TUDP_UdpForgetCmd(dummy, interp, argc, argv)
+     ClientData dummy;
+     Tcl_Interp *interp;
+     int argc;
+     char *argv[];
+{
+  Tcl_File tf;
+  int sock;
+  if (argc != 2) {
+    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
+                     " sockid\"", (char *) NULL);
+    return TCL_ERROR;
+  }
+  
+  sock = atoi(argv[1]);
+  tf = Tcl_GetFile((ClientData)sock, TCL_UNIX_FD);
+  Tcl_DeleteFileHandler(tf);
+  return TCL_OK;
+}
+
+/*
+ *  Callback routine.  Receive a packet, chop it up into null-terminated
+ *  ASCII strings, and call the Tcl callback proc with the sending host
+ *  IP address, sending port number, and the strings.
+ */
+
+static void
+TUDP_ReceiveDgram(cd, mask)
+     ClientData cd;
+     int mask;
+{
+
+  CB *cb = (CB *)cd;
+  int index, count;
+  int fromlen;
+  struct sockaddr_in from;
+  char buf[65535];
+  int msglen;
+  char sender_ipaddr[16], sender_port[6];
+  unsigned long ipaddr;
+  int nargs;
+  char indices[MAXARGS];
+
+  msglen = recvfrom(cb->cb_sock, buf, sizeof(buf), 0,
+                    (struct sockaddr *)&from, &fromlen);
+  
+  if (msglen <= 0) {
+    return;
+  }
+
+  /*
+   *  Parse out IP address and port of sender from the sockaddr_in.
+   */
+
+  sprintf(sender_port, "%d", (int)(from.sin_port));
+  ipaddr = from.sin_addr.s_addr;
+  sprintf(sender_ipaddr, "%d.%d.%d.%d", (int)(ipaddr >> 24),
+          (int)((ipaddr >> 16) && 0xff), (int)((ipaddr >> 8) & 0xff),
+          (int)(ipaddr & 0xff));
+  
+  /*
+   *  If the datagram contains any zeros, replace them with '@@'.
+   */
+          
+  buf[msglen] = '\0';
+  for (index = 0; index < msglen; index++)
+    if (buf[index] == '\0')
+      buf[index] = '@@';
+
+  /*
+   *  deliver it....
+   */
+
+  if (Tcl_VarEval(cb->cb_interp, cb->cb_procname, sender_ipaddr, sender_port, buf,
+                  (char *)NULL)
+      != TCL_OK) 
+    Tcl_BackgroundError(cb->cb_interp);
+}
+
+    
+    
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

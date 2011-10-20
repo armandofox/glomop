@@ -1,0 +1,191 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.09.15.18.09.46;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.10.18.05.41;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@added mitzenmachers paper and scalable timers
+@
+text
+@<html>
+<title>
+Effective Distributed Scheduling of Parallel Workloads
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Effective Distributed Scheduling of Parallel Workloads
+</h1>
+<strong>
+Andrea C. Dusseau, Remzi H. Arpaci, and David E. Culler
+</strong>
+
+<p><b>One-line summary:</b>
+Implicit scheduling allows each local scheduler in a distributed system to
+make independent decisions that have the bulk effect of coordinating the
+scheduling of cooperating processes across processors;  they show implicit
+scheduling is near that of coscheduling without requiring global explicit
+coordination.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> coscheduling badness:
+	  <ul>
+	       <li> hard to design and implement
+	       <li> ignores needs ot mixed workloads (I/O intensive or
+		    interactive jobs)
+	       <li> busy-waiting during I/O, which is cycle-wasteful
+	  </ul>
+     <li> their processing model: bulk-synchronous SPMD
+	  <ul>
+	       <li> phases of purely local computation, separated by
+		    barriers
+	       <li> within a barrier, some cross-processor communication
+		    occurs
+	       <li> vary mean computation time <i>g</i>, and variation in
+		    computation time <i>v</i> (i.e. imbalance of jobs
+		    across processors)
+	       <li> examine 3 communication pattens: barrier (no
+		    communication), news (a grid communication pattern,
+		    each process communicates with 4 neighbours), and
+		    transpose (<i>P</i> read phases, on
+		    <i>i</i>th read, process <i>p</i> reads
+		    data from process <i>(p+i) mod P</i>.
+	  </ul>
+     <li> implicit scheduling
+	  <ul>
+	       <Li> communicating processes dynamically identified and
+		    coordinated.  <b>two-phase blocking</b>: waiting
+		    process spins for some predetermined time, and if
+		    response is received continues executing and if not,
+		    process blocks and yields processor.  The secret sauce
+		    is in knowing how long to spin-block.
+	       <li> <b>immediate blocking</b>: bad vs. coscheduling.  For
+		    coarse-grained jobs (large <i>g</i>), does ok.  For
+		    fine-grained jobs (small <i>g</i>), does pitifully
+		    because of large context-switch and idle processor
+		    time.  Up to factor of 14 worse than coscheduling for
+		    transpose pattern.
+	       <li> <b>static blocking</b>:
+		    <ul>
+			 <li> spin time = context switch time: does much
+			      better, about factor of 3-5 slowdown from
+			      coscheduling.  Much time is now spent
+			      spinning on barrier, little time idle or
+			      context-switching.  <b>This counts on fact
+			      that process is woken with high-priority by
+			      scheduler when a message arrives for it.</b>
+			 <li> spin time = 2 x context switch time: does
+			      significantly better, about factor of 1-1.2
+			      slowdown.  Argue that a skew of 2 x context
+			      switch time is introduced by distributed
+			      scheduling when returning from barriers, and
+			      that waiting at least this smooths over
+			      scheduling irregularities.  One bad case: if
+			      variation is higher than 2 x CS, then get
+			      spikes of bad performance because end up not
+			      waiting long enough.
+		    </ul>
+	       <li> <b>Adaptive algos</i>:
+		    <ul>
+			 <li> <b>Load-imbalance oracle</b>: there is a
+			      minimum spin-time <i>S</i> that ensures
+			      coordinated processes remain coordinated, and
+			      a load imbalance <i>V</i> past which it is
+			      more beneficial to block at barrier than to
+			      spin until barrier completes.  We know S is
+			      at least 2 x CS.  Some simple cost analysis
+			      shows that V is 10 x CS.  For oracle
+			      (perfect knowledge of imbalance), get to
+			      within 1.2 of coscheduling.
+			 <li> <b>Load-imbalance approx</b>: can approximate
+			      knowledge of load imbalance with to measure
+			      wait-times and remove outliers due to
+			      scheduling irregularities (e.g. interactive
+			      job got scheduled).  Does worse than oracle
+			      for fine-grained programs because
+			      approximation of load-imbalance is worse than
+			      actual one, causing process to not sping-wait
+			      long enough.  Low approx because some valid
+			      wait times are thrown out by removing
+			      outliers.
+			 <li> <b>Global approx</b>: their barrier
+			      implementation assumes a barrier server which
+			      does a global notification on barrier
+			      completion.  That barrier server can
+			      explicitly calculate load imbalance and
+			      provide that figure along with barrier
+			      completion notifications.  Does pretty mch
+			      the same as oracle.
+		    </ul>
+	  </ul>
+     <li> Sensitivity to scheduler
+	  <ul>
+	       <li> If timers in local schedulers are synchronized across
+		    processors, adaptive blocking algorithm gets better
+		    (from 1.3x to 1.15x worse than coscheduling).
+	       <li> If round-robin scheduling is used (instead of priority
+		    sched. with processes receiving messages getting
+		    immediate boost and scheduling), performance dives to
+		    3.4x worse than coscheduling.
+	  </ul>
+</ul>
+
+<h2>Relevance</h2>
+Excellent way to eliminate complexity when coscheduling parallel jobs.
+Implicit information is clearly cheap (free!) to obtain and nearly always
+right.  <b>Sounds a heck of a lot like the BASE philosophy.  We should
+remember this and talk about it when we chat with Steve McCanne about
+soft-state protocols.</b>
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> Dependence on priority scheduler that immediately schedules a
+	  process after receiving message is a little fishy, but I guess I
+	  can live with it.
+     <li> Seems extremely sensitive to perturbations in the system - what
+	  if very heavy non-parallel-job workloads are on the system?  What
+	  if the communication latencies across processors is high and
+	  variable?  These things will blow the validity of implicit
+	  information.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@Added implicit scheduling summary.
+@
+text
+@d56 1
+a56 1
+	       <li> <b>immediate blocking</i>: bad vs. coscheduling.  For
+d62 1
+a62 1
+	       <li> <b>static blocking</i>:
+@

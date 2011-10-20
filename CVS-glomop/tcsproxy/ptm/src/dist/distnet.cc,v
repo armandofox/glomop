@@ -1,0 +1,1231 @@
+head	1.18;
+access;
+symbols
+	Yatin-final:1.17.2.1
+	Yatin:1.17.0.2
+	pre-yatin-merge:1.17
+	transend-beta2:1.14
+	fox-dev:1.14
+	ptm-ng:1.14
+	transend-beta-latest:1.14
+	Aggregators:1.14
+	NoAggregators:1.14
+	iang:1.14.0.2
+	transend-beta:1.12.0.2
+	SOSP:1.11
+	stable_ptm:1.9
+	merged_preintegrate:1.5
+	heisenbug:1.5
+	PRE_INTEGRATION:1.5;
+locks; strict;
+comment	@// @;
+
+
+1.18
+date	98.01.16.22.16.25;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.09.22.20.33.02;	author fox;	state Exp;
+branches
+	1.17.2.1;
+next	1.16;
+
+1.16
+date	97.09.18.22.45.25;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.15.03.09.40;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.28.18.46.44;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.04.28.17.35.42;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.04.07.00.26.31;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.03.07.20.36.53;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.26.04.15.07;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.07.21.54.55;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.29.23.26.14;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.29.06.00.56;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.04.09.55.45;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.24;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.08.21.41;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.00.42.31;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.57;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.56;	author yatin;	state Exp;
+branches;
+next	;
+
+1.17.2.1
+date	97.11.17.22.07.07;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "defines.h"
+#include "log.h"
+#include "distiller.h"
+#include "packet.h"
+
+
+gm_Bool
+PTMConnection::EvConnectionBroken(EventSystem */*evs*/)
+{
+  gm_Log("PTM connection lost; trying to listen for new PTM address\n");
+  MyDistiller::getInstance()->ClosePTMConnection();
+  return MyDistiller::getInstance()->ListenOnSharedBus();
+}
+
+
+gm_Bool
+ProxyServer::EvConnectionReceived(EventSystem *evs, int newSocketID)
+{
+  ProxyConnection *socket;
+  if ((socket = new ProxyConnection(newSocketID))==NULL) 
+    Return(gm_False, errOutOfMemory);
+  if (Error::getStatus()!=success) return gm_False;
+  
+  gm_Log("Received connection from front end\n");
+  return evs->AddCommunicationObject(socket);  
+}
+
+
+/* 
+ * Packet format:
+ *   "PTM-IP-Address|PTM-Port-Number|.....\0"
+ */
+class PTMBeaconHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, CommunicationObject *object);
+protected:
+};
+
+
+gm_Bool
+PTMBeaconHandler::Handle(gm_Packet *packet, CommunicationObject */*object*/)
+{
+  RemoteID ptmAddress;
+  UINT32 dummyRandomID;
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Delimit('|')  >> ptmAddress >> Skip >> Binary(gm_True) 
+	 >> dummyRandomID >> Binary(gm_False) >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+  if (ptmAddress.port==0) Return(gm_False, errFormattingError);
+
+  return MyDistiller::getInstance()->PTMLocationReceived(ptmAddress);
+}
+
+
+/* 
+ * Packet format:
+ *   "DistillerSleepStatus\0"
+ */
+class DistillerSleepHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, CommunicationObject *object);
+protected:
+};
+
+
+gm_Bool
+DistillerSleepHandler::Handle(gm_Packet *packet, 
+			      CommunicationObject */*object*/)
+{
+  UINT32 sleepStatusUINT32;
+  IStream stream(packet->getData(), packet->getLength());
+  stream >> Binary(gm_True) >> sleepStatusUINT32 >> Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+  return MyDistiller::getInstance()->Sleep_WakeUp((DistillerSleepStatus)
+						  sleepStatusUINT32);
+}
+
+
+
+#define HANDLE(HandlerObjectType) \
+{ \
+  HandlerObjectType handler; \
+  return handler.Handle(packet, this); \
+}
+
+
+gm_Bool
+Listener::EvPacketReceived(EventSystem */*evs*/, gm_Packet *packet)
+{
+  switch (packet->getType()) {
+  case pktPTMBeacon: HANDLE(PTMBeaconHandler);
+  default:
+    Return(gm_False, errInvalidPacketType);
+  }
+}
+
+
+gm_Bool
+PTMConnection::EvPacketReceived(EventSystem */*evs*/, gm_Packet *packet)
+{
+  switch (packet->getType()) {
+  case pktDistillerSleep: HANDLE(DistillerSleepHandler);
+  default:
+    Return(gm_False, errInvalidPacketType);
+  }  
+}
+
+
+gm_Bool
+ProxyConnection::EvPacketReceived(EventSystem */*evs*/, gm_Packet *packet)
+{
+  switch (packet->getType()) {
+  case pktDistillerInput:
+    {
+      Work *work;
+      if ((work = new Work(this))==NULL) Return(gm_False, errOutOfMemory);
+      
+      work->replyID = packet->getRequestReplyID();
+      if (UnmarshallDistillerInput(work, packet)==gm_False) {
+	delete work;
+	return gm_False;
+      }
+      
+      if (MyDistiller::getInstance()->WorkReceived(work)==gm_False) {
+	delete work;
+	return gm_False;
+      }
+      return gm_True;
+    }
+
+  default:
+    Return(gm_False, errInvalidPacketType);
+  }
+}
+
+
+gm_Bool
+ProxyConnection::EvConnectionBroken(EventSystem *evs)
+{
+  gm_Log("Front end connection lost\n");
+  evs->RemoveCommunicationObject(this);
+
+  MarkForDeletion(); // this object will be garbage-collected later on
+  return gm_True;
+}
+
+
+gm_Bool
+ProxyConnection::UnmarshallDistillerInput(Work *work, gm_Packet *packet)
+{
+  UINT32   argTypeUINT32;
+  Argument *argument;
+
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Binary(gm_True) >> work->numberOfArgs;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (work->numberOfArgs > 0) {
+    work->args = new Argument [work->numberOfArgs];
+    if (work->args==NULL) Return(gm_False, errOutOfMemory);
+  }
+
+  for (UINT32 idx=0; idx < work->numberOfArgs; idx++) {
+    argument = &work->args[idx];
+
+    stream >> argTypeUINT32 >> argument->id;
+    if (stream.IsGood()==gm_False) { 
+      delete [] work->args; 
+      work->args = NULL; 
+      return gm_False; 
+    }
+    argument->type = (ArgumentType) argTypeUINT32;
+
+    switch(argument->type) {
+    case typeInt: 
+      {
+	stream >> _ARG_INT(*argument);
+	if (stream.IsGood()==gm_False) return gm_False;
+	break;
+      }
+    case typeString:
+      {
+	stream >> SetW(MAX_ARG_STRING)   >> Delimit('\0') 
+	       >> _ARG_STRING(*argument) >> Skip;
+	if (stream.IsGood()==gm_False) return gm_False;
+	break;
+      }
+    case typeDouble:
+      {
+	char   doubleString[MAX_ARG_STRING];
+	float  arg_double;
+	stream >> SetW(MAX_ARG_STRING) >> Delimit('\0') >> doubleString >>Skip;
+	if (stream.IsGood()==gm_False) return gm_False;
+	sscanf(doubleString, "%f", &arg_double);
+	SET_ARG_DOUBLE(*argument, (double)arg_double);
+	break;
+      }
+    default:
+      Return(gm_False, errFormattingError);
+    }
+  }
+
+  /*
+   *  Read data block
+   */
+  stream >> Binary(gm_True) >> work->input.data.length >> Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (work->input.data.length > 0) {
+    work->input.data.data = DistillerMalloc(work->input.data.length);
+    if (work->input.data.data==NULL) Return(gm_False, errOutOfMemory);
+    work->input.data.maxLength = work->input.data.length;
+    stream.Extract(work->input.data.data, work->input.data.length);
+    if (stream.IsGood()==gm_False) return gm_False;
+  }
+  else {
+    // no data
+    work->input.data.data = NULL;
+  }
+  /*
+   *  Read metadata block
+   */
+  stream >> Binary(gm_True) >> work->input.metadata.length >> Binary(gm_False);
+  if (stream.IsGood() == gm_False) return gm_False;
+
+  if (work->input.metadata.length > 0) {
+    work->input.metadata.data = DistillerMalloc(work->input.metadata.length);
+    if (work->input.metadata.data == NULL) Return(gm_False, errOutOfMemory);
+    work->input.metadata.maxLength = work->input.metadata.length;
+    stream.Extract(work->input.metadata.data, work->input.metadata.length);
+    if (stream.IsGood() == gm_False) return gm_False;
+  } else {
+    // no metadata
+    work->input.metadata.data = NULL;
+  }
+
+  stream >> work->input.mimeType;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  return gm_True;
+}
+
+
+gm_Bool
+ProxyConnection::SendReply(DistillerStatus status, DistillerOutput *output,
+			   UINT32 replyID)
+{
+  OStream stream;
+
+#ifdef _REPORT_STATS
+  if (status!=distOk) {
+    Statistics *stats = MyDistiller::getInstance()->getStats();
+    if (stats!=NULL) stats->IncrementBadRequests();
+  }
+#endif
+
+  if (output->data.data==NULL) output->data.length = 0;
+
+  stream << Binary(gm_True) << (UINT32)status << output->data.length 
+	 << Binary(gm_False);
+  if (stream.IsGood()==gm_False) {
+    return gm_False;
+  }
+
+  if (output->data.length > 0) {
+    stream.Append(output->data.data, output->data.length);
+    if (stream.IsGood()==gm_False) return gm_False;
+  }
+
+  // write metadata length followed by metadata
+  if (output->metadata.data==NULL) output->metadata.length = 0;
+
+  stream << Binary(gm_True) << output->metadata.length << Binary(gm_False);
+  if (output->metadata.length > 0) {
+    stream.Append(output->metadata.data, output->metadata.length);
+    if (stream.IsGood()==gm_False) return gm_False;
+  }
+
+  stream << output->mimeType;
+  if (stream.IsGood()==gm_False) return gm_False;
+  
+  gm_Packet packet(pktDistillerOutput, stream.getLength(), replyID,
+		stream.getData());
+
+  if (Write(&packet)==gm_False) {
+    // couldn't send over the socket
+    // probably means that the socket connection is broken
+    Error::SetStatus(success);
+    EvConnectionBroken(MyDistiller::getInstance()->getEventSystem());
+    return gm_True;
+  }
+
+  return gm_True;
+}
+@
+
+
+1.17
+log
+@max_length wasn't getting set properly in distiller stub routines in
+cachenet.cc and distnet.cc.  also modified SET_ARG_STRING macro to copy
+at most N-1 characters of the arg, to ensure there is room for strncpy
+to add a terminating null
+@
+text
+@d76 1
+a76 1
+						sleepStatusUINT32);
+@
+
+
+1.17.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d76 1
+a76 1
+						  sleepStatusUINT32);
+@
+
+
+1.16
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d214 1
+d231 1
+@
+
+
+1.15
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d35 1
+a35 1
+  gm_Bool Handle(Packet *packet, CommunicationObject *object);
+d41 1
+a41 1
+PTMBeaconHandler::Handle(Packet *packet, CommunicationObject */*object*/)
+d62 1
+a62 1
+  gm_Bool Handle(Packet *packet, CommunicationObject *object);
+d68 2
+a69 1
+DistillerSleepHandler::Handle(Packet *packet, CommunicationObject */*object*/)
+d89 1
+a89 1
+Listener::EvPacketReceived(EventSystem */*evs*/, Packet *packet)
+d100 1
+a100 1
+PTMConnection::EvPacketReceived(EventSystem */*evs*/, Packet *packet)
+d111 1
+a111 1
+ProxyConnection::EvPacketReceived(EventSystem */*evs*/, Packet *packet)
+d150 1
+a150 1
+ProxyConnection::UnmarshallDistillerInput(Work *work, Packet *packet)
+d282 1
+a282 1
+  Packet packet(pktDistillerOutput, stream.getLength(), replyID,
+@
+
+
+1.14
+log
+@Added the DistillerBuffer data structure to provide a more elegant way of
+freeing buffers between the library and the main program
+@
+text
+@d11 2
+a12 2
+  Distiller::getInstance()->ClosePTMConnection();
+  return Distiller::getInstance()->ListenOnSharedBus();
+d52 1
+a52 1
+  return Distiller::getInstance()->PTMLocationReceived(ptmAddress);
+d74 1
+a74 1
+  return Distiller::getInstance()->Sleep_WakeUp((DistillerSleepStatus)
+d124 1
+a124 1
+      if (Distiller::getInstance()->WorkReceived(work)==gm_False) {
+d251 1
+a251 1
+    Statistics *stats = Distiller::getInstance()->getStats();
+d288 1
+a288 1
+    EvConnectionBroken(Distiller::getInstance()->getEventSystem());
+@
+
+
+1.13
+log
+@added metadata support to distiller data struct
+@
+text
+@d207 1
+a207 1
+  stream >> Binary(gm_True) >> work->input.length >> Binary(gm_False);
+d210 4
+a213 4
+  if (work->input.length > 0) {
+    work->input.data = new char [work->input.length];
+    if (work->input.data==NULL) Return(gm_False, errOutOfMemory);
+    stream.Extract(work->input.data, work->input.length);
+d218 1
+a218 1
+    work->input.data = NULL;
+d223 1
+a223 1
+  stream >> Binary(gm_True) >> work->input.metalength >> Binary(gm_False);
+d226 4
+a229 4
+  if (work->input.metalength > 0) {
+    work->input.metadata = new char [work->input.metalength];
+    if (work->input.metadata == NULL) Return(gm_False, errOutOfMemory);
+    stream.Extract(work->input.metadata, work->input.metalength);
+d233 1
+a233 1
+    work->input.metadata = NULL;
+d256 1
+a256 1
+  if (output->data==NULL) output->length = 0;
+d258 1
+a258 1
+  stream << Binary(gm_True) << (UINT32)status << output->length 
+d264 2
+a265 2
+  if (output->length > 0) {
+    stream.Append(output->data, output->length);
+d270 1
+a270 1
+  if (output->metadata==NULL) output->metalength = 0;
+d272 3
+a274 3
+  stream << Binary(gm_True) << output->metalength << Binary(gm_False);
+  if (output->metalength > 0) {
+    stream.Append(output->metadata, output->metalength);
+@
+
+
+1.12
+log
+@Removed debugging information from the PTM code.
+Removed the setspecific/getspecific calls from frontend code
+@
+text
+@d204 3
+a206 1
+
+d217 1
+d220 15
+d266 9
+@
+
+
+1.11
+log
+@Added sleep mechanism to the distillers
+@
+text
+@a159 1
+    gm_Debug(dbgTmp, "Args = " << work->numberOfArgs << "\n");
+a208 1
+    gm_Debug(dbgTmp, "Input = " << work->input.length << "\n");
+@
+
+
+1.10
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d56 24
+d99 11
+d234 4
+a237 2
+  if (status!=distOk)
+    Distiller::getInstance()->getStats()->IncrementBadRequests();
+@
+
+
+1.9
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d125 1
+d175 1
+d222 1
+a222 1
+  if (packet.Send(this)==gm_False) {
+@
+
+
+1.8
+log
+@More changes for killing processes via the monitor
+@
+text
+@d24 1
+a24 1
+  gm_Log("Received connection from proxy\n");
+d105 1
+a105 1
+  gm_Log("Proxy connection lost\n");
+d195 5
+@
+
+
+1.7
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@a76 1
+  gm_Log("Packet received by distiller\n");
+@
+
+
+1.6
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d75 1
+a75 1
+ProxyConnection::EvSelect(EventSystem *evs)
+d77 19
+a95 25
+  Packet argsPacket, dataPacket;
+
+  if (argsPacket.Receive(this)==gm_False) 
+    return HandleSelectError(evs, &argsPacket);
+  if (argsPacket.getType()!=pktDistillerArguments) { 
+    Error::SetStatus(errInvalidPacketType);
+    return HandleSelectError(evs, &argsPacket);
+  }
+
+  if (dataPacket.Receive(this)==gm_False) 
+    return HandleSelectError(evs, &dataPacket);
+  if (dataPacket.getType()!=pktDistillerData) {
+    Error::SetStatus(errInvalidPacketType);
+    return HandleSelectError(evs, &dataPacket);
+  }
+  if (dataPacket.getRequestReplyID()!=argsPacket.getRequestReplyID()) {
+    // something's wrong - the two packets must have the same id
+    // we'll just ignore these packets
+    gm_Log("Invalid request ID's received for arguments and data packets. "
+	   "Ignoring the packets\n");
+    return gm_True;
+  }
+
+  Work *work;
+  if ((work = new Work(this))==NULL) Return(gm_False, errOutOfMemory);
+d97 2
+a98 4
+  work->replyID = argsPacket.getRequestReplyID();
+  if (UnmarshallArguments(work, &argsPacket)==gm_False) {
+    delete work;
+    return HandleSelectError(evs, &argsPacket);
+a99 10
+  if (UnmarshallData(work, &dataPacket)==gm_False) {
+    delete work;
+    return HandleSelectError(evs, &dataPacket);
+  }
+
+  if (Distiller::getInstance()->WorkReceived(work)==gm_False) {
+    delete work;
+    return gm_False;
+  }
+  return gm_True;
+d115 1
+a115 1
+ProxyConnection::UnmarshallArguments(Work *work, Packet *argsPacket)
+d120 1
+a120 1
+  IStream stream(argsPacket->getData(), argsPacket->getLength());
+d158 1
+a158 1
+	double arg_double;
+d161 2
+a162 2
+	sscanf(doubleString, "%lf", &arg_double);
+	SET_ARG_DOUBLE(*argument, arg_double);
+a168 2
+  return gm_True;
+}
+d171 16
+a186 5
+gm_Bool
+ProxyConnection::UnmarshallData(Work *work, Packet *dataPacket)
+{
+  work->input       = dataPacket->FreezeData();
+  work->inputLength = dataPacket->getLength();
+d192 2
+a193 2
+ProxyConnection::SendReply(DistillerStatus status, void *reply, 
+			   UINT32 replyLen, UINT32 replyID)
+d195 1
+a195 3
+  const int BufferSize=32;
+  static char buffer[BufferSize];
+  OStream stream(buffer, BufferSize); // don't need the overhead of malloc here
+d197 4
+a200 1
+  stream << Binary(gm_True) << (UINT32)status;
+a201 1
+    // no reason why this should happen
+d205 3
+a207 9
+  Packet statusPacket(pktDistillerStatus, stream.getLength(), replyID,
+		      stream.getData());
+
+  if (statusPacket.Send(this)==gm_False) {
+    // couldn't send over the socket
+    // probably means that the socket connection is broken
+    Error::SetStatus(success);
+    EvConnectionBroken(Distiller::getInstance()->getEventSystem());
+    return gm_True;
+d210 5
+a214 1
+  Packet dataPacket(pktDistillerReply, replyLen, replyID, (char*)reply);
+d216 1
+a216 1
+  if (dataPacket.Send(this)==gm_False) {
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@a6 30
+/*gm_Bool
+PTMConnection::EvSelect(EventSystem *evs)
+{
+  Packet packet;
+  if (packet.Receive(this)==gm_False) {
+    packet.HandleIgnorableErrors(Log);
+
+    switch(GlobalErrorCode) {
+    case success:
+      gm_BoolErrorReturn(success);
+      
+    case errSocketReadEOF:
+      SetGlobalError(success);
+      LOG ("PTM connection lost; trying to listen for new PTM address\n");
+      Distiller::getInstance()->ClosePTMConnection();
+      return Distiller::getInstance()->ListenOnSharedBus();
+
+    default:
+      return gm_False;
+    }
+  }
+  else {
+    // nothing to handle here
+    // we actually do not expect any packets from the PTM
+    // so the else part actually should never be executed!
+    gm_BoolErrorReturn(success);
+  }
+}*/
+
+
+d10 1
+a10 1
+  LOG ("PTM connection lost; trying to listen for new PTM address\n");
+d21 2
+a22 2
+    gm_BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return gm_False;
+d24 1
+a24 1
+  LOG("Received connection from proxy\n");
+a28 27
+/*gm_Bool
+Listener::EvSelect(EventSystem *evs)
+{
+  Packet packet;
+  if (packet.ReceiveAndHandle(evs, (PacketHandler*)
+			      Distiller::getInstance()->getPacketHandler(), 
+			      this) == gm_False) {
+    packet.HandleIgnorableErrors(Log);
+
+    switch(GlobalErrorCode) {
+    case success:
+      gm_BoolErrorReturn(success);
+      
+    case errSocketReadEOF:
+      // EOF on a connection-less socket! This must be a fatal error
+      // fall thru to the default case
+      
+    default:
+      return gm_False;
+    }
+  }
+  else gm_BoolErrorReturn(success);
+}*/
+
+
+
+
+d50 1
+a50 1
+  if (ptmAddress.port==0) gm_BoolErrorReturn(errFormattingError);
+d69 1
+a69 1
+    gm_BoolErrorReturn(errInvalidPacketType);
+d82 1
+a82 1
+    SetGlobalError(errInvalidPacketType);
+d89 1
+a89 1
+    SetGlobalError(errInvalidPacketType);
+d95 3
+a97 3
+    LOG("Invalid request ID's received for arguments and data packets. "
+	"Ignoring the packets\n");
+    gm_BoolErrorReturn(success);
+d101 1
+a101 1
+  if ((work = new Work(this))==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d103 1
+a103 1
+  work->replyID     = argsPacket.getRequestReplyID();
+d117 1
+a117 1
+  gm_BoolErrorReturn(success);
+d124 1
+a124 1
+  LOG("Proxy connection lost\n");
+d128 1
+a128 1
+  gm_BoolErrorReturn(success);
+d145 1
+a145 1
+    if (work->args==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d184 1
+a184 1
+      gm_BoolErrorReturn(errFormattingError);
+a185 1
+
+d187 1
+a187 1
+  gm_BoolErrorReturn(success);
+d196 1
+a196 1
+  gm_BoolErrorReturn(success);
+d220 1
+a220 1
+
+d222 1
+a222 1
+    gm_BoolErrorReturn(success);
+d230 1
+a230 1
+
+d232 1
+a232 1
+    gm_BoolErrorReturn(success);
+d235 1
+a235 1
+  gm_BoolErrorReturn(success);
+@
+
+
+1.4
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d7 1
+a7 1
+/*Bool
+d11 1
+a11 1
+  if (packet.Receive(this)==FALSE) {
+d16 1
+a16 1
+      BoolErrorReturn(success);
+d25 1
+a25 1
+      return FALSE;
+d32 1
+a32 1
+    BoolErrorReturn(success);
+d37 1
+a37 1
+Bool
+d46 1
+a46 1
+Bool
+d51 2
+a52 2
+    BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return FALSE;
+d59 1
+a59 1
+/*Bool
+d65 1
+a65 1
+			      this) == FALSE) {
+d70 1
+a70 1
+      BoolErrorReturn(success);
+d77 1
+a77 1
+      return FALSE;
+d80 1
+a80 1
+  else BoolErrorReturn(success);
+d92 1
+a92 1
+  Bool Handle(Packet *packet, CommunicationObject *object);
+d97 1
+a97 1
+Bool
+d104 4
+a107 4
+  stream >> Delimit('|')  >> ptmAddress >> Skip >> Binary(TRUE) 
+	 >> dummyRandomID >> Binary(FALSE) >> Skip;
+  if (stream.IsGood()==FALSE) return FALSE;
+  if (ptmAddress.port==0) BoolErrorReturn(errFormattingError);
+d120 1
+a120 1
+Bool
+d126 1
+a126 1
+    BoolErrorReturn(errInvalidPacketType);
+d131 1
+a131 1
+Bool
+d136 1
+a136 1
+  if (argsPacket.Receive(this)==FALSE) 
+d143 1
+a143 1
+  if (dataPacket.Receive(this)==FALSE) 
+d154 1
+a154 1
+    BoolErrorReturn(success);
+d158 1
+a158 1
+  if ((work = new Work(this))==NULL) BoolErrorReturn(errOutOfMemory);
+d161 1
+a161 1
+  if (UnmarshallArguments(work, &argsPacket)==FALSE) {
+d165 1
+a165 1
+  if (UnmarshallData(work, &dataPacket)==FALSE) {
+d170 1
+a170 1
+  if (Distiller::getInstance()->WorkReceived(work)==FALSE) {
+d172 1
+a172 1
+    return FALSE;
+d174 1
+a174 1
+  BoolErrorReturn(success);
+d178 1
+a178 1
+Bool
+d185 1
+a185 1
+  BoolErrorReturn(success);
+d189 1
+a189 1
+Bool
+d197 2
+a198 2
+  stream >> Binary(TRUE) >> work->numberOfArgs;
+  if (stream.IsGood()==FALSE) return FALSE;
+d202 1
+a202 1
+    if (work->args==NULL) BoolErrorReturn(errOutOfMemory);
+d209 1
+a209 1
+    if (stream.IsGood()==FALSE) { 
+d212 1
+a212 1
+      return FALSE; 
+d220 1
+a220 1
+	if (stream.IsGood()==FALSE) return FALSE;
+d227 1
+a227 1
+	if (stream.IsGood()==FALSE) return FALSE;
+d235 1
+a235 1
+	if (stream.IsGood()==FALSE) return FALSE;
+d241 1
+a241 1
+      BoolErrorReturn(errFormattingError);
+d245 1
+a245 1
+  BoolErrorReturn(success);
+d249 1
+a249 1
+Bool
+d254 1
+a254 1
+  BoolErrorReturn(success);
+d258 1
+a258 1
+Bool
+d266 2
+a267 2
+  stream << Binary(TRUE) << (UINT32)status;
+  if (stream.IsGood()==FALSE) {
+d269 1
+a269 1
+    return FALSE;
+d275 1
+a275 1
+  if (statusPacket.Send(this)==FALSE) {
+d280 1
+a280 1
+    BoolErrorReturn(success);
+d285 1
+a285 1
+  if (dataPacket.Send(this)==FALSE) {
+d290 1
+a290 1
+    BoolErrorReturn(success);
+d293 1
+a293 1
+  BoolErrorReturn(success);
+@
+
+
+1.3
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d1 2
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d99 1
+d102 2
+a103 1
+  stream >> Delimit('|') >> ptmAddress >> Skip;
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d101 1
+a101 4
+  stream.Delimit('|').SetW(MAXIP) >> ptmAddress.ipAddress;
+  if (stream.IsGood()==FALSE) return FALSE;
+
+  stream.Delimit('|') >> ptmAddress.port;
+d154 1
+a154 1
+  if ((work = new Work)==NULL) BoolErrorReturn(errOutOfMemory);
+a155 1
+  work->replyObject = this;
+a156 1
+
+d179 2
+a180 1
+  delete this;
+d193 1
+a193 1
+  stream.Binary(TRUE) >> work->numberOfArgs;
+d215 1
+a215 1
+	stream >> argument->arg_int;
+d221 2
+a222 1
+	stream.SetW(MAX_ARG_STRING).Delimit('\0') >> argument->arg_string;
+d228 3
+a230 2
+	char doubleString[MAX_ARG_STRING];
+	stream.SetW(MAX_ARG_STRING).Delimit('\0') >> doubleString;
+d232 2
+a233 1
+	sscanf(doubleString, "%lf", &argument->arg_double);
+d262 1
+a262 1
+  stream.Binary(TRUE) << (UINT32)status;
+@

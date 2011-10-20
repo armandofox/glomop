@@ -1,0 +1,129 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.09.17.20.23.50;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+U-Net MM
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Incorporating Memory Management into User-Level Network Interfaces
+</h1>
+<strong>
+Matt Welsh, Anindya Basu, Thorsten von Eicken, Cornell Univ.
+</strong>
+
+<p><b>One-line summary:</b> Allow network endpoints to be faulted in and
+out of the memory mapped for the NI,rather than pinning all that memory,
+just as pages are faulted in and out of user memory.  A dedicated on-NI
+TLB coordinates its operations with the OS's memory management, so the
+mechanisms are mostly OS-independent. (This addition to U-Net results in
+the "U-Net/MM" architecture.)
+
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Goal: Allow efficient use of high-performance NI's by multiple
+       applications without requiring all NI-mapped I/O memory to be
+       pinned.
+  <li> Paging the I/O buffers allows "zero copy" send/receive (directly
+       to/from application's data space), but must move some minimal
+       intelligence into the NI to do message mux/demux and virtual to
+       physical address translation (and signal "buffer faults").
+  <li> NI maintains short queues of pre-translated
+       (virtual-to-physical) buffer addresses for message receives.  If
+       none is available when a message arrives, msg may be dropped.
+  <li> If  buffer address can be translated (TLB hit) but buffer is paged out,
+       kernel initiates a page-in, but message may be dropped if page-in
+       is not completed by the time the message is ready to be delivered.
+  <li> On TLB miss, NI requests kernel to translate the buffer address.
+       If translation would result in access to a non-resident page,
+       kernel informs NI that translation will be deferred while the
+       page is faulted in.  NI may handle other requests during this
+       time.
+       (<b>Note:</b> Page-ins can't be initiated
+       from inside an interrupt
+       handler, so an in-kernel thread is activated to
+       handle the page-in and eventually provide the translation.  The
+       thread is moved to the head of the run queue.)
+  <li> NI TLB Consistency:
+       <ul>
+         <li> Kernel sets max size of pinned memory by limiting
+              size of NI TLB.
+         <li> When TLB evicts pages, notifies kernel to reduce
+              that page's reference count. ("Busy" pages are never
+              evicted.)
+         <li> Kernel never requests a TLB invalidation: since TLB is
+              used to set up DMA transfers that can take arbitrarily
+              long, only the NI knows when it's safe to invalidate an
+              entry.
+         <li> Result: TLB invalidations are atomic with respect to sends
+              and receives, including DMA's.
+       </ul>
+  <li> 2 implementations: Linux router connected to ATM switch with
+       embedded i960, and Win NT on DEC Alpha with DMA-capable fast
+       Ethernet.
+       <ul>
+         <li> Linux: TLB hit adds 1-2us to the critical path (about 10%
+              overhead) compared to U-Net without memory mgmt.  TLB miss
+              without page fault is 3-4x hit, with page fault is 5-6x.
+         <li> Win NT: added latency is comparable, but send critical path is
+              shorter (only about 3us) on NT, so overhead is relatively
+              larger (~30%),and page fault handling is almost an order
+              of magnitude increase in overhead. But hey, it's a page fault.
+       </ul>
+  <li> TLB simulations: 1K and 256 entry direct-mapped TLB's with
+       16-entry fully-associative victim cache.  The 1K entry TLB seems
+       large enough to accommodate "all network buffers in a wide
+       variety of [presumably co-running] applications" (but this
+       implies a large amount of pinned memory).
+</ul>
+
+<h2>Relevance</h2>
+
+<ul>
+  <li> Flexible per-process memory management for NI queues need not be
+       expensive (in the common case) and provides many of the benefits
+       of traditional paged memory while preserving the ability to do
+       zero-copy high-performance network transfers.
+  <li> Main tradeoff: main CPU overhead vs. reduced message latency.
+       Moving the NI TLB stuff onto a coprocessor reduces the load on
+       main CPU,but increases messaging latency due to I/O bus transfers.
+</ul>
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> I had some trouble getting the big picture w/r/t performance, but
+       that might be my fault.
+  <li> Can TLB size be changed dynamically?
+  <li> How to avoid/deal with messages being dropped due to lack of
+       availability of a buffer or TLB entry?
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

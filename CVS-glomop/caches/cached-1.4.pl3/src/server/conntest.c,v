@@ -1,0 +1,171 @@
+head	1.2;
+access;
+symbols
+	caches-tag:1.1.1.1
+	caches-tag:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	98.01.06.22.03.52;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.11.05.36.03;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.08.11.05.36.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Fixed up cache deny stuff so that bitmaps work correctly - I had a
+missing parenthesis in an equality test.
+@
+text
+@/* This function will compare the sockaddr against a list of
+ * forbidden IP addresses.  If the destination is forbidden,
+ * this will set errno to 0 and return a value of -1 */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <string.h>
+#include <strings.h>
+#include <errno.h>
+#include <netdb.h>
+
+extern int errno;
+
+#define AUTH_IP_FILE "cache_deny.list"
+
+typedef struct {
+  unsigned long int ip_address;
+  unsigned long int netmask;
+} auth_st;
+
+auth_st *authlist = NULL;
+int      num_in_list = 0;
+
+int auth_connect_init = 0;
+
+void init_auth_connect(void) {
+  FILE *cdf;
+  char  nextline[2048];
+
+  auth_connect_init = 1;
+  if (authlist != NULL) {
+    free(authlist);
+    authlist = NULL;
+    num_in_list = 0;
+  }
+
+  cdf = fopen(AUTH_IP_FILE, "r");
+  if (cdf == NULL) {
+    fprintf(stderr, "Couldn't open auth file %s\n", AUTH_IP_FILE);
+    return;
+  }
+
+  /* Now suck in authorization entries */
+  while (fgets(nextline, 2047, cdf) != NULL) {
+    auth_st next_st, *newlst;
+    char    *nexttok;
+    int      one, two, three, four;
+    
+    if (nextline[0] == '#')
+      continue;
+
+    if (nextline[strlen(nextline)-1] == '\n')
+      nextline[strlen(nextline)-1] = '\0';
+    
+    nexttok = strtok(nextline, " \t");
+    if (nexttok == NULL)
+      continue;
+
+/*    fprintf(stderr, "First tok: %s\n", nexttok); */
+
+    next_st.ip_address = inet_addr(nexttok);
+    if (next_st.ip_address == -1)
+      continue;
+
+    nexttok = strtok(NULL, " \t");
+    if (nexttok != NULL) {
+      next_st.netmask = inet_addr(nexttok);
+/*      fprintf(stderr, "2nd tok: %s\n", nexttok); */
+      if (next_st.netmask == -1)
+	next_st.netmask = inet_addr("255.255.255.255");
+    }
+    else
+      next_st.netmask = inet_addr("255.255.255.255");
+    
+    num_in_list++;
+    newlst = realloc(authlist, sizeof(auth_st)*num_in_list);
+    if (newlst == NULL) {
+      fprintf(stderr, "out of memory in init_auth_connect()\n");
+      exit(1);
+    }
+    authlist = newlst;
+    authlist[num_in_list-1] = next_st;
+  }
+}
+
+int auth_connect(int s, struct sockaddr *name, int namelen)
+{
+  unsigned long test_ip;
+  int i;
+
+  if (auth_connect_init == 0)
+    init_auth_connect();
+
+  test_ip = ((struct sockaddr_in *) name)->sin_addr.s_addr;
+
+  for (i=0; i<num_in_list; i++) {
+    /*fprintf(stderr, "checking %lx %lx %lx %lx\n",
+	    authlist[i].netmask, test_ip, authlist[i].ip_address,
+	    authlist[i].netmask & test_ip); */
+    if ((authlist[i].netmask & test_ip) == authlist[i].ip_address) {
+      errno = 0;
+      return -1;
+    }
+  }
+  return connect(s, name, namelen);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d104 4
+a107 3
+/*    fprintf(stderr, "checking %lx %lx %lx\n",
+	    authlist[i].netmask, test_ip, authlist[i].ip_address); */
+    if (authlist[i].netmask & test_ip == authlist[i].ip_address) {
+@
+
+
+1.1.1.1
+log
+@Harvest and squid caches.
+@
+text
+@@

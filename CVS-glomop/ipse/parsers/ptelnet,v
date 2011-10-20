@@ -1,0 +1,267 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/bin/perl -0777
+
+package ptelnet;
+
+$prot1port = 23;
+$prot2port = 513;
+$prot3port = 543;
+
+sub ptelnet {
+MAIN:
+foreach $file (@@_)
+{
+    ($lhost,$lport,$hhost,$hport) = $file =~ m{
+	([\w\.-]+?)
+	:
+	(\d+)
+	-
+	([\w\.-]+?)
+	:
+	(\d+)
+	}sox;
+
+    if ($lport != $prot1port && $hport != $prot1port
+	&& $lport != $prot2port && $hport != $prot2port
+	&& $lport != $prot3port && $hport != $prot3port)
+    {
+	warn "Not on port $prot1port or $prot2port or $prot3port!\n";
+	next MAIN;
+    }
+
+    ($cli, $srv, $clihost, $cliport, $srvhost, $srvport) = 
+	($hport == $prot1port || $hport == $prot2port || $hport == $prot3port) ?
+	    ("\x01", "\x02", $lhost, $lport, $hhost, $hport)
+	  : ("\x02", "\x01", $hhost, $hport, $lhost, $lport);
+
+    $protstr = ($srvport == $prot1port) ? "TELNET" : "RLOGIN";
+
+    open(F, $file) || do {warn "Cannot open $file: $!\n"; next MAIN;};
+
+    print "\n$file\n" if $main::v;
+    $sess = "\x01";
+    $sess .= <F>;
+    close(F);
+    unlink($file) if $main::rm;
+    $sess =~ s/^\x01\x02/\x02/six;
+
+    $passseen = '';
+    $userseen = '(unknown)';
+    $lastpos = 0;
+    $front = '';
+    $rlhead = '';
+    study $sess;
+    ## Look for a password or rlogin header
+    while ($sess =~ m{
+	(?:
+	    (?:word|phrase)\s*:\s*		## prompt
+	    ${cli}
+	    ## $1 is the password
+	    ((?:[^\x01\x02\x03\n]|\x03.[^r])+)	## password
+	    (?:\x03\\r|\n)     			## CR
+	|
+	    \x03\^\@@
+	    ## $2 is the remote userid
+	    ((?:[^\x01\x02\x03]|\x03.[^@@]){1,20})
+	    \x03\^\@@
+	    ## $3 is the local userid
+	    ((?:[^\x01\x02\x03]|\x03.[^@@]){1,20})
+	    \x03\^\@@
+	    (?:[^\x01\x02\x03]|\x03.[^@@]){0,20}
+	    \/
+	    (?:[^\x01\x02\x03]|\x03.[^@@]){0,20}
+	    \x03\^\@@
+	    ${srv}
+	    \x03\^\@@
+	)
+	}sixg)
+    {
+	if ($1 ne "") {
+	    $passseen = $1;
+	    &clean($passseen, $protstr);
+
+	    ## OK; we have the password.  What is it for?
+	    $front =substr($sess,$lastpos,pos($sess)-$lastpos);
+	    $lastpos = pos($sess);
+	    $front =~ s/${cli}[^\x01\x02]*//g;
+	    $front =~ s/${srv}//g;
+	    $front = substr($front, length($front)-1024) if length($front)>1024;
+	    &clean($front, $protstr);
+	    $front = $rlhead . $front;
+	    $rlhead = '';
+	    if ($front =~ m{ .*
+		(?:
+		    ## Login prompt
+		    (?:[lL]ogin|[uU]sername)
+		    \s*:\s*
+		    ## $1 is login name
+		    ((?:[^ \x03\n]|\x03.[^r])*)
+		    (?:\x03\\r|\n)
+		|
+		    ## ftp session
+		    ## $2 is default ftp name
+		    [nN]ame\s*\([\w\.-]+:((?:[^\x03\n\)]|\x03.[^r])*)\)
+		    :\s*
+		    ## $3 is supplied ftp name
+		    ((?:[^\x03\n]|\x03.[^r])*)
+		    (?:\x03\\r|\n)
+		|
+		    ## su or kinit or rlogin or pgp command
+		    ## $4 is command name
+		    (su|kinit|rlogin|pgp|passwd)
+		    (?:
+			## $5 is command args
+			\s+((?:[^\x03\n]|\x03.[^r]){0,100})
+		    )?
+		    (?:\x03\\r|\n)
+		|
+		    ## rlogin header
+		    \x03 \^\@@ _R_L_O_G_I_N_ \x03 \^\@@
+		    ## $6 is remote user
+		    ((?:[^\x03]|\x03.[^\@@])+)
+		    \x03 \^\@@
+		    ## $7 is local user
+		    ((?:[^\x03]|\x03.[^\@@])+)
+		    \x03 \^\@@ \n
+		)
+	    }sx)
+	    {
+		if ($1 ne "")
+		{
+		    ## Login prompt
+		    $logname = $1;
+		    print "$protstr\t$logname\@@$srvhost\t$passseen\n";
+		    $userseen = $logname;
+		} elsif ($2 ne "") {
+		    ## ftp session
+		    $logname = $3 || $2;
+		    ## what server?
+		    if ($front =~ m{
+			Connected\s*to\s*([\w\.-]+)\.
+			(?:\x03\\r|\n)
+		    }six) {
+			$ftpsrv = $1;
+		    } elsif ($front =~ m{
+			ftp\s*(?:\-\w*\s*)*
+			([\w\.-]+)
+			(?:\x03\\r|\n)
+		    }six) {
+			$ftpsrv = $1;
+		    } else {
+			$ftpsrv = "unknown_ftp_server";
+		    }
+		    ## Don't bother with anon FTP's (as long as the password
+		    ##   has a @@ in it)
+		    if (($logname ne "anonymous" && $logname ne "ftp") ||
+			$passseen !~ /\@@/) {
+			print "$protstr FTP\t$logname\@@$ftpsrv\t$passseen\n";
+		    }
+		} elsif ($4 ne "") {
+		    ## Executed command
+		    print "$protstr CMD\t$userseen\@@$srvhost\t$passseen\t$4 $5\n";
+		} elsif ($6 ne "") {
+		    ## rlogin header
+		    print "$protstr\t$7\@@$srvhost\t$passseen\n";
+		    $userseen = $7;
+		}
+	    } else {
+		print "$protstr PASSWORD\t$userseen\@@$srvhost\t$passseen\n";
+		print "START DEBUG\t\n$front\nSTOP DEBUG\t\n";
+	    }
+	} elsif ($2 ne "") {
+	    ## We saw an rlogin header
+	    $rlhead = "\x03\^\@@_R_L_O_G_I_N_\x03\^\@@$2\x03\^\@@$3\x03\^\@@\n";
+	    $lastpos = pos($sess);
+	    $userseen = $3;
+
+	    ## See if we get asked for a password
+	    $front = substr($sess, $lostpos, 300);
+	    if ($front !~ /password/six) {
+		## Nope; record that fact
+		print "RUSEROK\t$2\@@$clihost -> $3\@@$srvhost\n";
+	    }
+	} else {
+	    #print "$protstr: blank password?\n";
+	}
+    }
+}
+}
+
+sub cleantelnet
+{
+    ## Clean up the TELNET protocol
+    $_[0] =~ s{
+	\x03 f f				## IAC
+	(?:
+	    \x03 f [b-e]			## DO(N'T)/WILL(N'T)
+	    (?:[^\x01\x02\x03]|\x03..)		## OPTION
+	|
+	    \x03 f [1-9]			## COMMAND
+	|
+	    \x03 f a				## SB
+	    (?:[^\x01\x02\x03]){0,80}?          ## DATA
+	    \x03 f f				## IAC
+	    \x03 f 0				## SE
+	)
+    }{}gox;
+    $_[0] =~ s{\x03 f f \x03 f f}{\x03 f f}gox; ## IAC IAC
+}
+
+sub cleanrlogin
+{
+    ## Clean up the RLOGIN protocol
+    $_[0] =~ s{
+	\x03 f f
+	\x03 f f
+	s s
+	(?:[^\x01\x02\x03]|\x03..){8}
+    }{}gox;
+}
+
+sub clean
+{
+    if ($_[1] eq "TELNET") {
+	&cleantelnet($_[0]);
+    } elsif ($_[1] eq "RLOGIN") {
+	&cleanrlogin($_[0]);
+    }
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

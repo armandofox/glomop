@@ -1,0 +1,390 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.20.26.23;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From hoon@@galaxy.CS.Berkeley.EDU  Fri Nov 20 17:26:03 1998
+Return-Path: hoon@@galaxy.CS.Berkeley.EDU
+Received: from cs2.CS.Berkeley.EDU (cs2.CS.Berkeley.EDU [169.229.60.56]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id RAA17814 for <daw@@joseph.CS.Berkeley.EDU>; Fri, 20 Nov 1998 17:26:02 -0800
+Received: from galaxy.CS.Berkeley.EDU (galaxy.CS.Berkeley.EDU [128.32.131.143]) by cs2.CS.Berkeley.EDU (8.9.1a/8.6.6.Beta11) with ESMTP id RAA09547 for <daw@@cs.Berkeley.EDU>; Fri, 20 Nov 1998 17:25:51 -0800 (PST)
+Received: from localhost (hoon@@localhost) by galaxy.CS.Berkeley.EDU (8.8.3/8.8.2) with SMTP id RAA27876; Fri, 20 Nov 1998 17:25:48 -0800 (PST)
+Date: Fri, 20 Nov 1998 17:25:48 -0800 (PST)
+From: ByungHoon Kang <hoon@@galaxy.CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkely.edu
+cc: daw@@cs.Berkeley.EDU
+Subject: cs261 hw3
+Message-ID: <Pine.GSO.3.96.981120172249.18700B-100000@@galaxy.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Status: RO
+
+
+CS261 Homework 3
+
+ByungHoon Kang
+
+Question 1
+
+The following program is intended to allow unprivileged users to
+edit the moderators file, which is used for configuration of Usenet
+news servers. (You don't need to understand anything about Usenet
+or the moderators file to do this assignment.) It is installed setuid
+root. The code is available here; or you can use a version with line
+numbers if that makes your life easier (but beware that the version
+with line numbers will not compile, of course).=20
+
+Find as many security vulnerabilities as you can in the code.=20
+
+Line 18,19, /tmp/vi_moderator.lock is created using O_EXCL=20
+mode in line 84 but we can create vi_moderator.lock as symlink and=20
+have it pointing to null, if the OS follows the symlink and thinks it
+is not exist, it can be exploitable.
+
+Line 68,69,157,158, sprintf(msg =85); debug(msg) etc. can be exploited=20
+buffer overrun by overflowing the line[1024] buffer using msg,=20
+progname, ctm combination. Or overflowing msg[512].
+
+Line 162-169, looksok(tmpf) can be fooled by having the tmpf file with no=
+=20
+shell escape but the MODF actually ends up contain shell=20
+Escape by exploiting race condition to /tmp directory. =20
+(By guessing the return value of tmpnam(NULL) we can=20
+create same tmpf file with shell escape in it. =20
+In line 168 tmpf binds to the file with no shell-escape but in line 169=20
+tmpf binds to the file with shell escape that we created by=20
+manipulating race condition to /tmp directory.
+
+Or in line 134 since it opens without O_EXCL for opening tmpf file=20
+and the shell escape can be executed as root.=20
+
+Or in line 99 since it opens without O_EXCL for opening tmpf file=20
+and the shell escape can be executed as root.
+
+Line 117, execl(=93/usr/bin/vi=94=85) and in certain shell / is IFS and we=
+=20
+can exploit this.
+
+Line 18, we can create /tmp/debug.vi_moderator with shell escape along=20
+with setuid(0) in line 36-43 in secure_open_as_user call. It is=20
+exploitable since the fopen in line 38 is done without O_EXCL and the=20
+save-id is still 0 when the fopen call is running in line 38. The mallory=
+=20
+still be able to call setuid(0) to get root access since saved-uid is=20
+still 0(root) in fopen shell script exploitation.
+
+
+
+
+
+Question 2
+
+This question asks you to explore some of the consequences of
+active networks, where packets can contain mobile code that is
+executed by the routers along the path.=20
+
+For concreteness, we can think of 'adaptive routing' as a sample
+application: if your TCP connection to France is too slow because
+of poor bandwidth on the transatlantic link and for some reason you
+happen to know that there is a much faster route to France via
+China, you might wish to adaptively update the route your TCP
+packets take. In this case, you would "push" some mobile code into
+each router along the way; the mobile code would run at each
+router before the packet is forwarded and select which interface to
+send it out over.=20
+
+We describe below a series of extensions to the IP protocol suite
+which allows for progressively more sophisticated active networks
+applications. For each of the extensions below, list the security
+threats that might arise and how they could be addressed.=20
+
+   1.In the simplest variant, we'd extend the IP packet format to
+     allow an optional extra header which contains some mobile
+     code to run at each router. The mobile code is specified as
+     BPF bytecodes. Each router which receives such a packet
+     first verifies that the bytecode contains no backwards loops,
+     and then interprets the bytecode. The only memory locations
+     the bytecodes are allowed to read are (1) the packet itself,
+     and (2) a global list of interfaces available at the router. (No
+     writes to memory are allowed.) Just before exiting, the
+     bytecode should store the desired interface in a fixed register;
+     the router should use that interface to forward the packet on.=20
+
+-Mallory=92s bytecode might not update the fixed register so that it can=20
+follow the previous packet=92s interface.
+-> Make sure the fixed register is zeroed out after every packet=20
+processing.
+
+-Race condition: Mallory can update the fixed register right after=20
+other packet=92s bytecode processing is done so that the packet can be=20
+redirected to Mallory=92s nest.
+-> Make sure the access to the fixed register is locked per packet=20
+processing.
+
+-Sounds like source routing attack can be exploited since mallory can=20
+control the BPF code for its attacking packet to be delivered to a=20
+target.  IP source based packet filtering may be fooled.
+-> Router can record the travel history and authenticate it so that it=20
+can=92t be forged.  And use this routing history information in packet=20
+filtering.
+
+c.f.
+-Denial of service attack might be easily exploited by simply sending=20
+many packet to router and make the queue overflow since the=20
+bytecode processing is required per every packet with huge overhead. =20
+
+-The global interface need to be securely installed out-of-band mechanism.
+-The global interface of the router could be known to Mallory clearly, not=
+=20
+a big deal but could be used as an information for further attack. =20
+
+   2.One obvious performance issue with the previous scheme is
+     that it requires an overhead of potentially hundreds of bytes
+     on every packet. So we use the notion of "flows" to amortize
+     the cost of specifying the mobile code. Each packet is
+     associated with a flow somehow (for instance, in TCP the
+     flow ID might be the (src host, dst host, src port, dst port)
+     tuple; for otehr protocols, we might simply extend the packet
+     format to allow for a 32-bit flow ID). We add a "set handler"
+     option which allows endpoints to specify a single chunk of
+     mobile code which will be run at the router on every packet
+     reception. This allows us to specify a chunk of mobile code
+     once; then all subsequent packets will inherit the same code
+     without incurring any bandwidth overhead.=20
+
+Mallory can insert its attacking packet within the flow and easily=20
+perform IP packet insertion attack since any packet in between the=20
+flow can be treated with same handler code.
+-> authenticate and encrypt each packet and sequence number per=20
+hop-to-hop basis.
+
+   3.We decide we might like to allow the mobile code to make
+     routing policy decisions based on the payload of the packets.
+     Since this might require scanning the entire packet and
+     possibly interpreting higher-level protocols, we will need to
+     be able to write loops in bytecode. Therefore, we eliminate
+     the restriction on backwards jumps, and allow arbitrary
+     control flow in the bytecode.=20
+
+- There is no guarantee that the bytecode can be finished in=20
+reasonable amount of time; hence can consume resources(CPU,bus)=20
+at the router. (Denial of service attack)
+->Setting the timer for each mobile code to run.
+
+- Mallory code can stay and make interaction to another mallory's code to=
+=20
+subvert or consume the router's resource.
+- Malicious bytecode can stay in the router(we can have loops) and=20
+could watch on-going traffic and its packet content. (If the access
+control is enforced, Mallory can not look at other packet's content=20
+directly, but some sort of security hole could trick other packet tell its=
+=20
+own data to Mallory since other packet's data portion is readable now.)
+->end-to-end encryption and hop-to-hop encryption is needed
+->transient bytecode: when the last packet in a flow leaves the router=20
+make it sure the bytecode is kicked out from memory.=20
+
+And also make sure not to allow a transient code call another=20
+transient code since this interaction can be badly exploitable. We need=20
+cleaner and unwieldy safety/security closure boundary somehow to enforce=20
+our safety/security invariants.
+
+
+   4.It occurs to us that it would be neat to have our handler
+     compress packets for us when bandwidth is scarce. But this
+     requires the handler to be able to modify the contents of the
+     packet, so we relax our security policy so that handlers are
+     allowed both read and write access to the packet itself. If the
+     handler modifies the packet during execution, the router will
+     forward the modified packet instead of the original contents.
+=20
+Mallory can modify its packet content after it bypass the firewall=20
+with disguised normal packet. When Mallory's packet is inspected at=20
+firewall it contains no attacking content, but the packet content can=20
+be modified by handler code to have such content at the router=20
+located inside firewall.
+-> Firewall can decompress and/or applying the handler=92s=20
+modification and filter out the attacking packet.
+
+Mallory might be able to exploit the buffer overrun at the router by=20
+taking advantage of the fact that packet size can be larger than=20
+maximum when it is decompressed.
+-> don=92t assume decompressed packet size always be within the limit=20
+and make provision for overflowed packet size in secure way.
+
+-The contents of packet may not be the same due to bug in handler in=20
+compression/decompression process. (a bit safety concern)
+-> make sure bug-free non-lossy compression/decompression is used.
+
+   5.To realize better compression ratios, we relax the security
+     policy so handlers may maintain state across packet
+     reception events. Thus, when a new flow is created, we set
+     aside a chunk of memory for use by that flow's handler; the
+     handler for is allowed read and write access only its own
+     chunk of memory.=20
+
+Security: Memory protection cannot prevent that mallory's mobile=20
+code watch the on-going traffic; Mallory cannot read the other flow=92s=20
+state directly from memory but might be able to trick system resource=20
+tell him the information.
+-> try to find flaws in system service and make it to be secure service
+
+State across packet reception events can be exploited by Mallory by=20
+inserting certain attacking packet at a vulnerable state such as the=20
+state after admission control is done.
+->authenticated and encrypted sequence number within the flow
+
+
+   6.An astute reader points out that decompression may increase
+     the size of a packet; if this exceeds the network's MTU, our
+     decompression handler may need to send multiple packets.
+     So we allow handlers to construct whole IP packets in their
+     own memory space and invoke a special operation to send
+     that packet over the wire.=20
+
+Mallory can bypass firewall and create attacking packets inside=20
+firewall.
+-> firewall decompress the packet and apply handler=92s code and create=20
+new sanitized IP packets for the end node behind firewall.
+
+Mallory can create a whole IP attacking packet at the router without=20
+revealing Mallory=92s source.
+-> Whenever the packet leaves node, the special operation replace the=20
+IP source field as original one.
+
+
+   7.Users clamor for more features: threads, utility libraries, a
+     better development language, etc. So the protocol is
+     extended to allow handlers to be specified as Java bytecodes
+     instead of BPF bytecodes; the Java bytecodes get executed
+     in a JVM on the router.=20
+
+Mallory=92s Java bytecode can watch all the traffic and its packet=20
+Content.
+-> Hop to hop and end-to-end encryption/authentication is needed.
+
+Denial of service attack is very easy since java bytecode can consume=20
+various system resources at the router.
+-> Assign quota for each packet processing and limit the resource=20
+consumption along with timer.
+
+Mallory=92s java bytecode can access all the files and memory at the=20
+router since the handler=92s bytecode doesn=92t have applet=92s security=20
+restriction at all
+-> do appropriate access control to all system resource.
+
+All sort of JVM=92s implementation/design flaws can be exploited.
+-> Try to patch bug fixed JVM as soon as possible.
+
+
+
+Question 3
+
+As we discussed in class, the firewall security model doesn't
+compose well with mobile code. This questions asks you to
+consider various attempts to deal with this tension.=20
+
+   1.If it is acceptable to block all mobile code at the firewall,
+     how would you do so and what problems might you expect
+     to encounter?=20
+
+- For JAVA example, we can use a proxy to scan enabling documents for=20
+<applet> tags and rewrite such tags in a benign form(html text=20
+explaining that an applet has been blocked), so never even attempts=20
+to fetch the attacker=92s applet. =20
+Some other mobile code delivery is blocked in the same way by=20
+changing the enabling document.
+
+-Blocking packets start with CA FE BA BE : all java class files begins=20
+with the 4byte hex CA FE BA BE signature;=20
+-> the packet might be split up and arrive out of order=20
+-> legitimate HTTP traffic doesn=92t always occur on the same port; a=20
+packet filter would have to determine on-the-fly which ports on which=20
+hosts are being used for HTTP
+
+-blocking by requested file name(.class or .zip or .jar) ; reject all=20
+browser request via HTTP,FTP, gopher etc for files with names=20
+ending in .class .jar;
+-> blocking .zip file may block the Zip file service, so .zip file need to=
+=20
+be unpacked and inspected for signature of applet to be sure.
+
+Some other mobile code like Java script, safe-TCL can be blocked=20
+similar way above.=20
+
+Blocking the applet or mobile code may be very annoying since lots of=20
+the service might be dependent on these mobile code functionality.
+
+    2.Suppose next that you can't get away with blocking all
+     mobile code: you are asked to block dangerous mobile code
+     and let through (the majority of) safe mobile code. (But it is
+     ok to be cautious and occasionally block some mobile code
+     which might have been safe.) What additional problems does
+     this introduce, and how might you try to solve them?=20
+
+-The mobile code can access local resource and reveal it through=20
+covert channel. And denial of service attack and modification of=20
+protected resource can be exploited.
+To distinguish dangerous mobile code from safe mobile code is not=20
+easy task. Digital signing (endorsement) by author or brand name can=20
+be used for static analysis, but user might not pay attention to the=20
+signed information when user invoked the mobile code also it doesn=92t=20
+guarantee that the mobile code is not dangerous (hostile).
+Proof carrying code, software fault isolation(memory protection), safe=20
+language or using compiler safety (modular-3) can be used as an=20
+indication.
+
+-Playground : Physically separate the attacker from the resource of=20
+value; each mobile code downloaded to the protected domain can be=20
+rerouted to a dedicated machine(playground) and executed; the=20
+mobile code can be transformed to use the end-user=92s web browser as=20
+a  graphics terminal for its input and output, and so the user has the=20
+illusion that the mobile code is running on user=92s own machine but its=20
+execution is on playground machine not the user=92s own.=20
+Firewall can have playground for its inside host=92s mobile code=20
+executions.
+
+   3.For each of the problems you listed, who is to blame? The
+     firewall, or the end host?=20
+
+Totally blocking the mobile code at firewall is not a good idea since=20
+we can=92t benefit from the use of mobile code. Firewall has to do much=20
+better than that.
+User might be responsible for running a possibly-hostile-mobile-code=20
+without checking the endorsement signature.
+
+
+
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=20
+UC BERKELEY                                  hoon@@cs.berkeley.edu
+ATTN: ByungHoon Kang/ 493 SODA HALL           (voice)510-642-8468=20
+COMPUTER SCIENCE DIVISION                     (fax)  510-642-5775=20
+387 SODA HALL                                    Attn:B.Hoon Kang
+BERKELEY, CA 94720                                     Rm493-Soda          =
+    =20
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=20
+
+
+@

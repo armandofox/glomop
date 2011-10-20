@@ -1,0 +1,204 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.02.20.18.22;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From geweke@@bang.cs.berkeley.edu  Fri Oct  2 12:39:03 1998
+Return-Path: geweke@@bang.cs.berkeley.edu
+Received: from bang.cs.berkeley.edu (bang.CS.Berkeley.EDU [128.32.36.35]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id MAA10679 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 12:39:02 -0700
+Received: (from geweke@@localhost)
+	by bang.cs.berkeley.edu (8.8.7/8.8.7) id MAA01743
+	for cs261-homeworks@@joseph.cs.berkeley.edu; Fri, 2 Oct 1998 12:35:58 -0700
+Message-Id: <199810021935.MAA01743@@bang.cs.berkeley.edu>
+Date: Fri, 2 Oct 1998 12:35:58 -0700 (PDT)
+From: geweke@@uclink.berkeley.edu
+Subject: Homework #1
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+MIME-Version: 1.0
+Content-Type: TEXT/plain; CHARSET=US-ASCII
+Status: RO
+
+Andrew Geweke / 12183838 / geweke@@{cs,millennium}.berkeley.edu
+CS 261 / Homework #1 / 2 Oct 1998
+
+1.
+    1. The essential problem is that by allowing ftpd to run external
+       programs, the security envelope was increased from ftpd to the
+       transitive closure of all programs runnable by ftpd on the
+       machine -- essentially, everything. To fix this, code in such
+       features as "tar" yourself -- or, better yet, remove them!
+
+       Lesson: Be aware of exactly what you're trusting. Don't trust
+       anything more than is necessary.
+
+    2. The end problem here is that sendmail does not keep a clean
+       boundary between untrusted/unsafe data and safe data -- because
+       data (addresses) can *implicitly* become programs (program
+       calls), you must check each one. To fix this, don't allow
+       untrusted data to have any effect on program execution! Better
+       yet, don't execute external programs (at least not based on
+       addresses). See #1 above; also, see qmail.
+
+       Lesson: Untrusted data pollutes trusted data very rapidly. Keep
+       a clean separation, and don't let untrusted data affect program
+       behaviour in arbitrary ways.
+
+    3. The end problem here is that the *default* is to grant access
+       (if you don't check with the security manager, all will work
+       fine). Further, you can essentially be "caching" information;
+       in the datagram packet example given in class, you cache the
+       "yes" security response for a moment before making the actual
+       system call. To fix this, mediate *system calls*, not Java
+       calls (Janus would be a huge help here); also, all information
+       being passed in the system call must be immutable to the Java
+       program.
+
+       Lessons: Default must be to deny access. Do not cache security
+       information, and you might be doing so without knowing it.
+
+    4. The essential problem is that a very large program is changing
+       privileges at runtime; there will always be bugs in such a
+       program. To fix this, wu-ftpd should either provide a separate
+       daemon for anonymous FTP (and exec() one or the other at login
+       time) (best solution), or call a separate, setuid root program
+       to do its dirty work for it (and pass information to/from that
+       program very, very carefully).
+
+       Lesson: Large programs (for some, relatively conservative,
+       definition of the word "large") will never be free of security
+       holes. Thus, rely only upon very small code fragments/programs
+       to do security-critical work.
+
+2. The ways in which the applet can publish information are the
+intersection of publicly available information about a machine (which
+is a great deal) and the information that the applet can control
+(which is also a great deal). Specifically:
+
+- Open ports. The applet can open a connection from specific ports
+  back to its originating server or listen on certain ports; this can
+  contain as many as 14 bits of information per port. There are a whole
+  set of channels possible, in other words, if the applet is allowed
+  *any* access to the network.
+
+- Bandwidth. Dump a whole bunch of data to your server; this slows
+  down the machine on which the applet is running and (very likely) many
+  other machines on the same LAN, as well as the main link out to the
+  net. Do this while you're downloading something from a different
+  machine behind the main net link and get quite a bit of information.
+
+- System load. The applet can kick up a bunch of high-computational
+  threads; load may either be published (ruptime) or be observable (ping
+  response times, etc.).
+
+- Class loading. The applet can use objects only at specific times
+  during its lifetime, causing more .class files to be pulled down. This
+  is information.
+
+- DNS queries. Do DNS lookups on sites in some order in a domain over
+  which you have control. If the applet can't do it by itself, it can
+  talk to the browser, which can do it.
+
+- DNS queries and caching. Do DNS lookups on sites in some arbitrary
+  domain; these will be cached. Later, observe the DNS packets or the
+  response time when they're looked up again.
+
+3. Note: This question seems underspecified. Specifically, details on
+   the interaction (or lack thereof) of the strong authentication and
+   the encryption of the stream (for parts 2 and 3) are omitted. I see
+   three choices:
+      - This is a SSL-like protocol, where the authentication includes
+        selection of a session key in such a way that no observer can
+	discover that key. In this case, your own paper on the ISAAC
+	site indicates that breaking the session is something even you
+	don't know how to do, so I assume this isn't the case.
+      - The authentication and symmetric crypt are detached, but the
+        symmetric crypt's key is not transmitted (key distribution is
+	achieved some other way). This is what I assume below.
+      - The authentication and symmetric crypt are detached, but the
+        symmetric crypt's key is transmitted over the network --
+	presumably in plaintext, or close enough as to make no
+	difference. In this case attacking it is trivial, and this is
+	silly enough as to be uninteresting.
+
+    1. Replace a single-character packet with a packet containing:
+       suspend echo, "echo + + > ~/.rhosts\n", resume echo, just as in
+       the example. Alternatively, "take over" the TCP connection by
+       playing the server to the client, and the client to the server,
+       once the authentication is done.
+
+    2. Read the stream when known plaintext is passing through -- the
+       user's prompt is a good example (likely the last n packets just
+       before a long pause in output), or the login sequence, or "ls
+       -l", or whatever. This gives you the encrypted versions of
+       characters; insert them into the stream in the proper sequence
+       to give you "echo + + ...". This most likely breaks the stream
+       (since you can't put them all in one packet as a character is
+       shorter than an ECB block).
+
+    3. Once the authentication is achieved, *you* become the end
+       user, spoofing IP to take over the TCP connection entirely from
+       both ends -- each side is actually talking to you, when they
+       think they're talking to each other. This makes use of the
+       separation between authentication and session. Of course, if
+       something like a password is demanded during the actual
+       session, you're out of luck.
+
+    4. Use asymmetric crypto with a CBC or CBC-like scheme. By
+       encrypting with your private key and then with the other end's
+       public key, it's impossible to generate data that can be
+       inserted into the stream (the intruder would be required to
+       know your private key). The CBC scheme effectively prevents
+       replay attacks. Alternatively, one can use a SSL-like protocol
+       where the asymmetric crypto is used only to negotiate the
+       symmetric-crypto key, and then a CBC-based symmetric crypt is
+       used for the rest of the session. The initial exchange prevents
+       intruders from deducing the key, and the CBC-based symmetric
+       crypt prevents known-plaintext and replay attacks during the
+       session.
+
+4.
+    1. The lack of authentication for negative responses is a
+       problem. Initially, it allows attackers to make hosts
+       "disappear" from DNS arbitrarily; this can be used to do
+       denial-of-service in dozens of different ways. For example,
+       telling a host that its YP server doesn't exist will shut down
+       nearly all logins to that machine.
+
+       Playing games with negative responses under in-arpa.addr also
+       can cause problems; this can shut down access to FTP servers
+       and (probably) NFS servers as well -- basically, any place that
+       has a list of names of machines allowed to do something will
+       either look them all up and cache the results, or do a reverse
+       lookup on the incoming machine and a name match -- both of
+       which can be spoofed and shut down using this new DNS scheme.
+
+       I *know* there must be a way to cause more serious attacks --
+       otherwise you wouldn't have asked the question -- but I can't
+       see it right now.
+
+    2. The negative response should be signed with the same key
+       structure that would have signed the record had it
+       existed. Further, cache times (just like those for real DNS
+       records) must be included in the negative response so that the
+       authenticated negative response will time out after some time
+       (in case the host later actually does spring into existence).
+
+
+@

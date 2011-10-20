@@ -1,0 +1,1125 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     96.11.19.01.17.22;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.11.19.01.17.22;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* Copyright (C) 1995, Digital Equipment Corporation.         */
+/* All rights reserved.                                       */
+/* See the file LICENSE for a full description.               */
+/* Last modified on Tue Oct 10 14:22:16 PDT 1995 by brewer    */
+/*      modified on Tue Aug 15 09:31:01 PDT 1995 by mcjones   */
+
+/* This module is close to a line-by-line translation of OCR_PS.m3,
+   developed as part of the Virtual Paper project at the Systems
+   Research Center.  The main difference is that there is a single
+   global instance (the variable "t") rather than an object type. */
+
+#define BOOLEAN int
+#define FALSE 0
+#define TRUE 1
+#define MAX_WORDS 2000
+
+extern void* malloc(unsigned);
+extern void* realloc(void*, unsigned);
+extern void bzero(char*, unsigned);
+
+#define MIN(a,b) ((a)<=(b)?(a):(b))
+#define MAX(a,b) ((b)<=(a)?(a):(b))
+
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
+
+typedef enum {
+  Ascii, Html, Rich
+} Format;
+
+/* Character encoding.  Each element of the QE directive produced by
+   ocr.ps is either an index in the StandardGlyph array, or is
+   "NonstandardGlyph" (indicating the corresponding entry in the font's
+   encoding specifies some nonstandard glyph). */
+
+typedef unsigned GlyphIndex;
+#define NonstandardGlyph 9999
+
+#define UnknownChar '#' /* substitute for nonstandard glyph */
+
+/* The first 256 entries in StandardGlyphs correspond to ISOLatin1;
+   the next 28 entries correspond to characters not in ISOLatin1, but
+   defined in the standard /Times-Roman font. */
+
+#define LastISOLatin1 255
+
+#define FIRSTSpecialGlyphs (LastISOLatin1+1)
+#define LASTSpecialGlyphs (LastISOLatin1+28)
+static char *SpecialGlyphs[] = {
+    "''",    /* quotedblright */
+    "S\237", /* Scaron */
+    "+",     /* dagger */
+    "<",     /* guilsinglleft */
+    "Z\237", /* Zcaron */
+    "#",     /* daggerdbl */
+    "L/",    /* Lslash */
+    "...",   /* ellipsis */
+    ">",     /* guilsinglright */
+    "oe",    /* oe */
+    "fi",    /* fi */
+    ".",     /* bullet */
+    "o/oo",  /* perthousand */
+    "''",    /* quotedblbase */
+    "--",    /* endash */
+    "---",   /* emdash */
+    "^TM",   /* trademark */
+    "f",     /* florin */
+    "l/",    /* lslash */
+    "s\237", /* scaron */
+    "Y\250", /* Ydieresis */
+    "fl",    /* fl */
+    "/",     /* fraction */
+    "``",    /* quotedblleft */
+    "'",     /* quotesinglbase */
+    "'",     /* quotesingle */
+    "z\237", /* zcaron */
+    "OE"     /* OE */
+  };
+
+/* The next 256 entries correspond to the self-named glyphs used in
+   Type 3 fonts from dvips: "\000", ..., "\377":  */
+
+#define FirstDvips (LASTSpecialGlyphs+1)
+#define LastDvips  (FirstDvips+256-1)
+
+/* The next 512 entries correspond to glyph names used in Microsoft
+   TrueType fonts: "G00", ..., "Gff" and "G00", ..., "GFF", which
+   in both cases correspond to ISOLatin1 with some extensions. */
+
+#define FirstTT1 (LastDvips+1)
+#define LastTT1 (FirstTT1+256-1)
+#define FirstTT2 (LastTT1+1)
+#define LastTT2 (FirstTT2+256-1)
+#define FirstOldDvips (LastTT2+1)
+#define LastOldDvips (FirstOldDvips+128-1) /* note only 128 */
+
+#define FIRSTTTSpecialGlyphs (FirstTT1+130)
+#define LASTTTSpecialGlyphs (FirstTT1+159)
+static char *TTSpecialGlyphs[] = {
+    "'",     /* quotesinglbase */
+    "f",     /* florin */
+    "''",    /* quotdblbase */
+    "...",   /* ellipsis */
+    "+",     /* dagger */
+    "#",     /* daggerdbl */
+    "\223",  /* circumflex */
+    "o/oo",  /* perthousand */
+    "S\237", /* Scaron */
+    "<",     /* guilsinglleft */
+    "OE",    /* OE */
+    "#",     /* <undefined> */
+    "#",     /* <undefined> */
+    "#",     /* <undefined> */
+    "#",     /* <undefined> */
+    "`",     /* ISOLatin1: quoteleft */
+    "'",     /* ISOLatin1: quoteright */
+    "``",    /* quotedblleft */
+    "''",    /* quotedblright */
+    ".",     /* bullet */
+    "--",    /* endash */
+    "---",   /* emdash */
+    "~",     /* ISOLatin1: tilde */
+    "^TM",   /* trademark */
+    "s\237", /* scaron */
+    ">",     /* guilsinglright */
+    "oe",    /* oe */
+    "#",     /* <undefined> */
+    "#",     /* <undefined> */
+    "Y\250"  /* Ydieresis" */
+  };
+
+#define FIRSTDvipsGlyphs FirstDvips
+#define LASTDvipsGlyphs (FirstDvips+127)
+static char *DvipsGlyphs[] = {
+  /* 00x */
+    "\\Gamma", "\\Delta", "\\Theta", "\\Lambda",
+    "\\Xi", "\\Pi", "\\Sigma", "\\Upsilon",
+  /* 01x */
+    "\\Phi", "\\Psi", "\\Omega", "ff", "fi", "fl", "ffi", "ffl",
+  /* 02x */
+    "i",     /* \imath */
+    "j",     /* \jmath */
+    "`",
+    "'",
+    "\237",  /* caron */
+    "\226",  /* breve */
+    "\257",  /* macron */
+    "\232",  /* ring */
+  /* 03x */
+    "\270",  /* cedilla */
+    "\337",  /* germandbls */
+    "ae",
+    "oe",
+    "\370",  /* oslash */
+    "AE",
+    "OE",
+    "\330",  /* Oslash */
+  /* 04x */
+    "/" /* bar for Polish suppressed-L ??? */, "!", "''", "#",
+    "$", "%", "&", "'",
+  /* 05x */
+    "(", ")", "*", "+",
+    ",", "\255" /* hyphen */, ".", "/",
+  /* 06x */
+    "0", "1", "2", "3", "4", "5", "6", "7",
+  /* 07x */
+    "8", "9", ":", ";",
+    "!" /* exclamdown */, "=", "?" /* questiondown */, "?",
+  /* 10x */
+    "@@", "A", "B", "C", "D", "E", "F", "G",
+  /* 11x */
+    "H", "I", "J", "K", "L", "M", "N", "O",
+  /* 12x */
+    "P", "Q", "R", "S", "T", "U", "V", "W",
+  /* 13x */
+    "X", "Y", "Z", "[",
+    "``", "]", "\223" /* circumflex */, "\227" /* dotaccent */,
+  /* 14x */
+    "`", "a", "b", "c", "d", "e", "f", "g",
+  /* 15x */
+    "h", "i", "j", "k", "l", "m", "n", "o",
+  /* 16x */
+    "p", "q", "r", "s", "t", "u", "v", "w",
+  /* 17x */
+    "x", "y", "z",
+    "--",    /* en dash */
+    "---",   /* em dash */
+    "\235",  /* hungarumlaut */
+    "~",
+    "\250"   /* dieresis */
+  };
+
+/* There are gaps in the set of printable ISOLatin1 characters: */
+/*CONST ISOLatin1Gaps = SET OF [0..255] {8_0..8_37, 8_177..8_217, 8_231, 8_234};*/
+
+typedef struct {
+  double blx, bly, trx, try; /* font matrix in character coordinates */
+  struct {double x, y;} chr[256]; /* widths in character coordinates */
+} MetricsRec;
+typedef MetricsRec *Metrics;
+typedef Metrics MetricsTable[];
+
+typedef GlyphIndex EncodingVector[256];
+typedef EncodingVector *Encoding;
+typedef Encoding EncodingTable[];
+
+/* font spec */
+#define BOLD 0x1
+#define ITALIC 0x2
+#define SANSSERIF 0x4
+#define FIXED 0x8
+#define SYMBOL 0x10
+typedef int FontSpec;
+
+typedef struct {
+  double x, y; /* (1000,0) in font's character coordinate system */
+  double xp, yp; /* (0,1000) in font's character coordinate system */
+  int e; /* index in "encoding" */
+  int m; /* index in "metrics" */
+  double bx, by, tx, ty; /* height of font bbox in reporting coordinates */
+  FontSpec spec; /* font scec, e.g. bold, italic, serif, sans serif */
+} FontRec;
+typedef FontRec *Font;
+typedef Font FontTable[];
+
+
+/* State of the instance "t". */
+static struct {
+  FILE *rd; /* the input stream */
+  double scale; /* conversion from reporting coordinates to pixels */
+  int metricsSize;
+  MetricsTable *metrics;
+  int encodingSize;
+  EncodingTable *encoding;
+  int fontSize;
+  FontTable *font;
+
+  /* Data for current word prefix: */
+  char buf[1000];
+  int lbuf; /* elements 0 through "lbuf-1" of "buf" are in use */
+  int f; /* font number */
+  double x0, y0, x1, y1; /* initial and final currentpoint */
+
+  BOOLEAN nonEmptyPage;
+  int blx, bly, trx, try; /* bounding box of last word output */
+} t;
+
+static void Init(file) FILE *file; {
+  int i;
+
+  t.rd = file;
+  t.scale = 1.0;
+  t.metricsSize = t.encodingSize = t.fontSize = 100;
+
+  t.metrics = (MetricsTable *)malloc(t.metricsSize * sizeof(Metrics));
+  for(i=0;i<t.metricsSize;i++)(*t.metrics)[i] = NULL;
+
+  t.encoding = (EncodingTable *)malloc(t.encodingSize * sizeof(Encoding));
+  for(i=0;i<t.encodingSize;i++)(*t.encoding)[i] = NULL;
+
+  t.font = (FontTable *)malloc(t.fontSize * sizeof(Font));
+  for(i=0;i<t.fontSize;i++)(*t.font)[i] = NULL;
+
+  t.lbuf = 0;
+  t.nonEmptyPage = FALSE;
+  t.blx = t.bly = t.trx = t.try = 0;
+}
+
+static int ReadInt() {
+  int i;
+  if (fscanf(t.rd, "%d", &i) == EOF) exit(1);
+  return i;
+}
+
+static void ParseEncoding() {
+  /* Parse QE directive. */
+  int e = ReadInt(), n = ReadInt(), i, tooSparse;
+  Encoding enc;
+  if (e<0) abort("negative encoding number");
+  if (n>256) abort("too many glyph indexes");
+
+  /* Grow "t.encoding" if necessary. */
+  if (t.encodingSize<=e) {
+    int oldSize = t.encodingSize;
+    t.encodingSize = 2*e;
+    t.encoding = (EncodingTable *)realloc(
+      (char *)t.encoding,
+      t.encodingSize * sizeof(Encoding)
+    );
+    for(i=oldSize;i<t.encodingSize;i++)(*t.encoding)[i] = NULL;
+  }
+
+  /* If this is the first encoding numbered "e", allocate array. */
+  if ((*t.encoding)[e] == NULL)
+    (*t.encoding)[e] = (EncodingVector *)malloc(sizeof(EncodingVector));
+
+  enc = (*t.encoding)[e];
+
+  for (i = 0 ; i<256 ; i++)
+    (*enc)[i] = (i<n) ? ReadInt() : NonstandardGlyph;
+
+  /* Some applications build the encoding vector incrementally.  If
+     this one doesn't have at least the lower-case letters, we augment
+     it with ISOLatin1. */
+  for (i = 'a'; i<='z'; i++)
+    tooSparse = (*enc)[i] == NonstandardGlyph;
+  if (tooSparse)
+    for (i = 0; i<256; i++)
+      if ((*enc)[i] == NonstandardGlyph) (*enc)[i] = i;
+
+}
+
+#define GuessAscend 0.9
+#define GuessDescend -0.3
+
+static void ParsePair(/*out*/ x, y) double *x, *y; {
+  *x = ReadInt() / 100.0;
+  *y = ReadInt() / 100.0;
+}
+
+#include <tcl.h>
+Tcl_Interp *TclInterp;
+Tcl_HashTable Fonts;
+
+static inline int set_font(char *name, int spec, double scale) {
+  int new, value;
+  Tcl_HashEntry *hash;
+  
+  value = (int) (scale * 256 + 0.5) << 16;
+  value |= spec;
+  hash = Tcl_CreateHashEntry(&Fonts, name, &new);
+  Tcl_SetHashValue(hash, value);
+  return value;
+}
+
+static void InitFonts(void) {
+  TclInterp = Tcl_CreateInterp();
+  Tcl_InitHashTable(&Fonts, TCL_STRING_KEYS);
+
+  set_font("Times-Roman", 0, .89);
+  set_font("Times-Bold", BOLD, .86);
+  set_font("Times-Italic", ITALIC, .91);
+  set_font("Palatino-Italic", ITALIC, .84);
+  set_font("Helvetica", SANSSERIF, .87);
+  set_font("Helvetica-Bold", BOLD | SANSSERIF, .84);
+  set_font("Symbol", SYMBOL, .75);
+}
+
+static FontSpec GetFontSpec(char *name, double height) {
+  FontSpec spec;
+  Tcl_HashEntry *hash;
+  int size;
+
+  /* internally, the spec stores the font type info and, in the top 16 bits,
+     the scaling factor to convert bounding boxes to font size;
+     externally, the top 16 bits of the spec are the scaled height
+     of the current font */
+  hash = Tcl_FindHashEntry(&Fonts, name);
+  if (hash == NULL) {
+    spec = 0;
+    if (Tcl_RegExpMatch(TclInterp, name, "Bold|Black")) spec |= BOLD;
+  
+    if (Tcl_RegExpMatch(TclInterp, name, "Italic|Oblique|Slanted"))
+      spec |= ITALIC;
+    
+    if (Tcl_RegExpMatch(TclInterp, name, "Helvetica")) spec |= SANSSERIF;
+    
+    if (Tcl_RegExpMatch(TclInterp, name, "Courier|Monaco")) spec |= FIXED;
+    
+    if (Tcl_RegExpMatch(TclInterp, name, "Symbol")) spec |= SYMBOL;
+    fprintf(stderr, "Set %s %d %g\n", name, spec, height);
+    spec = set_font(name, spec, .86);
+  } else {
+    spec = (int) Tcl_GetHashValue(hash);
+  }
+  /* convert from internal spec format to external format */
+  if (height == 0) size = 10;
+  else {
+    size = (int) (height * (spec >> 16) + .5);
+  }
+  return (size << 16 | (spec & 0xffff));
+}
+
+static void ParseFont() {
+  /* Parse QF directive. */
+  int n = ReadInt(), i;
+  char fontName[1024];
+  Metrics mt;
+  Font f;
+  double xmax, bly, try;
+  if (n<0) abort("negative font number");
+
+  /* Grow "t.font" if necessary. */
+  if (t.fontSize<=n) {
+    int oldSize = t.fontSize;
+    t.fontSize = 2*n;
+    t.font = (FontTable *)realloc(
+      (char *)t.font,
+      t.fontSize * sizeof(Font)
+    );
+    for(i=oldSize;i<t.fontSize;i++)(*t.font)[i] = NULL;
+  }
+
+  /* If this is the first font numbered "n", allocate "FontRec". */
+  if ((*t.font)[n] == NULL) {
+    (*t.font)[n] = (Font)malloc(sizeof(FontRec));
+  }
+
+  f = (*t.font)[n];
+
+  /* read font name */
+  if (fscanf(t.rd, "%s ", fontName) == EOF) exit(1);
+  if (strlen(fontName) >= 40) abort("expecting font name < 40 chars");
+
+  ParsePair(&f->x, &f->y);
+  ParsePair(&f->xp, &f->yp);
+  f->e = ReadInt();
+  if ((*t.encoding)[f->e] == NULL) abort("undefined encoding number");
+  f->m = ReadInt();
+  mt = (*t.metrics)[f->m];
+  if (mt == NULL) abort("undefined metric number");
+
+  /* Transform height of font bounding box to reporting coordinates: */
+  f->bx = f->xp * mt->bly / 1000.0;
+  f->by = f->yp * mt->bly / 1000.0;
+  f->tx = f->xp * mt->try / 1000.0;
+  f->ty = f->yp * mt->try / 1000.0;
+
+  /* In some fonts produced by dvips, the FontBBox is incorrectly
+     defined as [0 0 1 1].  We check for this, and apply the same
+     heuristic used for an undefined FontBBox in "ParseMetrics".  */
+  if (f->by-f->ty < 1.1) {
+    xmax = 0.0;
+    for (i = 0; i<256; i++)
+      if (mt->chr[i].x > xmax) xmax = mt->chr[i].x;
+    bly = GuessDescend * xmax; try = GuessAscend * xmax;
+    f->bx = f->xp * bly / 1000.0;
+    f->by = f->yp * bly / 1000.0;
+    f->tx = f->xp * try / 1000.0;
+    f->ty = f->yp * try / 1000.0;
+  }
+  f->spec = GetFontSpec(fontName, f->by - f->ty);
+}
+
+static void ParseMetrics() {
+  /* Parse QM directive. */
+  int m = ReadInt(), i;
+  Metrics mt;
+
+  if (m<0) abort("negative metric number");
+
+  /* Grow "t.metrics" if necessary. */
+  if (t.metricsSize<=m) {
+    int oldSize = t.metricsSize;
+    t.metricsSize = 2*m;
+    t.metrics = (MetricsTable *)realloc(
+      (char *)t.metrics,
+      t.metricsSize * sizeof(Metrics)
+    );
+    for(i=oldSize;i<t.metricsSize;i++)(*t.metrics)[i] = NULL;
+  }
+
+  /* If this is the first metrics numbered "m", allocate "MetricsRec". */
+  if ((*t.metrics)[m] == NULL)
+    (*t.metrics)[m] = (Metrics)malloc(sizeof(MetricsRec));
+
+  mt = (*t.metrics)[m];
+
+  ParsePair(&mt->blx, &mt->bly);
+  ParsePair(&mt->trx, &mt->try);
+
+  for (i = 0; i<256; i++) ParsePair(&mt->chr[i].x, &mt->chr[i].y);
+
+  if (mt->blx == 0.0 && mt->bly == 0.0 && mt->trx == 0.0 && mt->try == 0.0) {
+    /* "FontBBox" was not specified; take a guess. */
+    for (i = 0; i<256; i++)
+      if (mt->chr[i].x > mt->trx) mt->trx = mt->chr[i].x;
+    mt->bly = GuessDescend * mt->trx;
+    mt->try = GuessAscend * mt->trx;
+  }
+}
+
+typedef struct {
+  int *base;
+  int size, count;
+} Hist;
+
+static void ClearHist(Hist *hist) {
+  bzero((char*) hist->base, hist->size * sizeof(int));
+  hist->count = 0;
+}
+
+static Hist* CreateHist(int size) {
+  Hist *hist = (Hist*) malloc(sizeof(Hist));
+
+  hist->base = (int *) malloc(size*sizeof(int));
+  hist->size = size;
+  ClearHist(hist);
+  return hist;
+}
+
+static void AddHist(Hist *hist, int value) {
+  if (hist == NULL) abort("null hist pointer");
+  if (value < 0 || value >= hist->size) {
+    fprintf(stderr, "AddHist(%d) %d\n", value,
+	    hist->size);
+    abort("hist value out of range");
+  }
+  hist->base[value]++;
+  hist->count++;
+}
+
+static int HistPercent(const Hist *hist, int percent) {
+  int i, total=0;
+  int mid;
+  if (percent < 0 || percent > 100) abort("percent out of range");
+
+  mid = (hist->count * percent)/100.0;
+  for (i=0; i<hist->size; i++) {
+    total += hist->base[i];
+    if (total > mid) return i;
+  }
+  return hist->size;  
+}
+
+static int Median(const Hist *hist) {
+  return HistPercent(hist, 50);
+}
+
+
+static int Queue[4*MAX_WORDS];
+static char Words[MAX_WORDS*10];
+static char* TopWord = Words;
+static int Top = 0;
+
+static Hist* HeightHist; /* word height */
+static Hist* WidthHist; /* char width */
+static Hist* LineHist;  /* line spacing */
+static Hist* LHist;     /* left margin */
+
+/* add word to the words for this page (column), later we will output
+the column all at one time */
+
+static void Push() {
+  double x0, y0, x1, y1, x2, y2, x3, y3;
+  int blx, bly, trx, try, mid;
+  Font f;
+  static int last_baseline = 0;
+
+  f = (*t.font)[t.f];
+
+  /* Compute the corners of the parallelogram with width "(t.x0,t.y0)"
+     to "(t.x1,t.y1)" and height "(f.bx,f.by)" to "(f.tx,f.ty)". Then
+     compute the bottom left corner and the top right corner of the
+     bounding box (rectangle with sides parallel to the coordinate
+     system) of this rectangle. */
+  x0 = t.x0 + f->bx; y0 = t.y0 + f->by;
+  x1 = t.x1 + f->bx; y1 = t.y1 + f->by;
+  x2 = t.x0 + f->tx; y2 = t.y0 + f->ty;
+  x3 = t.x1 + f->tx; y3 = t.y1 + f->ty;
+
+  blx = floor(t.scale * MIN(MIN(MIN(x0, x1), x2), x3));
+  bly = floor(t.scale * MAX(MAX(MAX(y0, y1), y2), y3));
+  trx = floor(t.scale * MAX(MAX(MAX(x0, x1), x2), x3));
+  try = floor(t.scale * MIN(MIN(MIN(y0, y1), y2), y3));
+  
+  if (t.nonEmptyPage) {
+    mid = (try+bly) / 2;
+    if ((t.blx<t.trx && t.try>=t.bly)
+	|| (blx<trx && try<bly
+	&& t.blx <= blx
+	&& t.try <= mid
+	&& mid <= t.bly)) {
+      /* same line */
+    } else { /* different line */
+      int dy = bly - last_baseline;
+      last_baseline = bly;
+      AddHist(LHist, blx);
+      if (dy > 2) AddHist(LineHist, dy);
+    }
+  }
+
+  t.buf[t.lbuf] = '\0';
+  TopWord[0] = t.lbuf+2;
+  strcpy(&TopWord[1], t.buf);
+  TopWord += t.lbuf+2;
+
+  Queue[Top++] = blx;
+  Queue[Top++] = bly;
+  Queue[Top++] = trx;
+  Queue[Top++] = try;
+  Queue[Top++] = f->spec;
+
+  AddHist(HeightHist, bly - try);
+  AddHist(WidthHist, (int)(10*(trx-blx)/t.lbuf));
+
+  t.lbuf = 0;
+  t.nonEmptyPage = TRUE;
+  t.blx = blx; t.bly = bly; t.trx = trx; t.try = try;
+}
+
+
+typedef struct {
+  float width; /* average char width */
+  int height; /* most common font height, currently defined as the
+                 height of the font that's bigger than 10% of the
+                 words, this seems to be about right to ignore footnotes
+                 and sub/superscripts.  Note that there's a huge range
+                 in the middle (say from 4% to 80%) that represents
+                 words in the primary font, which is what we're after. */
+  int lm;  /* left margin */
+  int line; /* line spacing */
+  int columns; /* number of columns */
+  int col[10]; /* starting x value for each column */
+} PageMetrics;
+
+
+static void OutputPage(const PageMetrics *page) {
+  int blx, bly, trx, try, mid;
+  int i, c; char *ptr;
+  static int last_baseline = 0;
+  int spec;
+
+  for (i=0, ptr=Words; i<Top; ) {
+    blx = Queue[i++];
+    bly = Queue[i++];
+    trx = Queue[i++];
+    try = Queue[i++];
+    spec = Queue[i++];
+
+    /* Output word separator if this isn't first word on page. */
+    if (t.nonEmptyPage) {
+      mid = (try+bly) / 2;
+      if ((t.blx<t.trx && t.try>=t.bly)
+	  || (blx<trx && try<bly
+	  && t.blx <= blx
+	  && t.try <= mid
+	  && mid <= t.bly)) putc(' ', stdout); /* same line */
+      else { /* different line */
+	int dy = bly - last_baseline;
+	for (c=0; dy > page->line+3 && c<10; c++, dy -= page->line) {
+	  putc('\n', stdout);
+	}
+	putc('\n', stdout);
+
+	for (c=0; blx > page->col[c+1]-5; c++);
+	if (blx > page->col[c]+2) {
+	  
+	  float spc;
+	  for (spc = blx - page->col[c]; spc > 2.0; spc -= page->width) {
+	    putc(' ', stdout);
+	  }
+	}
+	last_baseline = bly;
+      }
+    }
+    
+#ifdef ANNOTATE_ASCII
+    if (spec != old_spec) {
+      old_spec = spec;
+      fprintf(stdout, "<%s%s%s-%d>",
+	      spec & BOLD ? "b" : "",
+	      spec & ITALIC ? "i" : "",
+	      spec & SANSSERIF ? "h" : (spec & FIXED ? "c" :
+					(spec & SYMBOL ? "s" : "r")),
+	      (int)((spec >> 16)/256.0 + .5));
+    }
+#endif
+
+    /* Output word */
+    fputs(ptr+1, stdout);
+    
+    t.nonEmptyPage = TRUE;
+    t.blx = blx; t.bly = bly; t.trx = trx; t.try = try;
+    ptr += (int) *ptr;
+  }
+  if (t.nonEmptyPage) putc('\n', stdout);
+  fputs("\f\n", stdout);
+}
+
+static void OutputRichText(const PageMetrics *page) {
+  int blx, bly, trx, try;
+  int i; char *ptr;
+  int spec;
+
+  for (i=0, ptr=Words; i<Top; ) {
+    blx = Queue[i++];
+    bly = Queue[i++];
+    trx = Queue[i++];
+    try = Queue[i++];
+    spec = Queue[i++];
+
+    fprintf(stdout, "%s%s%s %d %d %d {%s}\n",
+	    spec & BOLD ? "b" : "",
+	    spec & ITALIC ? "i" : "",
+	    spec & SANSSERIF ? "h" : (spec & FIXED ? "c" :
+				      (spec & SYMBOL ? "s" : "r")),
+	    (int)((spec >> 16)/256.0 + .5),
+	    blx, bly, ptr+1);
+
+    t.nonEmptyPage = TRUE;
+    t.blx = blx; t.bly = bly; t.trx = trx; t.try = try;
+    ptr += (int) *ptr;
+  }
+  fputs("eop\n", stdout);
+}
+
+static inline int diff(int spec, int old_spec, int flag) {
+  return ((spec & flag) != (old_spec & flag));
+}
+
+static inline void addText(char **handle, char *text) {
+  int len = strlen(text);
+  strcpy(*handle, text);
+  *handle += len;
+}
+   
+  
+static void OutputHTML(const PageMetrics *page) {
+  int blx, bly, trx, try, mid;
+  int i, c; char *ptr;
+  int leftMost, rightMost, columnMid, colLeft, colRight;
+  static int last_baseline = 0;
+  static int old_spec = -1, old_size = 0, old_heading = 0;
+  int spec, size, heading;
+  char output[1024]; char *outptr = output;
+
+  fprintf(stdout, "<hr size=8>\n");
+
+  *outptr = 0;
+  colLeft = 36; colRight = 8*72;
+  columnMid = (colLeft + colRight)/2;
+  leftMost = rightMost = columnMid;
+
+  for (i=0, ptr=Words; i<Top; ) {
+    blx = Queue[i++];
+    bly = Queue[i++];
+    trx = Queue[i++];
+    try = Queue[i++];
+    spec = Queue[i++];
+
+    /* Output word separator if this isn't first word on page. */
+    if (t.nonEmptyPage) {
+      mid = (try+bly) / 2;
+      if ((t.blx<t.trx && t.try>=t.bly)
+	  || (blx<trx && try<bly
+	  && t.blx <= blx
+	  && t.try <= mid
+	  && mid <= t.bly)) *outptr++ = ' ';
+      else { /* different line */
+	int dy = bly - last_baseline;
+
+	/* output previous line */
+	*outptr++ = 0;
+
+	/* look for centering */
+	if (leftMost > colLeft + 36) {
+	  if (rightMost > colRight) { /* find col boundary */
+	    for (c=0; rightMost > page->col[c] && c < page->columns; c++);
+	    colRight = page->col[c];
+	    columnMid = (colRight + colLeft)/2;
+	  }
+	  if ((rightMost + leftMost)/2 > columnMid - 36 &&
+	      (rightMost + leftMost)/2 < columnMid + 36) {
+	    fprintf(stdout, "<center>%s</center>\n", output);
+	  } else { /* not centered */
+	    fprintf(stdout, "%s <br>\n", output);
+	  }
+	} else { /* not centered */
+	  fprintf(stdout, "%s <br>\n", output);
+	}
+
+#define MAX_BREAKS 2
+	for (c=0; dy > page->line+3 && c<MAX_BREAKS; c++, dy -= page->line) {
+	  fprintf(stdout, "<br>\n");
+	}
+
+
+	for (c=0; blx > page->col[c+1]-5; c++);
+	if (blx > page->col[c]+2) {
+	  float spc = (blx - page->col[c])/page->width;
+	  if (spc > 0 && spc < 10) {
+	    fputs("<p>\n", stdout);
+	  }
+	}
+	colLeft = page->col[c];
+	colRight = page->col[c+1];
+	columnMid = (colRight + colLeft)/2;
+	leftMost = blx;
+	rightMost = trx;
+	last_baseline = bly;
+	outptr = output;
+      }
+    }
+    
+    if (spec != old_spec) {
+      if (diff(spec, old_spec, BOLD)) {
+	addText(&outptr, spec & BOLD ? "<b>" : "</b>");
+      }
+      if (diff(spec, old_spec, ITALIC)) {
+	addText(&outptr, spec & ITALIC ? "<i>" : "</i>");
+      }
+      if (diff(spec, old_spec, FIXED)) {
+	addText(&outptr, spec & FIXED ? "<tt>" : "</tt>");
+      }
+      size = ((spec >> 16)/256.0 +.5);
+      if (size != old_size) {
+	if (size >= 14) {
+	  if (size > 24) heading = 1;
+	  else if (size >=18) heading = 2;
+	  else heading = 3;
+	} else if (size < 9) {
+	  heading = -1;
+	} else heading = 0;
+
+	if (heading != old_heading) {
+	  if (old_heading > 0) {
+	    sprintf(outptr, "</h%d>\n", old_heading);
+	    outptr += 6;
+	  } else if (old_heading < 0)
+	    addText(&outptr, "</small>");
+	  if (heading > 0) {
+	    sprintf(outptr, "<h%d> ", heading);
+	    outptr += 5;
+	  } else if (heading < 0)
+	    addText(&outptr, "<small>");
+	  old_heading = heading;
+	}
+	old_size = size;
+      }
+      old_spec = spec;
+    }
+    /* Output word */
+    addText(&outptr, ptr+1);
+
+    if (blx < leftMost) leftMost = blx;
+    if (trx > rightMost) rightMost = trx;
+    t.nonEmptyPage = TRUE;
+    t.blx = blx; t.bly = bly; t.trx = trx; t.try = try;
+    ptr += (int) *ptr;
+  }
+  fprintf(stdout, "%s <br>\n\n", output);
+}
+
+
+static void Output(format) Format format; {
+  PageMetrics page;
+  int i, threshold;
+  static int number=1;
+
+  fprintf(stderr, "Page %d\n", number++);
+
+  page.height = HistPercent(HeightHist, 10);
+  page.width = Median(WidthHist)/10.0;
+  page.lm = HistPercent(LHist, 10);
+  page.line = HistPercent(LineHist, 10);
+
+  threshold = (int) (.2 * LHist->count + .5);
+
+  for (i=0, page.columns = 0; i<1000; i++) {
+    int val = LHist->base[i];
+    if (val > threshold) {
+      /* fprintf(stderr, "%5d:%3d\n", i, LHist->base[i]); */
+      page.col[page.columns++] = i;
+    }
+  }
+  page.col[page.columns] = (int) 8.5*72;
+
+  switch (format) {
+  case Ascii:
+    OutputPage(&page); break;
+  case Html:
+    OutputHTML(&page); break;
+  case Rich:
+    OutputRichText(&page); break;
+  default:
+    fprintf(stderr, "Unknown format: %d\n", format);
+    exit(1);
+  }
+}
+
+
+static int SameDirection(x0, y0, x1, y1) double x0, y0, x1, y1; {
+  return (y0 == 0.0 && y1 == 0.0 && x0*x1 > 0.0)
+      || (x0 == 0.0 && x1 == 0.0 && y0*y1 > 0.0)
+      || (x0 * y1 == x1 * y0);
+}
+
+static void ParseString() {
+  /* Parse QS directive. */
+#define spaceTol 0.3 /* fraction of average character width to signal word break */
+  char buf[1000];
+  int n, ch, i, j, in, l;
+  Font f;
+  Encoding enc;
+  GlyphIndex glyph;
+  double x0, y0, x1, y1, xsp, ysp, dx, dy, maxx, maxy;
+
+#define SetBuf() \
+  do { \
+  strncpy(t.buf, buf, l); \
+  t.lbuf = l; \
+  t.f = n; \
+  t.x0 = x0; t.y0 = y0; t.x1 = x1; t.y1 = y1; \
+  } while(0)
+
+    n = ReadInt(); /* index in "t.font" */
+    f = (*t.font)[n];
+    if (f == NULL) abort("undefined font number");
+    enc = (*t.encoding)[f->e];
+    if (enc==NULL) abort("undefined encoding number");
+    ParsePair(&x0, &y0); /* initial currentpoint */
+    j = ReadInt(); /* length of string */
+    ch = getc(t.rd);
+    if (ch == EOF) exit(1);
+    if (ch != ' ') abort("expected space in string directive");
+
+    l = 0;
+    for (i = 0; i<=j-1; i++) {
+      in = fgetc(t.rd);
+      if (in==EOF) exit(1);
+      glyph = (*enc)[in];
+
+      /* If "glyph==0", then "in" mapped to the glyph ".notdef".  This
+	 is usually a mistake, but we check for several known cases: */
+      if (glyph == 0) {
+
+	/* If any element of the current encoding is in the range used
+	   by Microsoft TrueType, assume this character is, too. */
+	int k = 0, tt = FALSE;
+	for(;;) {
+	  if (FirstTT1 <= (*enc)[k] && (*enc)[k] <= LastTT2)
+	    tt = TRUE;
+	  if (tt || k == sizeof(*enc)/sizeof((*enc)[0])) break;
+	  k++;
+	}
+	if (tt) glyph = FirstTT1 + (int)in;
+	else if (in == '\r') ; /* Adobe Illustrator does this... */
+	else if (in == '\t') ; /* MacDraw Pro does this... */
+	else if (in == '\032') ; /* MS Word on Mac does this... */
+	/* else abort("undefined glyph") ... and lots of other stuff! */
+      }
+      if (glyph == 0) 
+	/*skip*/;
+      else if (glyph <= LastISOLatin1) {
+	buf[l] = (char)glyph;
+	/* *** if (glyph IN ISOLatin1Gaps) buf[l] = UnknownChar; */
+	l++;
+      }
+      else if (glyph <= LASTSpecialGlyphs) {
+	char *str = SpecialGlyphs[glyph-FIRSTSpecialGlyphs];
+        int lstr = strlen(str);
+        strncpy(&buf[l], str, lstr);
+        l += lstr;
+      }
+      else if (glyph <= LastDvips) {
+	if (glyph <= LASTDvipsGlyphs) {
+          char *str = DvipsGlyphs[glyph-FIRSTDvipsGlyphs];
+          int lstr = strlen(str);
+          strncpy(&buf[l], str, lstr);
+          l += lstr;
+	}
+	else {
+	  /* E.g., U encoding or Cork encoding */
+	  buf[l] = UnknownChar;
+          l++;
+	}
+      }
+      else if (glyph <= LastTT2) {
+	if (FirstTT2 <= glyph) glyph -= FirstTT2-FirstTT1;
+	if (glyph < FirstTT1+32) {
+          buf[l] = UnknownChar; l++;
+	}
+	else if (glyph < FIRSTTTSpecialGlyphs ||
+	      LASTTTSpecialGlyphs < glyph) {
+	  buf[l] = (char)(glyph - FirstTT1); l++;
+	}
+	else {
+	  char *str = TTSpecialGlyphs[glyph-FIRSTTTSpecialGlyphs];
+          int lstr = strlen(str);
+          strncpy(&buf[l], str, lstr);
+          l += lstr;
+	}
+      }
+      else if (glyph <= LastOldDvips) {
+	char *str = DvipsGlyphs[glyph-FirstOldDvips];
+        int lstr = strlen(str);
+        strncpy(&buf[l], str, lstr);
+        l += lstr;
+      }
+      else if (glyph == NonstandardGlyph) { /* not in StandardGlyphs */
+	buf[l] = UnknownChar;
+        l++;
+      }
+      else abort("unknown glyph index");
+
+      /* Substitute minus for hyphen. */
+      if (buf[l-1] == '\255') buf[l-1] = '-';
+    }
+
+    ParsePair(&x1, &y1); /* final currentpoint */
+    if (l != 0) { /* "l==0" e.g., when Adobe Illustrator outputs "\r" */
+      if (t.lbuf == 0) {SetBuf();}
+      else {
+        /* If the distance between this string and the previous one is
+           less than "spaceTol" times the minimum of the average
+           character widths in the two strings, and the two strings
+           are in the same direction, then append this string to the
+           previous one.  Otherwise, output the previous string and
+           then save the current one.
+
+           Sometimes this string overlaps the previous string, e.g.,
+           when TeX is overprinting an accent over another character.
+           So we make a special case for this (but only handle the
+           left-to-right orientation). */
+
+        /* Set "(xsp,ysp)" to the reporting space coordinates of the
+           minimum of the average width of the characters in this
+           string and the previous one. */
+
+        xsp = MIN((t.x1-t.x0) / t.lbuf, (x1-x0) / l);
+        ysp = MIN((t.y1-t.y0) / t.lbuf, (y1-y0) / l);
+
+        dx = x0-t.x1;
+        dy = y0-t.y1;
+        maxx = spaceTol * xsp;
+        maxy = spaceTol * ysp;
+	if (dx*dx + dy*dy < maxx*maxx + maxy*maxy
+	    || (t.y1 == y0 && t.x0 <= t.x1 && t.x0 <= x0 && x0 <= t.x1
+	   && SameDirection(t.x1-t.x0, t.y1-t.y0, x1-x0, y1-y0))) {
+	  if (t.lbuf+l >= sizeof(t.buf)) abort("string too long");
+          strncpy(&t.buf[t.lbuf], buf, l);
+          t.lbuf += l;
+	  t.x1 = x1; t.y1 = y1;
+	  /* *** Merge font bounding boxes? */
+	}
+	else {
+	  Push();
+	  SetBuf();
+	}
+      }
+    }
+}
+
+int Filter(file, format) FILE *file; Format format; {
+ int c;
+ Top = 0;
+ TopWord = Words;
+
+ HeightHist = CreateHist(100);
+ WidthHist = CreateHist(1000);
+ LHist = CreateHist(1000);
+ LineHist = CreateHist(1000);
+ InitFonts();
+
+ Init(file);
+
+ for ( ; ; ) {
+    do {c = fgetc(t.rd); if (c==EOF) return FALSE;} while (c!='Q');
+    c = fgetc(t.rd);
+    switch (c) {
+      case 'M': ParseMetrics(); break;
+      case 'E': ParseEncoding(); break;
+      case 'F': ParseFont(); break;
+      case 'S': ParseString(); break;
+      case 'C': /* copypage */ abort("unexpected copypage");
+      case 'P': /* showpage */
+                if (t.lbuf > 0) Push();
+	        Output(format);
+	        Top = 0;
+	        TopWord = Words;
+	        fflush(stdout);
+                t.nonEmptyPage = FALSE;
+                t.blx = t.bly = t.trx = t.try = 0;
+	        ClearHist(HeightHist);
+	        ClearHist(WidthHist);
+	        ClearHist(LHist);
+	        ClearHist(LineHist);
+                break;
+      case 'Z': /* erasepage */ /*skip;*/ break;
+      case EOF: return FALSE;
+      /* default: skip */
+    }
+  }
+  /* Finalize. */
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

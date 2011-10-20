@@ -1,0 +1,207 @@
+head	1.4;
+access;
+symbols
+	Yatin-final:1.4
+	Yatin:1.4.0.2
+	pre-yatin-merge:1.4;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	97.10.30.02.26.25;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.10.23.22.25.11;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.10.23.17.38.01;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.23.17.19.03;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Added winman dispatcher.  .prc's in .zip's now works
+@
+text
+@# Handle .zip files
+
+use TACCutils;
+use clib;
+use CGI;
+
+sub message {
+    my $err = shift;
+    chomp $err;
+    $err .= "\n";
+    &MonitorClient_Send("WingMan Messages", $err, "Log");
+}
+
+sub DistillerInit {
+    %sufmap = (
+	prc => 'application/x-palmosdb',
+	pdb => 'application/x-palmosdb',
+	zip => 'application/zip',
+	htm => 'text/html',
+	html => 'text/html',
+    );
+    0;                                      # the distOk return code
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @@_;
+    my($unzip);
+    my($myurl) = &get_my_url($headers);
+    my($listing);
+
+    if (-x '/usr/sww/bin/unzip') {
+      $unzip = '/usr/sww/bin/unzip';
+    } else {
+      $unzip = '/usr/bin/unzip';
+    }
+    ## Write the .zip file to disk (because that's all unzip can understand)
+    $zipfilename = ".zipfile.$$.zip";
+    open(ZIP, ">$zipfilename");
+    print ZIP $data;
+    close(ZIP);
+
+    if ($args{"s219"}.'' eq '') {
+	## Show what's in it
+	unless(open(ZOUT, "-|")) {
+	    exec $unzip, '-l', '-q', $zipfilename;
+	    &message("exec: $!");
+	    exit;
+	}
+	while(<ZOUT>) {
+	    last if /^ -----/;
+	}
+	while(<ZOUT>) {
+	    last if /^ -----/;
+	    chomp;
+	    if (/^\s*(\S+)\s+\S+\s+\S+\s+/) {
+		my ($size, $name) = ($1, substr($_,27));
+		my ($escname, $magicurl);
+		$escname = CGI::escape($name);
+		$magicurl = &tomagic($myurl, "s219=$escname");
+		$name =~ s/\&/&amp;/g;
+		$name =~ s/\</&lt;/g;
+		$name =~ s/\>/&gt;/g;
+		$listing .= "<LI><A HREF=\"$magicurl\">$name</A> ($size bytes)\n";
+	    }
+	}
+	while(<ZOUT>) {
+	}
+	close(ZOUT);
+
+	unlink $zipfilename;
+
+	$data = <<EOD;
+<HTML><HEAD><TITLE>Zipfile listing</TITLE></HEAD>
+<BODY><UL>
+$listing
+</UL></BODY></HTML>
+EOD
+	$hdrs = <<EOH;
+HTTP/1.0 200 OK\r
+Location: $myurl\r
+Content-Type: text/html\r
+\r
+EOH
+	return($data, $hdrs, "text/html", 0);
+    } else {
+	## Retrieve the file
+	my ($file) = $args{"s219"};
+	$file =~ s/\%([0-9a-f][0-9a-f])/pack('H2',$1)/ieg;
+	&message("Extracting $file");
+	unless(open(ZOUT, "-|")) {
+	    exec $unzip, '-p', '-q', $zipfilename, $file;
+	    &message("exec: $!");
+	    exit;
+	}
+	$data = join('',<ZOUT>);
+	close(ZOUT);
+
+	## Figure out the appropriate next distiller
+&message("file is $file\n");
+	if ($file =~ /\.(\w+)$/) {
+	    $suffix = lc $1;
+	} else {
+	    $suffix = '';
+	}
+&message("suffix is $suffix\n");
+	if (defined $sufmap{$suffix}) {
+	    $type = $sufmap{$suffix};
+	} else {
+	    $type = 'text/plain';
+	}
+&message("type is $type\n");
+
+	$hdrs = <<EOH;
+HTTP/1.0 200 OK\r
+Location: $myurl\r
+Content-Type: $type\r
+\r
+EOH
+	return($data, $hdrs, $type, 0);
+    }
+}
+
+1;
+@
+
+
+1.3
+log
+@Works OK now - checks /usr/sww/bin and /usr/bin for unzip
+@
+text
+@d15 7
+a81 1
+X-Route: wingman/text/*\r
+d84 1
+a84 1
+	return($data, $hdrs, "text/html", 10);
+d98 15
+d116 1
+a116 2
+Content-Type: text/plain\r
+X-Route: wingman/text/*\r
+d119 1
+a119 1
+	return($data, $hdrs, "text/plain", 10);
+@
+
+
+1.2
+log
+@.
+@
+text
+@d20 1
+a20 1
+    my($unzip) = '/usr/sww/bin/unzip';
+d24 5
+@
+
+
+1.1
+log
+@Handle .zip files
+@
+text
+@d42 1
+@

@@ -1,0 +1,1236 @@
+head	1.12;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.12
+date	99.08.03.00.45.12;	author daw;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.11.16.10.18.47;	author daw;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.11.16.08.25.16;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.11.16.07.47.33;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.11.16.05.23.13;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.11.16.01.30.04;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.11.16.00.48.51;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.11.16.00.33.03;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.11.14.12.38.26;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.14.12.04.41;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.14.10.34.44;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@\chapter{The Design and Implementation of Janus}
+\label{implementation}
+
+Janus is a powerful tool for confining untrusted applications.
+In this chapter, we describe the design and implementation of our
+prototype.  To support the design and implementation choices we made,
+we also briefly discuss why we believe our tool is secure and
+outline a basic security policy for it.
+
+\section{Design}
+\label{design}
+
+Our design, in the style of a reference monitor, centers around 
+the following basic assumption:
+	\begin{center} \frame{\parbox{5.2in}{
+	\begin{center} \parbox{5.0in}{ \begin{center}
+	\vskip -.2in
+	\sc
+	An application can do little harm
+	if its access to the underlying operating system is appropriately
+	restricted.
+	\vskip -.2in
+	\end{center}
+	} \end{center}
+	}}
+	\end{center}
+Our goal, then, was to design a user-level mechanism
+that monitors an untrusted application and
+disallows harmful system calls\footnote{As an aside,
+it is worth mentioning that the boxed principle above is not
+sufficient on its own to prevent denial-of-service attacks.
+Fortunately, in practice not much extra work is required:
+we simply set limits on the application's resource usage
+using the Unix {\tt setrlimit(2)} primitive
+before transferring control to the application.
+See also Section~\ref{sec:framework}.}.
+
+
+A corollary of the assumption is that an application may be allowed to
+do anything it likes that does not involve a system call.  This means it
+may have complete access to its address space, both code and data.
+Therefore, any user-level mechanism we provide
+must reside in a different address space.
+Under Unix, this means having a separate process.
+
+One of our basic design goals was {\sc security}.  The untrusted application
+should not be able to access any part of the system or network for which
+our program has not granted it permission.
+Like others before us,
+we use the term {\em sandboxing} to describe the concept
+of confining an untrusted application to a restricted environment,
+within which it has free reign.
+This term was introduced before in, e.g., \cite{sfi}
+(although it was used there in a slightly different setting).
+
+To achieve security, a slogan we kept in mind
+was ``keep it simple'' \cite{hints-design}.
+Simple programs are more likely to be secure \cite[Theorem 1]{ches-smb-book};
+simplicity helps to avoid bugs,
+and makes it easier to find that which creep in.
+We would like to keep our mechanism simpler than
+the applications that would run under it.
+
+Another of our goals was {\sc versatility}.  We would like to be able
+to allow or deny individual system calls flexibly, perhaps programatically
+depending on the arguments to the call.  For example, the {\tt open}
+system call could be allowed or denied depending on which file the
+application was trying to open, and whether it was for reading or for
+writing.  Maintaining flexibility allows us to use the tool to
+protect many different types of applications.
+
+Our third goal was {\sc configurability}.  Different sites have different
+requirements as to which files the application should have access, or
+to which hosts it should be allowed to open a TCP connection.
+In fact, our program ought to be configurable in this way even on a
+per-user or per-application basis.
+
+On the other hand,
+we did {\em not} strive for the criteria of safety
+or portability of applications.
+By {\em safety}, we mean 
+protecting the application from its own bugs.
+We allow the user to run any program he wishes, and we
+allow the executable to play within its own address space as much as it
+would like.
+In other words, our tool focuses on security for the untrusted application,
+not correctness.
+
+We adopted for
+our program, then, a simple, modular design:
+a {\em framework}, which is the essential body of the program, and
+dynamic {\em modules}, used to implement various aspects of a
+configurable security policy by filtering relevant system calls.
+This decomposition allows us to separate mechanism from policy
+\cite{hints-design}.
+
+The framework reads a configuration file, which can be site-,
+user-, or application-dependent.  This file lists which
+of the modules should be loaded, and may supply parameters to them.
+For example, the configuration line
+\begin{verbatim}
+    path allow read,write /tmp/*
+\end{verbatim}
+\noindent
+would load the {\tt path} module, passing it the parameters ``{\tt allow
+read,write /tmp/*}'' at initialization time.
+This syntax is intended to allow
+files under {\tt /tmp} to be opened for reading or writing.
+
+Each module filters out certain dangerous system-call invocations,
+according to its area of specialization.
+When the application attempts a system call,
+the framework dispatches that information to relevant policy modules.
+Each module reports its opinion on whether the system call should
+be permitted or quashed,
+and any necessary action is taken by the framework.
+We note that, following the Principle of Least Privilege,
+we let the operating system execute a system call only
+if some module explicitly allows it;
+the default is for system calls to be denied.
+This behavior is important
+because it causes the system to err on the side of security
+in case of an under-specified security policy.
+
+Each module contains a list of system calls that it will
+examine and filter.
+Note that some system calls may appear in several modules' lists.
+A module may assign to each system call an arbitrary function
+that validates the arguments of the call
+{\em before} the call is executed by the operating system.%
+\footnote{
+In addition, a module can assign to a system call a similar function
+which gets called {\em after} the system call has executed, just before
+control is returned to the untrusted application.  This function can examine the
+arguments to the system call, as well as the return value, and update the
+module's local state.
+}
+The function can then use this information
+to optionally update local state, and then
+suggest allowing the system call, suggest denying it,
+or make no comment on the attempted system call.
+% In the event that this function would always return the same value,
+% one can assign the value itself to the system call in place of the function.%
+
+The suggestion to {\em allow} is used to indicate a module's
+explicit approval of the execution of this system call.
+The suggestion to {\em deny} indicates a system call
+that is to be denied execution.
+Finally, a {\em no comment} response means that the
+module has no input as to the dispatch of this system call.
+
+Modules are listed in the configuration file from most
+general to most specific, so that the last relevant
+module for any system call dictates whether the call is to be
+allowed or denied (unless it has ``no comment'').
+For example,
+a suggestion to allow countermands an earlier denial.
+Note that a {\em no comment} response has no effect:
+in particular, it does not override an earlier {\em deny}
+or {\em allow} response.
+
+Normally, when conflicts arise,
+earlier modules are overridden by later ones.
+To escape this behavior,
+for very special circumstances
+modules may unequivocally allow or deny a system call
+and explicitly insist that their judgement be considered final.
+In this case, no further modules are consulted;
+a {\em super-allow} or {\em super-deny} cannot be overridden.
+The intent is that this feature should be used quite rarely,
+for only the most critical of uses.
+Write access to {\tt .rhosts} could be super-denied
+near the top of the configuration file, for example,
+to provide a safety net in case we
+accidentally miswrite a subsequent file access rule.
+We have never used the {\em super-allow} keyword, and in
+retrospect it probably should have been omitted from the design.
+
+Relying on the ordering of the policy rules is potentially error-prone,
+but it gives the policy specification language great power and
+flexibility by allowing successive refinement of the policy.
+For instance, it allows us to implement the principle of least privilege
+easily: we can deny a broad class of system calls at the top of the
+configuration file, and later craft out limited exceptions to this broad rule
+with modules listed further down in the configuration file.
+See Figure~\ref{sconfig} for an example where this technique is used
+to initially deny file access to most absolute pathnames and later
+allow access to relative paths and selected absolute paths.
+However, in hindsight we did not use the ordering rules as much as
+we initially expected, and this feature could probably be eliminated
+with better module design and with a slightly more powerful syntax for
+pattern matching.
+
+Note also that the existence of {\em super} keywords
+may cause the tool to behave in unexpected ways if modules have
+visible side effects, since a {\em super} judgement will prevent
+later modules from executing.  In practice, none of our modules
+cause {\em super} judgements where side effects could occur,
+but in retrospect, this was blind luck rather than careful design.
+This provides additional evidence that relying on the ordering
+of policy rules may have been a mistake.
+
+To sum up, in designing the framework we aimed at providing simplicity and
+versatility as much as possible,
+though these goals often conflict.
+In retrospect the policy specification language probably
+could have been simplified with little loss in power,
+but on the whole we are quite happy with
+%the simplicity and versatility provided by
+the rest of our framework for dispatching system calls.
+%While our design is relatively simple and very powerful,
+%One can imagine more versatile and sophisticated algorithms
+%to dispatch system calls, but they would
+%come at a great cost to simplicity.
+
+These goals of versatility and configurability provided sound
+reasons to reject an approach based on an in-kernel implementation.
+It is extremely difficult for kernel code to read configuration files.
+Also, ease-of-development and similar benefits must be discarded
+with any kernel implementation.
+Finally, as we mentioned before, a kernel implementation runs the risk
+of introducing new security holes to the system, and system administrators
+are much less likely to install any tool that requires modifications
+to the kernel.
+Therefore, we focused on building a user-level solution.
+
+One of the core benefits of our design is its simplicity.
+Simpler programs are typically more likely to be correct and easier to audit,
+and our final implementation contains only a few thousand lines of code.
+Furthermore, much of the complexity can be found in just one or two
+modules; those modules need not be loaded for applications
+that don't need them, so for such applications the tool should
+have even better assurance properties.
+By allowing the implementation to be as simple as
+possible\footnote{\ldots but no simpler---with thanks to Albert Einstein.},
+we have improved our chances of getting the code reasonably correct.
+
+\section{Implementation}
+\label{implement}
+
+\subsection{Choosing an operating system}
+
+In order to implement our design, we needed to find an operating system
+that allowed a user-level process to watch the
+system calls executed by another process and to control the second process
+in various ways (such as causing selected system calls to fail).
+
+Luckily, most operating systems have a process-tracing facility,
+intended for debugging purposes.
+In such cases, typically one can find a program, such as
+{\tt trace}, {\tt strace}, or {\tt truss},
+that can observe the system calls performed by another process
+as well as their return values.
+Under the hood, these programs often use the {\tt ptrace} system call,
+which allows the tracer to register a callback
+to be executed whenever the traced process issues a system call.
+Unfortunately, {\tt ptrace} offers only very coarse-grained
+all-or-nothing tracing:
+we cannot trace a few system calls without tracing all the rest as well.
+Another serious limitation of the {\tt ptrace} interface is that many
+OS implementations provide no way for a tracing process
+to abort a dangerous system call without killing the traced process entirely.
+Both of these shortcomings make {\tt ptrace} unsuitable for our purposes.
+
+Some more modern operating systems, such as Solaris 2.4 and OSF/1,
+however, offer access to a better process-tracing
+facility through the {\tt /proc} virtual filesystem.
+This interface allows direct control of the traced process's address space.
+Furthermore, it supports fine-grained control: we can request
+callbacks on a per-syscall basis.
+Finally, the {\tt proc} interface provides a way for the tracer to
+abort a system call requested by the tracee before the syscall executes.
+
+There are only slight differences between the Solaris and the OSF/1
+interfaces to the {\tt /proc} facility.
+One of them is that Solaris
+provides an easy way for the tracing process to determine the arguments
+and return values of a system call performed
+by the traced process.
+Also, Solaris operating system is somewhat more widely deployed.
+For these reasons,
+we chose Solaris 2.4 for our implementation.
+
+\subsection{The policy modules}
+
+The policy modules are used to select and implement security policy
+decisions.  They are dynamically loaded at runtime, so that different
+security policies can be configured for different sites, users, or
+applications.  We implemented a sample set of modules that can be used
+to set up the traced application's environment, and to
+restrict its ability to read or write
+files, execute programs, and access the network.
+In addition, the traced application is prevented from performing
+certain system calls, as described below.
+The provided modules offer considerable
+flexibility themselves, so that one may configure them simply by editing
+their parameters in the configuration file.  However, if different
+modules are desired or required, it is very simple to compile new ones.
+
+Policy modules need to make a decision as to which system calls to
+allow, which to deny, and for which a function must be called to
+determine what to do.  The first two types of system calls are the
+easiest to handle.
+
+Some examples of system calls that are always allowed (in our sample
+modules) are {\tt close}, {\tt exit}, {\tt fork}, and {\tt read}.
+The operating system's protection on these system calls is
+sufficient for our needs.
+
+Some examples of system calls that are always denied (in our sample
+modules) are ones that would not succeed for an unprivileged process anyway,
+like {\tt setuid} and {\tt mount},
+along with some others, like {\tt chdir}, that we
+disallow as part of our security policy.
+
+The hardest system calls to handle are those for which a function
+(a ``guard'') must, in general, be called to determine whether the
+system call should be allowed or denied.
+The majority of these are system calls such as {\tt open},
+{\tt rename}, {\tt stat}, and {\tt kill}
+whose arguments must be checked against
+the configurable security policy specified in the parameters given
+to the module at load time.
+
+\subsection{The framework}
+\label{sec:framework}
+
+%%\subsubsection{Reading the configuration file}
+{\sc Reading the configuration file}: \,\,
+The framework starts by reading the configuration file,
+which can be specified on the command line or as a system-wide default.
+This configuration file consists of lines like those shown
+in Figure~\ref{sconfig}: the first word is the name of
+the module to load, and the rest of the line acts as a parameter to the
+module.
+
+For each module specified in the configuration file, {\tt dlopen(3x)}
+is used to dynamically load the module into the framework's address
+space.  The module's {\tt init()} function is called, if present, with
+the parameters for the module as its argument.
+
+The list of system calls and associated values and functions
+in the module is then
+merged into the framework's {\em dispatch table}.  The dispatch table is
+an array, indexed by system-call number, of linked lists.  Each value
+and function in the module is appended to the list in the dispatch table
+that is indexed by the system call to which it is associated.
+
+The result, after the entire configuration file has been read, is that
+for each system call, the dispatch table provides a linked list
+that can be traversed to decide whether
+to allow or deny a system call.
+
+% \subsubsection{Setting up the traced process}
+% \label{setup}
+{\sc Setting up the traced process}: \,\,
+After the dispatch table is set up, the framework gets ready to run the
+application that is to be traced: a child process is {\tt fork()}ed,
+and the child's state is cleaned up.  This includes setting a {\tt
+umask} of 077, setting limits on virtual memory use, disabling core
+dumps, switching to a sandbox directory,
+and closing unnecessary file descriptors.
+Modules get a chance to further initialize the child's state;
+for instance, the {\tt putenv} module sanitizes the environment variables.
+The parent process waits for the child to complete this
+cleanup, and begins to debug the child via the {\tt /proc} interface.
+It sets the child process to stop whenever it begins or finishes a
+system call.
+(Actually, only a subset of the system calls are marked in
+this manner; see Section~\ref{optimizer}, below.)
+The child waits until it is being traced, and executes the desired
+application.
+
+In our sample security policy, the application is confined
+to a sandbox directory.
+By default, this is a new subdirectory created in {\tt /tmp}
+with a random name,
+although the {\tt SANDBOX\_DIR} environment variable can be used to
+override this choice.
+We create a new temporary-use subdirectory in {\tt /tmp} and confine
+the program to that subdirectory, rather than simply allowing the
+application full access to {\tt /tmp}, because we want to isolate the
+untrusted application from other processes running on the same system.
+If the untrusted application needs to receive data from other processes,
+we instruct the other processes (via some out-of-band hint) to place
+their output in an appropriate temporary subdirectory where the
+untrusted application can find it.
+
+% \subsubsection{Running the traced process}
+{\sc Running the traced process}: \,\,
+The application runs until it performs a system call.  At this point,
+it is put to sleep by the operating system, and the tracing process wakes up.
+The tracing process (Janus) determines which system call was attempted, along
+with the arguments to the call.
+It then traverses the appropriate linked list
+in the dispatch table, in order to determine
+whether to allow or to deny this system call.
+
+If the system call is to be allowed, Janus simply wakes up
+the application, and the system call is executed.
+If, however, the system
+call is to be denied, the tracing process wakes up the application with
+the {\tt PRSABORT} flag set.  This causes the system call to abort
+immediately, returning a value indicating that the system call failed
+and setting {\tt errno} to {\tt EINTR}.
+In either case, the tracing process goes back to sleep immediately.
+
+The fact that an aborted system call returns {\tt EINTR} to the
+application presents a potential problem.  Some applications are coded
+in such a way that, if they receive an {\tt EINTR} error from a system
+call, they will retry the system call.
+Thus, if such a application tries to execute a
+system call that is denied by the security policy, it will
+get stuck in a retry loop.  We detect this problem by noticing when a
+large number (currently 100) of the same system call with the same
+arguments are consecutively denied.  If this occurs, we assume the
+traced application is not going to make any further progress, and just
+kill the application entirely, giving an explanatory message to the user.
+We would prefer to be able to return other error codes (such as {\tt
+EPERM}) to the application, but Solaris does not support that behavior.
+
+When a system call completes, the tracing process has the ability to
+examine the return value if it so wishes.  If any module had assigned
+a function to be executed when this system call completes, as described
+above, it is executed at this time.  This facility is not widely used;
+it was developed primarily to support the {\tt fork()} system call.
+
+Since all children of untrusted processes are presumed to be untrusted
+as well, and since our security policy requires that all untrusted
+processes be traced by Janus, we see that we need to handle the creation
+of child processes to ensure that this policy is obeyed.
+When a {\tt fork()} or {\tt vfork()} system call completes, the tracing
+process checks the return value and then {\tt fork()}s itself.  The child
+of the tracing process then detaches from the application and begins
+tracing the application's child.  Once the child Janus process has enabled
+process tracing on the application's child, the application's child is
+allowed to begin executing.
+See Figure~\ref{recursion} for a graphic depiction of this process.
+This method safely allows
+the traced application to spawn a child
+(as {\tt ghostview} spawns {\tt gs}, for example)
+by ensuring that all children of untrusted applications are traced as well.
+
+\begin{figure}
+\begin{center}
+\ \psfig{file=recursion.eps,width=6in} \ 
+\end{center}
+\caption{\label{recursion} Handling the {\tt fork} system call.
+Solid lines depict the parent-child relationships, and dashed lines
+are drawn from tracer to tracee.
+In the leftmost picture, untrusted application U1 is being traced
+by Janus process J1.
+In the middle picture, U1 has forked an untrusted child process U2,
+and Janus responds by pausing U2 and forking a copy of itself J2
+to handle U2.
+(With the {\tt /proc} filesystem, by default J2 inherits the tracing
+relationship with U1.)
+In the rightmost picture, J2 has detached from U1 and attached to U2;
+now U2 may be restarted.}
+\end{figure}
+
+We have not aimed for extensive auditing, but logging of the
+actions taken by the framework would be
+easy to add to our implementation if desired.
+
+We should point out that the Solaris tracing facilities will not
+allow a traced application to {\tt exec()} a setuid program.
+Therefore, untrusted applications cannot increase their privileges.
+Furthermore, traced programs cannot turn off their own tracing.
+
+\subsection{The optimizer}
+\label{optimizer}
+
+Our program has the potential to add a nontrivial amount of overhead
+to the traced application whenever we intercept a system call.
+In order to keep this overhead down, we obviously want to intercept
+as few system calls as possible.
+%---or at least, as few of the common ones as possible.
+However, we do not wish to give up security to gain
+performance.
+Therefore, we apply several optimizations to the system-call dispatch
+table when it is created.
+% before the untrusted application executes.
+% at initialization time.
+
+One optimization is a simple form of constant propagation.
+We note that one common case arises when a module's system-call
+handler always returns the same allow/deny value
+(and leaves no side effects);
+this special case allows us to remove redundant values in the dispatch table.
+
+The most important optimization observes that certain system calls,
+such as {\tt write}, are always safe.
+This strategy is appropriate
+because IO in Unix is built around a capability model:
+one requests capability via the {\tt open} system call, and if the
+{\tt open} call is allowed by the kernel, a reference is returned
+that may be safely used with e.g. the {\tt write} system call.
+Since all access checks are done when the capability is bound
+by the {\tt open} call to a file object, we only need to check
+the {\tt open} call; and since we trust the kernel to execute
+{\tt write} requests only when an appropriate capability is presented,
+we need not check the {\tt write} call.
+
+When we know in advance that a system call will always be allowed,
+we need not register a callback with the OS for them.
+This avoids the extra context switches to
+and from the tracing process
+each time the traced application
+makes such a system call, and thus those system calls can execute at
+full speed as though there were no tracing or filtering in place.
+By eliminating the need to trace common system calls such as
+{\tt read} and {\tt write}, we can greatly speed up overall
+performance.
+
+Fortunately for us, the structure of the Unix system-call interface
+allows us to apply this type of optimization to many of the
+system calls most critical to performance.
+Thus we benefited from an interface that separates binding-time
+access checks for an object from fast direct access to that object.
+See also Section~\ref{os-principles} for more discussion on this point.
+
+\section{Security and assurance}
+\label{assurance}
+
+There is no universally accepted way to assess
+whether our implementation is secure;
+however, there are definite
+indications we can use to make this decision. 
+
+We believe in security through simplicity,
+and this was a guiding principle throughout the design
+and implementation process.
+Our entire implementation
+consists of approximately 2100 lines of code:
+the framework has 800, and the modules have the remaining 1300.
+Furthermore, 
+we have attempted to minimize the amount of security-critical
+state where possible.
+Since the design concept is a simple one, and because the entire
+program is small, the implementation is easier to understand and to
+evaluate.
+Thus, there is a smaller chance of having a security hole
+go undetected.
+
+We performed some simple sanity checks to verify that
+our implementation appropriately restricts applications.
+More work on assurance is needed.
+
+Most importantly, the best test is outside scrutiny
+by independent experienced security researchers;
+a detailed code review would help improve
+the assurance and security offered by our secure environment.
+All are encouraged to examine our implementation
+for flaws.
+
+Note that we rely on the OS kernel to enforce some minimal
+protection properties.
+For instance, we assume that the operating system will protect
+Janus from the untrusted application it is tracing.\footnote{Note
+that these types of invariants have occasionally been violated
+when bugs are found in the kernel.  A recent example is a bug
+that let one kill any other process, bypassing permission checks
+by using idiosyncrasies of the signals interface.
+Nonetheless, it is our experience that serious security holes
+in the kernel are far less common than security exposures in
+application code.}
+As a slightly more subtle example,
+we rely on the invariant that the kernel will not allow the traced
+application to perform a {\tt write} on a file descriptor not obtained
+via {\tt open}: this allows us to perform the optimization
+of monitoring only {\tt open} calls and ignoring all {\tt write}
+and {\tt read} calls.
+In general, we have tried to rely on only the most stable,
+well-understood protection properties guaranteed by the kernel, but
+if the kernel operates with reckless disregard for security (or
+worse, with hostile intent), there is clearly nothing Janus can do
+to remedy the situation.
+
+
+\section{A security policy}
+\label{policy}
+
+We implemented a sample security policy to test our ideas,
+as a proof of concept.
+This one policy turned out to be very useful at confining a variety
+of interesting applications; but certainly if it were not sufficient
+for some needs, other policies could be easily implemented.
+
+Sandboxed processes may {\tt fork} children,
+which we then recursively trace.
+Traced applications can only send signals to themselves or
+to their children,
+and never to an untraced application.
+Our policy carefully limits resource usage and
+sanitizes environment variables at initialization time.
+
+We impose severe limits on access to the filesystem.
+We place the untrusted application in a particular
+directory and allow it full access to files in or below this directory;
+To prevent escape from this sandbox directory,
+we ensure that it cannot {\tt chdir} out of this directory
+and always deny access to paths containing ``{\tt ..}''.
+We provide the untrusted application with read access to certain
+carefully controlled files referenced by absolute pathnames,
+such as shared libraries and global configuration files.
+
+We concentrate all access control in the {\tt open} system call,
+and always allow {\tt read} and {\tt write} calls.
+This is safe, because {\tt write}
+is only useful when used on a file descriptor obtained from a system
+call like {\tt open}.
+This approach simplifies matters and also permits
+an important performance optimization (see Section~\ref{optimizer}).
+
+Of course, protecting the filesystem alone is not enough.
+Network access must be carefully controlled, lest the untrusted
+application escape its sandbox and cause harm elsewhere.\footnote{This
+is a crucial limitation of the {\tt chroot} primitive.
+{\tt chroot} can help control filesystem access reliably,
+but its Achilles heel is that it does not control network
+access; for these reasons, {\tt chroot} environments can
+often be escaped if extra precautions are not taken.}
+Yet nearly any practical application will legitimately require access
+to network resources.
+
+For example, some programs may need to open
+a window on the X11 display to interact with the user.
+In our security policy,
+we allow network connections only to the X display,
+and this access is allowed only through a safe X proxy.
+In theory, we could instead buy a second monitor
+and set the X display of the sandboxed application to point
+to the second monitor; this would provide robust security,
+but at great expense.
+Therefore, we find that we must securely multiplex access
+to the X display for both trusted and untrusted applications.
+We found it most natural to enforce this by carefully
+controlling network access so the untrusted application
+can only access the display through a trusted application-level proxy.
+
+As X access control is all-or-nothing,
+X11 does not itself provide the security services we require.
+A rogue X client has full access to all other clients on
+the same server, so an otherwise confined application
+could compromise other applications if it were allowed uncontrolled
+access to X.
+Fortunately the firewall community has already built several
+safe X proxies that understand the X protocol and filter out
+dangerous requests \cite{x11-proxy,xnest}.
+We integrated our Janus prototype with {\tt Xnest} \cite{xnest},
+which lets us run another complete instance
+of the X protocol under {\tt Xnest}.
+{\tt Xnest} acts as a server to its clients
+(e.g.\ the sandboxed applications),
+and its entire display is painted within one window managed by the
+root X server.
+In this way, untrusted applications are securely encapsulated
+within the child {\tt Xnest} server and cannot escape from
+this sandbox display area
+or affect other normal trusted applications.
+(For instance, attempting to cut-and-paste from a untrusted
+window inside {\tt Xnest} to a trusted window will fail, as will
+the reverse direction.)
+{\tt Xnest} is not ideal---it is not as small or simple
+as we would like---but any further advances in X protocol
+filtering from the firewall community would likely
+%to directly improve the situation.
+provide immediate benefits for Janus as well.
+
+Additional controls over network access are typically also necessary.
+For instance, some applications need to be able to resolve hostnames
+via DNS.
+As another example, web browsers need to be able to access web
+servers (typically on TCP port 80).
+
+At the moment, we handle DNS by opening up a small hole in the
+sandbox to allow UDP connections to port 53 on a
+single, specially designated local DNS server.
+We take care to ensure that the designated DNS server runs the most
+secure DNS code we can find (with no known holes), so a malicious
+application can't easily escape this way.
+Also, to help manage the risk, we only grant DNS access to the small
+subset of programs that actually need it.
+If Berkeley had a firewall, we would point our untrusted applications
+to a DNS server outside the firewall that knows nothing about
+internal hosts.
+Note that this does introduce a
+covert channel \cite{lampson-confinement,java-bugs},
+but from our perspective, we are not worried about covert channels,
+because we have attempted to prevent untrusted applications from
+ever getting access to any confidential information in the first place.
+
+It is interesting to observe that the problem of handling DNS securely
+for sandboxed applications is very similar to the problem of handling
+DNS securely in a firewall.
+In the firewalls community this is well-known to be a tricky problem.
+Our current policy is akin to what most simple packet filters do today;
+this policy is not perfect, but it can be easily improved.
+Better would be to interpose a filtering DNS proxy between the
+sandboxed application and the external DNS server.
+Such secure DNS proxies have been described in the firewalls literature
+\cite{dnsproxy}, and we are in a good position to leverage that work.
+There is no fundamental reason this is not in place at the moment; we
+simply haven't added it to our prototype yet.
+
+Our approach for handling web browsers is also very similar
+to policies found in today's packet filters.
+As before, this could be improved by borrowing techniques from
+application-level firewalls and interposing a filtering web proxy
+between the sandboxed application and the outside world.
+
+This seems to be a general principle: techniques for handling
+network access by sandboxed applications can almost always be
+stolen directly from the firewalls community.
+This has very nice benefits, as we can benefit from the experiences
+of firewalls researchers, as well as borrow pre-existing code.
+In general, we may be able to do even better than firewalls can,
+since we can set a per-application policy on network access.
+
+%\subsubsection{Sample modules}
+
+{\sc Sample modules: \,\,}
+Our modules implementing this sample policy are as follows.
+The {\tt basic} module supplies defaults for the system calls
+which are easiest to analyze, and takes no configuration parameters.
+The {\tt putenv} module allows one to specify environment variable
+settings for the traced application via its parameters;
+those environment variables that are not explicitly mentioned are unset.
+The special parameter {\tt display} causes the confined application
+to inherit the parent's {\tt DISPLAY}.
+The {\tt net} module allows us to restrict TCP and UDP connections
+(both outgoing and incoming) by host and/or port;
+the default is to disallow all connections.
+The {\tt path} module, the most complicated one, lets one
+allow or deny file access according to one or more patterns.
+
+Because this policy is just an example, we have not gone
+into excruciating detail regarding the specific policy
+decisions implemented in our modules.
+
+A sample configuration file for this policy can be seen in
+Figure~\ref{sconfig}.
+
+
+
+
+{\sloppy \begin{figure}
+% \begin{figure}[p]
+\caption{\label{sconfig} A sample configuration file.}
+{\ssp \sloppy \small \tt
+\vfill
+
+~\\
+
+~\\
+
+\# `basic' sets a simple policy for core interfaces (signals, fork, ioctl, ...)\\
+\# This simple policy will be refined by later modules.\\
+basic\\
+
+putenv display\\
+putenv HOME=. TMP=. PATH=/bin:/usr/bin:/usr/ucb:/usr/local/bin:/usr/local/X11/bin\\
+:/usr/bin/X11:/usr/contrib/bin:/usr/local/bin XAUTHORITY=./.Xauthority\\
+LD\_LIBRARY\_PATH=/usr/local/X11/lib\\
+
+net allow connect display\\
+
+path super-deny read,write,exec */.forward */.rhosts */.klogin */.ktrust\\
+
+\# This is the paradigm to deny absolute paths and allow relative paths.\\
+\# (Of course, we will later allow selected absolute paths.)\\
+\# Assumes someone will put us in a safe sandboxed dir.\\
+path allow read,write *\\
+path deny read,write /*\\
+
+\# Allow certain explicit paths.\\
+path allow read /dev/zero /dev/null /etc/netconfig /etc/nsswitch.conf /etc/hosts \\
+/etc/resolv.conf /etc/default/init /etc/TIMEZONE /etc/magic /etc/motd /etc/services /etc/inet/services /etc/hosts /etc/inet/hosts\\
+
+\# Note: subtle issues here.\\
+\# Make sure tcpconnect is loaded, to restrict connects!\\
+\# /dev/ticotsord is the loopback equivalent of /dev/tcp, ticlts same for udp.\\
+path allow read,write /dev/tcp /dev/udp /dev/ticotsord /dev/ticlts\\
+
+\# Where libraries live; includes app-defaults stuff too.\\
+path allow read /lib/* /usr/lib/* /usr/local/X11/lib/* /usr/local/X11R6/lib/* /usr/share/lib/zoneinfo/* /usr/local/lib/* /usr/openwin/lib/*\\
+
+\# This is where binaries live; it should look a lot like your PATH.\\
+path allow read,exec /bin/* /usr/bin/* /usr/ucb/* /usr/local/bin/*\\
+/usr/local/X11/bin/* /usr/bin/X11/* /usr/contrib/bin/* /usr/local/bin/*
+
+~\\
+
+~\\
+}
+\end{figure} }
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d15 3
+a17 2
+	\begin{center} \frame{\parbox{2.9in}{
+	\begin{center} \parbox{2.7in}{ \begin{center}
+d22 1
+d29 9
+a37 1
+disallows harmful system calls.
+d49 2
+a50 1
+We use the term {\em sandboxing} to describe the concept
+d53 2
+a54 2
+This term was first introduced, in a slightly different setting,
+in \cite{sfi}.
+d86 2
+d155 1
+a155 1
+allowed or denied.
+d179 25
+a203 1
+In designing the framework we aimed at providing simplicity and
+d206 9
+a214 3
+One can imagine more versatile and sophisticated algorithms
+to dispatch system calls, but they would
+come at a great cost to simplicity.
+d219 1
+a219 1
+Also, ease-of-development and similar benefits have to be discarded
+d256 1
+a256 1
+to be executed whenever the tracee issues a system call.
+d326 1
+d493 1
+a493 1
+such as {\tt write}, are always be allowed.
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@a282 1
+\subsubsection{Reading the configuration file}
+d284 2
+d310 3
+a312 3
+\subsubsection{Setting up the traced process}
+\label{setup}
+
+d345 2
+a346 2
+\subsubsection{Running the traced process}
+
+d409 1
+a409 1
+In the middle picture, U1 forks an untrusted child process U2,
+d412 1
+a412 1
+(In the {\tt /proc} filesystem, by default J2 inherits the tracing
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d392 3
+a394 1
+allowed to begin executing.  This method safely allows
+d398 18
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d454 1
+a454 1
+Thus we benefitted from an interface that separates binding-time
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d1 9
+d198 1
+a198 1
+\subsection{Choice of operating system}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d516 1
+a516 1
+Sandboxed applications may {\tt fork} children,
+d518 1
+a518 1
+Traced processes can only send signals to themselves or
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d427 2
+a428 2
+the {\tt open} call; and since we trust the kernel to only execute
+{\tt write} requests when an appropriate capability is presented,
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d676 1
+a676 1
+\caption{\label{sconfig} Sample configuration file}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d328 1
+a328 1
+application full access of {\tt /tmp}, because we want to isolate the
+d678 8
+d697 3
+a699 3
+\# this is the paradigm to deny absolute paths and allow relative paths\\
+\# (of course, we will later allow selected absolute paths)\\
+\# assumes someone will put us in a safe sandboxed dir.\\
+d703 1
+a703 1
+\# allow certain explicit paths\\
+d707 2
+a708 2
+\# note: subtle issues here.\\
+\# make sure tcpconnect is loaded, to restrict connects!\\
+d712 1
+a712 1
+\# where libraries live; includes app-defaults stuff too\\
+d715 1
+a715 4
+\# these are here so you can read the files placed by Netscape and Mosaic\\
+path allow read /var/tmp/* /tmp/*\\
+
+\# this is where binaries live; it should look a lot like your PATH\\
+a721 3
+
+
+\vfill
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d40 1
+a40 1
+and makes it easier to find those which creep in.
+d88 1
+a88 1
+Each module filters out certain dangerous system call invocations,
+d123 1
+a123 1
+The suggestion to allow is used to indicate a module's
+d125 1
+a125 1
+The suggestion to deny indicates a system call
+d127 1
+a127 1
+Finally, a ``no comment'' response means that the
+d136 3
+a138 3
+Note that a ``no comment'' response has no effect:
+in particular, it does not override an earlier ``deny''
+or ``allow'' response.
+d147 1
+a147 1
+a ``super-allow'' or ``super-deny'' cannot be overridden.
+d154 2
+d218 1
+a218 1
+callbacks on a per-system call basis.
+d291 1
+a291 1
+an array, indexed by system call number, of linked lists.  Each value
+d322 3
+a324 2
+By default, this directory is created in {\tt /tmp} with a random name,
+but the {\tt SANDBOX\_DIR} environment variable can be used to
+d326 8
+d371 2
+a372 2
+above, it is executed at this time.  This facility is not widely used,
+except in one special case.
+d403 3
+a405 2
+as few system calls as possible---or at least, as few of the common ones as
+possible.  However, we do not wish to give up security to gain
+d407 1
+a407 1
+Therefore, we apply several optimizations to the system call dispatch
+d413 1
+a413 1
+We note that one common case arises when a module's system call
+d419 14
+a432 2
+such as {\tt write}, are always allowed;
+so we need not register a callback with the OS for them.
+d439 9
+a447 1
+{\tt read} and {\tt write}, we can greatly speed up the common case.
+d503 1
+a503 1
+worse, with hostile intent), there is clearly Janus can do
+d516 1
+a516 1
+Sandboxed applications are allowed to {\tt fork} children,
+d521 2
+a522 2
+Environment variables are initially sanitized,
+and resource usage is carefully limited.
+d524 7
+a530 7
+In our policy, access to the filesystem is severely limited.
+A untrusted application is placed in a particular
+directory; it cannot {\tt chdir} out of this directory. 
+We allow it full access to files in or below this directory;
+to prevent escape from this sandbox directory,
+access to paths containing {\tt ..}\ are always denied.
+The untrusted application is allowed read access to certain
+d533 1
+d535 2
+a536 2
+and always allow {\tt read} and {\tt write} calls;
+this is safe, because {\tt write}
+d539 1
+a539 1
+This approach simplifies matters, and also permits
+d561 1
+a561 1
+but is far too expensive.
+d568 2
+a569 2
+X11 does not itself provide the security services we require
+(X access control is all-or-nothing).
+d593 3
+a595 2
+filtering from the firewall community would be likely
+to directly improve the situation.
+d605 1
+a605 1
+single, specially-designated local DNS server.
+d610 1
+a610 1
+subset of programs which actually need it.
+d612 1
+a612 1
+to a DNS server outside the firewall which knows nothing about
+d614 2
+a615 1
+Note that this does introduce a covert channel \cite{java-bugs};
+d627 1
+a627 1
+sandboxed pplication and the external DNS server.
+d631 1
+a631 1
+simply haven't added it to your prototype yet.
+d655 1
+a655 1
+those environment variables which are not explicitly mentioned are unset.
+d662 1
+a662 1
+allow or deny file accesses according to one or more patterns.
+d674 1
+a674 1
+\begin{figure}
+d721 1
+a721 1
+\end{figure}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d107 1
+a107 1
+which validates the arguments of the call
+d126 1
+a126 1
+which is to be denied execution.
+d169 1
+a169 1
+are much less likely to install any tool which requires modifications
+d178 1
+a178 1
+which don't need them, so for such applications the tool should
+d190 2
+a191 2
+that allowed one user-level process to watch the
+system calls executed by another process, and to control the second process
+d196 2
+a197 2
+In such cases, typically one can find a program such as
+{\tt trace}, {\tt strace}, or {\tt truss}
+d348 1
+a348 1
+system call which is denied by the security policy, it will
+@
+
+
+1.1.1.1
+log
+@Adding in my master's to CVS control.
+This version reflects the draft that I gave to Eric (I think).
+
+@
+text
+@@

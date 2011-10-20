@@ -1,0 +1,215 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.04.17.23.06;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Added granularity of locks/degrees of consistency summary.  Very nice.
+@
+text
+@<html>
+<title>
+Locks and Consistency
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Granularity of Locks and Degrees of Consistency in a Shared Data Base
+</h1>
+<strong>
+J.N. Gray, R.A. Lorie, G.R. Putzolu, I.L. Traiger
+</strong>
+
+<P><i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Greater lock granularity gives you finer sharing and concurrency but
+higher overhead;  four separate degrees of consistency which give
+increasingly greater protection from inconsistencies are presented,
+requiring increasingly greater lock granularity.
+</p>
+
+<h2>Relevance</h2>
+
+Absolutely great stuff.  Formality, rigour, proofs, practical applications,
+and a revolution of database technology.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> No rigorous (or for that matter, unrigorous) treatment of the
+	  relative costs of these degrees of consistency or granularity of
+	  locks is presented.  How much more do I pay for consistency of
+	  degree N+1 over degree N?
+     <li> Which data/applications need which consistencies?  Do they need
+	  them all the time?  Some sort of classification of typical data
+	  requirements into the consistency degrees would be useful
+	  (although to be fair this is done at a very high/abstract level).
+     <li> SIX/IX/IS mode, although correct, seem a little on the hackish
+	  side.  I suppose it is just the influence of practicality and
+	  optimization blurring the crisp perfection of the formal work.
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <LI> <B>Hierarchical lockable units</B>: assume set of resources to be
+	  locked is organized in a hierarchy, e.g. (database, areas, files,
+	  records) as a simple hierarchy.  Each node of hierarchy can be
+	  locked, and in doing so, one implicity locks all of that node's
+	  descendants.  There is shared access (S, shared-read access) and
+	  exclusive access (X, exclusive read/write access).
+	  <ul>
+	       <li> In order to lock a subtree rooted at node R in S or X,
+		    one must prevent others from obtaining incompatible
+		    locks on any ancestor of R.  A new mode,
+		    &quot;intention mode&quot; is introduced to do this -
+		    all ancestors of a node are tagged with intention mode
+		    before the node itself is locked.  Summary of modes:
+		    <ul>
+			 <li> null (NL): no access
+			 <li> intention-share (IS): allows requestor to
+			      lock descendant nodes in S or IS mode.  (does
+			      no implicit locking)
+			 <li> intention-exclusive (IX): allows requestor to
+			      explicitly lock descendants in X, S, SIX, IX,
+			      or IS mode.  (does no implicit locking)
+			 <li> share (S): access to node and all descendants
+			      without setting further locks.  (implicitly
+			      sets S locks on all descendants)
+			 <li> share and intention exclusive (SIX):
+			      implicitly locks all descendants of node in
+			      share mode and allows requestor to explicitly
+			      lock descendant nodes in X, SIX, or IX mode.
+			      (for finer grained locking)
+			 <li> exclusive (X): exclusive access to node and
+			      all descendants.  (implicitly sets X locks on
+			      all descendants)
+		    </ul>
+	       <li> To request a node,
+		    <ol>
+			 <li> before requesting S or IS on node, all
+			      ancestor nodes must be held in IX or IS mode.
+			 <li> before requesting X, SIX, or IX on node, all
+			      ancestors must be held in SIX or IX mode.
+			 <li> locks should be released either at end of
+			      transaction (in any order), or in leaf to root
+			      order in the middle of a transaction.
+		    </ol>
+	  </ul>
+     <li> DAGs:
+	  <ul>
+	       <li> if don't have resource hierarchy but rather a
+		    DAG, can modify protocol:
+		    <ol>
+			 <li> before requesting S or IX on a node, request
+			      at least one parent (and by induction a path
+			      to root) in IS or greater mode.
+			 <li> before requesting IX, SIX, or X, request all
+			      parents of the node in IX or greater mode.
+			 <li> locks should be release either at end of
+			      transaction in any order, or in leaf to root
+			      order. (breadth-first)
+		    </ol>
+	  </ul>
+     <li> Dynamic lock graphs:
+	  <ul>
+	       <li> if hierarchy/DAG is dynamically updated, need rule for
+		    changing parents of a node.  Before moving a node in
+		    the lock graph, the node must be implicitly or
+		    explicitly granted X mode in both its old and its new
+		    position in the graph.  Further, the node must not be
+		    moved in a way to introduce cycles.
+	  </ul>
+     <li> <B>Consistency:</b> database consists of entites which are
+	  structured in ways.  Structure is assertions on data.  Data base
+	  is consistent if it satisfies all assertions.  Database needs to
+	  be temporarily inconsistent in order to transform to a new
+	  consistent state - need transactions to hide inconsistency.
+	  <ul>
+	       <li> transaction is committed when transaction abdicates the
+		    right to undo the write;  its output is available to
+		    other transactions.
+	       <li> output is uncommitted or dirty if not yet committed.
+		    Crux of concurrency is preventing the reading or
+		    writing of other transactions' dirty data.
+	  </ul>
+     <li> <B>Degrees of consistency:</b>  given the possible constraints
+	  on behaviour of transaction T:
+	  <ol>
+	       <li> does not overwrite dirty data of other transactions
+	       <li> does not commit any writes until it completes all its
+		    writes (i.e. end of transaction EOT).
+	       <li> does not read dirty data from other transactions
+	       <li> other transactions do not dirty any data read by T
+		    before T completes
+	  </ol>
+	  then:
+	  <ul>
+	       <li> Degree 3: T satisfies 1,2,3,4.  Alternatively, T sets
+		    long exclusive lock on any data it dirties and long
+		    share lock on any data it reads.
+	       <li> Degree 2: T satisfies 1,2,3.  Alternatively, T sets
+		    long exclusive lock on any data it dirties, and
+		    (possibly short) share lock on data it reads.
+	       <li> Degree 1: T satisfies 1,2.  Alternatively, T sets long
+		    exclusive lock on any data it dirties.
+	       <li> Degree 0: T satisfies 1.  Alternatively, T sets
+		    (possibly short) exclusive lock on any data it dirties.
+	  </ul>
+     <li> Properties:
+	  <ul>
+	       <li> Degree 0 transactions are unrecoverable (commit outputs
+		    before EOT).  If all transactions see at least degree 0
+		    consistency, any degree 1 transaction is recoverable.
+		    All transactions must be degree 1 for DB to be recoverable.
+	       <li> Degree 2 isolates transactions from uncommitted data of
+		    other transactions. Degree 1 may read uncommitted data
+		    which are subsequently updated or undone.
+	       <li> Degree 3 isolates transaction from dirty relationships
+		    among entities (!!).  E.g., degree 2 may read two
+		    different committed values if it reads same entity
+		    twice.  Degree 3 is true isolation (I in ACID).
+	  </ul>
+     <li> Dependencies among transactions:  If T performs <b>a</b> then T'
+	  performs <b>a'</b>,
+	  <ul>
+	       <li> T &lt;&lt;&lt; T' if <b>a</b> is a write and <b>a'</b> is a
+		    write, or if <b>a</b> is a write and <b>a'</b> is a
+		    read, or if <b>a</b> is a read and <b>a'</b> is a
+		    write.
+	       <li> T &lt;&lt; T' if <b>a</b> is a write and <b>a'</b> is a
+		    write, or if <b>a</b> is a write and <b>a'</b> is a
+		    read
+	       <li> T &lt; T' if <b>a</b> is a write and <b>a'</b> is a write.
+	  </ul>
+	  Let &lt;* be the transitive closure of &lt; (and similar for
+	  other two).  Then, <P>
+	  Assertion:  a schedule (set of transactions over time) is degree
+	  1 (2, or 3) consistent if and only if the relation &lt;*
+	  (&lt;&lt;* or &lt;&lt;&lt;*) is a partial order.  (Partial order:
+	   if T &lt; T', then we cannot have T' &lt; T)
+     <li> Backups and recovery:  checkpoint and replay of at least degree 1
+	  consistent transactions.  Replaying degree 1 may give
+	  different results because degree 1 doesn't prevent reading of
+	  dirty data.  Degree 2 guarantees same results every time.
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

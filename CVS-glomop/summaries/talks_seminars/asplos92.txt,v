@@ -1,0 +1,286 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.05.27.23.46.45;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@SELECTED HIGHLIGHTS OF ASPLOS V 1992 Oct 12-15, Boston, MA
+Armando Fox, P6 Architecture, JF1-19, (69)6-8038, fox@@ichips.intel.com
+
+
+This is a discussion of some of the papers and presentations I thought were
+particularly relevant to P6 Architecture.  
+
+
+-----------------------------------------------------------------------------
+Software Support for Speculative Loads
+Anne Rogers & Kai Li, Dept. of CS, Princeton Univ.
+
+SUMMARY: 
+
+The authors characterize speculative loads as those which do
+not block, bypass the cache, and does not fault.  They propose to add 2
+bits to each data register that could be the destination of a load: the
+Presence bit to insure that dependencies are observed, and the Poison
+bit to indicate a faulting condition.  The Presence bit of a register is
+set iff its data is valid (i.e. the register is not waiting on an
+outstanding speculative load).  The Poison bit gets set when the
+speculative load filling that register would have faulted if allowed to
+proceed; the authors claim that unnecessary faults are avoided since the
+poison bit will be ignored if the register does not need to be used (ie.
+the speculation was incorrect).
+
+The authors point out later in the paper that the nonfaulting nature of
+their mechanism (poison bit) allows some spec. loads to be lifted even
+if they might normally fault.  They describe a couple of straightforward
+ways to deal with the fault in the event that the load is needed (trap
+on reading a register with poison bit set, have the read force the
+address into the pipeline to restart the load, etc.) but they don't
+discuss the architectural impact of either of these.
+
+The authors suggest a compiler heuristic for lifting speculative loads
+in order to use them aggressively.  They prove its correctness, but the
+algorithm is so limited and makes so many assumptions that this is
+trivial: they do not lift across basic blocks, do not model overlap in
+FP operations, assume that loads and stores take one cycle (with no
+comment on what to do about misses), and assume that intervening speculative
+loads take zero cycles.  The authors acknowledge that WAR register
+conflicts may artificially limit how far a spec. load can be lifted;
+they say only that "registers can be renamed" to solve this problem, and
+that "in practice, the combination of this method of lifting ... and
+register renaming works quite well", though they don't cite any evidence
+for this claim.
+
+The authors briefly discuss the ramifications of lifting loads above
+conditional branches, although they don't cite any other work in this
+area.  They describe how, given a two-way conditional branch in which
+each destination block loads a different value into the same register,
+the speculative load should be lifted from the block that is expected
+to be executed more often.  This is OK because of their nonfaulting
+model using poison bits.
+
+For lifting across loop iterations, the authors propose to give each
+iteration a private register set, and unroll the loop as far as possible
+with this constraint.  This is a nice idea, but in practice there are
+never enough registers to do what you want even without considering loop
+unrolling.  They don't mention renaming as a possible solution either.
+
+The authors' simulation (MIPS R2000 instruction set simulator) uses a
+writethrough cache, which is bypassed for speculative loads.
+Experiments are presumably being conducted to determine the effect of
+using a writeback cache, or of allowing the spec. loads to modify the
+cache. 
+
+IMHO:
+
+Some interesting points are made, but the authors (1) do not clearly
+delineate the scope of their work, or address relevant issues at least
+tangential to their discussion; (2) do not reference much related
+research in the text (reg renaming, prefetching, etc), though
+interestingly they have a long bibliography list; (3) as a result don't
+show that they have produced any new or unusual results.  They seemed to
+make a big point about how speculative loads hide memory latency and
+improve the amortized miss cost, but most of the audience probably
+already knew that.
+
+-----------------------------------------------------------------------------
+Design & Evaluation of a Compiler Algorithm for Prefetching
+Todd Mowry, Monica Lam, Anoop Gupta, Stanford
+
+
+-----------------------------------------------------------------------------
+Improving the Accuracy of Dynamic Branch Prediction Using Branch
+        Correlation
+S.-T. Pan, Kimming So, IBM Advanced Workstation Div; & Joseph T.
+        Rahmeh, UT Austin
+
+
+SUMMARY:
+
+Branch correlation is a dynamic prediction scheme in which branches are
+related to one another by their control flow dependencies.  For example,
+in the code fragment (if (aa==1) then if (bb==1) then...)  clearly the
+two branches are correlated, because whether the second is taken depends
+directly on whether the first is taken.  As one would expect, the
+authors claim that considering this correlation results in significant
+improvement over counter-based prediction for integer code in which
+branch outcomes tend to depend on other recently executed branches.
+Although correlation appears to make branches behave more randomly for a
+counter based scheme, it can be profitably used to partition the branch
+history in a way that maximizes prediction accuracy.
+
+A branch's history is subdivided according to its branch paths.  Suppose
+branch b3 is correlated to b1 and b2.  There are four possible execution
+sequences, or paths, of b1 and b2, since each can be either taken or not
+taken. Each path leads to a different subhistory for b3.  For example,
+the history corresponding to b1=T,b2=N might be TTTTN; the history
+corresponding to b1=b2=T might be TNNNT; and so on.  Within each
+subhistory, counter-based prediction might work well.  The authors show
+an implementation based on correlation that does not increase the total
+number of counters required for prediction, compared to a pure
+counter-based prediction system.
+
+The (M,N) correlation scheme maintains 2^M subhistories of each branch,
+that is, it correlates each branch with the M preceding branches. An
+M-bit shift register indexes one of the 2^M FSM's which implements a
+counter-based prediction mechanism for that subhistory.  The shift
+register is updated every time a branch is resolved by the machine.  At
+any given time, then, when a branch is to be predicted, the appropriate
+subhistory on which the prediction should be made is reflected by the
+shift register.  
+
+The BTB is generalized to a BPT, or branch prediction table.  Its size
+is given by the "correlation dimension" M and the "entry dimension" R:
+number of entries = 2^(M+R), where each entry accesses one N-bit counter
+FSM.  (R is the number of bits from the branch IP used to index the
+BPT.)  The degenerate cases are M=0 (no branch correlation is used), and
+R=0 (the shift register only is used, so the prediction depends only on
+past branch history).  In this case a resolved branch correctly predicts
+the outcome of the next branch, up to the limit of the table size.
+
+Trace-driven simulation of some of the SPECint programs is used to
+illustrate the benefits of the authors' scheme.  Not surprisingly, their
+scheme offers no improvement over 2-bit counters for FP-intensive
+scientific code, which is dominated by inner loops that iterate many
+times.  The authors don't explicitly show how to determine the sizes M
+and R for integer code, but they do show how increasing M for a fixed
+table size improves accuracy significantly beyond the point of
+saturation of a 2-bit counter scheme.
+                
+IMHO:
+
+The authors claim to achieve branch prediction accuracy comparable to
+Yeh's algorithm, using a concept that is intuitively satisfying.
+Unfortunately, the single largest weakness of the paper is that the
+authors primarily compare their algorithm to a 2-bit counter, hardly the
+state of the art in dynamic branch prediction.  (Yeh and Patt were not
+mentioned in the talk, though they do receive one sentence in the
+paper.)  The apparent advantage of the correlation method over Yeh's
+algorithm is its relative ease of implementation, but the best question
+was asked by Dave Patterson of Berkeley who wanted to know whether the
+implementation described was the subject of an IBM patent (it is).
+
+-----------------------------------------------------------------------------
+Predicting Conditional Branch Directions from Previous Runs of a Program
+Joseph A. Fisher & Stefan M. Freudenberger, HP Labs
+
+
+-----------------------------------------------------------------------------
+Migrating a CISC Computer Family to RISC via Object Code Translation
+Kristy Andrews & Duane Sand, Tandem Inc.
+
+SUMMARY:
+
+Tandem recently migrated its TNS (Tandem NonStop) series to TNS/R (R for
+RISC) which is based on MIPS RISC.  They cite all the standard
+advantages of migration via object code translation.  
+
+The TNS architecture describes a fault-tolerant message-passing
+multiprocessor, well suited to things like online transaction
+processing.  Although the architecture is very effective for its target
+applications, the CISC instruction set (derived from the HP3000 in 1975)
+is described as offering "opportunities for improvement."  (Hah!)
+
+Some flies in the ointment: Many instructions have implied stack
+operands.  The evaluation stack is *not* a buffered copy of memory, but
+a barrel of registers that can also be addressed by index, with a
+dedicated RP register pointing to the current TOS.  (What does this
+remind you of?)  This hybrid register architecture precludes many
+compiler optimizations, and in fact the TNS CISC compiler doesn't do any
+of the common transformations.  Such were some problems which the move
+to RISC was intended to remedy.
+
+Static object code translation was chosen over dynamic interpretation or
+emulation not only for performance, but also because most TNS machines
+are used for prolonged runs of very few applications, amortizing the
+time needed to do the static translation.  Translation is done by
+performing static analysis, and falling back on "interpretive execution"
+(CISC emulation in RISC) when the static analysis results in incorrect
+object code.  The programmer can give tuning hints to the translator,
+but correctness is still guaranteed without them.  The most difficult
+part of translation is determining the static value of RP, especially
+after a function return or trap handler.  In these cases, a guess is
+made and verified at runtime; if the guess is wrong, interpreter mode is
+entered.
+
+
+The switching between native and interpreted-CISC mode implies that the
+CISC code must be kept around, and the CISC registers, memory layout and
+return-stack state must be exactly duplicated at potential "switch
+points" where the interpreter could take over.  Switch points include:
+subroutine call and return; likely target of indirect jump through a
+pointer; the beginning of every statement,if single-step debugging is
+turned on; and "puzzle points" when an unexpected condition is
+encountered (described below).
+
+The translated executable image also includes a sparse map between
+16-bit TNS instruction addresses and 32-bit RISC instruction addresses:
+only register- and memory-exact points are mapped.  The map is typically
+75% the size of the original CISC code.  A "puzzle point" occurs when
+the target of a call or jump is not found in the table, or is an
+untranslated code stream; when the optimizing translator/compiler's
+guess about the return size of a function value is determined at runtime
+to be incorrect; or when several control paths converge with different
+predicted values of RP, the top-of-stack pointer.  Native RISC execution
+resumes at the next call or return that does have an entry in the map.
+The authors claim that in practice, puzzle points are rare; and that the
+bad case of a long loop that makes no function calls is also rare.  No
+examples are offered.
+
+The authors claim that many TNS applications are so
+system-service-intensive that CISC emulation is suitable for them,
+provided the system libraries have been optimized into native RISC code
+(which of course they have); even if the application drivers were
+infinitely fast, the amount of time spent in system calls dwarfs the
+amount of time spent in user code.  We must take this on faith since
+they do not give specific examples.
+
+The only incompatibility, according to the authors, is that trap
+handlers cannot arbitrarily modify CISC state as they could in CISC
+native mode.  In practice, they claim, few trap handlers do this.  No
+examples are offered.  The optimizer can also be instructed to perform
+certain optimizations that will cause incompatibilities, if the
+particular features that break are known not to be used by the code
+being translated.  Someone from Intel asked how they handled
+self-modifying code, which caused another audience member to hiss.  The
+answer was that SMC is not allowed by the architecture.  (Wimps.)
+
+Code expansion is severe: the expansion factor is 2i+.75, where .75
+comes from the CISC-RISC register-exact map, and i is a factor that
+measures the approximate number of CISC instructions required to emulate
+a single TNS RISC instruction.  (The 2 is because the basic opcode size
+for TNS RISC is 32 bits, compared to 16 bit for CISC.)  For 32-bit
+Dhrystone, i turns out to be between 4.0 and 4.8; for 16-bit Dhrystone,
+between 4.6 and 5.7, for a total code expansion on the order of 10x.  To
+attenuate this effect, a very large cache (256K code, 256K data) is used
+on the Cyclone/R, 4x the amount of cache on the CISC Cyclone.
+
+IMHO:
+
+Interesting results.  I wish DEC would publish how they are doing on
+VAX-to-Alpha translation.  Tandem can get away with some of these
+problems (severe code expansion, frequent fallback to interpreter mode)
+because of their limited applications and niche market, but it will be
+interesting to see how well it serves DEC's VAX user base.
+
+-----------------------------------------------------------------------------
+Characterizing the Caching and Synchronization Performance of a
+Multiprocessor Operating System
+Josep Torrellas, John Hennessy, & Anoop Gupta, Stanford
+@

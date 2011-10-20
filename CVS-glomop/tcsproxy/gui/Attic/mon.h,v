@@ -1,0 +1,173 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.01.29.21.59.23;	author fox;	state dead;
+branches;
+next	1.3;
+
+1.3
+date	97.01.28.03.55.21;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.27.21.50.16;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.08.03.39.18;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@renamed mon.h to libmon.h - clientlib was not compiling correctly
+(though it would have if its includepath had been right) since solaris
+has a /usr/include/mon.h file.  minor monitor interface changes in
+monitor.c.
+@
+text
+@#ifndef _MONITOR_H
+#define _MONITOR_H
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <stdio.h>
+#include <signal.h>
+
+#define MON_MAXUNITNAME  100    /* max length of unitname */
+#define MON_SEPARATOR "\001"    /* component separator in messages */
+
+typedef struct monitor {
+  struct sockaddr_in sin;
+  int sock;
+  char unitname[MON_MAXUNITNAME];
+} Monitor;
+
+/*
+ *  Create instance of a monitor client for this unit
+ */
+Monitor  *MonitorClient_Create(const char *unitname, const char *ipaddr,
+                             int port, int ttl);
+/*
+ *  Set this monitor client as the one that will be called for "dying gasp"
+ */
+void     MonitorClient_SetAsDefault(Monitor *m);
+/*
+ *  Call this function to tell the GUI Monitor you're about to die (call
+ *  this before destroying the monitor client).  The only reason it
+ *  takes an int argument is because it may also be called from inside
+ *  this library as a signal handler.  You should call your cleanup
+ *  function from inside this function since this function may be used
+ *  to indicate (asynchronously) your impending doom.  DO NOT call
+ *  MonitorClient_Destroy from inside here, though.
+ */
+void     MonitorClient_Gasp(int sig);
+/*
+ *  Destroy client
+ */
+int      MonitorClient_Destroy(Monitor *m);
+/*
+ *  Send a message overriding the unit name temporarily
+ */
+int     MonitorClient_UnitSend(Monitor *m, const char *unit, const char *field,
+                               const char *value, const char *script);
+/*
+ *  Send a message giving field name, new value, optional Tcl script(s)
+ */
+#define  MonitorClient_Send(m,f,v,s)  \
+                MonitorClient_UnitSend((m),((m)->unitname),(f),(v),(s))
+     
+/*
+ *  Useful macro to cause Gasp function to be called when external
+ *  signals received (eg SIGINT, SIGHUP).  Gasp function will also be
+ *  called (asynchronously) when a "kill yourself" message is received
+ *  from monitor.
+ */
+#define MonitorClient_GaspOn(sig) signal((sig), MonitorClient_Gasp)
+/*
+ *  Useful macros to get and set the unit name for an existing monitor client
+ */
+#define MonitorClient_GetUnitName(m) ((m)->unitname)
+#define MonitorClient_SetUnitName(m,n) \
+        (strncpy((m)->unitname, (n), MON_MAXUNITNAME))
+
+/*
+ *  Monitor behaviors
+ */
+
+#define MON_SIMPLE  ""
+#define MON_LOG     "Log"
+#define MON_TIMECHART "TimeChart"     
+
+#endif
+@
+
+
+1.3
+log
+@bug fix to tudp.so, usability fixes to libmon
+@
+text
+@@
+
+
+1.2
+log
+@add readme and cleanup .h file
+@
+text
+@d9 1
+d45 5
+d52 3
+a54 3
+int      MonitorClient_Send(Monitor *m, const char *field, const char *value,
+                           const char *script);
+
+d68 8
+@
+
+
+1.1
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@d20 3
+d25 17
+d43 3
+a47 2
+void     MonitorClient_Gasp(int sig);
+void     MonitorClient_SetAsDefault(Monitor *m);
+d49 6
+d56 3
+@

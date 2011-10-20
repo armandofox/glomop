@@ -1,0 +1,285 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.24.23.41.54;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From nikitab@@cs.berkeley.edu  Mon Nov 23 12:39:28 1998
+Return-Path: nikitab@@cs.berkeley.edu
+Received: from glasgow.CS.Berkeley.EDU (glasgow.CS.Berkeley.EDU [128.32.37.64]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id MAA22417 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Mon, 23 Nov 1998 12:39:28 -0800
+Received: from cs.berkeley.edu (ali-ca51-30.ix.netcom.com [209.110.236.158]) by glasgow.CS.Berkeley.EDU (8.8.3/8.6.9) with ESMTP id MAA02933 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Mon, 23 Nov 1998 12:39:45 -0800 (PST)
+Message-Id: <199811232039.MAA02933@@glasgow.CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw3
+Date: Mon, 23 Nov 1998 12:35:08 -0800
+From: Nikita Borisov  <nikitab@@cs.berkeley.edu>
+Status: RO
+
+Sorry this is late, but I was sick last week, and Ian said I could
+submit it today.
+
+- Nikita
+
+Q1.
+
+The most glaring security hole: The procedure vi() calls /usr/bin/vi
+without dropping priveleges.  A ':shell' command gets a root shell
+within seconds.  Other problems:
+
++ copyfile opens the destination without checking whether it exists.
+It's called with the result of tmpnam(), which tries to find something
+that doesn't exist, but a race condition will enable the user to create
+a symlink to /etc/passwd.  Then the program will overwrite /etc/passwd
+with the current contents of the moderators file (which can be made to
+contain the line 'root::' by a previous invocation of the program).
+
++ One of the arguments to sprintf in debug() is progname, which is just
+argv[0].  execl("vi_moderators", exploit_code, "-d", 0); would give us a
+simple stack smashing attack.  A nice feature is that the first debug
+message occurs before we call grablock() - otherwise a first failed
+experiment with the stack smashing code would leave a lockfile around,
+and disable further attempts.
+
++ The temporary file is created with the user's umask().  This means
+that 'umask 0; vi_moderators' will leave the moderators file
+world-writeable.  This would be a nice way to circumvent the looksok()
+function, if it was security-critical.  Also, you may be able to disable
+parts of the news system by setting your umask to 777.
+
++ This is a convoluted one cause: the 'execl' call in vi() to fail.  Then
+the child will continue the program: rename the temp file from /tmp to
+/usr/lib/moderators, and release the lock.  At this point, the parent
+will receive a SIGCHLD, and do the same thing.  If we're quick, we can
+create a new tempfile which the parent will rename to the moderators
+file.  Some notes about this exploit:
+
+a. This is at least as useful as the previous exploit; except that now
+the moderators file is owned by you, and you can make it executable, a
+named pipe, or a symlink, all of which might have potential uses.
+Similar results can also be achieved by racing tmpnam(), but this is a
+distinct exploit.  For example, with a symlink, the tmpnam() race will
+let us overwrite any file, while this race will let us read any file:
+
+vi_moderators; race to replace /tmp/tempfile with a symlink to
+/etc/shadow.
+/usr/lib/moderators is now a symlink to /etc/shadow
+vi_moderators again (with no races) will copy /etc/shadow to the
+tempfile and let us see the contents.  We then replace it with the
+original contents of the moderators file, covering our tracks.
+
+b. How do we make execl() fail?  Well, looking at the Linux execl
+manpage, execl can fail if either the process or the system has too many
+files open.  I had little success in getting the exploit to work with
+opening lots of files before execing vi_modrators - either it would not
+run at all, or be able to run vi().  I think, however, that by playing
+with system-wide maximum number of files open you may get somewhere -
+although it might involve a race.  You can also try to make the system
+run out of memory.  Like I said, it's a convoluted exploit, but I think
+with enough time and effort it could be made to work.
+
+Q2.
+
+1. Some of these are really just the implications of source routing that
+active networks provides: 
+
++ Potentially, one could send a packet on a looping route.  TTLs will
+probably prevent it from getting out of hand, but still, someone who
+could cause 250 bounces between two routers by sending only one packet
+can be a problem.  Solution: enforce smaller max TTLs, perhaps.
+
++ Someone can explore network topology more easily - one could imagine a
+BFS traceroute, which just sends packets to go to alternating
+interfaces.  Solutions: don't keep network topology secret.  Or give
+each interface a 32-bit (or longer) ID, if you really _know_ a better
+route, you should be required to know the IDs of the interfaces.
+
++ Interface/route based security (eg. if packet comes in on interface X,
+then it must come from a secure source) can be circumvented.  Solution:
+don't use IF/route based security and allow source routing at the same
+time.
+
++ Extra overhead makes DoS easier.  Solution: give thousands of dollars
+to Cisco to make processing faster.
+
++ BPF interpreter is an extra point of attack on router.  Solution:
+inspect the code _really_ well.
+
++ Harder to trace exactly where that "ping-of-death" or other one packet
+attacks came from.
+
+2. 
+
++ The biggest problem is intercepting someone else's flow - someone else
+sending my session to France (which is of course unencrypted) through
+China.  Solutions:  Require an explicit option to specify flow-id, so
+that a normal TCP session can't be hijacked.  Or use some cryptographic
+authentication to establish a flow and set a handler (eg. flow ID X
+means that handler must be signed by key X, or by a key which hashes to
+X).  Some such protocols might allow for MITM attacks, but it's better
+than the Man-In-China attack.
+
++ One can now cause hundreds of thousands of bounces between two routers
+with a few strategic packets, by sending some high traffic connections
+through a loop.  Solutions as above.
+
+3.
+
++ Now the Man-In-China who has intercepted our flow can only send
+interesting packets for inspection/modification, becoming more
+transparent, perhaps.  Solutions: as above.
+
++ Infinite loops in packet routing code could be a problem.  Solution:
+impose some sort of time limit on the code.
+
+4. 
++ Now the Man-In-China can hijack my TCP connection to France without
+any of my packets actually going through China.  Solutions: as above.
+
++ Router-bounce attacks - make a TCP session originate from a router, by
+creating a handler that will modify our innocent packets to contain
+malicious attack code, and have come from the router.  Solutions: router
+makes sure that IP address and some other fields stay the same.  Better
+source IP authentication.
+
+5.
++ Easy DoS exploring the fact that router has finite amount of memory,
+and thus can handle a finite number of flows.  Solutions: only allocate
+memory to trusted clients.  Limit number of flows per source address.
+Buy "enough" RAM.
+
++ The Man-In-China's filtering just got better, since he can now piece
+together information from packets.
+
++ One can now attack the handlers themselves to get them to leak useful
+bits about their state.
+
+6. 
+
++ Now that we can send multiple packets in response to one, someone
+could more easily run services on your router; perhaps even a mini-WWW
+server.  Solution: restrict the amount of memory used/packets sent out
+heavily.  Preserve IP source/destination information in new packets
+(helps somewhat)
+
++ An internet bomb: a self-reproducing handler which sends several
+packets to each of its neighbours, very quickly bringing them down with
+traffic bouncing back and forth, but not before they infect their
+respective neighbours, and so on...  Solutions: limit number of outgoing
+packets; divide the TTL up between new packets...
+
+7. 
+
++ Handler become more expressive, one can send an existing Java WWW
+server to run on a router.  Solution: resist user's demands for feeping
+creaturism.
+
++ Handler isolation - this is harder to get right with Java than with
+BPF.  Solution: get it right, don't use Java, use separate JVMs.
+
++ Exploits in the JVM are harder to find than bugs in BPF.  Solution: find
+the bugs, use an existing well-tested JVM.
+
+A generic problem with active networks is that people can steal the
+routers' CPUs to carry out computations, eg. run RC5 clients on a bunch
+of routers.  This becomes easier with various levels: on 1, you can have
+a non-looping computation, one per packet, with the output being the
+interface selected.  On 2, you can get more computation by using less
+bandwidth - a 20 byte packet can cause the execution of a 500
+instruction handler.  On 3, we start having fun - it becomes easier to
+write a client, computation per packet is greater, and we get to provide
+inputs to the code without having to set a new handler (eg.  actively
+distribute various key blocks to routers, not that that's very useful).
+With 4, output becomes more expressive; with 5, it becomes easier to
+carry out complex computations by not having to send state back to the
+originator to be included with the next packet.  With 6, the computation
+can give us periodic output without us having to periodically ping it.
+With 7, we're pretty much given RSH access to the router's JVM, so we're
+sailing.  Solutions: make router languages not very expressive, restrict
+the amount of computation per byte/packet/handler.
+
+Q3.
+
+1. Mobile code could be blocked by an application-level proxy for all
+transmission methods of mobile code.  As a first step, one could search
+for all <SCRIPT> and <APPLET> tags that go over HTTP, and either block
+the pages, or edit out the tags.  It would probably be prudent to do
+similar editing for FTP and e-mail.  Another good step is to disallow
+downloads of anything that looks like java (eg. .class and .jar files).
+
+Problems:
+a. If downloading Java code is disallowed, how am I going to get a new
+version of Sun's HotJava browser?  One might allow only source to get
+through, with the hope that source will be examined by a human before it
+becomes code - but that's really a futile hope.  
+
+b. What about Microsoft's new protocol that allows inserting VB code
+into HTML with the <VB> tag?  One could try to normalize all HTML, but
+what about the X-RunThis: header in e-mail?  Or a "##RunThis" escape
+inside the e-mail body?
+
+c. Encapsulation - encrypted e-mail, SSL connections...  One could
+potentially disallow such things, but then someone will come out with
+something that will encode a dancing bear application - that you don't
+want your boss to see - inside the whitespace of HTML on slashdot -
+which should be legitimate IT research, right?  You can't stop all
+covert channels.
+
+2.
+a. Your initial implementation will probably block way too much mobile
+code, making users behind firewall unhappy.  You could probably add new
+heuristics that you can believe are safe on a case-by-case basis,
+hopefully building up a less conservative, but still correct filter.
+
+b. You lose track of all of the heuristics you've put in and how they
+interact, and allow an attack to get through.  To resolve this, you
+rewrite the filter from scratch, performing detailed security analysis
+of everything, while making sure it incorporates most of the previous
+heuristics.  You start to block a little more code, but performance is
+acceptable.
+
+c. Now someone starts using an old version of HotJava, which can be
+exploited by very safe-looking code...  In general, implementation bugs
+behind the firewall may result in code that you may be able to _prove_
+safe can still contain an exploit.  Solutions? Make everyone use the JVM
+that you compiled from source yourself and went through with a fine
+toothcomb.
+
+d. How do you verify ActiveX?  It's unlikely that you'll be able to
+prove more than the most trivial applications safe.  Solutions? Don't
+allow hard-to-verify mobile code.
+
+3. Who is to blame?
+
+1a. The end host, really - HotJava is still mobile code, in a sense.
+You really shouldn't let your users download code off the internet.
+
+1b. The firewall - it should be aware of all the protocols that the
+clients behind it support.
+
+1c. In case of encrypted connections, the firewall is to blame - it
+shouldn't blindly allow unknown content through if it intends to censor
+mobile code from it.  In the case of steganography, the end host is
+clearly to blame for trying to subvert the firewall.
+
+2a,b - clearly the firewall
+2c - end host, for having a bug in its implementation
+2d - end host, for requesting really expressive and impossible to verify
+mobile code.
+
+@

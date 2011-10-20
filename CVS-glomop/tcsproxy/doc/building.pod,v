@@ -1,0 +1,440 @@
+head	1.3;
+access;
+symbols
+	Yatin-final:1.1
+	Yatin:1.1.0.2
+	pre-yatin-merge:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	98.01.24.22.51.56;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.11.18.21.59.42;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.26.01.52.50;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@=head1 How to Build and Run a Distiller
+
+This file tries to explain how to drop your distiller into the proxy
+system, and how to cause it to be invoked.
+
+=head1 Building the Distiller for Testing
+
+In the Makefile, there is a default target described as c_stub. You can
+add any additional .o/.h files as you see fit.
+
+There is also defined a 'test' target which will wrap a test 'harness' 
+around the distiller. This will allow you to run various tests, including 
+passing arguments and data (in the form of files) to the distiller. For 
+more information about using the test harness see the file HARNESS.txt.
+
+To build the distiller against the test harness you type:
+
+   gmake test
+
+It will then generate a 'test' binary which you can run with various arguments.
+
+=head1 Building the Distiller for Production
+
+To build the distiller for Production, you type:
+
+   gmake c_stub
+
+This will generate a binary of the name 'c_stub'. You should probably
+rename this to something else, 
+then configure the PTM
+to be 'aware' of the existence of this particular distiller as well
+as its associated MIME Type (see below).
+
+=head1 Using the C Test Harness
+
+The test harness is used as follows: 
+
+  ./test <inputfile> <count>
+
+Where I<inputfile> is a specially formated text file described below,
+and I<count> is the number of times to run each test described in the
+input file.
+
+The format of the input file is as follows:
+    [default args]
+    file1 [arg1=value arg2=value arg3=value]
+    ...
+    fileN [arg1=value arg2=value arg3=value]
+
+Each file is an input to the distiller, and the optional arguments are
+passed to the distiller along with the file.  Note that you have to edit
+the file containing the C stub source to get the correct MIME type
+passed to the distiller.
+
+There are three types of arguments: float, string, and integer.
+The following is an example of default arguments using a
+string, integer and float:
+
+   i400=500 f5001=5.5 s500='fubar'
+
+An example input file would be as follows:
+
+  i400=500 f5001=5.5 s500='fubar'
+  test.gif i400=50 f5002=6.0
+  test2.gif 
+
+In a case where specific run cases use the same argument ID as the
+default args, they override the default args for that test run only.
+
+=head1 Using the Perl Test Harness
+
+The Perl test harness is used as follows:
+
+  % cd perl_dir
+  % perl [-d] harness [-d] distiller.pl <URL>
+
+Where I<URL> is a URL whose contents you wished to have fetched and
+passed to the distiller.
+
+The first C<-d>, if present,  allows you to use the Perl debugger, as
+usual.  The second  causes the distiller machinery itself to print out
+some debugging information.  Be sure you read about the L<TACCutils> and
+L<clib> Perl extension libraries, containing lots of good stuff for
+writing distillers.
+
+=head1 Adding a Distiller to the Proxy System (C or Perl)
+
+There are three ways to cause your distiller to be invoked when you use
+the proxy.  The first way is easiest; the second way is most powerful;
+the third allows your distiller to receive immediate control to
+intercept a request before anyone else (including the cache) sees it.
+All ways require you to create an entry for your distiller in the
+F<gm_options> file.  This file is automatically re-read (if
+it's changed) every 10 seconds, so waiting 10 seconds after adding your
+entry should be enough to cause your entry to be visible.
+
+=head2 Method 1: Dispatch By MIME Type
+
+Edit the F<gm_options> file (warning! it may be under RCS control) 
+and insert a line of the form:
+
+C<dist.transend/text/html:  /path/to/distiller>
+
+Substitute the MIME type that your distiller handles for C<text/html>,
+of course.
+
+As described previously, you can still have your distiller return an
+C<X-Route> header and a Redispatch return code to do primitive chaining.
+
+=head2 Method 2 (preferred): Explicit Chain Specification
+
+This method works as follows.  Each user of the proxy maintains, as part
+of her user profile, a mapping from MIME types to chains of distillers
+(think of it as a routing table).
+A special distiller called the Dispatcher
+is called as the first stage distiller for I<every> request, regardless
+of MIME type.  The Dispatcher looks at the MIME type of the request, and
+computes the correct distiller chain.  The Dispatcher also provides a
+forms interface for users to change their routing table.  If no route
+exists for the given MIME type, the original content is passed through
+unaltered. 
+
+To use this method, edit the F<gm_options> file as follows.  First add
+an entry for your distiller:
+
+C<dist.distillername:   /path/to/distiller>
+
+C<distillername> can be any unique symbolic name, but it should I<not>
+follow the C<transend/text/html> MIME type naming convention.
+
+Then add the following line:
+
+C<dist.transend/*/*:  sbin/perl_stub -- perl_dir/Dispatcher.pl>
+
+This causes the Dispatcher to be invoked for every request, regardless
+of the MIME type (*/*).
+
+=head2 Viewing and Changing Your Route Table
+
+To view or change your route table, visit any page with argument C<i99>
+set to 1 (or actually to any nonzero value).  (To see how to do this
+without actually modifying the argument's value in your permanent user
+profile, check out the Customization documentation.)  This will cause
+the Dispatcher to return an HTML form containing a text entry for each
+of various MIME types.  You set the route for a given MIME type by
+typing distiller names separated by semicolons.  For example, if
+distillers called I<kwhilite> and I<boldify> both exist, and you'd like
+C<text/html> requests to be piped through both of them in that order,
+you would type C<kwhilite;boldify> in the form entry corresponding to
+C<text/html>.
+
+The three default TranSend distillers (HTML munging, GIF reduction, JPEG
+reduction) are installed as I<htmlmunge>, I<gifmunge>,  and I<jpgmunge>
+respectively, so setting the C<text/html>, C<image/gif>, and
+C<image/jpeg> blanks to those respective values will give you exactly
+the behavior of the production TranSend.
+
+Some important caveats for using this mechanism:
+
+=over 4
+
+=item
+
+TranSend's normal behavior when a distiller cannot be found or
+successfully invoked is to bypass the original content.  In the context
+of chains of distillers, the content returned will be the I<original>
+content, I<not> the output of the last successful stage.  It's not clear
+if this is the right design decision or not.
+
+If you set argument C<i15> to a nonzero value, then TranSend will
+generate and return an error message describing (roughly) what went
+wrong, rather than just bypassing the original content.  This can be
+useful if your chain doesn't seem to be working as expected.
+
+=item
+
+Unfortunately, MIME types C<image/jpg> and C<image/jpeg> seem to be
+synonyms.  If you specify different routes for them, the route used will
+depend on the caprice of the particular server serving you the JPEG.
+
+=item
+
+You have to know the MIME types that each distiller can handle.  The
+Dispatcher doesn't check that the output of one distiller is compatible
+with the input of another.  There's nothing to stop you from sending a
+GIF image to a filter that expects only text/html, for instance.  In
+general, you should try to make distillers resilient to such cases,
+because frequently servers simply return the wrong MIME type for a given
+object, for reasons beyond the scope of normal human understanding.
+
+=item
+
+If you use this method, I<all> hints involving Redispatch return codes
+and C<X-Route> headers are B<ignored>.  This is a feature: it lets an
+arbitrary distiller participate in an arbitrary  pipeline even if it was
+originally written as part of a very specific pipeline.
+
+=item
+
+As described in the Customization docs, users are currently identified
+by IP address.  This means your user profile (and thus your routing
+table) won't follow you from machine to machine.  This is a bug and will
+be fixed soon.
+
+=back
+
+=head2 "Server-Like" Dispatch
+
+In this mode, you address the TACC proxy as if it were an HTTP server
+(instead of a proxy), and you designate a specific worker that receives
+control I<immediately> on server-like requests.
+
+To use this mechanism:
+
+=over 4
+
+=item 1.
+
+Edit the C<frontend.aggString> entry in the options file.  This is the
+special URL which, if visited, will invoke the "immediate intercept"
+mechanism. 
+
+=item 2.
+
+Choose a name for the special worker that will intercept requests in
+"server mode".  The default name is C<myurl/dispatch>.  B<NOTE: This is
+a change from the previous default value, which was>
+C<transend/myurl/dispatch>.  If you choose a name other than the
+default, specify this name as the value of the
+C<frontend.myurl.dispatch> property.
+
+=item 3.
+
+Add an options file entry for the special worker.  Its  name
+should be whatever you specified in step 2 above.
+
+=item 3.
+
+You can set your browser proxy, or not, as you prefer.  If you do set
+it, you can still invoke the bypass mechanism by visiting the above
+special URL via the proxy.  If you don't set it, I<all> URL's will get
+the bypass behavior with no proxy, but you can force using the proxy by
+getting a URL such as:
+
+  http://transend.cs.berkeley.edu:4444/http://real.host.com/index.html
+
+=back
+
+When the frontend receives a request of the form
+C<GET /foo.html HTTP/1.0> 
+instead of 
+
+  GET http://some.web.server/foo.html HTTP/1.0
+
+then it recognizes this request and passes it on to the special worker.
+This worker can do whatever it likes with
+the request, including dispatching it on to other workers.  The special
+worker is specified just like any other in the config file.
+
+The special worker will receive the entire GET (or POST) request
+as part of the metadata. It must return a valid HTTP response i.e. set the 
+return headers correctly to include "HTTP/1.0 200 OK" etc.  Unless this
+worker specifies a redispatch, it will be the only one called for the
+request.  It could, for example, redispatch the request based on the
+user IP address (which, by the way, is available as arg ID C<i10>).
+
+=head1 Persistent/Background Distillers
+
+Background distillers work. Specify the C<-e> flag before the C<--> in the 
+F<gm_options> line for the distiller. The PTM will IMMEDIATELY respawn the
+distiller if it crashes. This mechanism is still very simple and naive.
+
+=head1 Distillers Can Rename Themselves
+
+Distillers can rename themselves: API function DistillerRename.
+Currently, only C and tcl distillers export this function.
+
+An example usage of this function is as follows: The gm_options file
+registers a distiller C<pilot/mediaboard/*> which can act as a Pilot
+mediaboard gateway. There is one gateway for every I<mb> session that
+the pilot user is interested in. When the gateway worker starts up,
+it figures out the session that it is going to handle (say, for
+example, 224.8.8.8:9990) and renames itself to
+pilot/mediaboard/224.8.8.8:9990. This way any further Pilot clients
+that try to participate in the same session can be redirected to
+the same worker.
+
+This function will soon be available for Perl distillers.
+
+
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d138 1
+a138 1
+=h3 Viewing and Changing Your Route Table
+d225 11
+a235 2
+Add an options file entry for a worker named
+C<transend/myurl/dispatch>.  Only this hardcoded name will work.
+d243 3
+a245 2
+getting a URL such as 
+C<http://transend.cs.berkeley.edu:4444/http://real.host.com/index.html>.
+d251 8
+a258 4
+(instead of C<GET http://some.web.server/foo.html HTTP/1.0>), it recognizes
+this request and passes it on to the special worker C<transend/myurl/dispatch>.
+This worker can do whatever it likes with the request, including 
+dispatching it on to other workers.
+d260 1
+a260 1
+The C<transend/myurl/dispatch> worker receives the entire GET (or POST) request
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d88 5
+a92 3
+There are two ways to cause your distiller to be invoked when you use
+the proxy.  The first way is easier; the second way is more powerful.
+Both ways require you to create an entry for your distiller in the
+d206 71
+@

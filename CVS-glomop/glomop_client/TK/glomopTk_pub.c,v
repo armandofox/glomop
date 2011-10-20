@@ -1,0 +1,1969 @@
+head	1.14;
+access;
+symbols
+	stable:1.11
+	current:1.11
+	release:1.11;
+locks; strict;
+comment	@ * @;
+
+
+1.14
+date	96.08.23.19.57.43;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.07.25.22.12.24;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.07.25.17.31.34;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.06.14.21.54.01;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.14.21.10.24;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.11.02.18.47;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.07.05.08.37;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.07.01.55.02;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.07.00.25.33;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.04.02.57.16;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.01.00.04.35;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.05.31.17.23.21;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.24.21.30.52;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.22.00.45.57;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.14
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTk_pub.c --
+ *
+ * Provides generic versions of the routines exported to client applications.
+ * These version are intended to lie under a thin language-specific
+ * glue layer.
+ *
+ * $Id: glomopTk_pub.c,v 1.3 96/08/22 19:53:08 glomop Exp $
+ * 
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <errno.h>
+#include <unistd.h>
+
+#include "glomopTk.h"
+#include "tk.h"
+ 
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.3 96/08/22 19:53:08 glomop Exp $";
+static GM_ConnectId curCon = 1;
+  static GM_DocId theID = 0L;
+
+void socketHandler(ClientData clientData, int mask);
+GM_DocChunk *GMReadChunkFromStream(int fd);
+GM_DocChunk *GMMessage_getChunkFromMessage(GMMessage newMsg, int socket_fd);
+
+GM_ConnectId  GM_ConnectProxy(char *proxyhost, char *proxyport, 
+			      char *username, char *passwd,
+			      char *realm, unsigned short tgt_lifetime,
+			      unsigned short is_asynch)
+{
+  /*
+   * Open a socket to the proxy, and perform the charon authentication
+   * dance.  If successful, add a new entry to the CS connection hash 
+   * table.
+   */
+  int    proxySocket;
+  char   session_key[8];
+  GM_ConnectId retCon;
+  
+  if (proxyhost == NULL)
+    return (GM_ConnectId) 0;
+
+  if (proxyport == NULL)
+    return (GM_ConnectId) 0;
+
+  /** open up socket connection **/
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) sconnecting to %s %s\n", proxyhost, proxyport);
+#endif
+  proxySocket = sconnect(proxyhost, proxyport);
+  if (proxySocket == -1)
+    return (GM_ConnectId) 0;
+
+  /** do authentication **/
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) performing charon_authenticate\n");
+#endif
+  if (!charon_authenticate(proxySocket, username, passwd, realm,
+			   tgt_lifetime, "glomopTk", &(session_key[0]))) {
+    return (GM_ConnectId) 0;
+  }
+  
+  /* Done!  Create the new CS connection hash */
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) performing CS_addConnection.\n");
+#endif DEBUG
+  if (CS_addConnection(curCon, proxySocket, proxyhost, proxyport,
+		       session_key, is_asynch) != 0) {
+   close(proxySocket);
+   return (GM_ConnectId) 0;
+  }
+
+  if (is_asynch) {
+    /* Create a handler procedure to be called when socket activity
+       occurs */
+#ifdef DEBUG
+    printf("Calling Tk_CreateFileHandler on socket %d\n", proxySocket);
+#endif DEBUG
+    Tk_CreateFileHandler(proxySocket, TK_READABLE | TK_EXCEPTION, 
+			 socketHandler, (ClientData) proxySocket);
+  }
+
+  retCon = curCon;
+  curCon++;
+  return retCon;
+}
+
+GM_ConnectId  GM_ConnectProxy_Unauth(char *proxyhost, char *proxyport, 
+				     char *username,
+				     unsigned short is_asynch)
+{
+  /*
+   * Open a socket to the proxy, but no authentication
+   * dance.  If successful, add a new entry to the CS connection hash 
+   * table.
+   */
+  int    proxySocket;
+  GM_ConnectId retCon;
+  char   session_key[8] = {'\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'};  
+  GMMessage outMsg = GMMessage_newMessage();
+  GMStr1 theStr1;
+
+  if (proxyhost == NULL)
+    return (GM_ConnectId) 0;
+
+  if (proxyport == NULL)
+    return (GM_ConnectId) 0;
+
+  /** open up socket connection **/
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) sconnecting to %s %s\n", proxyhost, proxyport);
+#endif
+  proxySocket = sconnect(proxyhost, proxyport);
+  if (proxySocket == -1)
+    return (GM_ConnectId) 0;
+
+  /** pass in empty authentication stuff **/
+  if (!ch_build_handshake(username, "glomopTk", "", 15, "AUTH_NONE", 
+			  &outMsg)) {
+    fprintf(stderr, "Couldn't build handshake message in charon_auth.\n");
+    close(proxySocket);
+    GMMessage_destroy(outMsg);
+    return (GM_ConnectId) 0;
+  }
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) sending authnone message\n");
+  GMMessage_dump(outMsg, stdout);
+#endif
+  if (!GMMessage_writeToStream(outMsg, proxySocket)) {
+    fprintf(stderr, "Couldn't write out AUTH_NONE handshake in core.\n");
+    GMMessage_destroy(outMsg);
+    close(proxySocket);
+    return (GM_ConnectId) 0;
+  }
+  
+  /* Now receive back confirmation */
+  GMMessage_clearMessage(&outMsg);
+  if (!GMMessage_readFromStream(&outMsg, proxySocket)) {
+    fprintf(stderr, "readFromStream failed in AUTH_NONE core.\n");
+    GMMessage_destroy(outMsg);
+    close(proxySocket);
+    return (GM_ConnectId) 0;
+  }
+  if (GMMessage_isError(outMsg)) {
+    fprintf(stderr, "protocol failure in AUTH_NONE core.\n");
+    GMMessage_dumpError(outMsg, stderr);
+    GMMessage_destroy(outMsg);
+    close(proxySocket);
+    return (GM_ConnectId) 0;
+  }
+  GMMessage_beginExtract(&outMsg);
+  theStr1 = GMMessage_getNextStr1(&outMsg);
+  if ((theStr1.length == 0) || (strncmp(theStr1.data, ERR_STR, 2) == 0)) {
+    fprintf(stderr, "Error in AUTH_NONE authentcation -OK not received.\n");
+    GMMessage_dumpError(outMsg, stderr);
+    close(proxySocket);
+    GMMessage_destroy(outMsg);
+    GMStr1_destroy(theStr1);
+    return (GM_ConnectId) 0;
+  }
+  GMMessage_destroy(outMsg);
+  GMStr1_destroy(theStr1);
+
+  /* Done!  Create the new CS connection hash */
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) performing CS_addConnection.(2)\n");
+#endif DEBUG
+  if (CS_addConnection(curCon, proxySocket, proxyhost, proxyport,
+		       session_key, is_asynch) != 0) {
+   close(proxySocket);
+   return (GM_ConnectId) 0;
+  }
+
+  if (is_asynch) {
+    /* Create a handler procedure to be called when socket activity
+       occurs */
+#ifdef DEBUG
+    printf("Calling Tk_CreateFileHandler on socket %d\n", proxySocket);
+#endif DEBUG
+    Tk_CreateFileHandler(proxySocket, TK_READABLE | TK_EXCEPTION, 
+			 socketHandler, (ClientData) proxySocket);
+  }
+
+  retCon = curCon;
+  curCon++;
+  return retCon;
+}
+
+GM_Error GM_DisconnectProxy(GM_ConnectId connId)
+{
+  /*
+   * This function must get the socket corresponding to the connection,
+   * close the socket, and delete the connection with CS_removeConnection.
+   */
+
+  proxyConnection *theC;
+
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) About to CS_getConnection on id %ld\n", connId);
+#endif
+  theC = CS_getConnection(connId);
+  if (theC == NULL)
+    return -1;
+
+  if (theC->is_asynchronous) {
+    /* Get rid of the file handler for this socket connection */
+    Tk_DeleteFileHandler(theC->proxy_socket);
+  }
+
+  close(theC->proxy_socket);
+#ifdef DEBUG
+  printf("(glomopTk_pub.c) About to removeConnection\n");
+#endif
+  if (CS_removeConnection(connId) != 0)
+    return -1;
+
+  return 0;  /* no error */
+}
+
+GM_DocId  GM_GetDoc(GM_ConnectId connId,
+		    GM_DocLocator loc,
+		    GM_DocCallbackProcPtr callback,
+		    unsigned callbackThreshold,
+		    unsigned maxChunks,
+		    char *extra)
+{
+  GMMessage       docRequest = GMMessage_newMessage();
+  proxyConnection *theConn;
+  GMStr1          aStr1;
+  GMStr2          aStr2;
+
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  if (theConn == NULL)
+    return (GM_DocId) 0;
+
+  if (theConn->is_asynchronous == 0) {
+    fprintf(stderr, "GM_GetDoc called, but synchronous connection.\n");
+    fprintf(stderr, "use GM_GetDocSynch instead.\n");
+    return (GM_DocId) 0;
+  }
+
+  /*** Build up the document request message ***/
+
+  /* Add the opcode */
+  aStr1 = GMStr1_defFromBytes(OP_OPEN_DOC, strlen(OP_OPEN_DOC));
+  if (!GMMessage_addStr1(&docRequest, aStr1)) {
+    fprintf(stderr, "addStr1 failed for opcode in GM_GetDoc.\n");
+    GMStr1_destroy(aStr1);
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMStr1_destroy(aStr1);
+
+  /* Add the doclocator */
+  aStr2 = GMStr2_defFromBytes(loc.doc_url, strlen(loc.doc_url));
+  if (!GMMessage_addStr2(&docRequest, aStr2)) {
+    fprintf(stderr, "addStr2 failed for doclocator in GM_GetDoc.\n");
+    GMStr2_destroy(aStr2);
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMStr2_destroy(aStr2);
+
+  /* Add the max field */
+  if (!GMMessage_addi16(&docRequest, (i16) maxChunks)) {
+    fprintf(stderr, "addi16 failed for maxChunks in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+
+  /* Add the id field */
+  theID++;
+  if (!GMMessage_addi32(&docRequest, (i32) theID)) {
+    fprintf(stderr, "addi32 failed for theID in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+
+  /* OK - message is ready.  Squirt it off */
+  if (!GMMessage_writeToStream(docRequest, theConn->proxy_socket)) {
+    fprintf(stderr, "writeToStream failed in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMMessage_destroy(docRequest);
+
+  /* Now add a new documentInfo structure to the hash tables */
+  if (CS_addDocument(connId, theID, callback, callbackThreshold, 
+		     maxChunks, extra) != 0) {
+    fprintf(stderr, "addDocument failed in GM_GetDoc!?\n");
+    return (GM_DocId) 0;
+  }
+
+  return theID;
+}
+
+GM_DocId GM_GetDocSynch(GM_ConnectId connId,
+			GM_DocLocator loc,
+			unsigned *num_retchunks,
+			GM_DocChunk **returned_chunks)
+{
+  GMMessage       docRequest = GMMessage_newMessage();
+  proxyConnection *theConn;
+  GMStr1          aStr1;
+  GMStr2          aStr2;
+  GM_DocChunk    *nextChunk;
+  GM_TocChunk     tocChunk;
+  int             i;
+
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  if (theConn == NULL)
+    return (GM_DocId) 0;
+
+  /*** Build up the document request message ***/
+  /* Add the opcode */
+  aStr1 = GMStr1_defFromBytes(OP_OPEN_DOC, strlen(OP_OPEN_DOC));
+  if (!GMMessage_addStr1(&docRequest, aStr1)) {
+    fprintf(stderr, "addStr1 failed for opcode in GM_GetDoc.\n");
+    GMStr1_destroy(aStr1);
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMStr1_destroy(aStr1);
+
+  /* Add the doclocator */
+  aStr2 = GMStr2_defFromBytes(loc.doc_url, strlen(loc.doc_url));
+  if (!GMMessage_addStr2(&docRequest, aStr2)) {
+    fprintf(stderr, "addStr2 failed for doclocator in GM_GetDoc.\n");
+    GMStr2_destroy(aStr2);
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMStr2_destroy(aStr2);
+
+  /* Add the max field */
+  if (!GMMessage_addi16(&docRequest, (i16) 9999)) {
+    fprintf(stderr, "addi16 failed for maxChunks in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+
+  /* Add the id field */
+  theID++;
+  if (!GMMessage_addi32(&docRequest, (i32) theID)) {
+    fprintf(stderr, "addi32 failed for theID in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+
+  /* OK - message is ready.  Squirt it off */
+  if (!GMMessage_writeToStream(docRequest, theConn->proxy_socket)) {
+    fprintf(stderr, "writeToStream failed in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return (GM_DocId) 0;
+  }
+  GMMessage_destroy(docRequest);
+
+  /* Now add a new documentInfo structure to the hash tables */
+  if (CS_addDocument(connId, theID, NULL, 1,
+		     9999, NULL) != 0) {
+    fprintf(stderr, "addDocument failed in GM_GetDoc!?\n");
+    return (GM_DocId) 0;
+  }
+
+  /* Now wait for TOC chunk to arrive */
+  nextChunk = GMReadChunkFromStream(theConn->proxy_socket);
+  if (nextChunk == NULL) {
+    CS_removeDocument(connId, theID);
+    fprintf(stderr, "GMReadChunkFromStream failed\n");
+    return (GM_DocId) 0;
+  }
+  if (GM_ParseTocChunk(nextChunk, &tocChunk) != 0) {
+    CS_removeDocument(connId, theID);
+    fprintf(stderr, "ParseTocChunk failed\n");
+    return (GM_DocId) 0;
+  }
+  
+  /* Figure out how many chunks we'll be getting */
+  *num_retchunks = tocChunk.num_descriptors + 1;
+  *returned_chunks = (GM_DocChunk *) malloc(sizeof(GM_DocChunk) *
+					    (tocChunk.num_descriptors + 1));
+  if (*returned_chunks == NULL) {
+    CS_removeDocument(connId, theID);
+    fprintf(stderr, "malloc failed in GetDocSynch\n");
+    return (GM_DocId) 0;
+  }
+  **returned_chunks = *nextChunk;
+
+  /* Now pull down the remaining chunks */
+  for (i=0; i<tocChunk.num_descriptors; i++) {
+    nextChunk = GMReadChunkFromStream(theConn->proxy_socket);
+    if (nextChunk == NULL) {
+      CS_removeDocument(connId, theID);
+      fprintf(stderr, "GMReadChunkFromStream failed\n");
+      free(*returned_chunks);
+      return (GM_DocId) 0;
+    }
+    *((*returned_chunks) + (long int) (i + 1)) = *nextChunk;
+  }
+
+  free(tocChunk.descriptor_array);
+  free(tocChunk.metadata);
+  return theID;
+}
+
+GM_Error  GM_GetChunk(GM_ConnectId connId,
+		      GM_DocId doc_id,
+		      GM_ChunkId chunk_id)
+{
+  documentInfo    *theDoc;
+  proxyConnection *theConn;
+  GMMessage        outMsg = GMMessage_newMessage();
+  GMStr1           aStr1;
+
+#ifdef DEBUG
+  printf("GM_GetChunk: connectId %lu, doc_id %lu, chunk_id %lu\n",
+	 connId, doc_id, chunk_id);
+#endif
+
+  /* Make sure that the document exists */
+  theDoc = CS_getDocument(connId, doc_id);
+  theConn = CS_getConnection(connId);
+  if ((theDoc == NULL) || (theConn == NULL)) {
+    fprintf(stderr, "getDocument failed in GetChunk.\n");
+    return -1;
+  }
+
+  /**** Build up the getchunk message ****/
+
+  /* Add the opcode */
+  aStr1 = GMStr1_defFromBytes(OP_GET_CHUNK, strlen(OP_GET_CHUNK));
+  if (!GMMessage_addStr1(&outMsg, aStr1)) {
+    fprintf(stderr, "addStr1 failed for opcode in GM_GetChunk.\n");
+    GMStr1_destroy(aStr1);
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+  GMStr1_destroy(aStr1);
+
+  /* add the docid */
+  if (!GMMessage_addi32(&outMsg, (i32) doc_id)) {
+    fprintf(stderr, "addi32 failed for docid in GM_GetChunk.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+  
+  /* add the chunkid */
+  if (!GMMessage_addi32(&outMsg, (i32) chunk_id)) {
+    fprintf(stderr, "addi32 failed for chunk_id in GM_GetChunk.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+
+  if (!GMMessage_writeToStream(outMsg, theConn->proxy_socket)) {
+    fprintf(stderr, "writeToStream failed in GM_GetChunk.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+
+  /** Success! **/
+  GMMessage_destroy(outMsg);
+  return 0;
+}
+
+GM_Error  GM_CloseDoc(GM_ConnectId connId,
+		      GM_DocId doc_id)
+{
+  /* delete document state and squirt off a closedoc message */
+
+  GMMessage       docRequest = GMMessage_newMessage();
+  documentInfo    *theDoc;
+  proxyConnection *theConn;
+  GMStr1          aStr1;
+
+#ifdef DEBUG
+  printf("GM_CloseDoc: connectId %lu, doc_id %lu\n",
+	 connId, doc_id);
+#endif
+
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  theDoc = CS_getDocument(connId, doc_id);
+  if ((theDoc == NULL) || (theConn == NULL))
+    return -1;
+
+  /*** Build up the document request message ***/
+
+  /* Add the opcode */
+  aStr1 = GMStr1_defFromBytes(OP_CLOSE_DOC, strlen(OP_CLOSE_DOC));
+  if (!GMMessage_addStr1(&docRequest, aStr1)) {
+    fprintf(stderr, "addStr1 failed for opcode in GM_GetDoc.\n");
+    GMStr1_destroy(aStr1);
+    GMMessage_destroy(docRequest);
+    return -1;
+  }
+  GMStr1_destroy(aStr1);
+
+  /* Add the docid */
+  if (!GMMessage_addi32(&docRequest, (i32) doc_id)) {
+    fprintf(stderr, "addi32 failed for doc_id in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return -1;
+  }
+
+  /* OK - message is ready.  Squirt it off */
+  if (!GMMessage_writeToStream(docRequest, theConn->proxy_socket)) {
+    fprintf(stderr, "writeToStream failed in GM_GetDoc.\n");
+    GMMessage_destroy(docRequest);
+    return -1;
+  }
+  GMMessage_destroy(docRequest);
+
+  /* Now remove the documentInfo structure to the hash tables */
+  if (CS_removeDocument(connId, doc_id) != 0) {
+    fprintf(stderr, "removeDocument failed in GM_GetDoc!?\n");
+    return -1;
+  }
+
+  /** Success! **/
+  return 0;
+}
+
+GM_DocCallbackProcPtr GM_SetCallback(GM_ConnectId connId,
+				     GM_DocId doc_id,
+                                     GM_DocCallbackProcPtr newProc,
+				     unsigned newMaxChunks,
+				     unsigned newThreshold,
+				     char *extra)
+{
+  /* Get the document state and modify it */
+  documentInfo *theDoc;
+  GM_DocCallbackProcPtr old;
+
+#ifdef DEBUG
+  printf("GM_SetCallback: connectId %lu, doc_id %lu\n",
+	 connId, doc_id);
+#endif
+
+  theDoc = CS_getDocument(connId, doc_id);
+  if (theDoc == NULL)
+    return (GM_DocCallbackProcPtr) NULL;
+
+  old = theDoc->callback_ptr;
+  theDoc->callback_ptr = newProc;
+  theDoc->maxChunks = newMaxChunks;
+  theDoc->callbackThreshold = newThreshold;
+  if (extra == NULL)
+    strcpy(theDoc->extra, "");
+  else
+    strcpy(theDoc->extra, extra);
+
+  return old;
+}
+
+GM_Error  GM_SetQosPrefs(GM_ConnectId connId, char *htype,
+			 int num_prefs, GM_QosPrefs *prefArray)
+{
+  /* Job of this procedure is to create the set_prefs message and
+     squirt it off.  Difficulty: building the preflist.  Strategy:
+     loop through prefArray, reallocating a temp char *, and concatenating
+     the next prefArray stuff to it */
+     
+  char        *tmpChar = NULL, tmpBuf[256];
+  GMStr1       theHTYPE, opcode;
+  GMStr2       thePREFLIST;
+  GMMessage    outMsg;
+  int          i, nextLen;
+  GM_QosPrefs *nextEl;
+  proxyConnection *theConn;
+
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  if (theConn == NULL) {
+    fprintf(stderr, "Error: bad connection - couldn't do getConnection.\n");
+    return -1;
+  }
+
+  opcode = GMStr1_defFromBytes(OP_SET_PREFS, (byte) strlen(OP_SET_PREFS));
+  theHTYPE = GMStr1_defFromBytes(htype, (byte) strlen(htype));
+
+  /* Now build the preflist component */
+  for (i=0; i<num_prefs; i++) {
+    nextEl = &(prefArray[i]);
+    if (nextEl->prefweight == -1) {  /* prefweight undefined */
+      sprintf(tmpBuf, "%s=%d:", nextEl->prefname, nextEl->prefval);
+    } else {
+      sprintf(tmpBuf, "%s=%d:%d", nextEl->prefname, nextEl->prefval,
+	      nextEl->prefweight);
+    }
+#ifdef DEBUG
+    printf("tmpBuf is '%s'\n", tmpBuf);
+#endif
+    nextLen = strlen(tmpBuf);
+    if (i != 0)
+      nextLen++;   /* for comma */
+    if (tmpChar == NULL) {
+      tmpChar = (char *) malloc(sizeof(char) * (nextLen + 1));
+      *tmpChar = '\0';
+    }
+    else
+      tmpChar = (char *) realloc(tmpChar,
+				 sizeof(char) * (nextLen + strlen(tmpChar)
+						 + 1));
+    if (tmpChar == NULL) {
+      fprintf(stderr, "Out of memory in SetQosPrefs.\n");
+      exit(-1);
+    }
+    if (i != 0)
+      strcat(tmpChar, ",");
+    strcat(tmpChar, tmpBuf);
+#ifdef DEBUG
+    printf("tmpChar is '%s'\n", tmpChar);
+#endif
+  }
+  /* Done building tmpChar - create Str2 */
+  thePREFLIST = GMStr2_defFromBytes(tmpChar, (i16) strlen(tmpChar));
+
+  /* Now build message */
+  outMsg = GMMessage_newMessage();
+  GMMessage_addStr1(&outMsg, opcode);
+  GMMessage_addStr1(&outMsg, theHTYPE);
+  GMMessage_addStr2(&outMsg, thePREFLIST);
+
+  free(tmpChar);
+  GMStr1_destroy(opcode);
+  GMStr1_destroy(theHTYPE);
+  GMStr2_destroy(thePREFLIST);
+
+  if (!GMMessage_writeToStream(outMsg, theConn->proxy_socket)) {
+    fprintf(stderr, "Writing QosPrefs message failed.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+
+  GMMessage_destroy(outMsg);
+  return 0;
+}
+
+GM_Error  GM_SetOutputType(GM_ConnectId connId, char *htype,
+			   unsigned char outputtype)
+{
+  GM_QosPrefs   thePref;
+
+  sprintf(thePref.prefname, "outputtype");
+  thePref.prefval = outputtype;
+  thePref.prefweight = 255;
+
+  return GM_SetQosPrefs(connId, htype, 1, &thePref);
+}
+
+GM_Error GM_RegisterDeviceClass(GM_ConnectId connId, char *device_class) 
+{
+  proxyConnection *theConn;
+  GMMessage        outMsg;
+  GMStr1           theClientType, opcode;
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  if (theConn == NULL) {
+    fprintf(stderr, "Error: bad connection - couldn't do getConnection.\n");
+    return -1;
+  }
+  
+  opcode = GMStr1_defFromBytes(OP_SET_CLIENTTYPE, 
+			       (byte) strlen(OP_SET_CLIENTTYPE));
+  theClientType = GMStr1_defFromBytes(device_class, (byte) strlen(device_class));
+  outMsg = GMMessage_newMessage();
+  GMMessage_addStr1(&outMsg, opcode);
+  GMMessage_addStr1(&outMsg, theClientType);
+  GMStr1_destroy(opcode);
+  GMStr1_destroy(theClientType);
+  if (!GMMessage_writeToStream(outMsg, theConn->proxy_socket)) {
+    fprintf(stderr, "Writing client type change message failed.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+
+  GMMessage_destroy(outMsg);
+  return 0;
+}
+
+GM_Error GM_ChangeMimeHTypeBinding(GM_ConnectId connId,
+				   char *mime_type,
+				   char *htype)
+{
+  proxyConnection *theConn;
+  GMMessage        outMsg;
+  GMStr1           opcode, mimestr1, htypestr1;
+
+  /* First make sure that the connId exists */
+  theConn = CS_getConnection(connId);
+  if (theConn == NULL) {
+    fprintf(stderr, "Error: bad connection - couldn't do getConnection.\n");
+    return -1;
+  }
+  
+  opcode = GMStr1_defFromBytes(OP_SET_HTYPEBINDING,
+			       (byte) strlen(OP_SET_HTYPEBINDING));
+  mimestr1 = GMStr1_defFromBytes(mime_type, (byte) strlen(mime_type));
+  htypestr1 = GMStr1_defFromBytes(htype, (byte) strlen(htype));
+  outMsg = GMMessage_newMessage();
+  GMMessage_addStr1(&outMsg, opcode);
+  GMMessage_addStr1(&outMsg, mimestr1);
+  GMMessage_addStr1(&outMsg, htypestr1);
+  GMStr1_destroy(opcode);
+  GMStr1_destroy(mimestr1);
+  GMStr1_destroy(htypestr1);
+  if (!GMMessage_writeToStream(outMsg, theConn->proxy_socket)) {
+    fprintf(stderr, "Writing htype binding change message failed.\n");
+    GMMessage_destroy(outMsg);
+    return -1;
+  }
+
+  GMMessage_destroy(outMsg);
+  return 0;
+}
+
+GM_Error GM_ParseTocChunk(GM_DocChunk *toc_chunk, GM_TocChunk *parsed_toc)
+{
+
+  /* This procedure parses information in the opaque BlobPtr of a
+     toc_chunk, and populates the (passed in by reference) parsed_toc. */
+  
+  /* verify that the chunk has the correct mime type */
+  if (strcmp( (toc_chunk->mime_type).mimetype, "glomop/toc") != 0) {
+    fprintf(stderr, "Bogus TOC chunk passed to GM_ParseTocChunk.\n");
+    fprintf(stderr, "glomop/toc expected, %s received.\n", 
+	    (toc_chunk->mime_type).mimetype);
+    return -1;
+  }
+
+  /* OK, it's a TOC.  Parse the TOC */
+  {
+    GMMessage tmpMessage = GMMessage_newMessage();
+    GMStr2    metadata;
+    GMStr1    mimetype, annotation;
+    i16       numchunks, i;
+    unsigned char *foo;
+
+    tmpMessage.data = toc_chunk->chunk_obj;
+    tmpMessage.length = (i16) toc_chunk->blob_len;
+
+    /* Add metadata */
+    metadata = GMMessage_getNextStr2(&tmpMessage);
+    if (metadata.length != 0) {
+      fprintf(stderr, "Metadata length: %d\n", (int) metadata.length);
+      parsed_toc->metadata = (BlobPtr) malloc(sizeof(char) *
+					      (metadata.length + 1) );
+      if (parsed_toc->metadata == NULL) {
+	fprintf(stderr, "Out of memory in GM_ParseTocChunk!\n");
+	exit(-1);
+      }
+      memcpy(parsed_toc->metadata, metadata.data, metadata.length);
+      foo = (unsigned char *) parsed_toc->metadata;
+      foo[metadata.length] = '\0';
+      parsed_toc->metadatalen = (long int) metadata.length;
+    } else {  
+      parsed_toc->metadata = NULL;
+      parsed_toc->metadatalen = (long int) 0L;
+    }
+    GMStr2_destroy(metadata);
+
+    /* Determine number of chunks */
+    numchunks = (i16) GMMessage_getNexti16(&tmpMessage);
+    parsed_toc->num_descriptors = (long int) numchunks;
+    parsed_toc->descriptor_array = (GM_ChunkDescriptor *)
+      calloc(sizeof(GM_ChunkDescriptor), numchunks);
+    if (parsed_toc->descriptor_array == NULL) {
+      fprintf(stderr, "Out of memory in GM_ParseTocChunk (2)! \n");
+      exit(-1);
+    }
+
+#ifdef DEBUG
+    printf("Number of chunks in TOC data - %d\n", (int) numchunks);
+#endif
+
+    for (i=0; i<numchunks; i++) {
+      /* Pull out mimetype and annotation */
+      mimetype = GMMessage_getNextStr1(&tmpMessage);
+      annotation = GMMessage_getNextStr1(&tmpMessage);
+      memcpy(  ((parsed_toc->descriptor_array)[i]).mimetype.mimetype,
+	       mimetype.data, mimetype.length);
+      memcpy(  ((parsed_toc->descriptor_array)[i]).annotation, annotation.data,
+	       annotation.length);
+#ifdef DEBUG
+      printf("Added TOC mimetype[%d] %s\n", i,
+	     ((parsed_toc->descriptor_array)[i]).mimetype.mimetype);
+      printf("Added TOC annotation[%d] %s\n", i,
+	     ((parsed_toc->descriptor_array)[i]).annotation);
+#endif
+      GMStr1_destroy(mimetype);
+      GMStr1_destroy(annotation);
+    }
+  }
+
+  return 0;
+}
+
+
+
+/** This local procedure is called by TK whenever a socket event
+    occurs for one of our connections **/
+
+void socketHandler(ClientData clientData, int mask)
+{
+  int       socket_fd = (int) clientData;
+  GMMessage newMsg = GMMessage_newMessage();
+  GMStr1    opcode;
+
+  /* The socket has become readable.  We will block (!) reading an
+     entire message. */
+
+#ifdef DEBUG
+  printf("In socketHandler TK event callback - mask %d\n", mask);
+#endif DEBUG
+
+  if (mask & TK_EXCEPTION) {
+    GM_ConnectId theId;
+
+    fprintf(stderr, "Exceptional condition in socketHandler.\n");
+    theId = CS_getConnectId(socket_fd);
+    CS_removeConnection(theId);
+    Tk_DeleteFileHandler(socket_fd);
+    return;
+  }
+
+#ifdef DEBUG
+  printf("About to GMMessage_readFromStream in socketHandler..\n");
+#endif
+
+  if (!GMMessage_readFromStream(&newMsg, socket_fd)) {
+    GM_ConnectId theId;
+
+    fprintf(stderr, "readFromStream failed in socketHandler.\n");
+    GMMessage_destroy(newMsg);
+
+#ifdef DEBUG
+    printf("cleaning up document state as proxy died.\n");
+#endif
+
+    /* Clean up this connection state now */
+    theId = CS_getConnectId(socket_fd);
+    CS_removeConnection(theId);
+    Tk_DeleteFileHandler(socket_fd);
+    return;
+  }
+
+#ifdef DEBUG
+    printf("GMMessage_readFromStream succeeded:\n");
+    GMMessage_dump(newMsg, stdout);
+#endif
+
+  /* is this an error message? */
+  if (GMMessage_isError(newMsg)) {
+    GMMessage_dumpError(newMsg, stderr);
+    GMMessage_destroy(newMsg);
+    return;
+  }
+
+  /* Not an error message.  Pull out the opcode */
+  opcode = GMMessage_getNextStr1(&newMsg);
+  if (opcode.length <= (byte) 1) {
+    fprintf(stderr, "<= 1 length opcode in socketHandler.\n");
+    GMMessage_destroy(newMsg);
+    GMStr1_destroy(opcode);
+    return;
+  }
+
+  /* Now do something based on the opcode */
+  if (opcode.length == (byte) 2) {
+    if (memcmp(opcode.data, ERR_STR, (size_t) 2) == 0) {
+      GMStr1 errMsg;
+      int    i;
+
+#ifdef DEBUG
+      fprintf(stderr, "ERR_STR received.\n");
+#endif
+      errMsg = GMMessage_getNextStr1(&newMsg);
+      if (errMsg.length != 0) {
+
+	/* print out failure message */
+	fprintf(stderr, "        msg: ");
+	for (i=0; i<errMsg.length; i++) {
+	  fprintf(stderr, "%c", *(errMsg.data + (long int) i));
+	}
+	fprintf(stderr, "\n");
+
+      }
+      GMStr1_destroy(errMsg);
+    } else if (memcmp(opcode.data, OK_STR, (size_t) 2) == 0) {
+#ifdef DEBUG
+      fprintf(stderr, "OK_STR received.\n");
+#endif
+    } else if (memcmp(opcode.data, OP_OPEN_CREEK, (size_t) 2) == 0) {
+      fprintf(stderr, "OP_OPEN_CREEK received!?!?!\n");
+    } else if (memcmp(opcode.data, OP_CLOSE_CREEK, (size_t) 2) == 0) {
+      fprintf(stderr, "OP_CLOSE_CREEK received!?!?!?\n");
+    } else if (memcmp(opcode.data, OP_SET_TYPES, (size_t) 2) == 0) {
+      fprintf(stderr, "OP_SET_TYPES received!?!?!?!\n");
+    } else if (memcmp(opcode.data, OP_OPEN_DOC, (size_t) 2) == 0) {
+      fprintf(stderr, "OP_OPEN_DOC received!?!?!\n");
+    } else if (memcmp(opcode.data, OP_CLOSE_DOC, (size_t) 2) == 0) {
+      fprintf(stderr, "OP_CLOSE_DOC received!?!?!\n");
+    } else if (memcmp(opcode.data, OP_CHUNK, (size_t) 2) == 0) {
+        GM_DocChunk     *theChunk;
+	documentInfo    *theDoc;
+	proxyConnection *theConn;
+	GM_ConnectId     theConID;
+
+	theChunk = GMMessage_getChunkFromMessage(newMsg, socket_fd);
+	if (theChunk == NULL) {
+	  GMMessage_destroy(newMsg);
+	  GMStr1_destroy(opcode);
+	  return;
+	}
+	theConID = CS_getConnectId(socket_fd);
+	theConn = CS_getConnection(theConID);
+	theDoc = CS_getDocument(theConID,theChunk->doc_id);
+
+#ifdef DEBUG
+      printf("number of chunks received so far: %u\n", theDoc->numChunks);
+#endif DEBUG
+
+      if (theDoc->callbackThreshold <= theDoc->numChunks) {
+	theDoc->callbackThreshold = 0;  /* first hump done */
+#ifdef DEBUG
+	printf("about to call callback\n");
+#endif DEBUG
+	theDoc->callback_ptr(theConID, *theChunk);
+      }
+    }
+  } else if ((opcode.length == (byte) 3) || (opcode.length == (byte) 4)) {
+    if (memcmp(opcode.data, OP_GET_CHUNK, (size_t) 3) == 0) {
+      fprintf(stderr, "OP_GET_CHUNK received!?!?!?\n");
+    } else if (memcmp(opcode.data, OP_FAIL, (size_t) 4) == 0) {
+      GMStr2 errMsg;
+      int    i;
+
+      fprintf(stderr, "OP_FAIL received.\n");
+      errMsg = GMMessage_getNextStr2(&newMsg);
+      if (errMsg.length != 0) {
+
+	/* print out failure message */
+	fprintf(stderr, "        msg: ");
+	for (i=0; i<errMsg.length; i++) {
+	  fprintf(stderr, "%c", *(errMsg.data + (long int) i));
+	}
+	fprintf(stderr, "\n");
+
+      }
+      GMStr2_destroy(errMsg);
+    }
+  } else {
+    fprintf(stderr, ">4 length opcode in socketHandler.\n");
+  }
+
+  GMMessage_destroy(newMsg);
+  GMStr1_destroy(opcode);
+  return;
+}
+
+GM_DocChunk *GMReadChunkFromStream(int fd)
+{
+  GMMessage    newMsg;
+  GMStr1       opcode;
+  GM_DocChunk *retChunk;
+
+  newMsg = GMMessage_newMessage();
+  if (!GMMessage_readFromStream(&newMsg, fd)) {
+    fprintf(stderr, "readFromStream failed in GMReadChunkFromStream\n");
+    GMMessage_destroy(newMsg);
+    return NULL;
+  }
+#ifdef DEBUG
+  GMMessage_dump(newMsg, stderr);
+#endif
+
+  if (GMMessage_isError(newMsg)) {
+    GMMessage_dumpError(newMsg, stderr);
+    GMMessage_destroy(newMsg);
+    return NULL;
+  }
+  opcode = GMMessage_getNextStr1(&newMsg);
+  if (opcode.length != (byte) 2) {
+    fprintf(stderr, "GMReadChunkFromStream - not a chunk opcode\n");
+    GMMessage_destroy(newMsg);
+    return NULL;
+  }
+  if (memcmp(opcode.data, OP_CHUNK, (size_t) 2) != 0) {
+    fprintf(stderr, "GMReadChunkFromStream - not a chunk opcode 2\n");
+    GMMessage_destroy(newMsg);
+    return NULL;
+  }
+
+  retChunk = GMMessage_getChunkFromMessage(newMsg, fd);
+  return retChunk;
+}
+
+GM_DocChunk *GMMessage_getChunkFromMessage(GMMessage newMsg, int socket_fd)
+{
+  /* The opcode should have been parsed out of the message before
+     passing the message into this function.  The message is
+     NOT destroyed in case of error - caller should do this.
+     Returns NULL on error. */
+
+      i32              docId, chunkId;
+      i16              comptype, uncomplen, sofar, metadatalen;
+      byte             mimlen, reflen;
+      GM_DocLocator    refine_dl;
+      GM_MimeType      mime_type;
+      GMStr2           chunk_data;
+      GM_ConnectId     theConID;
+      proxyConnection *theConn;
+      documentInfo    *theDoc;
+      char            *ptr;
+      BlobPtr          chunk_obj, metadata_obj;
+      GM_DocChunk     *theChunk;
+
+#ifdef DEBUG
+      printf("OP_CHUNK received.\n");
+#endif
+      docId = GMMessage_getNexti32(&newMsg);
+      chunkId = GMMessage_getNexti32(&newMsg);
+      chunk_data = GMMessage_getNextStr2(&newMsg);
+
+#ifdef DEBUG
+      printf("docId: %lu, chunkId: %lu\n",
+	     docId, chunkId);
+#endif
+      /* Make sure that it is a bona fide chunk */
+      theConID = CS_getConnectId(socket_fd);
+      if (theConID == 0) {
+	fprintf(stderr, "Bogus connection id in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      theConn = CS_getConnection(theConID);
+      if (theConn == NULL) {
+	fprintf(stderr, "Couldn't get connection in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      theDoc = CS_getDocument(theConID, docId);
+      if (theDoc == NULL) {
+	fprintf(stderr, "Couldn't get document in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+
+#ifdef DEBUG
+      printf("Got chunk: connID %lu, docID %lu, chunkId %lu\n",
+	     theConID, docId, chunkId);
+#endif DEBUG
+
+      /** OK - looks good so far. Now pull info out of chunk_data **/
+      ptr = chunk_data.data;
+      sofar = (i16) 0;
+
+      /* grab the mimetype length */
+      if (chunk_data.length - sofar < 1) {
+	fprintf(stderr, "Bogus chunk received in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&mimlen, ptr, (size_t) 1);
+      ptr += (unsigned long) 1;
+      sofar += 1;
+
+#ifdef DEBUG
+      printf("mimetype length: %hu\n", mimlen);
+#endif
+
+      /* grab the mime data */
+      if (mimlen > MIME_MAXLEN) {
+	fprintf(stderr, "MIME data exceeds MIME_MAXLEN in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      if (chunk_data.length - sofar < mimlen) {
+	fprintf(stderr, "Bogus chunk received in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&(mime_type.mimetype[0]), ptr, (size_t) mimlen);
+      mime_type.mimetype[mimlen] = '\0';
+      ptr += (unsigned long) mimlen;
+      sofar += (i16) mimlen;
+
+#ifdef DEBUG
+      printf("Mime type: %s\n", mime_type.mimetype);
+#endif DEBUG
+
+      /* Grab the refinement length */
+      if (chunk_data.length - sofar < 1) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (2).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&reflen, ptr, (size_t) 1);
+      ptr += (unsigned long) 1;
+      sofar += 1;
+
+#ifdef DEBUG
+      printf("refinement length: %hu\n", reflen);
+#endif
+
+      /* Grab the refinement doclocator */
+      if (reflen > DL_MAXLEN) {
+	fprintf(stderr, "REFINE data exceeds DL_MAXLEN in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      if (chunk_data.length - sofar < reflen) {
+	fprintf(stderr, "Bogus chunk received in socketHandler(4).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&(refine_dl.doc_url[0]), ptr, (size_t) reflen);
+      refine_dl.doc_url[reflen] = '\0';
+      ptr += (unsigned long) reflen;
+      sofar += (i16) reflen;
+
+#ifdef DEBUG
+      printf("Refinement doclocator: %s\n", refine_dl.doc_url);
+#endif DEBUG
+
+      /* Grab the compresson type */
+      if (chunk_data.length - sofar < 2) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (5).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&comptype, ptr, (size_t) 2);
+      ptr += (unsigned long) 2;
+      sofar += 2;
+
+#ifdef DEBUG
+      printf("Compression type: %x\n", comptype);
+#endif DEBUG
+
+      /* Grab the metadata length */
+      if (chunk_data.length - sofar < 2) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (6).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&metadatalen, ptr, (size_t) 2);
+      metadatalen = ntohs(metadatalen);  /* convert from network to host order */
+      ptr += (unsigned long) 2;
+      sofar += 2;
+
+#ifdef DEBUG
+      printf("Metadata length: 0x%X\n", metadatalen);
+#endif DEBUG
+
+      if (chunk_data.length - sofar < metadatalen) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (7).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      metadata_obj = (BlobPtr) malloc(metadatalen*sizeof(unsigned char));
+      if (metadata_obj == NULL) {
+	fprintf(stderr, "Out of memory in socketHandler.\n");
+	exit(-1);
+      }
+      memcpy(metadata_obj, ptr, (size_t) metadatalen);
+      ptr += (unsigned long) metadatalen;
+      sofar += (i16) metadatalen;
+
+      /* Grab the uncompressed length */
+      if (chunk_data.length - sofar < 2) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (6).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      memcpy(&uncomplen, ptr, (size_t) 2);
+      uncomplen = ntohs(uncomplen);  /* convert from network to host order */
+      ptr += (unsigned long) 2;
+      sofar += 2;
+
+#ifdef DEBUG
+      printf("Uncompressed length: 0x%X\n", uncomplen);
+#endif DEBUG
+
+      /***** THIS IS WHERE DECOMPRESSION WOULD BE DONE *****/
+      if (chunk_data.length - sofar < uncomplen) {
+	fprintf(stderr, "Bogus chunk received in socketHandler (7).\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;
+      }
+      chunk_obj = (BlobPtr) malloc(uncomplen*sizeof(unsigned char));
+      if (chunk_obj == NULL) {
+	fprintf(stderr, "Out of memory in socketHandler.\n");
+	exit(-1);
+      }
+      memcpy(chunk_obj, ptr, (size_t) uncomplen);
+      
+#ifdef DEBUG
+      printf("Adding chunk to glomop layer CS.\n");
+#endif
+
+      /* Now add the chunk */
+      if (CS_addChunk(theConID, docId, chunkId, refine_dl,
+		      mime_type, 
+		      metadata_obj,
+		      metadatalen,
+		      chunk_obj, (long int) uncomplen) != 0) {
+	fprintf(stderr, "addChunk failed in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	free(chunk_obj);
+	return NULL;	
+      }
+
+      /* Retrieve it and call the handler if necessary */
+      theChunk = CS_getChunk(theConID, docId, chunkId);
+      if (theChunk == NULL) {
+	fprintf(stderr, "getChunk failed in socketHandler.\n");
+	GMStr2_destroy(chunk_data);
+	return NULL;		
+      }
+      theDoc->numChunks++;
+      GMStr2_destroy(chunk_data);
+
+      return theChunk;
+}
+
+@
+
+
+1.13
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d2 8
+d16 1
+a16 1
+ * $Id: glomopTk_pub.c,v 1.12 1996/07/25 17:31:34 gribble Exp $
+a17 54
+ * $Log: glomopTk_pub.c,v $
+ * Revision 1.12  1996/07/25 17:31:34  gribble
+ * Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+ * function to glomopTk_pub.{c|h}.
+ *
+ * Revision 1.11  1996/06/14 21:54:01  gribble
+ * Tweaked to work on BSD - I made mistakes with htonl and ntohl...
+ *
+ * Revision 1.10  1996/06/14 21:10:24  gribble
+ * Whoohoo!  Created image browser application, added unauthenticated
+ * connection, TOC parsing.
+ *
+ * Revision 1.9  1996/06/11 02:18:47  gribble
+ * Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+ * and bugfixes to get it working correctly.
+ *
+ * Revision 1.8  1996/06/07 05:08:37  gribble
+ * Threw in "extra" field into document structure to store callback
+ * command name for Tcl (yes, a hack), and added a BlobPtr length field
+ * to keep track of how big chunks are.  Built straw-man GetImageChunk
+ * and GetChunkType procedures and Tcl commands to actually retrieve
+ * chunks.  Built Tcl callback functionality (I think).
+ *
+ * Revision 1.7  1996/06/07 01:55:02  gribble
+ * Fixed some syntax bugs
+ *
+ * Revision 1.6  1996/06/07 00:25:33  gribble
+ * Drastically simplified the GloMop API for a first cut, and implemented
+ * it.  Debugging has not yet taken place - waiting for equivalent
+ * functionality in the proxy.
+ *
+ * Revision 1.5  1996/06/04 02:57:16  gribble
+ * Threw some #ifdef DEBUG's in there, and fixed up the gm_connectproxy
+ * routine a bit, as well as the gm_disconnectproxy routine.
+ *
+ * Revision 1.4  1996/06/01 00:04:35  gribble
+ * Fixed up so that the gm_connectproxy command successfully uses the
+ * Charon authentication module.
+ *
+ * Revision 1.3  1996/05/31 17:23:21  gribble
+ * Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+ *
+ * Revision 1.2  1996/05/24 21:30:52  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+ * Revision 1.1  1996/02/22 00:45:57  gribble
+ * Skeleton core structure complete.  Next stage: implementation of core
+ * routines.
+ *
+ *
+ *
+d31 1
+a31 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.12 1996/07/25 17:31:34 gribble Exp $";
+d396 1
+a396 1
+					    tocChunk.num_descriptors + 1);
+d654 78
+d988 4
+d1021 1
+a1021 1
+      i16              comptype, uncomplen, sofar;
+d1030 1
+a1030 1
+      BlobPtr          chunk_obj;
+d1155 29
+d1218 4
+a1221 1
+		      mime_type, chunk_obj, (long int) uncomplen) != 0) {
+@
+
+
+1.12
+log
+@Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+function to glomopTk_pub.{c|h}.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.11 1996/06/14 21:54:01 gribble Exp $
+d11 4
+d77 1
+a77 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.11 1996/06/14 21:54:01 gribble Exp $";
+d79 1
+d82 2
+d87 2
+a88 1
+			      char *realm, unsigned short tgt_lifetime)
+d127 1
+a127 1
+		       session_key) != 0) {
+d132 3
+a134 2
+  /* Create a handler procedure to be called when socket activity
+     occurs */
+d136 1
+a136 1
+  printf("Calling Tk_CreateFileHandler on socket %d\n", proxySocket);
+d138 4
+a141 2
+  Tk_CreateFileHandler(proxySocket, TK_READABLE | TK_EXCEPTION, 
+		       socketHandler, (ClientData) proxySocket);
+d148 2
+a149 1
+				     char *username)
+d228 1
+a228 1
+		       session_key) != 0) {
+d233 3
+a235 2
+  /* Create a handler procedure to be called when socket activity
+     occurs */
+d237 1
+a237 1
+  printf("Calling Tk_CreateFileHandler on socket %d\n", proxySocket);
+d239 4
+a242 2
+  Tk_CreateFileHandler(proxySocket, TK_READABLE | TK_EXCEPTION, 
+		       socketHandler, (ClientData) proxySocket);
+d264 4
+a267 2
+  /* Get rid of the file handler for this socket connection */
+  Tk_DeleteFileHandler(theC->proxy_socket);
+a285 1
+  static GM_DocId theID = 0L;
+d296 6
+d357 110
+d887 14
+d902 81
+a982 1
+      /* A chunk was received.  Handle it here */
+a1011 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1013 1
+a1013 1
+	return;
+a1017 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1019 1
+a1019 1
+	return;
+a1023 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1025 1
+a1025 1
+	return;
+a1039 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1041 1
+a1041 1
+	return;
+a1053 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1055 1
+a1055 1
+	return;
+a1058 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1060 1
+a1060 1
+	return;
+a1073 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1075 1
+a1075 1
+	return;
+a1087 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1089 1
+a1089 1
+	return;
+a1092 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1094 1
+a1094 1
+	return;
+a1107 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1109 1
+a1109 1
+	return;
+a1121 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1123 1
+a1123 1
+	return;
+a1136 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1138 1
+a1138 1
+	return;
+d1146 1
+a1146 1
+
+a1154 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1157 1
+a1157 1
+	return;	
+a1163 2
+	GMMessage_destroy(newMsg);
+	GMStr1_destroy(opcode);
+d1165 1
+a1165 1
+	return;		
+a1167 13
+#ifdef DEBUG
+      printf("number of chunks received so far: %u\n", theDoc->numChunks);
+#endif DEBUG
+
+      if (theDoc->callbackThreshold <= theDoc->numChunks) {
+	theDoc->callbackThreshold = 0;  /* first hump done */
+#ifdef DEBUG
+	printf("about to call callback\n");
+#endif DEBUG
+	theDoc->callback_ptr(theConID, *theChunk);
+      }
+
+      /* All done - clean up */
+a1168 7
+    }
+  } else if ((opcode.length == (byte) 3) || (opcode.length == (byte) 4)) {
+    if (memcmp(opcode.data, OP_GET_CHUNK, (size_t) 3) == 0) {
+      fprintf(stderr, "OP_GET_CHUNK received!?!?!?\n");
+    } else if (memcmp(opcode.data, OP_FAIL, (size_t) 4) == 0) {
+      GMStr2 errMsg;
+      int    i;
+d1170 2
+a1171 10
+      fprintf(stderr, "OP_FAIL received.\n");
+      errMsg = GMMessage_getNextStr2(&newMsg);
+      if (errMsg.length != 0) {
+
+	/* print out failure message */
+	fprintf(stderr, "        msg: ");
+	for (i=0; i<errMsg.length; i++) {
+	  fprintf(stderr, "%c", *(errMsg.data + (long int) i));
+	}
+	fprintf(stderr, "\n");
+a1172 11
+      }
+      GMStr2_destroy(errMsg);
+    }
+  } else {
+    fprintf(stderr, ">4 length opcode in socketHandler.\n");
+  }
+
+  GMMessage_destroy(newMsg);
+  GMStr1_destroy(opcode);
+  return;
+}
+@
+
+
+1.11
+log
+@Tweaked to work on BSD - I made mistakes with htonl and ntohl...
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.10 1996/06/14 21:10:24 gribble Exp $
+d11 3
+d73 1
+a73 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.10 1996/06/14 21:10:24 gribble Exp $";
+d567 83
+@
+
+
+1.10
+log
+@Whoohoo!  Created image browser application, added unauthenticated
+connection, TOC parsing.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.9 1996/06/11 02:18:47 gribble Exp $
+d11 4
+d70 1
+a70 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.9 1996/06/11 02:18:47 gribble Exp $";
+d341 5
+d401 5
+d460 5
+d688 2
+a689 2
+      docId = ntohl(GMMessage_getNexti32(&newMsg));
+      chunkId = ntohl(GMMessage_getNexti32(&newMsg));
+d692 4
+@
+
+
+1.9
+log
+@Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+and bugfixes to get it working correctly.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.8 1996/06/07 05:08:37 gribble Exp $
+d11 4
+d66 2
+a67 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.8 1996/06/07 05:08:37 gribble Exp $";
+a80 1
+  static GM_ConnectId curCon = 1;
+d129 97
+d462 84
+d582 4
+d617 1
+a617 1
+      GMStr2 errMsg;
+d623 1
+a623 1
+      errMsg = GMMessage_getNextStr2(&newMsg);
+d634 1
+a634 1
+      GMStr2_destroy(errMsg);
+@
+
+
+1.8
+log
+@Threw in "extra" field into document structure to store callback
+command name for Tcl (yes, a hack), and added a BlobPtr length field
+to keep track of how big chunks are.  Built straw-man GetImageChunk
+and GetChunkType procedures and Tcl commands to actually retrieve
+chunks.  Built Tcl callback functionality (I think).
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.7 1996/06/07 01:55:02 gribble Exp $
+d11 7
+d62 1
+a62 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.7 1996/06/07 01:55:02 gribble Exp $";
+d387 4
+d404 5
+d431 1
+d433 1
+d447 1
+d449 1
+d465 2
+a466 1
+      i16              mimlen, reflen, comptype, uncomplen, sofar;
+d476 4
+a479 1
+      
+d520 1
+a520 1
+      if (chunk_data.length - sofar < 2) {
+d527 7
+a533 4
+      memcpy(&mimlen, ptr, (size_t) 2);
+      mimlen = ntohs(mimlen);  /* convert from network to host order */
+      ptr += (unsigned long) 2;
+      sofar += 2;
+d560 1
+a560 1
+      if (chunk_data.length - sofar < 2) {
+d567 7
+a573 4
+      memcpy(&reflen, ptr, (size_t) 2);
+      reflen = ntohs(reflen);  /* convert from network to host order */
+      ptr += (unsigned long) 2;
+      sofar += 2;
+d629 1
+a629 1
+      printf("Uncompressed length: %x\n", uncomplen);
+d646 4
+@
+
+
+1.7
+log
+@Fixed some syntax bugs
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.6 1996/06/07 00:25:33 gribble Exp $
+d11 3
+d55 1
+a55 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.6 1996/06/07 00:25:33 gribble Exp $";
+d151 2
+a152 1
+		    unsigned maxChunks)
+d212 1
+a212 1
+		     maxChunks) != 0) {
+d331 2
+a332 1
+				     unsigned newThreshold)
+d346 5
+a350 1
+  
+d619 1
+a619 1
+		      mime_type, chunk_obj) != 0) {
+@
+
+
+1.6
+log
+@Drastically simplified the GloMop API for a first cut, and implemented
+it.  Debugging has not yet taken place - waiting for equivalent
+functionality in the proxy.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.5 1996/06/04 02:57:16 gribble Exp $
+d11 5
+d52 1
+a52 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.5 1996/06/04 02:57:16 gribble Exp $";
+d367 1
+d380 1
+@
+
+
+1.5
+log
+@Threw some #ifdef DEBUG's in there, and fixed up the gm_connectproxy
+routine a bit, as well as the gm_disconnectproxy routine.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.4 1996/06/01 00:04:35 gribble Exp $
+d11 4
+d47 1
+a47 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.4 1996/06/01 00:04:35 gribble Exp $";
+a138 5
+GM_Error GM_RegisterTypes(GM_ConnectId connId, GM_TypeList *t)
+{
+   return 0;
+}
+
+d140 1
+a140 3
+		    GM_DocLocator *loc,
+		    GM_TypeList *types,
+		    char *annotation,
+d145 64
+a208 1
+   return 0;
+d211 3
+a213 3
+GM_DocChunk  GM_GetChunk(GM_ConnectId connId,
+			 GM_DocId doc_id,
+			 GM_ChunkId chunk_id)
+d215 12
+a226 1
+   GM_DocChunk retChunk;
+d228 35
+a262 1
+   return retChunk;
+d268 48
+a315 1
+   return 0;
+d322 1
+a322 2
+				     unsigned newThreshold,
+				     BlobPtr buffer)
+d324 14
+a337 1
+   return (GM_DocCallbackProcPtr) NULL;
+a339 2
+
+
+d345 316
+a660 1
+  int socket_fd = (int) clientData;
+d662 2
+@
+
+
+1.4
+log
+@Fixed up so that the gm_connectproxy command successfully uses the
+Charon authentication module.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.3 1996/05/31 17:23:21 gribble Exp $
+d11 4
+d43 1
+a43 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.3 1996/05/31 17:23:21 gribble Exp $";
+d68 3
+d76 3
+d85 3
+d96 3
+d115 3
+a117 1
+  printf("About to CS_getConnection on id %ld\n", connId);
+a118 1
+  printf("Did CS_getConnection.\n");
+d126 3
+a128 1
+  printf("About to removeConnection\n");
+a131 1
+  printf("Did removeConnection.\n");
+d178 1
+a178 1
+/** This local procedure is called by TK whenever a socket even
+@
+
+
+1.3
+log
+@Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.2 1996/05/24 21:30:52 gribble Exp $
+d11 3
+d39 1
+a39 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.2 1996/05/24 21:30:52 gribble Exp $";
+d43 3
+a45 1
+GM_ConnectId  GM_ConnectProxy(char *proxyAddr)
+d48 3
+a50 3
+   * This function must parse out the hostname and port number from the
+   * proxy address, open a socket to it, and if successful add a new
+   * entry to the CS connection hash table.
+a51 2
+  char  *hostName, *portNum;
+  char   proxyAddrCpy[256];
+d54 1
+d57 1
+a57 3
+  strncpy(proxyAddrCpy, proxyAddr, 255);
+  hostName = strtok(proxyAddrCpy, " ");
+  if (hostName == NULL)
+d60 1
+a60 2
+  portNum = strtok(NULL, " ");
+  if (portNum == NULL)
+d64 1
+a64 1
+  proxySocket = sconnect(hostName, portNum);
+d67 6
+d75 2
+a76 1
+  if (CS_addConnection(curCon, proxySocket, proxyAddr) != 0) {
+@
+
+
+1.2
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.c,v 1.1 1996/02/22 00:45:57 gribble Exp $
+d11 6
+d36 1
+a36 1
+static char gm_rcsid[] = "$Id: glomopTk_pub.c,v 1.1 1996/02/22 00:45:57 gribble Exp $";
+d91 1
+a91 1
+  printf("About to CS_getConnection on id %d\n", connId);
+@
+
+
+1.1
+log
+@Skeleton core structure complete.  Next stage: implementation of core
+routines.
+@
+text
+@d8 1
+a8 1
+ * $Id$
+d10 5
+a14 1
+ * $Log$
+d23 3
+d28 1
+d30 3
+a32 1
+static char gm_rcsid[] = "$Id$";
+d36 38
+a73 1
+   return 0;
+d78 23
+a100 1
+   return 0;
+d142 12
+@

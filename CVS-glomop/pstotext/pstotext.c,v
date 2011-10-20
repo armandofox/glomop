@@ -1,0 +1,176 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     96.11.19.01.17.22;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.11.19.01.17.22;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* Copyright (C) 1995, Digital Equipment Corporation.         */
+/* All rights reserved.                                       */
+/* See the file COPYRIGHT for a full description.             */
+/* Last modified on Tue Oct 10 10:39:05 PDT 1995 by brewer    */
+/*      modified on Fri May 26 09:13:55 PDT 1995 by mcjones   */
+
+#define BOOLEAN int
+#define TRUE 1
+#define FALSE 0
+
+#include <sys/param.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include "bundle.h"
+#include "ocr.h"
+#include "rot270.h"
+#include "rot90.h"
+#include "ocr_ps.h"
+
+extern BUNDLE ocr, rot270, rot90;
+extern int strcasecmp(const char*, const char*);
+
+static char *cmd; /* = argv[0] */
+static int raw=0;  /* output raw data from ghostscript */
+
+static enum {
+  portrait,
+  landscape,
+  landscapeOther} orientation = portrait;
+
+typedef enum {
+  Ascii, Html, Rich
+} Format;
+static Format format = Ascii;
+
+static int explicitFiles = 0; /* count of explicit file arguments */
+
+void usage(void) {
+  fprintf(stderr, "pstotext of May 26, 1995\n");
+  fprintf(stderr, "Copyright (C) 1995, Digital Equipment Corporation.\n");
+  fprintf(stderr, "Comments to {mcjones,birrell}@@pa.dec.com.\n\n");
+  fprintf(stderr, "Usage: %s [option|file]...\n", cmd);
+  fprintf(stderr, "Options:\n");
+  fprintf(stderr, "  -landscape       rotate 270 degrees\n");
+  fprintf(stderr, "  -landscapeOther  rotate 90 degrees\n");
+  fprintf(stderr, "  -portrait        don't rotate (default)\n");
+  fprintf(stderr, "  -html            output HTML (not ascii)\n");
+  fprintf(stderr, "  -rt              output rich text (not ascii)\n");
+  fprintf(stderr, "  -                read from stdin (default if no files specified)\n");
+}
+
+#define DEVICE ""
+#define OCRPATH "/tmp/,pstotext-ocr.ps"
+#define ROT270PATH "/tmp/,pstotext-rot270.ps"
+#define ROT90PATH "/tmp/,pstotext-rot90.ps"
+
+static char *make_temp(b) BUNDLE b; {
+  /* Return pathname of temporary file containing bundle "b".  Caller
+     should unlink file (and, technically, free pathname). */
+  FILE *f;
+  char *path = tempnam("/tmp", ",ps2t");
+  f = fopen(path, "w");
+  if (f==NULL) {perror(cmd); exit(1);}
+  putbundle(b, f);
+  fclose(f);
+  return path;
+}
+
+static char *ocr_path = NULL, *rotate_path = NULL;
+static FILE *gs = NULL;
+
+static void cleanup() {
+  extern int unlink(const char*);
+  if (gs!=NULL) pclose(gs);
+  if (rotate_path!=NULL & strcmp(rotate_path, "")!=0) unlink(rotate_path);
+  if (ocr_path!=NULL) unlink(ocr_path);
+}
+
+static void do_it(path) char *path; {
+  /* If "path" is NULL, then "stdin" should be processed. */
+  char gs_cmd[2*MAXPATHLEN];
+  char input[MAXPATHLEN];
+
+  signal(SIGINT, cleanup);
+  signal(SIGHUP, cleanup);
+
+  ocr_path = make_temp(ocr);
+
+  switch (orientation) {
+  case portrait: rotate_path = ""; break;
+  case landscape: rotate_path = make_temp(rot270); break;
+  case landscapeOther: rotate_path = make_temp(rot90); break;
+  }
+
+  if (path==NULL) strcpy(input, "-");
+  else {strcpy(input, "-- "); strcat(input, path);}
+
+  sprintf(gs_cmd, "gs -r72 -sDEVICE=pbmraw -sOutputFile=/dev/null -q -dNOPAUSE %s %s %s",
+    ocr_path,
+    rotate_path,
+    input
+    );
+  gs = popen(gs_cmd, "r");
+  if(gs==0) {perror(cmd); exit(1);}
+  
+  if (raw) {
+    char tmp[4096];
+    while (fgets(tmp, 4096, gs) != NULL) fputs(tmp, stderr);
+    exit(0);
+  }
+
+  Filter(gs, format);
+  cleanup();
+}
+
+int main(argc, argv) int argc; char *argv[]; {
+  int i;
+  char *arg;
+  cmd = argv[0];
+  for (i = 1; i<argc; i++) {
+    arg = argv[i];
+    if (strcasecmp(arg, "-landscape")==0) orientation = landscape;
+    else if (strcasecmp(arg, "-landscapeOther")==0) orientation = landscapeOther;
+    else if (strcasecmp(arg, "-portrait")==0) orientation = portrait;
+    else if (strcasecmp(arg, "-html")==0) format = Html;
+    else if (strcasecmp(arg, "-rt")==0) format = Rich;
+    /* ... */
+    else if (strcmp(arg, "-")==0) do_it(NULL);
+    else if (arg[0] == '-') {usage(); exit(1);}
+    else /* file */ {
+      explicitFiles++;
+      do_it(arg);
+    }
+  }
+  if(explicitFiles==0) do_it(NULL);
+  return 0;
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

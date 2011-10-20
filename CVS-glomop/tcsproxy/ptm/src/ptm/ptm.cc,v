@@ -1,0 +1,1904 @@
+head	1.24;
+access;
+symbols
+	Yatin-final:1.24
+	Yatin:1.24.0.2
+	pre-yatin-merge:1.24
+	transend-beta2:1.22
+	fox-dev:1.22
+	ptm-ng:1.18
+	transend-beta-latest:1.18
+	Aggregators:1.18
+	NoAggregators:1.18
+	iang:1.17.0.4
+	transend-beta:1.17.0.2
+	SOSP:1.16
+	stable_ptm:1.12
+	merged_preintegrate:1.8
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.24
+date	97.10.23.21.32.57;	author tkimball;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.09.18.22.45.28;	author yatin;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.07.15.18.38.33;	author yatin;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.07.15.02.43.17;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.06.28.23.34.38;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.06.14.05.05.51;	author yatin;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.05.11.10.24.38;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.04.18.19.26.47;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.07.20.36.56;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.03.06.02.49.24;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.26.04.15.12;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.17.03.01.27;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.07.21.54.58;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.29.22.15.11;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.08.03.39.25;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.04.09.55.49;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.15.13.46.41;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.05.01.27.29;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.08.12.29;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.22.08.21.43;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.00.42.33;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.28.00;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.43.01;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.31;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.31;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@Updating PTM with changes for the options reload every N ms
+Added field to options file of 'ptm.optionsrefresh' where the
+value of the field is how often to check the options file for modifications,
+in ms
+@
+text
+@#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <signal.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include "defines.h"
+#include "log.h"
+#include "ptm.h"
+#include "distlaunch.h"
+#include "utils.h"
+
+
+PTM *PTM::instance=NULL;
+static OptionDatabase options;
+
+gm_Bool
+PTM::CreateInstance(OptionDatabase *options)
+{
+  char cwd[1024];
+  if (getcwd(cwd, sizeof(cwd))==NULL) strcpy(cwd, "<error>");
+  instance = new PTM(options);
+  if (instance==NULL) Return(gm_False, errOutOfMemory);
+  if (Error::getStatus()!=success) return gm_False;
+
+  signal(SIGINT, CtlCPressed);
+  signal(SIGHUP,OptionsUpdate_static);
+  return gm_True;
+}
+
+
+PTM::PTM(OptionDatabase *options)
+  : evs(NULL), server(NULL), bus(NULL), beaconTimer(NULL),
+    distillerDB(NULL), distillerLauncher(NULL),
+    monitorClient(NULL)
+{
+  if (ExpandOptions(options)==gm_False) return;
+
+  timeval now;
+  gettimeofday(&now, NULL);
+  srand48(now.tv_usec + getpid());
+  myRandomID = (UINT32) lrand48();
+
+  // create the event system object
+  NEW(evs, RequestReplyEventSystem);
+
+  // set up the PTM server socket
+  NEW(server, PrivateConnectionServer);
+  if (evs->AddCommunicationObject(server)==gm_False) return;
+
+  if (CommunicationObject::GetHostIPAddress(myAddress.ipAddress)==gm_False)
+    return;
+  myAddress.port = server->getLocalPort();
+
+  // set up the multicast channel
+  safe_strncpy(myMulticast.ipAddress, options->Find(Opt_PTMMulticast_IP), 
+	       MAXIP);
+  myMulticast.port = (Port) options->FindUINT32(Opt_PTMMulticast_port);
+  int ttl = (int) options->FindUINT32(Opt_PTMMulticast_TTL);
+
+  NEW(bus, SharedBus(myMulticast, ttl));
+  if (evs->AddCommunicationObject(bus->getListener())==gm_False) return;
+
+  // set up a timer for perioding beacons
+  UINT32 beaconingPeriod_ms = options->FindUINT32(Opt_PTMBeacon_ms);
+  if (beaconingPeriod_ms==0) beaconingPeriod_ms = DefaultBeaconingPeriod_ms;
+  NEW(beaconTimer,       BeaconTimer(evs, beaconingPeriod_ms));
+
+  // set up a timer for checking to see if the options file has been
+  // modified.
+  UINT32 optionRefresh_ms = options->FindUINT32(Opt_PTMOptionsReRead_ms);
+  if (optionRefresh_ms==0) optionRefresh_ms = 10000; // default to 10 secs
+  
+  NEW(optionsTimer,      OptionsFileTimer(evs, optionRefresh_ms,options));
+
+  // create the monitor object
+  RemoteID log;
+  safe_strncpy(log.ipAddress, options->Find(Opt_MonitorMulticast_IP), MAXIP);
+  log.port = (Port) options->FindUINT32(Opt_MonitorMulticast_port);
+  int logTTL = (int) options->FindUINT32(Opt_MonitorMulticast_TTL);
+  
+  if (strcmp(log.ipAddress, "")!=0) {
+    char unitID[256];
+    sprintf(unitID, "PTM (Port %d)", myAddress.port);
+    monitorClient = new MonitorClient(unitID, log.ipAddress,log.port,
+				      logTTL);
+    if (monitorClient==NULL) VoidReturn(errOutOfMemory);
+    if (Error::getStatus()!=success) return;
+  
+    monitorClient->GaspOnStdSignals();
+    SetRemoteLogging(monitorClient);
+  }
+  else {
+    SetStderrLogging("PTM: ");
+  }
+
+  // create a database for storing all active distiller objects
+  NEW(distillerDB,       DistillerDatabase);
+
+  // create the distiller launcher object
+  NEW(distillerLauncher, DistillerLauncher(options));
+
+  gm_Log("Started up the PTM with following parameters:\n"
+	 << "    PTM Location = " << getAddress() << '\n'
+	 << "    Multicast address = " << getMulticast() << '/' << ttl << '\n'
+	 << "    Monitor address = " << log << '/' << logTTL << '\n'
+	 << "    Beaconing interval= " << beaconingPeriod_ms << " ms\n");
+}
+
+
+PTM::~PTM()
+{
+  if (server!=NULL) {
+    evs->RemoveCommunicationObject(server);
+    delete server;
+    server = NULL;
+  }
+
+  if (bus!=NULL) {
+    evs->RemoveCommunicationObject(bus->getListener());
+    delete bus;
+    bus = NULL;
+  }
+
+  if (bus!=NULL) {
+    delete bus;
+    bus = NULL;
+  }
+
+  DELETE(beaconTimer);
+  DELETE(distillerDB);
+  DELETE(distillerLauncher);
+  DELETE(evs);
+  DELETE(monitorClient);
+}
+
+
+gm_Bool
+PTM::OptionsUpdate(OptionDatabase *options)
+{
+  if (distillerLauncher->OptionsUpdate(options)==gm_False) return gm_False;
+  ListIndex idx;
+  PrivateConnection *socket;
+  gm_Packet packet(pktFlushNCache, 0, NULL);
+  idx = listOfConnections.BeginTraversal();
+  for (; listOfConnections.IsDone(idx)==gm_False;
+       idx = listOfConnections.getNext(idx)) {
+    socket = listOfConnections.getData(idx);
+    if (socket->IsDistillerConnection()==gm_False) {
+      gm_Log("Sending flush packet to frontend\n");
+      if (socket->Write(&packet)==gm_False) {
+	// ignore the error
+	Error::SetStatus(success);
+      }
+    }
+  }
+  listOfConnections.EndTraversal();
+  return gm_True;
+}
+
+
+void
+PTM::OptionsUpdate_static(int /*sig*/)
+{
+  extern OptionDatabase options;
+  char filename[MAXPATH];
+  strncpy(filename, options.Find(Opt_OptionsFile), MAXPATH);
+  gm_Log("Updating options database: " << filename << "\n");
+  options.Update(filename);
+  PTM::getInstance()->OptionsUpdate(&options);
+  signal(SIGHUP, OptionsUpdate_static);
+}
+
+
+gm_Bool
+PTM::Run()
+{
+  return evs->Run();
+}
+
+
+void
+PTM::CtlCPressed(int /*sig*/)
+{
+  Abort("Ctl-C pressed");
+}
+
+
+void
+PTM::Abort(char *string)
+{
+  gm_Log("Aborting program: " << string << "\n\n");
+  Error::Print();
+  //if (instance!=NULL) delete instance; //this doesn't work, so it's commented
+  if (getInstance()!=NULL) {
+    MonitorClient *monitorClient = getInstance()->getMonitorClient();
+    if (monitorClient!=NULL) monitorClient->Gasp(0);
+  }
+  exit(-1);
+}
+
+
+gm_Bool
+PTM::Register(DistillerRecord *distillerRecord)
+{
+  if (distillerDB->Add(distillerRecord)==gm_False) {
+    if (Error::getStatus()==errDuplicateIndexEntry) {
+      gm_Log("Cannot register distiller at " << distillerRecord->rid 
+	     << ". Distiller already exists.\n");
+    }
+    return gm_False;
+  }
+  distillerLauncher->getRExec()->UpLevel(distillerRecord->rid.ipAddress);
+  gm_Log("Registering distiller for " << distillerRecord->type 
+	 << " at " << distillerRecord->rid << '\n');
+  return gm_True;
+}
+
+
+void
+PTM::Deregister(DistillerRecord *distillerRecord)
+{
+  if (distillerRecord==NULL) return;
+  gm_Log("De-registering distiller for " << distillerRecord->type 
+	 << " at " << distillerRecord->rid << '\n');
+  distillerLauncher->getRExec()->DownLevel(distillerRecord->rid.ipAddress);
+  distillerDB->Remove(distillerRecord);
+}
+
+
+// This function does not block until it finds a distiller
+// It simply arranges for the PTM to eventually respond to the proxy
+gm_Bool
+PTM::EvAskForDistiller(DistillerType *distillerType,
+		       PrivateConnection *replyObject,
+		       UINT32 replyID)
+{
+  List<DatabaseRecord> list;
+
+  if (distillerDB->FindMatchingDistillers(distillerType, &list)==gm_False)
+    return gm_False;
+  if (list.IsEmpty()==gm_True) {
+    DistillerRecord *dist = distillerDB->WakeSleepingDistiller(distillerType);
+    if (dist==NULL) {
+      return distillerLauncher->TryToLaunch(distillerType, replyObject, 
+					    replyID);
+    }
+    else {
+      // we found a sleeping distiller;
+      list.InsertAtHead(dist);
+    }
+  }
+
+  return replyObject->AskForDistillerReply(replyID, ptmOk, &list);
+}
+
+
+/*gm_Bool
+PTM::SendBeaconPacket(CommunicationObject *object, 
+		      UINT32 requestReplyID, //can be set to NoRequestReply
+		      LinkedList<DatabaseRecord> *list)
+{
+  OStream stream;
+  UINT32  distillersPos, numberOfDistillers=0;
+  ListIdx idx;
+
+  stream << myAddress << '|';
+  if (stream.IsGood()==gm_False) return gm_False;
+  distillersPos = stream.getLength() - 1; // length includes trailing '\0'
+
+  stream << Binary(gm_True) << (UINT32) 0 << Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  for (idx=list->Head(); list->IsDone(idx)==gm_False; idx = list->Next(idx)) {
+    stream << *((DistillerRecord*)list->Record(idx)) << '|';
+    if (stream.IsGood()==gm_False) return gm_False;
+    numberOfDistillers++;
+  }
+
+  char *data = stream.getData();
+  numberOfDistillers = htonl(numberOfDistillers);
+  memcpy(data + distillersPos, (char*) &numberOfDistillers, sizeof(UINT32));
+
+  gm_Packet packet(pktPTMBeacon, stream.getLength(), requestReplyID, data);
+  if (packet.Send(object)==gm_False) return gm_False;
+
+  gm_BoolErrorReturn(success);
+}*/
+
+
+
+void
+PTM::Beacon(PrivateConnection *privateConnection)
+{
+  List<DatabaseRecord> *list;
+  gm_Bool returnValue;
+
+  list = distillerDB->getAllRecords();
+  if (privateConnection==NULL) {
+    returnValue = bus->Beacon(myAddress, myRandomID, list);
+  }
+  else {
+    returnValue = privateConnection->Beacon(myAddress, myRandomID, list);
+  }
+
+  if (returnValue==gm_False) {
+    gm_Log("Error sending beaconing packet (error " << Error::getStatus()
+	   << " in " << Error::getFilename() << " at line " 
+	   << Error::getLineNo() << ")\n");
+    Error::SetStatus(success);
+  }
+}
+
+
+int
+PTM::CompareBeacon(RemoteID &otherRid, UINT32 otherRandomID)
+{
+  UINT32 myIP, otherIP;
+
+  if (myRandomID < otherRandomID) return -1;
+  if (myRandomID > otherRandomID) return +1;
+
+  if (myAddress.port < otherRid.port) return -1;
+  if (myAddress.port > otherRid.port) return +1;
+
+  myIP    = ntohl(inet_addr(myAddress.ipAddress));
+  otherIP = ntohl(inet_addr(otherRid .ipAddress));
+
+  if (myIP < otherIP) return -1;
+  if (myIP > otherIP) return +1;
+
+  return 0;
+}
+
+
+void
+PTM::Usage()
+{
+  gm_Log("Usage: ptm [options]\n\n"
+	 << "Options: -o <options-file>\n");
+  exit(-1);
+}
+
+
+gm_Bool
+PTM::ExpandOptions(OptionDatabase *optDB)
+{
+  const char *value;
+  char *slash1, *slash2;
+
+  if (optDB->Find(Opt_PTMExecutable)==NULL) {
+    if (optDB->Add(Opt_PTMExecutable, DefaultPTMExecutable)==gm_False) 
+      return gm_False;
+  }
+
+  value = optDB->Find(Opt_PTMMulticast);
+  if (value==NULL) {
+    optDB->Add(Opt_PTMMulticast_IP,   DefaultMulticastAddress);
+    optDB->Add(Opt_PTMMulticast_port, DefaultMulticastPort);
+    optDB->Add(Opt_PTMMulticast_TTL,  DefaultTTL);
+  }
+  else {
+    RemoteID multicast;
+    int ttl;
+
+    slash1 = strchr(value, '/');
+    if (slash1==NULL || slash1==value) Return(gm_False, errFormattingError);
+
+    if (slash1 >= value + MAXIP) Return(gm_False, errBufferOverflow);
+    strncpy(multicast.ipAddress, value, slash1-value);
+    multicast.ipAddress[slash1-value] = '\0';
+    
+    slash2 = strchr(slash1+1, '/');
+    if (slash2==NULL) {
+      multicast.port = atoi(slash1+1);
+      if (multicast.port==0) Return(gm_False, errFormattingError);
+      ttl = DefaultTTL;
+    }
+    else {
+      if (sscanf(slash1+1, "%d/%d", &multicast.port, &ttl)!=2) 
+	Return(gm_False, errFormattingError);
+      if (multicast.port==0 || ttl==0) Return(gm_False, errFormattingError);
+    }
+    optDB->Add(Opt_PTMMulticast_IP,   multicast.ipAddress);
+    optDB->Add(Opt_PTMMulticast_port, (UINT32) multicast.port);
+    optDB->Add(Opt_PTMMulticast_TTL,  (UINT32) ttl);
+  }
+
+  value = optDB->Find(Opt_MonitorMulticast);
+  if (value==NULL) {
+    optDB->Add(Opt_MonitorMulticast_IP,   DefaultMonitorAddress);
+    optDB->Add(Opt_MonitorMulticast_port, DefaultMonitorPort);
+    optDB->Add(Opt_MonitorMulticast_TTL,  DefaultTTL);
+  }
+  else if (*value=='\0') {
+    // we have explicitly mentioned that we don't want to use a monitor
+    // All log messages will be output to stderr
+    optDB->Add(Opt_MonitorMulticast_IP,   "");
+    optDB->Add(Opt_MonitorMulticast_port, (UINT32)-1);
+    optDB->Add(Opt_MonitorMulticast_TTL,  (UINT32)-1);
+  }
+  else {
+    RemoteID multicast;
+    int ttl;
+
+    slash1 = strchr(value, '/');
+    if (slash1==NULL || slash1==value) Return(gm_False, errFormattingError);
+
+    if (slash1 >= value + MAXIP) Return(gm_False, errBufferOverflow);
+    strncpy(multicast.ipAddress, value, slash1-value);
+    multicast.ipAddress[slash1-value] = '\0';
+    
+    slash2 = strchr(slash1+1, '/');
+    if (slash2==NULL) {
+      multicast.port = atoi(slash1+1);
+      if (multicast.port==0) Return(gm_False, errFormattingError);
+      ttl = DefaultTTL;
+    }
+    else {
+      if (sscanf(slash1+1, "%d/%d", &multicast.port, &ttl)!=2) 
+	Return(gm_False, errFormattingError);
+      if (multicast.port==0 || ttl==0) Return(gm_False, errFormattingError);
+    }
+    optDB->Add(Opt_MonitorMulticast_IP,   multicast.ipAddress);
+    optDB->Add(Opt_MonitorMulticast_port, (UINT32) multicast.port);
+    optDB->Add(Opt_MonitorMulticast_TTL,  (UINT32) ttl);
+  }
+
+  if (optDB->Find(Opt_DistillerDB)==NULL) {
+    if (optDB->Add(Opt_DistillerDB, DefaultDistillerDB)==gm_False) 
+      return gm_False;
+  }
+  if (optDB->Find(Opt_Rsh)==NULL) {
+    if (optDB->Add(Opt_Rsh, DefaultRsh)==gm_False)
+      return gm_False;
+  }
+  if (optDB->Find(Opt_RshArgs)==NULL) {
+    if (optDB->Add(Opt_RshArgs, DefaultRshArgs)==gm_False)
+      return gm_False;
+  }
+  if (optDB->Find(Opt_Hosts)==NULL) {
+    // default hosts is myself
+    char myself[256];
+    if (CommunicationObject::GetHostName(myself)==gm_False) return gm_False;
+    if (optDB->Add(Opt_Hosts, myself)==gm_False)
+      return gm_False;
+  }
+  if (optDB->Find(Opt_PTMBeacon_ms)==NULL) {
+    if (optDB->Add(Opt_PTMBeacon_ms, DefaultBeaconingPeriod_ms)==gm_False)
+      return gm_False;
+  }
+
+  return gm_True;
+}
+
+
+int 
+main(int argc, char **argv)
+{
+  char     optionsFile[MAXPATH]="";
+  char     *optionString = "o:";
+  int      optCh;
+
+  optind = 1;
+  while ( (optCh = getopt(argc, argv, optionString))!=-1) {
+    switch (optCh) {
+    case 'o':
+      strcpy(optionsFile, optarg);
+      break;
+
+    case ':':
+    case '?':
+    default:
+      PTM::Usage();
+    }
+  }
+
+
+
+  if (*optionsFile!='\0') {
+    if (options.Create(optionsFile)==gm_False)
+      PTM::Abort("Error occurred while reading options file");
+  }
+
+  Debug_::getInstance()->Initialize("et", "PTM: ");
+  if (PTM::CreateInstance(&options)==gm_False) {
+    PTM::Abort("Could not start up the PTM");
+  }
+
+  /*if (InstallAllOptions(options)==gm_False) 
+    PTM::Abort("Error occurred while installing default options");
+
+
+  const char *mcastAddr;
+  if ((mcastAddr=options.Find(Opt_PTMMulticast_IP))!=NULL) {
+    if (strlen(mcastAddr) < MAXIP) strcpy(multicast.ipAddress,mcastAddr);
+    else {
+      strncpy(multicast.ipAddress, mcastAddr, MAXIP-1);
+      multicast.ipAddress[MAXIP-1] = '\0';
+    }
+    multicast.port = (Port) options.FindUINT32(Opt_PTMMulticast_port);
+    ttl = (int) options.FindUINT32(Opt_PTMMulticast_TTL);
+  }
+
+  mcastAddr=options.Find(Opt_MonitorMulticast_IP);
+  if (mcastAddr!=NULL && *mcastAddr!='\0') {
+    if (strlen(mcastAddr) < MAXIP) strcpy(log.ipAddress, mcastAddr);
+    else {
+      strncpy(log.ipAddress, mcastAddr, MAXIP-1);
+      log.ipAddress[MAXIP-1] = '\0';
+    }
+    log.port = (Port) options.FindUINT32(Opt_MonitorMulticast_port);
+    logTTL = (int) options.FindUINT32(Opt_MonitorMulticast_TTL);
+  }
+  
+
+  if ((launchDBPath = options.Find(Opt_DistillerDB))==NULL) {
+    // this should not happen
+    PTM::Abort("Could not read option from the options database");    
+  }
+
+  rsh     = options.Find(Opt_Rsh);
+  rshArgs = options.Find(Opt_RshArgs);
+  rhosts  = options.Find(Opt_Hosts);
+
+  beaconingPeriod_ms = options.FindUINT32(Opt_PTMBeacon_ms);
+  optionsReRead = options.FindUINT32(Opt_PTMOptionsReRead_ms);
+  if (beaconingPeriod_ms==0) beaconingPeriod_ms = DefaultBeaconingPeriod_ms;
+
+
+  Debug_::getInstance()->Initialize("et", "PTM: ");
+  if (PTM::CreateInstance(multicast, ttl, launchDBPath, rsh, rshArgs, rhosts,
+			  log, logTTL, beaconingPeriod_ms)==gm_False) {
+    PTM::Abort("Could not start up the PTM");
+  }*/
+
+  if (PTM::getInstance()->Run()==gm_False)
+    PTM::Abort("Error occurred while running the PTM");
+
+  gm_Log("Ending the PTM normally\n");
+  PTM::getInstance()->getMonitorClient()->Gasp(0);
+  return 0;
+}
+@
+
+
+1.23
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d69 7
+d527 1
+@
+
+
+1.22
+log
+@Modified DistillerType::CanSatisfy to accept wildcards between slashes
+
+Changed the thread-unsafe gethostbyname/getprotobyname to the corresponding
+thread safe version
+@
+text
+@d137 1
+a137 1
+  Packet packet(pktFlushNCache, 0, NULL);
+d277 1
+a277 1
+  Packet packet(pktPTMBeacon, stream.getLength(), requestReplyID, data);
+@
+
+
+1.21
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d303 1
+@
+
+
+1.20
+log
+@made a modification to options.cc so that if there are multiple lines in
+the options file with the same key, all the values get concatenated
+@
+text
+@d27 1
+a27 1
+  signal(SIGUSR1,OptionsUpdate_static);
+d164 1
+a164 1
+  signal(SIGUSR1, OptionsUpdate_static);
+@
+
+
+1.19
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d188 4
+a191 2
+  MonitorClient *monitorClient = getInstance()->getMonitorClient();
+  if (monitorClient!=NULL) monitorClient->Gasp(0);
+@
+
+
+1.18
+log
+@added distAsyncBegin to distiller return code.  modified ptm and distiller stubs to allow passing of options file name on distiller cmd line with -o
+@
+text
+@d11 1
+d15 1
+a15 2
+
+char     optionsFile[MAXPATH]="";
+d18 1
+a18 4
+PTM::CreateInstance(RemoteID &multicast, int ttl, const char *launchDBPath,
+		    const char *rsh, const char *rshArgs, const char *rhosts, 
+		    RemoteID &logAddr, int logTTL,
+		    UINT32 beaconingPeriod_ms)
+d22 1
+a22 2
+  instance = new PTM(multicast, ttl, launchDBPath, rsh, rshArgs, rhosts, 
+		     logAddr, logTTL, beaconingPeriod_ms);
+d26 2
+a27 11
+  signal (SIGINT, CtlCPressed);
+
+  gm_Log("Started up the PTM with following parameters:\n"
+	 << "    PTM Location = " << getInstance()->getAddress() << '\n'
+	 << "    Multicast address = " << multicast.ipAddress << '\n'
+	 << "    Multicast port    = " << multicast.port << '\n'
+	 << "    Distiller database= " << launchDBPath   << '\n'
+	 << "    Remote executor   = " << ((rsh==NULL) ? "":rsh) << '\n'
+	 << "    Remote hosts      = " << ((rhosts==NULL) ? "":rhosts) << '\n'
+	 << "    Beaconing interval= " << beaconingPeriod_ms << " ms\n");
+        
+d32 1
+a32 3
+PTM::PTM(RemoteID &multicast, int ttl, const char *launchDBPath,
+	 const char *rsh, const char *rshArgs, const char *rhosts, 
+	 RemoteID &logAddr, int logTTL, UINT32 beaconingPeriod_ms)
+d37 2
+d44 1
+d47 1
+d55 7
+a61 3
+  myMulticast = multicast;
+  NEW(bus, SharedBus(multicast, ttl));
+  //NEW(listener,          Listener(multicast));
+d64 3
+a67 1
+  NEW(distillerDB,       DistillerDatabase);
+d69 7
+a75 3
+  NEW(distillerLauncher, DistillerLauncher(launchDBPath,rsh,rshArgs,rhosts));
+
+  if (strcmp(logAddr.ipAddress, "")!=0) {
+d78 1
+a78 1
+    monitorClient = new MonitorClient(unitID, logAddr.ipAddress,logAddr.port,
+a86 1
+    //SetFileLogging("/tmp/log.ptm");
+d89 12
+d132 37
+d336 1
+a336 1
+InstallAllOptions(OptionDatabase &options)
+d341 2
+a342 2
+  if (options.Find(Opt_PTMExecutable)==NULL) {
+    if (options.Add(Opt_PTMExecutable, DefaultPTMExecutable)==gm_False) 
+d346 1
+a346 1
+  value = options.Find(Opt_PTMMulticast);
+d348 3
+a350 3
+    options.Add(Opt_PTMMulticast_IP,   DefaultMulticastAddress);
+    options.Add(Opt_PTMMulticast_port, DefaultMulticastPort);
+    options.Add(Opt_PTMMulticast_TTL,  DefaultTTL);
+d374 3
+a376 3
+    options.Add(Opt_PTMMulticast_IP,   multicast.ipAddress);
+    options.Add(Opt_PTMMulticast_port, (UINT32) multicast.port);
+    options.Add(Opt_PTMMulticast_TTL,  (UINT32) ttl);
+d379 1
+a379 1
+  value = options.Find(Opt_MonitorMulticast);
+d381 3
+a383 3
+    options.Add(Opt_MonitorMulticast_IP,   DefaultMonitorAddress);
+    options.Add(Opt_MonitorMulticast_port, DefaultMonitorPort);
+    options.Add(Opt_MonitorMulticast_TTL,  DefaultTTL);
+d388 3
+a390 3
+    options.Add(Opt_MonitorMulticast_IP,   "");
+    options.Add(Opt_MonitorMulticast_port, (UINT32)-1);
+    options.Add(Opt_MonitorMulticast_TTL,  (UINT32)-1);
+d414 3
+a416 3
+    options.Add(Opt_MonitorMulticast_IP,   multicast.ipAddress);
+    options.Add(Opt_MonitorMulticast_port, (UINT32) multicast.port);
+    options.Add(Opt_MonitorMulticast_TTL,  (UINT32) ttl);
+d419 2
+a420 2
+  if (options.Find(Opt_DistillerDB)==NULL) {
+    if (options.Add(Opt_DistillerDB, DefaultDistillerDB)==gm_False) 
+d423 2
+a424 2
+  if (options.Find(Opt_Rsh)==NULL) {
+    if (options.Add(Opt_Rsh, DefaultRsh)==gm_False)
+d427 2
+a428 2
+  if (options.Find(Opt_RshArgs)==NULL) {
+    if (options.Add(Opt_RshArgs, DefaultRshArgs)==gm_False)
+d431 1
+a431 1
+  if (options.Find(Opt_Hosts)==NULL) {
+d435 1
+a435 1
+    if (options.Add(Opt_Hosts, myself)==gm_False)
+d438 2
+a439 2
+  if (options.Find(Opt_PTMBeacon_ms)==NULL) {
+    if (options.Add(Opt_PTMBeacon_ms, DefaultBeaconingPeriod_ms)==gm_False)
+d446 1
+d450 1
+a450 1
+  OptionDatabase options;
+d452 1
+a452 7
+  const    char *launchDBPath=DefaultDistillerDB;
+  const    char *rsh=NULL, *rshArgs=NULL, *rhosts=NULL;
+  int      optCh, ttl=DefaultTTL, logTTL=DefaultTTL;
+  UINT32   beaconingPeriod_ms = DefaultBeaconingPeriod_ms;
+  RemoteID multicast(DefaultMulticastAddress, DefaultMulticastPort);
+  RemoteID log("", 0);
+
+d475 6
+a480 2
+    
+  if (InstallAllOptions(options)==gm_False) 
+d524 1
+a524 1
+  }
+@
+
+
+1.17
+log
+@Added rexec.args, so now you can pass arguments to rsh
+Cleaned up the ptm to always read options from the options file
+@
+text
+@d15 1
+a398 1
+
+a403 1
+  char     optionsFile[MAXPATH]="";
+@
+
+
+1.16
+log
+@Added sleep mechanism to the distillers
+@
+text
+@d17 2
+a18 2
+PTM::CreateInstance(RemoteID &multicast, int ttl, char *launchDBPath,
+		    char *rsh, char *rhosts, 
+d24 1
+a24 1
+  instance = new PTM(multicast, ttl, launchDBPath, rsh, rhosts, 
+d44 2
+a45 2
+PTM::PTM(RemoteID &multicast, int ttl, char *launchDBPath,
+	 char *rsh, char *rhosts, 
+d73 1
+a73 1
+  NEW(distillerLauncher, DistillerLauncher(launchDBPath, rsh, rhosts));
+d282 1
+a282 7
+	 << "Options:\n"
+	 << "    -m <multicast-address/port-number[/ttl]>\n"
+	 << "    -d <database path>\n"
+	 << "    -l <monitor-address/port-number[/ttl]>\n"
+	 << "    -r <rsh> /* use -r- to disable remote execution */\n"
+	 << "    -h <hosts>\n"
+	 << "    -o <options-file>\n");
+d379 4
+d402 5
+a406 3
+  char     *optionString = "m:l:d:r:h:o:";
+  char     launchDBPath[MAXPATH], optionsFile[MAXPATH], *ptr;
+  char     rsh[MAXPATH], *rhosts=NULL;
+a407 2
+  gm_Bool  isM=gm_False, isL=gm_False, isD=gm_False, isO=gm_False, 
+           isR=gm_False, isH=gm_False;
+d411 1
+a411 2
+  strcpy(launchDBPath, DefaultDistillerDB);
+  strcpy(rsh, "");
+a415 53
+    case 'm':
+      ptr = strchr(optarg, '/');
+      if (ptr==NULL) PTM::Usage();
+      if (sscanf(optarg, "%[^/]/%d", multicast.ipAddress, &multicast.port)!=2)
+	PTM::Usage();
+
+      ptr = strchr(ptr+1, '/');
+      if (ptr!=NULL) {
+	sscanf(ptr+1, "%d", &ttl);
+      }
+      isM = gm_True;
+      break;
+
+    case 'd':
+      strcpy(launchDBPath, optarg);
+      isD = gm_True;
+      break;
+
+    case 'l':
+      ptr = strchr(optarg, '/');
+      if (ptr==NULL) PTM::Usage();
+      if (sscanf(optarg, "%[^/]/%d", log.ipAddress, &log.port)!=2)
+	PTM::Usage();
+
+      ptr = strchr(ptr+1, '/');
+      if (ptr!=NULL) {
+	sscanf(ptr+1, "%d", &logTTL);
+      }
+      isL = gm_True;
+      break;
+
+    case 'r':
+      if (strcmp(optarg, "-")==0) strcpy(rsh, "");
+      else {
+	if (strlen(optarg) < sizeof(rsh)) strcpy(rsh, optarg);
+	else {
+	  strncpy(rsh, optarg, sizeof(rsh)-1);
+	  rsh[sizeof(rsh)-1] = '\0';
+	}
+      }
+      isR = gm_True;
+      break;
+
+    case 'h':
+      rhosts = new char [strlen(optarg)+1];
+      if (rhosts==NULL) {
+	gm_Log("PTM: Out of memory in main()\n");
+	exit(-1);
+      }
+      strcpy(rhosts, optarg);
+      isH = gm_True;
+      break;
+
+a417 1
+      isO = gm_True;
+d427 3
+a429 2
+  if (isO == gm_True) {
+    OptionDatabase options;
+d432 2
+d435 3
+a437 2
+    if (InstallAllOptions(options)==gm_False) 
+      PTM::Abort("Error occurred while reading options file");
+d439 6
+a444 11
+    if (isM==gm_False) {
+      const char *mcastAddr;
+      if ((mcastAddr=options.Find(Opt_PTMMulticast_IP))!=NULL) {
+	if (strlen(mcastAddr) < MAXIP) strcpy(multicast.ipAddress,mcastAddr);
+	else {
+	  strncpy(multicast.ipAddress, mcastAddr, MAXIP-1);
+	  multicast.ipAddress[MAXIP-1] = '\0';
+	}
+	multicast.port = (Port) options.FindUINT32(Opt_PTMMulticast_port);
+	ttl = (int) options.FindUINT32(Opt_PTMMulticast_TTL);
+      }
+d446 10
+a455 13
+    
+    if (isL==gm_False) {
+      const char *mcastAddr;
+      mcastAddr=options.Find(Opt_MonitorMulticast_IP);
+      if (mcastAddr!=NULL && *mcastAddr!='\0') {
+	if (strlen(mcastAddr) < MAXIP) strcpy(log.ipAddress, mcastAddr);
+	else {
+	  strncpy(log.ipAddress, mcastAddr, MAXIP-1);
+	  log.ipAddress[MAXIP-1] = '\0';
+	}
+	log.port = (Port) options.FindUINT32(Opt_MonitorMulticast_port);
+	logTTL = (int) options.FindUINT32(Opt_MonitorMulticast_TTL);
+      }
+d457 8
+a464 40
+    
+    if (isD==gm_False) {
+      const char *distillerDB;
+      if ((distillerDB=options.Find(Opt_DistillerDB))!=NULL) {
+	if (strlen(distillerDB) < MAXPATH) strcpy(launchDBPath, distillerDB);
+	else {
+	  strncpy(launchDBPath, distillerDB, MAXPATH-1);
+	  launchDBPath[MAXPATH-1] = '\0';
+	}
+      }
+    }
+    
+    if (isR==gm_False) {
+      const char *rsh_;
+      if ((rsh_=options.Find(Opt_Rsh))!=NULL) {
+	  if (strcmp(rsh_, "-")==0) strcpy(rsh, "");
+	  else {
+	    if (strlen(rsh_) < sizeof(rsh)) strcpy(rsh, rsh_);
+	    else {
+	      strncpy(rsh, rsh_, sizeof(rsh)-1);
+	      rsh[sizeof(rsh)-1] = '\0';
+	    }
+	  }
+      }
+    }
+    
+    if (isH==gm_False) {
+      const char *rhosts_;
+      if ((rhosts_ = options.Find(Opt_Hosts))!=NULL) {
+	rhosts = new char [strlen(rhosts_)+1];
+	if (rhosts==NULL) {
+	  gm_Log("PTM: Out of memory in main()\n");
+	  exit(-1);
+	  }
+	strcpy(rhosts, rhosts_);
+      }
+    }
+    
+    
+    beaconingPeriod_ms = options.FindUINT32(Opt_PTMBeacon_ms);
+d467 5
+d473 2
+d476 1
+a476 2
+  if (PTM::CreateInstance(multicast, ttl, launchDBPath, rsh, 
+			  (rhosts==NULL) ? "" : rhosts,
+a479 1
+  if (rhosts!=NULL) delete [] rhosts;
+@
+
+
+1.15
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d186 9
+a194 4
+    return distillerLauncher->TryToLaunch(distillerType, replyObject, replyID);
+  }
+  else {
+    return replyObject->AskForDistillerReply(replyID, ptmOk, &list);
+d196 2
+@
+
+
+1.14
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d19 2
+a20 1
+		    RemoteID &logAddr, int logTTL)
+d25 1
+a25 1
+		     logAddr, logTTL);
+d38 1
+a38 1
+	 << "    Working directory = " << cwd << '\n');
+d46 1
+a46 1
+	 RemoteID &logAddr, int logTTL)
+d65 1
+d70 1
+a70 1
+  NEW(beaconTimer,       BeaconTimer(evs));
+d229 1
+a229 1
+PTM::Beacon()
+d232 2
+d235 8
+a242 1
+  if (bus->Beacon(myAddress, myRandomID, list)==gm_False) {
+d385 4
+d397 1
+a397 1
+  char     *options = "m:l:d:r:h:o:";
+d403 1
+d410 1
+a410 1
+  while ( (optCh = getopt(argc, argv, options))!=-1) {
+d477 1
+a477 2
+  if (isO == gm_True && (isL==gm_False || isM==gm_False || isD==gm_False ||
+			 isR==gm_False || isH==gm_False)) {
+d481 1
+a481 1
+
+d488 1
+a488 1
+	if (strlen(mcastAddr) < MAXIP) strcpy(multicast.ipAddress, mcastAddr);
+d497 1
+a497 1
+
+d511 1
+a511 1
+
+d522 1
+a522 1
+
+d526 1
+a526 3
+	if (strcmp(rsh_, "-")==0) strcpy(rsh, "");
+	else {
+	  if (strlen(rsh_) < sizeof(rsh)) strcpy(rsh, rsh_);
+d528 5
+a532 2
+	    strncpy(rsh, rsh_, sizeof(rsh)-1);
+	    rsh[sizeof(rsh)-1] = '\0';
+a533 1
+	}
+d536 1
+a536 1
+
+d544 1
+a544 1
+	}
+d548 3
+a550 1
+
+d553 1
+d557 1
+a557 1
+			  log, logTTL)==gm_False) {
+@
+
+
+1.13
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d138 2
+a139 1
+  getInstance()->getMonitorClient()->Gasp(0);
+d154 1
+a154 1
+
+d167 1
+@
+
+
+1.12
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d53 1
+a53 1
+  myRandomID = lrand48();
+d177 1
+a177 1
+  LinkedList<DatabaseRecord> list;
+d227 3
+a229 2
+  if (bus->Beacon(myAddress, myRandomID,
+		  distillerDB->getAllRecords())==gm_False) {
+@
+
+
+1.11
+log
+@Changes to the monitor for killing
+@
+text
+@d18 1
+d21 4
+a24 1
+  instance = new PTM(multicast, ttl, launchDBPath, logAddr, logTTL);
+d33 6
+a38 2
+	 << "    Multicast port    = " << multicast.port << '\n');
+
+d44 1
+d52 2
+a53 2
+  srand(now.tv_usec + getpid());
+  myRandomID = rand();
+d71 1
+a71 1
+  NEW(distillerLauncher, DistillerLauncher(launchDBPath));
+d265 2
+d360 11
+d379 1
+a379 1
+  char     *options = "m:l:d:o:";
+d381 1
+d383 2
+a384 1
+  gm_Bool     isM=gm_False, isL=gm_False, isD=gm_False, isO=gm_False;
+d387 2
+a389 1
+  strcpy(launchDBPath, DefaultDistillerDB);
+d424 22
+d458 2
+a459 1
+  if (isO == gm_True && (isL==gm_False || isM==gm_False || isD==gm_False)) {
+d504 27
+d534 2
+a535 1
+  if (PTM::CreateInstance(multicast, ttl, launchDBPath, 
+d539 1
+@
+
+
+1.10
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@d66 1
+a66 1
+    sprintf(unitID, "PTM: %s/%d", myAddress.ipAddress, myAddress.port);
+d71 2
+a72 1
+
+d129 1
+a129 1
+  MonitorClient::DyingGasp();
+d468 1
+a468 1
+  MonitorClient::DyingGasp();
+a470 3
+
+
+
+@
+
+
+1.9
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d128 1
+d467 1
+@
+
+
+1.8
+log
+@Yatin's first commit from India
+@
+text
+@d21 2
+a22 2
+  if (instance==NULL) gm_BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return gm_False;
+d26 4
+a29 4
+  LOG("Started up the PTM with following parameters:\n"
+      << "    PTM Location = " << getInstance()->getAddress() << '\n'
+      << "    Multicast address = " << multicast.ipAddress << '\n'
+      << "    Multicast port    = " << multicast.port << '\n');
+d69 2
+a70 2
+    if (monitorClient==NULL) VoidErrorReturn(errOutOfMemory);
+    if (GlobalErrorCode!=success) return;
+d75 2
+a76 1
+    SetFileLogging("/tmp/log.ptm");
+a77 2
+
+  VoidErrorReturn(success);
+d125 3
+a127 15
+  LOG("Aborting program: " << string << "\n\n"
+      << "Abort status: Global error code = " << GlobalErrorCode << "\n"
+      << "              Thread error code = " << ThreadErrorCode << "\n");
+
+  if (GlobalErrorCode!=success) {
+    LOG( "              Error file-name   = " << ErrorFilename << "\n"
+	 << "              Error line number = " << ErrorLineNo   << "\n");
+  }
+
+  LOG("              errno = " << errno << "\n");
+  if (errno!=0) {
+    LOG( "              Errno explanation: " << strerror(errno) << "\n");
+  }
+
+  if (instance!=NULL) delete instance;
+d136 3
+a138 3
+    if (GlobalErrorCode==errDuplicateIndexEntry) {
+      LOG ("Cannot register distiller at " << distillerRecord->rid 
+	   << ". Distiller already exists.\n");
+d143 3
+a145 3
+  LOG ("Registering distiller for " << distillerRecord->type 
+       << " at " << distillerRecord->rid << '\n');
+  gm_BoolErrorReturn(success);
+d153 2
+a154 2
+  LOG ("De-registering distiller for " << distillerRecord->type 
+       << " at " << distillerRecord->rid << '\n');
+d216 5
+a220 3
+  if (bus->Beacon(myAddress, myRandomID,distillerDB->getAllRecords())==gm_False) {
+    LOG("Error sending beaconing packet (error " << GlobalErrorCode
+	<< " in " << ErrorFilename << " at line " << ErrorLineNo << ")\n");
+d249 6
+a254 6
+  LOG("Usage: ptm [options]\n\n"
+      << "Options:\n"
+      << "    -m <multicast-address/port-number[/ttl]>\n"
+      << "    -d <database path>\n"
+      << "    -l <monitor-address/port-number[/ttl]>\n"
+      << "    -o <options-file>\n");
+d281 1
+a281 1
+    if (slash1==NULL || slash1==value) gm_BoolErrorReturn(errFormattingError);
+d283 1
+a283 1
+    if (slash1 >= value + MAXIP) gm_BoolErrorReturn(errBufferOverflow);
+d290 1
+a290 1
+      if (multicast.port==0) gm_BoolErrorReturn(errFormattingError);
+d295 2
+a296 2
+	gm_BoolErrorReturn(errFormattingError);
+      if (multicast.port==0 || ttl==0) gm_BoolErrorReturn(errFormattingError);
+d321 1
+a321 1
+    if (slash1==NULL || slash1==value) gm_BoolErrorReturn(errFormattingError);
+d323 1
+a323 1
+    if (slash1 >= value + MAXIP) gm_BoolErrorReturn(errBufferOverflow);
+d330 1
+a330 1
+      if (multicast.port==0) gm_BoolErrorReturn(errFormattingError);
+d335 2
+a336 2
+	gm_BoolErrorReturn(errFormattingError);
+      if (multicast.port==0 || ttl==0) gm_BoolErrorReturn(errFormattingError);
+d344 2
+a345 1
+    if (options.Add(Opt_DistillerDB, DefaultDistillerDB)==gm_False) return gm_False;
+d348 1
+a348 1
+  gm_BoolErrorReturn(success);
+d456 1
+d465 1
+a465 1
+  LOG("Ending the PTM normally\n");
+@
+
+
+1.7
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d62 1
+a62 3
+  char monitorMulticast[MAXIP+30];
+  sprintf(monitorMulticast, "%s/%d/%d", logAddr.ipAddress,logAddr.port,logTTL);
+  NEW(distillerLauncher, DistillerLauncher(launchDBPath, monitorMulticast));
+d73 3
+@
+
+
+1.6
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d16 1
+a16 1
+Bool
+d21 2
+a22 2
+  if (instance==NULL) BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return FALSE;
+d31 1
+a31 1
+  return TRUE;
+d49 1
+a49 1
+  if (evs->AddCommunicationObject(server)==FALSE) return;
+d51 1
+a51 1
+  if (CommunicationObject::GetHostIPAddress(myAddress.ipAddress)==FALSE)
+d57 1
+a57 1
+  if (evs->AddCommunicationObject(bus->getListener())==FALSE) return;
+d108 1
+a108 1
+Bool
+d144 1
+a144 1
+Bool
+d147 1
+a147 1
+  if (distillerDB->Add(distillerRecord)==FALSE) {
+d152 1
+a152 1
+    return FALSE;
+d157 1
+a157 1
+  BoolErrorReturn(success);
+d173 1
+a173 1
+Bool
+d180 3
+a182 3
+  if (distillerDB->FindMatchingDistillers(distillerType, &list)==FALSE)
+    return FALSE;
+  if (list.IsEmpty()==TRUE) {
+d191 1
+a191 1
+/*Bool
+d201 1
+a201 1
+  if (stream.IsGood()==FALSE) return FALSE;
+d204 2
+a205 2
+  stream << Binary(TRUE) << (UINT32) 0 << Binary(FALSE);
+  if (stream.IsGood()==FALSE) return FALSE;
+d207 1
+a207 1
+  for (idx=list->Head(); list->IsDone(idx)==FALSE; idx = list->Next(idx)) {
+d209 1
+a209 1
+    if (stream.IsGood()==FALSE) return FALSE;
+d218 1
+a218 1
+  if (packet.Send(object)==FALSE) return FALSE;
+d220 1
+a220 1
+  BoolErrorReturn(success);
+d228 1
+a228 1
+  if (bus->Beacon(myAddress, myRandomID,distillerDB->getAllRecords())==FALSE) {
+d269 1
+a269 1
+Bool
+d276 2
+a277 2
+    if (options.Add(Opt_PTMExecutable, DefaultPTMExecutable)==FALSE) 
+      return FALSE;
+d291 1
+a291 1
+    if (slash1==NULL || slash1==value) BoolErrorReturn(errFormattingError);
+d293 1
+a293 1
+    if (slash1 >= value + MAXIP) BoolErrorReturn(errBufferOverflow);
+d300 1
+a300 1
+      if (multicast.port==0) BoolErrorReturn(errFormattingError);
+d305 2
+a306 2
+	BoolErrorReturn(errFormattingError);
+      if (multicast.port==0 || ttl==0) BoolErrorReturn(errFormattingError);
+d331 1
+a331 1
+    if (slash1==NULL || slash1==value) BoolErrorReturn(errFormattingError);
+d333 1
+a333 1
+    if (slash1 >= value + MAXIP) BoolErrorReturn(errBufferOverflow);
+d340 1
+a340 1
+      if (multicast.port==0) BoolErrorReturn(errFormattingError);
+d345 2
+a346 2
+	BoolErrorReturn(errFormattingError);
+      if (multicast.port==0 || ttl==0) BoolErrorReturn(errFormattingError);
+d354 1
+a354 1
+    if (options.Add(Opt_DistillerDB, DefaultDistillerDB)==FALSE) return FALSE;
+d357 1
+a357 1
+  BoolErrorReturn(success);
+d367 1
+a367 1
+  Bool     isM=FALSE, isL=FALSE, isD=FALSE, isO=FALSE;
+d385 1
+a385 1
+      isM = TRUE;
+d390 1
+a390 1
+      isD = TRUE;
+d403 1
+a403 1
+      isL = TRUE;
+d408 1
+a408 1
+      isO = TRUE;
+d418 1
+a418 1
+  if (isO == TRUE && (isL==FALSE || isM==FALSE || isD==FALSE)) {
+d420 1
+a420 1
+    if (options.Create(optionsFile)==FALSE)
+d423 1
+a423 1
+    if (InstallAllOptions(options)==FALSE) 
+d426 1
+a426 1
+    if (isM==FALSE) {
+d439 1
+a439 1
+    if (isL==FALSE) {
+d453 1
+a453 1
+    if (isD==FALSE) {
+d466 1
+a466 1
+			  log, logTTL)==FALSE) {
+d470 1
+a470 1
+  if (PTM::getInstance()->Run()==FALSE)
+@
+
+
+1.5
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d17 1
+a17 2
+PTM::CreateInstance(Port ptmPort, RemoteID &multicast, 
+		    int ttl, char *launchDBPath,
+d20 1
+a20 1
+  instance = new PTM(ptmPort, multicast, ttl, launchDBPath, logAddr, logTTL);
+d27 1
+a27 1
+      << "    PTM port = " << ptmPort << '\n'
+d35 1
+a35 1
+PTM::PTM(Port ptmPort, RemoteID &multicast, int ttl, char *launchDBPath,
+a40 4
+  if (CommunicationObject::GetHostIPAddress(myAddress.ipAddress)==FALSE)
+    return;
+  myAddress.port = ptmPort;
+
+d48 1
+a48 1
+  NEW(server, PrivateConnectionServer(ptmPort));
+d51 4
+a260 1
+      << "    -p <port-number>\n"
+d263 2
+a264 1
+      << "    -l <monitor-address/port-number[/ttl]>\n");
+d269 92
+d364 2
+a365 1
+  char     *options = "p:m:l:d:", launchDBPath[MAXPATH], *ptr;
+d367 1
+a367 1
+  Port     ptmPort = 0;
+d371 1
+a371 1
+  strcpy(launchDBPath, DefaultLaunchDB);
+a374 4
+    case 'p':
+      sscanf(optarg, "%d", &ptmPort);
+      break;
+
+d385 1
+d390 1
+d403 6
+d418 46
+a463 1
+  if (ptmPort==0) ptmPort = DefaultPTMPort;
+d465 1
+a465 1
+  if (PTM::CreateInstance(ptmPort, multicast, ttl, launchDBPath, 
+@
+
+
+1.4
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d7 2
+a10 2
+#include "defines.h"
+#include "xwin.h"
+d18 2
+a19 1
+		    int ttl, char *launchDBPath)
+d21 1
+a21 1
+  instance = new PTM(ptmPort, multicast, ttl, launchDBPath);
+d36 5
+a40 2
+PTM::PTM(Port ptmPort, RemoteID &multicast, int ttl, char *launchDBPath)
+  : evs(NULL), server(NULL)
+d62 17
+a78 1
+  NEW(distillerLauncher, DistillerLauncher(launchDBPath));
+a103 1
+
+d105 1
+d263 3
+a265 3
+      << "    -m <multicast-address/port-number>\n"
+      << "    -t <time-to-live>\n"
+      << "    -d <database path>\n");
+d273 2
+a274 2
+  char     *options = "p:m:t:d:", launchDBPath[MAXPATH];
+  int      optCh, ttl=DefaultTTL;
+d277 1
+d288 2
+a291 1
+      break;
+d293 4
+a296 2
+    case 't':
+      sscanf(optarg, "%d", &ttl);
+d303 12
+d324 2
+a325 1
+  if (PTM::CreateInstance(ptmPort, multicast, ttl, launchDBPath)==FALSE) {
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d5 2
+d10 1
+d25 6
+d42 5
+d52 4
+a55 1
+  NEW(bus,               SharedBus(multicast, ttl));
+d71 6
+d209 1
+a209 1
+  if (bus->Beacon(myAddress, distillerDB->getAllRecords())==FALSE) {
+d216 21
+a286 5
+
+  LOG("Starting up the PTM with following parameters:\n"
+      << "    PTM port = " << ptmPort << '\n'
+      << "    Multicast address = " << multicast.ipAddress << '\n'
+      << "    Multicast port    = " << multicast.port << '\n');
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@a4 1
+#include <netinet/in.h>
+d52 1
+a52 1
+  
+d89 1
+a89 1
+      << "              Error line number = " << ErrorLineNo   << "\n");
+d129 2
+a130 2
+// This function may return without replying to the requesting proxy 
+// immediately
+d132 3
+a134 3
+PTM::RequestForDistillersReceived(DistillerType *distillerType,
+				  CommunicationObject *replyObject,
+				  UINT32 replyID)
+d144 1
+a144 1
+    return SendBeaconPacket(replyObject, replyID, &list);
+d149 1
+a149 1
+Bool
+d151 1
+a151 1
+		      UINT32 requestReplyID, /*can be set to NoRequestReply*/
+d160 1
+a160 1
+  distillersPos = stream.getLength();
+d162 1
+a162 2
+  stream.Binary(TRUE) << (UINT32) 0;
+  stream.Binary(FALSE);
+d166 1
+a166 1
+    stream << '|' << *((DistillerRecord*)list->Record(idx));
+d179 1
+a179 1
+}
+d186 1
+a186 2
+  if (SendBeaconPacket(bus, NoRequestReply, 
+		       distillerDB->getAllRecords())==FALSE) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+d7 1
+d11 1
+a11 1
+PTM *PTM::ptm=NULL;
+d14 14
+a27 1
+PTM::PTM(Port ptmPort, RemoteID &multicast)
+d34 1
+a34 1
+  NEW(evs, EventSystem);
+d39 4
+a42 4
+  NEW(beaconTimer,   BeaconTimer(evs));
+  NEW(bus,           SharedBus(multicast));
+  NEW(packetHandler, PTMPacketHandler);
+  NEW(distillerDB,   DistillerDatabase);
+d59 5
+a63 3
+  if (evs!=NULL) { delete evs; evs = NULL; }
+  if (packetHandler!=NULL) { delete packetHandler; packetHandler = NULL; }
+  if (distillerDB!=NULL) { delete distillerDB; distillerDB = NULL; }
+d98 1
+a98 1
+  if (ptm!=NULL) delete ptm;
+d114 2
+a115 1
+  LOG ("Registering distiller at " << distillerRecord->rid << '\n');
+d124 2
+a125 1
+  LOG ("De-registering distiller at " << distillerRecord->rid << '\n');
+d130 55
+d186 1
+a186 1
+PTM::SendBeacon()
+d188 2
+a189 5
+  char buffer[100];
+  sprintf(buffer, "%s/%d|0", myAddress.ipAddress, myAddress.port);
+
+  Packet packet(pktPTMBeacon, strlen(buffer)+1, buffer);
+  if (packet.Send(bus)==FALSE) {
+d199 6
+a204 1
+  LOG("Usage: ptm [-p <port-number> -m <multicast-address/port-number>]\n");
+d212 2
+a213 2
+  char     *options = "p:m:";
+  int      optCh;
+d217 1
+d226 10
+a235 1
+      sscanf(optarg, "%[^/]/%d", multicast.ipAddress, &multicast.port);
+d252 1
+a252 4
+  if ((PTM::ptm = new PTM(ptmPort, multicast))==NULL) 
+    SetGlobalError(errOutOfMemory);
+
+  if (PTM::ptm==NULL || GlobalErrorCode!=success) {
+d256 1
+a256 3
+  signal (SIGINT, PTM::CtlCPressed);
+
+  if (PTM::ptm->Run()==FALSE)
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

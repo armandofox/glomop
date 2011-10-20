@@ -1,0 +1,152 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.04.08.15.40.00;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@2-phase commit stuff
+@
+text
+@<html>
+<title>
+R* Transaction Management
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Transaction Management in the R<sup>*</sup> Distributed Database Management
+System
+</h1>
+<strong>
+C. Mohan, B. Lindsay, and R. Obermarck
+</strong>
+
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+2-phase commit is the standard transaction management/distributed commit
+protocol, but it has 4(N-1) message cost - optimized commit protocols
+(presumed abort and presumed commit) are presented.  (And, for something
+completely different, distributed deadlock detection is mentioned in a
+half-page.)
+</p>
+
+<h2>Relevance</h2>
+2-phase commit is well-known, and potentiall extremely expensive to run.
+These variations reduce the cost in the common case, which is a good thing
+to do.
+
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> Hand-wavvy - I'm fairly convinced these algorithms are correct,
+	  but I'd like to see a more formal demonstraction of correctness.
+     <li> Performance analysis - which is common case in distributed
+	  databases?  Need to know in order to predict which to use.
+</ul>
+
+<h2>Overview/Main Points</h2>
+<ul>
+     <li> Have coordinator and subordinate nodes;  subordinates only talk
+	  to coordinator (not to each other).
+     <li> <B>2-Phase commit</B>:
+	  <ul>
+	       <li> Coordinator issues <B>PREPARE</B> message to begin
+		    first phase.
+	       <li> Each subordinate that is willing to let transaction
+		    commit force-writes a <i>prepare</i> log record then
+		    sends a <B>YES VOTE</B>.  If not, any subordinate can
+		    veto by issuing <B>NO VOTE</B>.  A yes-vote locks the
+		    subordinate into committing for all time.
+	       <li> Once coordinator receives all votes, if unilaterally
+		    YES, then force-writes a <i>commit</i> record and sends
+		    <B>COMMIT</B> message to subordinates, else
+		    force-writes <i>abort</i> and sends <B>ABORT</I> to all
+		    YES-responding subordinates.
+	       <li> Each subordinate, on receiving COMMIT, force-writes a
+		    <i>commit</i> record, and sends an <B>ACK</B> message.
+	  </ul>
+     <li> Under failure, have site-recovery process running at each active
+	  site that takes over.  If discover no  commit log record written,
+	  then whether or not it's a subordinate it will undo actions,
+	  write an abort, and forget about it.
+     <li> Only tricky case- if recovery processes receives inquiry message
+	  from a prepared subordinate, looks in information on log - if
+	  transaction is aborting or committing, then sends appropriate
+	  response.  If <b>no information</b>, then obviously inquirer had
+	  not received a COMMIT/ABORT (inquiree sends out PREPARE, crashes
+	  before receiving votes, and on restart aborts transaction).
+	  Given this, recipient must send back an ABORT.
+     <li> <b>Hierarchical 2-phase commit</B> - obvious extension where
+	  non-leaf nodes after receiving a PREPARE propagate it to
+	  subordinates, and only after receiving all votes does it send a
+	  combined (subtee) vote to coordinator.
+     <li> <B>Presumed Abort Protocol</B>
+	  <ul>
+	       <li> Take advantage of fact that absense of information
+		    implies recovery process orders inquirer to abort.
+	       <li> Coordinator forgets transaction immediately after
+		    making decision to abort and writing abort record -
+		    abort record need not be forced, and no ACKs need to be
+		    sent by subordinates for ABORT.
+	       <li> Coordinator also need not record names of subordinates
+		    in abort record or write and <i>end</i> record after
+		    the abort record.
+	       <li> Partially-read-only transactions: if some process does
+		    not perform any updates, then after receiving PREPARE
+		    and not having done any update, process sends READ
+		    VOTE, releases locks, and forgets about transaction -
+		    no log record written.  Coordinator now knows this
+		    subordinate is READ-ONLY, and excludes it from 2nd phase.
+	  </ul>
+     <li> <B>Presumed Commit Protocol</B>
+	  <ul>
+	       <li> Most transactions are expected to commit - try to
+		    eliminate ACKs for COMMITs.
+	       <li> Simple approach: require ABORT to be acknowledged, but
+		    COMMITs need not be, and that <i>abort</i> records are
+		    forced to disk but <i>commit</i> records need not be.
+	       <li> Problem: If root is in prepare state, a subordinate is
+		    also in prepared state, and root crashes before it has
+		    collected all votes.  On recovery, will just forget
+		    about transaction.  Fix: coordinator records names of
+		    subordinates safely before any subordinate can get in
+		    the prepared state.  So, at start of first phase,
+		    coordinator force-writes a <i>collecting</i> record
+		    with names of all subordinates.
+	       <li> Same optimization for read-only subordinates can be
+		    done.  If all subordinates read-only, don't need 2nd
+		    phase at all.
+	  </ul>
+     <li> Table on page 573 of text giving performance of protocols under
+	  various situations.  PA strictly better than 2P;  PA better than
+	  PC for completely read-only, and partially-read-only if only
+	  coordinator does update.  If only one update subordinate, PA and
+	  PC equal in terms of log writes, but PA needs extra ACK.  For n>1
+	  update subordinates, PC and PA need same number of log records,
+	  but PA will force n-1 times while PC will not (because of commit
+	  records by subordinates).  PA will also send n extra messages
+	  (due to ACKs).
+     <li> Deadlock-detection: see <a href="r_star.html">R<sup>*</sup>
+	  summary</a> for this.
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

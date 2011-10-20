@@ -1,0 +1,141 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	96.08.23.18.26.43;	author gribble;	state dead;
+branches;
+next	1.2;
+
+1.2
+date	96.07.09.02.53.47;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.07.07.00.04.01;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Replaced with IcapImage4colour.pl
+@
+text
+@#
+#  IcapImage: converts images from GIF (for now) to PPM and then to ICAP
+#  objects.
+#
+#  BUG::the interface between different parts of the distiller should be
+#  modularized, so that there doesn't need to be separate IcapImage and Image
+#  modules.  How exactly to do this is still under discussion.
+#
+
+package doc::IcapImage;
+
+#  Hacks: names of quant and scale programs.
+
+$Quant = "/staff/glomop/bin/ppmquant";
+$Scale = "/staff/glomop/bin/pnmscale";
+$FromGif = "/staff/glomop/bin/giftopnm";
+$Cmap = "./tm/cmap4.ppm";
+
+
+# Segmentation function.  Convert image to PPM of at most 16 colors using a
+# fixed color palette, and scale it down to no larger than 320x200.  
+# BUG::the scale should be determined by user prefs eventually.
+# Pack the whole thing into a single chunk whose type is "image/icap-bitmap".
+# The TOC won't matter for this, but who cares.
+
+sub segment {
+    my($doc,$client,$prefs) = @@_;
+    my $doc_id = $doc->id;
+    my $filename = $doc->filename;
+    my $refine_filename = "refine://no";
+    my $ppmdata;
+    my ($width,$height);
+
+    open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+        or die "giftopnm: $!";
+    # BUG::error checking?
+    local($/) = undef;
+    $ppmdata =  <GIFTOPNM>;
+    close GIFTOPNM;
+    # parse size from ppm data
+    $ppmdata =~ /(\S+)\s+(\d+)\s+(\d+)/m
+        or die "Can't parse width/height in ". substr($ppmdata,0,40);
+    ($width,$height) = ($2,$3);
+
+    # if greater than max size, scale down
+    # BUG::shouldn't hardwire constants
+
+    my ($maxx,$maxy) = (320,200);
+    my $scalecmd = '';
+    my $tmp = &util::mktemp;
+    if ($width > $maxx
+        || $height > $maxy) {
+        $scalecmd = "pnmscale -xysize $maxx $maxy |" ;
+    }
+    open(PPM, "| $scalecmd ppmquant -map $Cmap >$tmp")
+            or die "Opening PPM pipeline: $!";
+    print PPM $ppmdata;
+    close PPM;
+
+    # the tmpfile now has a ppm with the right properties....call ppmtoicap.
+
+    my $icap;
+
+    # ....code here....
+
+    # make an ICAP chunk
+    # my $tmp2 = &util::mktemp;
+    my $tmp2 = "/tmp/mytmp/ppm.out";
+
+    system("ppmtoicap -ifp $tmp -ofp $tmp2 -colors 4");
+    # and die "ppmtoicap: exit " . ($?>>8);
+    $icap = &util::slurp($tmp2);
+
+    my $chunk = new chunk ("image/icap-bitmap",
+                           undef,
+                           $doc_id,
+                           1,
+                           $icap,
+                           undef,
+                           undef,
+                           "ICAP image chunk");
+    my $toc = toc chunk ($doc_id, "", $chunk);
+    return ($toc,$chunk);
+}
+ 
+    
+1;
+@
+
+
+1.2
+log
+@imported from wink, 7/8 pm.  major changes to WebPage to actually do the
+chunking, and minor enhancmenets to html parser to support it.
+@
+text
+@@
+
+
+1.1
+log
+@Various bugs fixed in html parser; new IcapImage module (for testing
+only right now)
+@
+text
+@d70 1
+a70 1
+    system("ppmtoicap $tmp $tmp2");
+@

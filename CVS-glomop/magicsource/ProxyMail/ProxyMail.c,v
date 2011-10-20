@@ -1,0 +1,1811 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.10.26.04.13.07;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.25.00.59.13;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Bugfixes galore!  This version was the one that Eric took with him to Japan.
+The changelog has been disabled.  This is the final version pre-TCP.
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	ProxyMail
+#
+#	General Magic Developer Technical Support
+#	Copyright © 1994-1995 General Magic, Inc.
+#	All rights reserved.
+#
+#
+#	Version:	MC32						April 12, 1995
+#
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+#include "ProxyMail_indexicals.h"
+#include "Modem.h"
+/* 
+	Here's the empty main() routine that is needed for the linker.  Don't
+	put any code here!
+*/
+
+main()
+{
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS ProxyMailTransferTicket
+
+Private ObjectID
+LookupDeliveryChoice(ObjectID message, ulong whichList, ulong indexInList)
+{
+	ObjectID	choices = DeliveryChoices(message);
+	ulong		index = MapListToIndex(message, whichList, indexInList);
+	ObjectID	deliveryChoice = At(choices, index);
+
+	return deliveryChoice;
+}
+
+/* 
+	Make a list of all addressees to whom we have chosen to send this message via ProxyMail
+*/
+Method long int
+ProxyMailTransferTicket_WriteAddressList(ObjectID self, ulong countOfAdressees, ulong whichList, ObjectID stream)
+{
+	ObjectID	processedCard = ProcessedCard(self);
+	ObjectID	card = Card(processedCard);
+	ObjectID	message = Message(card);
+	ObjectID	deliveryChoice;
+	ulong		indexInList, actualCount = 0;
+	ObjectID	myCard = DirectID(iServiceAddressCard);
+	ObjectID	recipient, label, name;
+	long int    totLength = 0L;
+	
+	// Count how many addressees we'll be sending our ProxyMail message to
+	for (indexInList = 1; indexInList <= countOfAdressees; indexInList++) {
+		deliveryChoice = LookupDeliveryChoice(message, whichList, indexInList);
+
+		if (Service(deliveryChoice) == myCard)
+			actualCount += 1;
+	}
+
+	// Pick out all the ProxyMail addressees and add their ProxyMail addresses to the address list
+	for (indexInList = 1; indexInList <= countOfAdressees; indexInList++) {
+		deliveryChoice = LookupDeliveryChoice(message, whichList, indexInList);
+		recipient = Recipient(deliveryChoice);
+
+		if (Service(deliveryChoice) == myCard) {
+			label = AddressLabel(deliveryChoice);
+			
+			if (stream != nilObject)
+			   WriteText(stream, AddressText(label));
+			totLength += TextLength(AddressText(label));
+			
+			if (indexInList != countOfAdressees)
+			{
+			   totLength += 2L;
+			   if (stream != nilObject)
+			      Write(stream, ", ", 2L);
+			}
+			//WriteText(stream, name = NameAsText(recipient));
+			//Destroy(name);
+		}
+	}
+	return totLength;
+}
+
+/*
+	Make an address card with the specified name & ProxyMail address
+*/
+
+
+IntrinsicMethod ObjectID
+ProxyMailTransferTicket_CreateAddressCard(ObjectID name, ObjectID addressText)
+{
+	ObjectID addressCard;
+	ObjectID label;
+	
+	Log(("In CreateAddressCard"));
+	addressCard = CopyNear(iEmptyAddressCard, kSystemPersistent);
+	Log(("Did first copynear"));
+	label = CopyNear(iInternetLabel, addressCard);
+	Log(("Did second copynear"));
+	SetAddressText(label, addressText);
+	Log(("Did setaddresstext"));
+	AddAddressLabel(addressCard, label);
+	
+	SetNameText(addressCard, name);
+	Log(("did setnametext"));
+	FillSortKey(MagicName(addressCard));
+	Log(("did fillsortkey"));
+	
+	return addressCard;
+}
+
+/*
+	For incoming messages, create an address card for each addressee
+*/
+
+
+Private ObjectID
+MTTAddressList(ObjectID theText, ObjectID nearThis)
+{
+	ObjectID	addressText, name;
+	ObjectID	list = NewNear(ObjectList_, nearThis, nil);
+    long int    textLen, i;
+	char        *tText, *t2Text, *theComma, *theBrace, *startName;
+	int         braceOn = 0, toAdd = 0;
+	TextRange   nRange;
+	
+	Log(("In MTTAddressList!!!!!!!!!"));
+    addressText = NewNear(Text_, nearThis, nil);
+	name = NewNear(Text_, nearThis, nil);
+
+	textLen = TextLength(theText);
+	tText = (char *) NewTransientBuffer(sizeof(char) * textLen * 2);
+	
+	if ((tText == NULL) || (tText == nilObject))
+	{
+	   Log(("Got null tText!!!!"));
+	   ReplaceText(addressText, theText);
+	   ReplaceText(name, theText);
+	   AddLast(list, CreateAddressCard(name, addressText));
+	   return list;
+	}
+	
+	t2Text = (char *) NewTransientBuffer(sizeof(char) * textLen);
+	if ((t2Text == NULL) || (t2Text == nilObject))
+	{
+	   Log(("Got null t2Text!!!!"));
+	   ReplaceText(addressText, theText);
+	   ReplaceText(name, theText);
+	   AddLast(list, CreateAddressCard(name, addressText));
+	   DestroyTransientBuffer((Pointer) tText);
+	   return list;
+	}
+
+	nRange.start = 0;
+	nRange.length = textLen;
+	CopyTextRangeToBuffer(theText, &nRange, (CharactersPointer) tText);
+	ConvertToMagic8Bit((CharactersPointer) tText, (Pointer) t2Text, textLen);
+	DestroyTransientBuffer((Pointer) tText);
+	
+	Log(("t2Text is %s", t2Text));
+	theComma = startName = t2Text;
+	for (i=0L; i<textLen; i++)
+	{
+	   if (((*theComma == '<') || (*theComma == '('))  && (braceOn == 0))
+	   {
+	      Log(("Hit backbrace"));
+	      theBrace = theComma + 1L;
+	      braceOn = 1;
+		  if (*theComma == '<')
+		  {
+		  	 *theComma = '\0';
+			 tText = theComma-1L;
+			 while(tText >= startName)
+			 {
+			    if ((*tText == ' ') || (*tText == '\t'))
+				{
+				   *tText = '\0';
+				   tText -= 1L;
+				}
+				else
+				   break;
+			 }
+		     Log(("name is now %s", startName));
+			 ReplaceTextWithLiteral(name, startName);
+		  }
+		  else
+		  {
+		  	 *theComma = '\0';
+			 tText = theComma-1L;
+			 while(tText >= startName)
+			 {
+			    if ((*tText == ' ') || (*tText == '\t'))
+				{
+				   *tText = '\0';
+				   tText -= 1L;
+				}
+				else
+				   break;
+			 }
+		     Log(("addressText is now %s", startName));
+		     ReplaceTextWithLiteral(addressText, startName);
+		  }
+		  toAdd = 1;
+		  theComma += 1L;
+		  continue;
+	   }
+	   
+	   if (((*theComma == '>') || (*theComma == ')')) && (braceOn == 1))
+	   {
+	      braceOn = 0;
+		  if (*theComma == '>')
+		  {
+		     *theComma = '\0';
+		     if (theComma > theBrace)  /* so we have characters in the name */
+			    ReplaceTextWithLiteral(addressText, theBrace);
+			 else
+			    ReplaceText(addressText, name);
+			 Log(("Hit closebrace, addressText is now %s", theBrace));
+		  }
+		  else
+		  {
+		     *theComma = '\0';
+		     if (theComma > theBrace)  /* so we have characters in the name */
+		        ReplaceTextWithLiteral(name, theBrace);
+		     else
+		        ReplaceText(name, addressText);
+			 Log(("Hit closebrace, name is now %s", theBrace));
+		  }
+		  theComma += 1L;
+		  continue;
+	   }
+	   
+	   if ((*theComma == ',') && (braceOn == 0))
+	   {
+	      if (toAdd == 1)
+		  {
+		    toAdd = 0;
+			startName = theComma;
+			Log(("Hit comma and braceOn is 0"));
+			AddLast(list, CreateAddressCard(name, addressText));
+			Log(("Did addlast."));
+			while (  ((*startName == ',') || (*startName == ' ') || (*startName == '\r') || (*startName == '\n') || (*startName == '\t'))
+			       && (startName < (t2Text + textLen)))
+			{
+			   startName += 1L;
+			   theBrace = startName;
+	        }
+		  }
+	   }
+	   Log(("Done comma.  looping around...."));
+	   theComma += 1L;
+	}
+	
+	if (toAdd == 1)
+	{
+	   AddLast(list, CreateAddressCard(name, addressText));
+	   Log(("At last in message.  adding."));
+	}
+	
+	DestroyTransientBuffer((Pointer) t2Text);
+	return list;
+
+}
+
+IntrinsicMethod ObjectID
+ProxyMailTransferTicket_ReadAddressList(ObjectID stream, ObjectID nearThis)
+{
+	ulong		count;
+	ObjectID	addressText, name;
+	ObjectID	list = NewNear(ObjectList_, nearThis, nil);
+	
+	count = ReadLong(stream);
+	
+	while (count > 0) {
+		addressText = NewNear(Text_, nearThis, nil);
+		ReadText(stream, addressText);
+		name = NewNear(Text_, nearThis, nil);
+		ReadText(stream, name);
+		AddLast(list, CreateAddressCard(name, addressText));
+		count -= 1;
+	}
+	return list;
+}
+
+/* 
+	Given a ProxyMail label, find the ProxyMail address on it
+*/
+Private ObjectID
+FindFirstShackMailAddress(ObjectID label, Parameters* params)
+{
+#pragma unused(params)
+    Log(("Finding shackmailaddress..."));
+	if (Implements(label, InternetMailLabel_))
+	{
+		Log(("good - not nil."));
+		return label;
+	}
+    Log(("drat.  was nil"));
+	return nilObject;
+}
+
+/*
+	For outgoing messages, look up the current user's ProxyMail address from his or her
+	address card
+*/
+IntrinsicMethod ObjectID
+ProxyMailTransferTicket_FindCurrentUserProxyMailLabel(void)
+{
+	ObjectID addressCard = DirectID(iCurrentUser);
+	ObjectID addressList = Addresses(addressCard);
+
+	return Each(addressList, (EachFunction)FindFirstShackMailAddress, nil);
+}
+
+/*
+	Write the current user's ProxyMail address to the ShackMailStream
+*/
+IntrinsicMethod long int
+ProxyMailTransferTicket_WriteCurrentUserAddressList(ObjectID stream)
+{
+	ObjectID addressCard = DirectID(iCurrentUser);
+	ObjectID label, name;
+	ulong oneLong = 1;
+	long int theLen = 0L;
+	
+	label = FindCurrentUserProxyMailLabel();
+	if (HasObject(label)) {
+	    if (stream != nilObject)
+		{
+		   WriteText(stream, name = NameAsText(addressCard));  Destroy(name);
+		   Write(stream, " <", 2L);
+		   WriteText(stream, AddressText(label));
+		   Write(stream, ">", 1L);
+		}
+		
+		theLen += TextLength(name = NameAsText(addressCard));  Destroy(name);
+		theLen += TextLength(AddressText(label));
+		theLen += 3L;  /* for the " <" and ">" */
+	}
+	return theLen;
+}
+
+/*
+	Write the date to the ShackMailStream
+*/
+IntrinsicMethod void
+ProxyMailTransferTicket_WriteDateSentToStream(ObjectID stream, ObjectID message)
+{
+	long days;
+	ulong milliseconds;
+	
+	days = DateSent(message, &milliseconds);
+	Write(stream, &days, sizeof(days));
+	Write(stream, &milliseconds, sizeof(milliseconds));
+}
+
+/*
+	Update the status bar display
+*/
+Private void
+UpdateStatusAndForceRedraw(ObjectID announcement, ulong amount)
+{
+	UpdateStatusIndicator(announcement, amount);
+	PermitRedraw();
+	RunNext(iScheduler);
+}
+
+/*
+	Write a ProxyMail message to the ShackMailStream
+*/
+Method void
+ProxyMailTransferTicket_SendMessage(ObjectID self)
+{
+	ObjectID	service = Service(self);
+	ObjectID	stream = iModem;   /**** Stream(self); ****/
+	ObjectID	announcement = StatusAnnouncement(self);
+	ObjectID	processedCard = ProcessedCard(self);
+	ObjectID	card = Card(processedCard);
+	ObjectID	message = Message(card);
+	ObjectID	subject = Subject(card);
+    long int    numnew, numStrLen, numCur, totLength=0L;
+	Str255      numStr;
+	char        NDOCS[32], DSIZE[32], MESS[32];
+	long int    nLen, dLen;
+	
+	numnew = NumTot(service);
+	numCur = NumSent(service);
+	numCur+=1L;
+	SetNumSent(service, numCur);
+
+	SPrintF(MESS, "Sending message %ld of %ld...", numCur, numnew);
+	ReplaceTextWithLiteral(announcement, MESS);
+	PermitRedraw();
+	RunNext(iScheduler);
+
+	SPrintF(numStr, "%ld", numnew);
+	numStrLen = CStringLength(numStr);
+
+	Write(stream, "HERE 12345 ", 11);
+	Write(stream, numStr, numStrLen);
+	SPrintF(numStr, "%ld", numCur);
+	numStrLen = CStringLength(numStr);
+	Write(stream, numStr, numStrLen);
+	Write(stream, "\r", 1);
+		
+	/* Add length of "From: <From_t>\r" */
+	totLength += 7L;
+	totLength += WriteCurrentUserAddressList(nilObject);
+	Log(("FromLength: %ld", totLength));
+	
+	/* Add length of "To: <To_t>\r" */
+	totLength += 5L;
+	totLength += WriteAddressList(self, Count(ToRecipients(message)), kToMode, nilObject);
+	Log(("ToLength: %ld", totLength));
+	
+	/* Add length of "Cc: <Cc_t>\r" */
+	totLength += 5L;
+	totLength += WriteAddressList(self, Count(CopyRecipients(message)), kCCMode, nilObject);
+	Log(("CcLength: %ld", totLength));
+	
+	/* Add length of "Bcc: <Cc_t>\r" */
+	totLength += 6L;
+	totLength += WriteAddressList(self, Count(BlindCopyRecipients(message)), kBCCMode, nilObject);
+	Log(("BccLength: %ld", totLength));
+	
+	/* Add length of "Subject: <Subject_t>\r------\r"*/
+	totLength += 17L;
+	totLength += TextLength(subject);
+	Log(("SubjectLength: %ld", totLength));
+	
+	totLength += CalcCardContentLength(self);
+	totLength += 1L;    /* for extra \r padded on end */
+	
+	/* Build NDOCS string and DSIZE string */
+	SPrintF(NDOCS, "NDOCS 0\r");  nLen = CStringLength(NDOCS);
+	SPrintF(DSIZE, "DSIZE %ld\r", totLength);  dLen = CStringLength(DSIZE);
+	
+	Write(stream, NDOCS, nLen);
+	Write(stream, DSIZE, dLen);
+	    
+	Write(stream, "From: ", 6);
+	WriteCurrentUserAddressList(stream);
+	Write(stream, "\r", 1);
+	UpdateStatusAndForceRedraw(announcement, 32);
+	Log(("Wrote from."));
+    
+	Write(stream, "To: ", 4);
+	WriteAddressList(self, Count(ToRecipients(message)), kToMode, stream);
+	Write(stream, "\r", 1);
+	UpdateStatusAndForceRedraw(announcement, 34);
+	Log(("Wrote to."));
+    
+	Write(stream, "Cc: ", 4);
+	WriteAddressList(self, Count(CopyRecipients(message)), kCCMode, stream);
+	Write(stream, "\r", 1);
+	UpdateStatusAndForceRedraw(announcement, 36);
+	Log(("Wrote cc."));
+	
+	Write(stream, "Bcc: ", 5);
+	WriteAddressList(self, Count(BlindCopyRecipients(message)), kBCCMode, stream);
+	Write(stream, "\r", 1);
+	UpdateStatusAndForceRedraw(announcement, 38);
+	Log(("Wrote Bcc."));
+	
+	Write(stream, "Subject: ", 9);
+	WriteText(stream, subject);
+	UpdateStatusAndForceRedraw(announcement, 30);
+	Write(stream, "\r------\r", 8);
+	Log(("Wrote subject."));
+	
+	WriteCardContents(self);
+	Write(stream, "\r", 1);
+	
+	UpdateStatusAndForceRedraw(announcement, 100);
+	Write(stream, "END\r", 4);
+	Log(("WroteCardContents."));
+	
+	// indicate that this transfer is done
+	SetTransferDone(self, true);
+	ProcessTransfers(iPostOffice);
+}
+
+
+Private void
+SetDatesFromText(ObjectID message, ObjectID theText)
+{
+	long date;
+	ulong time;
+	TextRange nRange;
+	char  *buf1, *buf2;
+	long int textLen;
+	
+	textLen = TextLength(theText);
+	nRange.start = 0;
+	nRange.length = textLen;
+	buf1 = NewTransientBuffer(sizeof(char) * textLen * 2);
+	buf2 = NewTransientBuffer(sizeof(char) * (textLen + 1));
+	CopyTextRangeToBuffer(theText, &nRange, (CharactersPointer) buf1);
+	ConvertToMagic8Bit((CharactersPointer) buf1, (Pointer) buf2, textLen);
+	buf2[textLen] = '\0';
+	DestroyTransientBuffer((Pointer) buf1);
+
+	LocalDateAndTime(&date, &time);
+	SetDateReceived(message, date, time);
+
+	ExtractRFC822Date(buf2, &date, &time);
+	ConvertTimeAndDate(iUniversalTimeCity, iCurrentCity, &time, &date);
+	SetDateSent(message, date, time);
+	
+	DestroyTransientBuffer((Pointer) buf2);
+}
+
+/*
+	Read a ProxyMail message from the ShackMailStream
+*/
+Method ObjectID
+ProxyMailTransferTicket_ReceiveMessage(ObjectID self, ObjectID theMSlist, Boolean *success)
+{
+	ObjectID	announcement = StatusAnnouncement(self);
+	ObjectID	message = nilObject;
+	ObjectID	stream = iModem;   /**Stream(self);**/
+	ObjectID	text, list, exception;
+	ulong		dateSent, timeSent;
+	uchar		messageType;
+    ObjectID    theMSmsg;
+	Boolean     theSS;
+    
+	Log(("Jumping into GetMSMessage..."));
+    theMSmsg = GetMSMessage(stream, theMSlist, &theSS);
+	if (theSS == false)
+	{
+	   *success = false;
+	   return nilObject;
+	}
+	message = CopyNear(iPrototypePersonalMessage, iInBoxPlace);
+		
+	if ((exception = Try()) == nilObject) {
+	    SetDatesFromText(message, Date_t(theMSmsg));		
+		UpdateStatusAndForceRedraw(announcement, 10);
+	
+		text = NewNear(Text_, message, nil);
+		ReplaceText(text, Subject_t(theMSmsg));
+		SetSubject(message, text);
+		Destroy( Subject_t(theMSmsg) );
+		SetSubject_t(theMSmsg, nilObject);
+		
+		UpdateStatusAndForceRedraw(announcement, 20);
+	
+		list = MTTAddressList(From_t(theMSmsg), message);
+		SetSender(message, First(list));
+		Clear(list);
+		Destroy(list);
+		Destroy( From_t(theMSmsg));
+		SetFrom_t(theMSmsg, nilObject);
+		UpdateStatusAndForceRedraw(announcement, 30);
+		
+		SetToRecipients(message, MTTAddressList(To_t(theMSmsg), message));
+		UpdateStatusAndForceRedraw(announcement, 32);
+		Destroy( To_t(theMSmsg) );
+		SetTo_t(theMSmsg, nilObject);
+	
+		SetCopyRecipients(message, MTTAddressList(Cc_t(theMSmsg), message));
+		UpdateStatusAndForceRedraw(announcement, 34);
+		Destroy( Cc_t(theMSmsg) );
+		SetCc_t(theMSmsg, nilObject);
+			
+		messageType = kContentTypeTextOnly;   /*** Hardcoded for now ***/
+		if (messageType == kContentTypeEncodedMessage) {
+			ObjectID newMessage;
+			ObjectID wireline = NewTransient(Wireline_, nil);
+			SetStream(wireline, stream);
+			newMessage = ReadObject(wireline, message);
+			// removed call to GenerateImmigrationCardHack();
+			Destroy(wireline);
+			Destroy(message);
+			message = newMessage;
+		} else {
+			text = NewNear(Text_, message, nil);
+			//ReadText(stream, text);
+			ReplaceText(text, Body_t(theMSmsg));
+			AddLast(message, text);
+			Destroy(Body_t(theMSmsg));
+			SetBody_t(theMSmsg, nilObject);
+		}
+		UpdateStatusAndForceRedraw(announcement, 80);
+		Commit();
+	} else {
+		Destroy(message);
+		*success = false;
+		Fail(exception);
+	}
+	
+	*success = true;
+	return message;
+}
+
+IntrinsicMethod void
+ProxyMailTransferTicket_DeliverMessage(ObjectID message)
+{
+	ObjectID	ownLabel = FindCurrentUserProxyMailLabel();
+	ObjectID 	savedStationery;
+
+    Log(("In DeliverMessage"));
+	if (DeliveryChoice(message) == nilObject && ownLabel != nilObject) {
+		ObjectID deliveryChoice = NewNear(DeliveryChoice_, message, nil);
+		ObjectID deliveryChoices = NewNear(ObjectList_, message, nil);
+		
+		Log(("Setting up delivery choice"));
+		// Set up the DeliveryChoice.
+		CopyName(deliveryChoice, iServiceAddressCard);
+		SetAddressLabel(deliveryChoice, CopyNear(ownLabel, deliveryChoice));
+		SetImage(deliveryChoice, Image(iServiceAddressCard));
+		SetService(deliveryChoice, iServiceAddressCard);
+
+        Log(("Installing deliverychoice"));
+		// Install the DeliveryChoice.
+		AddFirst(deliveryChoices, deliveryChoice);
+		SetDeliveryChoices(message, deliveryChoices);
+		SetDeliveryChoiceIndex(message, 1);
+	}
+    
+	Log(("About to deliverOwn."));
+	savedStationery = DirectID (iPostCardStationery);
+	SetIndexical (iPostCardStationery, iBusinessLetterStationery);	
+	DeliverOwn(iInBoxPlace, message);
+	
+	Log(("Done deliverOwn."));
+	SetIndexical (iPostCardStationery, savedStationery);
+}
+
+
+/*
+	Collect ProxyMail messages from the ShackMailStream
+*/
+
+Private Unsigned botField(ObjectID theCard)
+{
+	Unsigned theBot;
+	Dot      theOrig;
+	
+	theBot = 0.0;	
+	ContentSize(theCard, &theOrig);
+	theBot = theOrig.v / 2L;
+	return theBot;
+}
+
+Private ObjectID GetICAL(ObjectID theTT, Boolean *success)
+{
+   ObjectID    theStream = iModem;  /**** = Stream(self); ?? ****/
+   ObjectID    message, text, text2, list;
+   char        nextLine[256], dummyC, *sizeTok, *calBuf, *dummy;
+   long int    sizeTS;
+   long date;
+   ulong time;
+   Boolean    theSS;
+   
+   Flush(theStream);
+   Write(theStream, "c #foo##magiccap#\r", 18L);
+   Write(theStream, "get #bar##ical#\r", 16L);
+   Write(theStream, "max 999\r", 8L);
+   Write(theStream, "types #gif#\r", 12L);
+   Write(theStream, "id 22\r", 6L);
+   Write(theStream, "end\r", 4L);
+
+   // start pulling in the messages
+   message = CopyNear(iPrototypePersonalMessage, iInBoxPlace);
+   ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+   if (theSS == false)
+   {
+      *success = false;
+      return nilObject;
+   }
+	  
+   Log(("Read in dummy TOC (HERE): %s", nextLine));
+   while(1)
+   {
+	   ReadNELine(theStream, (Pointer) nextLine, 127, 10, &theSS);
+	   if (theSS == false)
+	   {
+	     *success = false;
+		 return nilObject;
+	   }
+	   if (CompareBytes(nextLine, "END", 3, NULL) == 0)
+          break;
+	   Log(("Ignoring guts of dummy TOC line %s", nextLine));
+   }
+   Log(("Read in dummy TOC (END): %s", nextLine));
+   ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+   if (theSS == false)
+   {
+     *success = false;
+	 return nilObject;
+   }
+   Log(("Read in ICAL chunk (HERE): %s", nextLine));
+   ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+   if (theSS == false)
+   {
+     *success = false;
+	 return nilObject;
+   }
+   Log(("Read in ICAL chunk (NDOCS 0): %s", nextLine));
+   ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+   if (theSS == false)
+   {
+     *success = false;
+	 return nilObject;
+   }
+   Log(("Read in ICAL chunk (DSIZE ?): %s", nextLine));
+		
+   /* find out length of image chunk - don't use for now, but could be interesting later. */
+   dummy = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+   if (dummy >= nextLine)
+     *dummy = '\0';
+   sizeTok = nextLine + 6;
+   CtoPString(sizeTok);
+   if (!StringToInt(sizeTok, &sizeTS))
+   {
+	   PtoCString(sizeTok);
+	   Log(("Couldn't convert %s to int!\n", sizeTok));
+   }
+   Log(("Length of message is %ld", sizeTS));
+   calBuf = NewTransientBuffer(sizeof(char)*(sizeTS + 1L));
+   ReadWithTimeout(theStream, (Pointer) calBuf, sizeTS, 15000);  // fifteen seconds is plenty
+   calBuf[sizeTS] = '\0';
+   
+   LocalDateAndTime(&date, &time);
+   SetDateReceived(message, date, time);
+   SetDateSent(message, date, time);
+   
+   text = NewNear(Text_, message, nil);
+   text2 = NewNear(Text_, message, nil);
+      
+   ReplaceTextWithLiteral(text, "Current ICAL list");
+   SetSubject(message, text);
+   
+   ReplaceTextWithLiteral(text, "proxy <pythia@@cal.cs.berkeley.edu>");
+   list = MTTAddressList(text, message);
+   SetSender(message, First(list));
+   Clear(list);
+   Destroy(list);
+   
+   ReplaceTextWithLiteral(text, "proxy <pythia@@cal.cs.berkeley.edu>");   
+   SetToRecipients(message, MTTAddressList(text, message));
+   
+   ReplaceTextWithLiteral(text, "");
+   SetCopyRecipients(message, MTTAddressList(text, message));
+   
+   // This  must be the last thing...as I'm keeping "text"
+   ReplaceTextWithLiteral(text, calBuf);
+   AddLast(message, text);
+
+   /* now read the last "END" */
+   ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+   Log(("Read in ICAL chunk (END): %s", nextLine));
+   
+   DestroyTransientBuffer((Pointer)calBuf);
+   Destroy(text2);
+   *success = true;
+   return message;
+}
+
+Method void
+ProxyMailTransferTicket_CollectMessages(ObjectID self)
+{
+	ObjectID	announcement = StatusAnnouncement(self);
+	ObjectID	message;
+	ObjectID	ownLabel = FindCurrentUserProxyMailLabel();
+	ObjectID    stream = iModem;  /**** = Stream(self); ?? ****/
+	ObjectID	service = Service(self);
+	ObjectID    theMSlist, myCard, newStamp, theMes;
+	long int    i, numMessages, numIn, j;
+	Dot         newCenter;
+	char        MESS[55];
+	Boolean     theSS;
+	
+	theMSlist = CurrentMSList(service);
+	DestroyContents(theMSlist);
+	
+	/** ok - ask for inbox.  need to capture a TOC.  **/
+	Log(("Asking for unseen mail..."));
+	Write(iModem, "get #unseen##mail#\r", 19);
+	Write(iModem, "max 9999\r", 9);
+	Write(iModem, "types #mail#\r", 13);
+	Write(iModem, "id 2222\r", 8);
+	Write(iModem, "end\r", 4);
+	
+	Log(("Waiting for TOC"));
+	ReplaceTextWithLiteral(announcement, "Receiving TOC...");
+	PermitRedraw();
+	RunNext(iScheduler);
+
+	theMSlist = GetTOC(iModem, &theSS);
+	if (theSS == false)
+	{
+	   Log(("GetTOC failed!"));
+	   ReplaceTextWithLiteral(announcement, "Failed to receive TOC! Aborting...");
+	   PermitRedraw();
+	   RunNext(iScheduler);
+	   AbortTransfer(iPostOffice,self);
+	   return;
+	}
+	
+	numMessages = Length(theMSlist);
+	SetCurrentMSList(service, theMSlist);
+	
+	// Try to read a message from the ShackMailStream
+	for (i=1L; i<=numMessages; i++)
+	{
+		message = nilObject;
+		if (Catch(streamReadError) == nilObject)
+		{
+		    SPrintF(MESS, "Receiving message %ld of %ld...", i, numMessages);
+			ReplaceTextWithLiteral(announcement, MESS);
+			PermitRedraw();
+			RunNext(iScheduler);
+			
+			Log(("Asking for message %ld of %lf", i, numMessages));
+			message = ReceiveMessage(self, theMSlist, &theSS);
+			if (theSS == false)
+			{
+			   Log(("ReceiveMessage failed!"));
+			   ReplaceTextWithLiteral(announcement, "Failed to receive message! Aborting.");
+			   PermitRedraw();
+			   RunNext(iScheduler);
+			   //AbortTransfer(iPostOffice,self);
+			   return;
+			}
+			
+			updateInfoText(At(theMSlist, i), i);
+			Commit();
+		}
+		
+		// If we succeed, put a ProxyMail stamp on the incoming message
+		myCard = nilObject;
+		if (message != nilObject) 
+		{	
+			DeliverMessage(message);
+			numIn = Length(iInBoxStack);
+		    for (j=1L; j<=numIn; j+=1L)
+			{
+			   myCard = At(iInBoxStack, j);
+			   if (DirectID(Message(myCard)) == DirectID(message))
+			      break;
+			}
+			if (j > numIn)
+			{
+			   Log(("Couldn't find card?!??"));
+			   myCard = nilObject;
+			}
+			
+		    if (Length(Drt_entries(At(theMSlist, i))) >= 1L)
+			{
+			    newStamp = CopyNear(ipMIMEFetchStamp, ipMIMEFetchStamp);
+			    newCenter.h = 0.0;
+			    newCenter.v = botField(myCard);
+			    SwitchContainer(newStamp, myCard);
+			    SetRelativeOrigin(newStamp, &newCenter);
+				DirtyContent(myCard);
+		    }
+		}
+		SetTheTelecard(At(theMSlist, i), myCard);
+	}
+	
+	if (CollectCalendar(service))
+	{
+	   ReplaceTextWithLiteral(announcement, "Fetching ICAL -list...");
+	   PermitRedraw();
+	   RunNext(iScheduler);
+		
+	   message = GetICAL(self, &theSS);
+	   if (theSS == false)
+	   {
+		   Log(("GetICAL failed!"));
+		   ReplaceTextWithLiteral(announcement, "Could not get ICAL -list...");
+		   PermitRedraw();
+		   RunNext(iScheduler);
+		   return;
+	   }
+	   else if (message != nilObject)
+	      DeliverMessage(message);
+	}
+    
+	// Got the core messages - now start extracting MIME components 
+	for (i=1L; i<=numMessages; i++)
+	{
+	   Unsigned prevBot;
+	   Dot      prevDot;
+	   ObjectID nextMIME;
+	   
+	   SPrintF(MESS, "Getting MIME for message %ld of %ld...", i, numMessages);
+	   theMes = At(theMSlist, i);
+	   ExtractMIMEcomponents(theMes, stream);
+	   
+	   numIn = Length(Mime_parts(theMes));
+	   Log(("length is %ld", numIn));
+	   if (numIn > 0L)
+	   {
+	      Log(("getting telecard"));
+	      myCard = TheTelecard(theMes);
+		  
+	      // get rid of the "ipMIMEFetchStamp" stamp
+		  Log(("getting subview"));
+		  newStamp = FirstSubview(myCard);
+		  while(newStamp != nilObject)
+		  {
+		     Log(("checking implements stamp_"));
+		     if (Implements(newStamp, Stamp_))
+			    break;
+			 Log(("nope, going to next"));
+		     newStamp = Next(newStamp);
+		  }
+		  if (newStamp != nilObject)
+		  {
+		     Log(("found stamp, getting origin"));
+		     RelativeOrigin(newStamp, &prevDot);
+			 prevBot = prevDot.v;
+			 ContentSize(newStamp, &prevDot);
+			 prevBot -= prevDot.v / 2L;
+			 
+			 Log(("switching container and hosing."));
+		     SwitchContainer(newStamp, nilObject);
+			 Destroy(newStamp);
+		  }
+		  else
+		  {
+		     prevBot = botField(myCard);
+		  }
+		  
+		  for (j=1L; j<=numIn; j++)
+	      {
+		     ObjectID newerStamp;
+	         /** Now we get to add each of the downloaded images **/
+			 
+			 Log(("getting nextMIME"));
+			 nextMIME = At(Mime_parts(theMes), j);
+			 newerStamp = NewNear(Stamp_, ipMIMEFetchStamp, nil);
+			 SetImage(newerStamp, nextMIME);
+			 
+			 ContentSize(newerStamp, &prevDot);
+			 prevBot += prevDot.v/2L;
+			 prevDot.h = 0L;
+			 prevDot.v = prevBot;
+			 
+			 Log(("Switching container.."));
+			 SwitchContainer(newerStamp, myCard);
+			 SetRelativeOrigin(newerStamp, &prevDot);
+			 ContentSize(newerStamp, &prevDot);
+			 prevBot += prevDot.v + 3L*256L;
+			 DirtyContent(myCard);
+	      }
+	   }
+	}
+		
+	SetTransferDone(self, true);
+	ProcessTransfers(iPostOffice);	
+}
+
+/*
+	Translate the message content into a wireline object and write it to the ShackMailStream
+*/
+Method void
+ProxyMailTransferTicket_WriteEncodedCard(ObjectID self)
+{
+	ObjectID	stream = Stream(self);
+	ObjectID	wireline, exception;
+	ObjectID	processedCard = ProcessedCard(self);
+	ObjectID	card = Card(processedCard);
+	ObjectID	message = Message(card);
+	
+	
+	if ((exception = Try()) == nilObject) {
+		AttachCard(message, card);
+		
+		wireline = NewTransient(Wireline_, nil);
+		SetStream(wireline, stream);
+		WriteObject(wireline, message);
+		Destroy(wireline);
+		Clear(message);
+		Commit();
+	} else {
+		Clear(message);
+		Fail(exception);
+	}
+}
+
+typedef struct {
+	Parameters	header;
+	ObjectID	text;
+} IncludeOneMessageElementParams;
+
+/*
+	This method is called by WriteTextOnly to write message text to the ShackMailStream
+*/
+Private ObjectID
+IncludeOneMessageElement(ObjectID element, IncludeOneMessageElementParams* params)
+{
+	if (element != nilObject) {
+		if (Implements(element, HasText_)) {
+			AppendText(params->text, element);
+		} else if (Implements(element, Document_)) {
+			Each(FieldOf(element, Document_formData), (EachFunction)IncludeOneMessageElement, &params->header);
+			Each(FieldOf(element, Aggregate_contentList), (EachFunction)IncludeOneMessageElement, &params->header);
+		} else if (Implements(element, AttachmentElement_)) {
+			AppendCharacter(params->text, newLineCharacter);
+			AppendCharacter(params->text, newLineCharacter);
+			AppendStringToText(params->text, "\p--------------- Attachment ---------------");
+			AppendCharacter(params->text, newLineCharacter);
+			AppendCharacter(params->text, newLineCharacter);
+			return IncludeOneMessageElement(Document(element), params);
+		}
+	}
+	return nilObject;
+}
+
+/*
+	This method calls the private method IncludeOneMessageElement to strip the text out of
+	a Telecard and write it to the ShackMailStream
+*/
+Method void
+ProxyMailTransferTicket_WriteTextOnly(ObjectID self)
+{
+	ObjectID	stream = iModem;  /**** Stream(self); ****/
+	ObjectID	exception;
+	ObjectID	processedCard = ProcessedCard(self);
+	ObjectID	card = Card(processedCard);
+	ObjectID	message = Message(card);
+	ObjectID	text = NewTransient(Text_, nil);
+	IncludeOneMessageElementParams	params;
+	
+	
+	if ((exception = Try()) == nilObject) {
+		AttachCard(message, card);
+		
+		SetUpParameters(&params.header, 1);
+		params.text = text;
+		Each(message, (EachFunction)IncludeOneMessageElement, &params.header);
+		
+		WriteText(stream, text);
+		
+		Clear(message);
+		Destroy(text);
+		Commit();
+	} else {
+		Clear(message);
+		Destroy(text);
+		Fail(exception);
+	}
+}
+
+Private long int CalcCardContentLength(ObjectID theCard)
+{
+	ObjectID	stream = iModem;  /****Stream(theCard);****/
+	ObjectID	exception;
+	ObjectID	processedCard = ProcessedCard(theCard);
+	ObjectID	card = Card(processedCard);
+	ObjectID	message = Message(card);
+	ObjectID	text = NewTransient(Text_, nil);
+	IncludeOneMessageElementParams	params;
+	long int    theLen = 0L;
+	
+	
+	if ((exception = Try()) == nilObject) {
+		AttachCard(message, card);
+		SetUpParameters(&params.header, 1);
+		params.text = text;
+		Each(message, (EachFunction)IncludeOneMessageElement, &params.header);
+		theLen = TextLength(text);
+		Clear(message);
+		Destroy(text);
+		Commit();
+	} else {
+		Clear(message);
+		Destroy(text);
+		Fail(exception);
+		theLen = 0L;
+	}
+	
+	return theLen;
+}
+
+/*
+	Write the message oontents (text or encoded Telecard) to the ShackMailStream
+*/
+Method void
+ProxyMailTransferTicket_WriteCardContents(ObjectID self)
+{
+	ObjectID	stream = Stream(self);
+
+	WriteTextOnly(self);
+}
+
+Method void
+ProxyMailTransferTicket_Abort(ObjectID self)
+{
+	ObjectID	stream = iModem;
+	ObjectID	announcement = StatusAnnouncement(self);
+
+    //Log(("TransferTicket_Abort has been called..."));
+    //Disconnect(stream);
+	//Log(("Disconnect worked..."));
+	//Close(stream);
+	//Log(("Close worked..."));
+	
+	AbortTransfer(iPostOffice, self);
+	Log(("AbortTransfer worked."));
+ 	//FailSoon(iPostOffice, serverAborted);
+	//Log(("?!"));
+	//Log(("iPostOffice failsoon worked..."));
+	//Log(("Done TransferTicket_Abort"));
+	//Retract(announcement);
+	//Log(("Retraction worked..."));
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS ShackMailService
+
+/*
+	A transfer ticket is an object that Magic Mail uses to keep track of
+	various ongoing transfers. MakeCardTransferTickets() is called to send
+	messages.  
+*/
+Method ObjectID
+ShackMailService_MakeCardTransferTickets(ObjectID self, ObjectID card)
+{
+	ObjectID	transferTicket;
+
+	Log(("MakeCardTransferTickets has been called...."));
+	
+	// Create a new transfer ticket.
+	transferTicket = NewNear(ProxyMailTransferTicket_, self, nil);
+	
+	// Prepare the ticket to use the iSendProgress announcement
+	SetStatusAnnouncement(transferTicket, iSendProgress);
+
+	// This ticket is for sending, not collecting	
+	SetCollectTicket(transferTicket, false);
+
+	// Set up a few more fields of the transfer ticket.
+	SetService(transferTicket, self);
+
+	// Create & attach a new stream to the ticket
+	/****SetStream(transferTicket, NewTransient(ShackMailStream_, nil));****/
+	/****SetStream(transferTicket, iModem);  // does iModem get hosed later??****/
+	SetStream(transferTicket, nilObject);    // hardcode as iModem for now??
+
+	// Create & Set means = telephone
+	SetMeans(transferTicket, NewNear(TelephoneMeans_, self, nil));
+
+	return transferTicket;
+}
+
+Method ObjectID
+ShackMailService_MakeCollectionTransferTicket(ObjectID self, ObjectID service)
+{
+	#pragma unused (service)
+	ObjectID	transferTicket;
+
+    Log(("MakeCollectionTransferTicket has been called..."));
+	
+	
+	// Create a new ticket and fill out some fields
+	transferTicket = NewNear(ProxyMailTransferTicket_, self, nil);
+	// Prepare a status bar
+	SetStatusAnnouncement(transferTicket, iCollectProgress);
+	// Set service = ProxyMail
+	SetService(transferTicket, self);
+	
+	// Create & attach a new stream to the ticket
+	/****SetStream(transferTicket, NewTransient(ShackMailStream_, nil));****/
+	/****SetStream(transferTicket, iModem);  // does iModem get hosed later??****/
+	SetStream(transferTicket, nilObject);    // hardcode as iModem for now??
+	
+	SetIncoming(transferTicket, NewNear(ObjectList_, self, NULL));
+
+	// Mark this as a ticket for collecting	
+	SetCollectTicket(transferTicket, true);
+
+	return transferTicket;
+}
+
+Method Boolean
+ShackMailService_CanConnectNow(ObjectID self, ObjectID messageToSend)
+{
+#pragma unused (self, messageToSend)
+    Str255 numberToDial;
+	ObjectID	announcement = StatusAnnouncement(messageToSend);
+	Boolean  theSS;
+
+    Log(("CanConnectNow has been called..."));
+
+	// Display the status bar, pass ticket for calls to abort
+	AnnounceWithAbort(announcement, messageToSend);
+	ReplaceTextWithLiteral(announcement, "Connecting to Annex...");
+	UpdateStatusAndForceRedraw(announcement, 10);	
+	
+	/* the transfer ticket is messageToSend.  Should pull stream from "Stream" field,
+	   but for now, hardcode as iModem */
+	   
+	if (!CanConnect(iModem))
+	{
+	   Retract(announcement);
+	   return false;
+	}
+	if (Catch(portIsInUse) != nilObject)
+	{
+	   Announce(iCommunicationsError);
+	   Retract(announcement);
+	   return false;
+	}
+	if (Catch(cannotOpenPort) != nilObject)
+	{
+	   Announce(iCommHardwareError);
+	   Commit();
+	   Retract(announcement);
+	   return false;
+	}
+	if (Catch(notEnoughPowerForComms) != nilObject)
+	{
+	   Announce(iNotEnoughPowerForComms);
+	   Commit();  Commit();
+	   Retract(announcement);
+	   return false;
+	}
+	
+	OpenPort(iModem);
+	
+	/** Dial into annex **/
+	LocalizedWithCallingCard(ipTelenumber, numberToDial);
+	UpdateStatusAndForceRedraw(announcement, 20);
+    
+	ReplaceTextWithLiteral(announcement, "Connecting to annex...");
+	PermitRedraw();
+	RunNext(iScheduler);
+
+    if (ConnectToNumber(iModem, numberToDial) == ZERROR)
+	{
+       Commit();  Commit();  Commit();
+       Disconnect(iModem);
+	   Close(iModem);
+	   Retract(announcement);
+	   return false;
+	}
+	
+	ReplaceTextWithLiteral(announcement, "Handshaking with annex...");
+	PermitRedraw();
+	RunNext(iScheduler);
+
+	if (DoAnnexHandshake(iModem) == 0)
+	{
+	   Commit();  Commit();  Commit();
+	   Disconnect(iModem);
+	   Close(iModem);
+	   Retract(announcement);
+	   return false;
+	}
+	
+	// OK - we have a physical connection to the proxy.  Now do authentication
+	ReplaceTextWithLiteral(announcement, "Attempting to authenticate...");
+	PermitRedraw();
+	RunNext(iScheduler);
+	DoAuthenticate(iModem, announcement, &theSS);	
+	if (theSS == false)
+	{
+	   Commit();  Commit();  Commit();
+	   Disconnect(iModem);
+	   Close(iModem);
+	   Retract(announcement);
+	   return false;
+	}
+
+	UpdateStatusAndForceRedraw(announcement, 30);
+	
+	Commit();  Commit();  Commit();
+	return true;
+}
+
+Method Boolean
+ShackMailService_SameConnection(ObjectID self, ObjectID messageToSend, ObjectID previousMessage)
+{
+#pragma unused (self, messageToSend, previousMessage)
+	
+	/**return false;**/  /** for now, always send on same connection... **/
+	
+	Log(("SameConnection has been called...."));
+	return true;
+}
+
+
+Private Unsigned InInbox(ObjectID theMS)
+{
+   ObjectID   theCard, myCard;
+   long int   numIn, j;
+   
+   theCard = TheTelecard(theMS);
+   if (theCard == nilObject)
+   {
+      Log(("nil card in InInbox"));
+      return 0L;
+   }
+	  
+   numIn = Length(iInBoxStack);
+   Log(("length is %ld", numIn));
+   for (j=1L; j<= numIn; j+=1L)
+   {
+      myCard = At(iInBoxStack, j);
+	  if (DirectID(Message(myCard)) == DirectID(Message(theCard)))
+	      return j;
+   }
+   
+   return 0L;
+}
+
+Private void DumpChangeLog(ObjectID theService, ObjectID theStream)
+{
+    ObjectID nextMS, FVmsList;
+	Flags    theFlags;
+	long int i, nummessages, curStrLen, lenDat;
+	char     curStr[15];
+    
+    FVmsList = CurrentMSList(theService);
+    nummessages = Length(FVmsList);
+	Log(("numMessages: %ld", nummessages));
+	
+	for (i=1L, lenDat=0L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   if (InInbox(nextMS) == 0L)
+	   {
+	   	  Log(("Aha! found one not in inbox."));
+	      lenDat += 3L;  /*** for "r <#>\r" ***/
+		  SPrintF(curStr,"%ld", i);
+		  curStrLen = CStringLength(curStr);
+		  lenDat += curStrLen;
+	   }
+    }
+	
+	/* OK - prepare to send document of new messages */
+	Write(theStream, "PUT #log##mail#\r", 16);
+	Write(theStream, "TYPES #mail#\r", 13);
+	Write(theStream, "MAX 9999\r", 9);
+	Write(theStream, "ID 12345\r", 9);
+	Write(theStream, "END\r", 4);
+	
+	/* Send TOC */
+	Write(theStream, "HERE 12345 1 0\r", 15);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE 0\r", 8);
+	Write(theStream, "END\r", 4);
+	
+	Write(theStream, "HERE 12345 1 1\r", 15);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE ", 6);
+	SPrintF(curStr, "%ld", lenDat);
+	curStrLen = CStringLength(curStr);
+	Write(theStream, curStr, curStrLen);
+	Write(theStream, "\r", 1);
+	
+	/* Now loop through and send changes */
+	for (i=1L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   
+	   if (InInbox(nextMS) == 0L)
+	   {
+	      Log(("Aha! found one not in inbox."));
+	      Write(theStream, "r ", 2);
+		  SPrintF(curStr, "%ld", i);
+		  curStrLen = CStringLength(curStr);
+		  Write(theStream, curStr, curStrLen);
+		  Write(theStream, "\r", 1);
+	   }
+	   //theFlags = Info_flags(nextMS);
+	   //if ((theFlags & MS_beenDeleted) && (theFlags & MS_wasReceived))
+	   //{
+	   //    Write(theStream, "r ", 2);
+	   //	 SPrintF(curStr, "%ld", i);
+	   //    curStrLen = CStringLength(curStr);
+	   //    Write(theStream, curStr, curStrLen);
+	   //    Write(theStream, "\r", 1);
+	   //}
+	}
+	Write(theStream, "END\r", 4);
+}
+
+/*
+	Connect to the ShackMailService
+*/
+Method void
+ShackMailService_InitiateConnection(ObjectID self, ObjectID ticket)
+{
+#pragma unused (self)
+	ObjectID	theStream = iModem;    /***= Stream(ticket);***/
+	ObjectID	announcement = StatusAnnouncement(ticket);
+	ObjectID    theMSlist;
+	char     numStr[15];
+	long int numnew, numStrLen;
+	Boolean  theSS;
+
+	Log(("InitiateConnection has been called..."));
+		
+	/*** Now send down a changelog - marks all messages no longer in the
+	     inbox. ***/
+		 
+ 	// ****** THE FOLLOWING WERE COMMENTED OUT FOR ERIC'S JAPAN TRIP
+	// Log(("Dumping changelog."));
+	// ReplateTextWithliteral(announcement, "Sending deletions...");
+	// DumpChangeLog(self, theStream);
+	
+	/*** Changelog sent - now clear out the MSlist etc. ***/
+    ReplaceTextWithLiteral(announcement, "Preparing to send new messages...");
+	PermitRedraw();
+	RunNext(iScheduler);
+
+	DestroyContents(iInBoxStack);
+	theMSlist = CurrentMSList(self);
+	DestroyContents(theMSlist);
+	
+	/*** Figure out how many new messages we'll write ***/
+	numnew = Length(iTransferOutQueue);
+	
+	Write(theStream, "PUT #draft##mail#\r", 18);
+	Write(theStream, "TYPES #mail#\r", 13);
+	Write(theStream, "MAX 9999\r", 9);
+	Write(theStream, "ID 12345\r", 9);
+	Write(theStream, "END\r", 4);
+    
+	/* send TOC */
+	Write(theStream, "HERE 12345 ", 11);
+	SPrintF(numStr, "%ld", numnew);
+	numStrLen = CStringLength(numStr);
+	Write(theStream, numStr, numStrLen);
+	Write(theStream, " 0\r", 3);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE 0\r", 8);
+	Write(theStream, "END\r", 4);
+
+    SetNumSent(self, 0L);
+	SetNumTot(self, numnew);
+}
+
+/*
+	This method specifies what to do when the user taps the 'send' button
+*/
+Method void
+ShackMailService_Send(ObjectID self, ObjectID messageToSend)
+{
+#pragma unused (self)
+
+    Log(("Send is being called..."));
+	
+	if(!CollectTicket(messageToSend))
+	{
+	   // Retract(iSendProgress);
+	   // AnnounceWithAbort(iCollectProgress, messageToSend);
+		SendMessage(messageToSend);
+	}
+	else
+	{
+	    Retract(iSendProgress);
+		AnnounceWithAbort(iCollectProgress, messageToSend);
+		ReplaceTextWithLiteral(iCollectProgress, "Retrieving new mail...");
+		CollectMessages(messageToSend);
+	}
+}
+
+Method void
+ShackMailService_SendAnother(ObjectID self, ObjectID messageToSend)
+{
+    Log(("sendAnother has been called (so am calling Send...)"));
+	Send(self, messageToSend);
+}
+
+Method void
+ShackMailService_Receive(ObjectID self, ObjectID transferTicket)
+{
+#pragma unused (self, transferTicket)
+    Log(("Receive has been called...."));
+}
+
+Method void
+ShackMailService_CompleteTransfer(ObjectID self, ObjectID messageToSend)
+{
+#pragma unused (self, messageToSend)
+    Log(("CompleteTransfer has been called...."));
+}
+
+/*
+	This method closes the connection to ProxyMail
+*/
+Method void
+ShackMailService_TerminateConnection(ObjectID self, ObjectID messageToSend)
+{
+#pragma unused (self)
+	ObjectID	stream = iModem;    /*** = Stream(messageToSend); ***/
+	ObjectID	announcement = StatusAnnouncement(messageToSend);
+
+    Log(("TerminateConnection has been called..."));
+	Retract(announcement);
+	Log(("announcement retracted."));
+
+	Write(stream, "q\r", 2);
+	Flush(stream);
+    Disconnect(stream);
+	Close(stream);
+	Log(("Terminate finished..."));
+}
+
+Method void
+ShackMailService_AbortTransfer(ObjectID self, ObjectID messageToSend)
+{
+	ObjectID announcement = StatusAnnouncement(messageToSend);
+	
+    Log(("AbortTransfer called...(so calling TerminateConnection)"));
+	TerminateConnection(self, messageToSend);
+	Log(("Done terminateconnection."));
+	Retract(iSendProgress);
+	Retract(iCollectProgress);
+	ReplaceTextWithLiteral(announcement, "Finished abort.");
+	Log(("Done retracts."));
+}
+
+Method Boolean
+ShackMailService_CanAcceptAddressLabel(ObjectID self, ObjectID addressLabel)
+{
+#pragma unused (self)
+	return Implements(addressLabel, InternetMailLabel_);
+}
+
+Method Boolean
+ShackMailService_IsNativeAddressLabel(ObjectID self, ObjectID addressLabel)
+{
+#pragma unused (self)
+	return Implements(addressLabel, InternetMailLabel_);
+}
+
+/*	
+	When a package is first installed in the system, InstallInto is called for each
+	object in the software packageÕs receivers list. If you want to do something special
+	when an object is installed, you should override InstallInto. For example, Corridor
+	overrides InstallInto to make space for entrances in the hallway and buildings
+	downtown to lead to packagesÕ scenes.
+	
+	The newObject parameter is the corresponding object in the installList that is to
+	be installed into the receiver. The 'flags' parameters comes from the installFlags
+	in the software package. The 'parameter' parameter comes from the installParameters
+	list. The packageInstallList is a list of the objects that have been installed.
+	This list is used when the package is removed from the system. AddInstalledObject
+	should be called to add the object to this list to let the system know that an
+	object needs to be removed from the receiver.
+	
+	ShackMailService_InstallInto makes the ProxyMail service available to the system
+	when the package is installed.
+*/
+Method void
+ShackMailService_InstallInto(ObjectID self, ObjectID newObject, ulong flags, ObjectID parameter, ObjectID packageInstallList)
+{
+#pragma unused (parameter, flags)
+	Assert(self == newObject);
+	AddInstalledObject(packageInstallList, self, newObject);
+	
+	if (Registered(self)) {
+		InstallIntoSystemLists(self);
+	}
+}
+
+/*
+	This method installs references to this service into all the necessary system lists
+	so that the user can send and collect mail.
+*/
+Method void
+ShackMailService_InstallIntoSystemLists(ObjectID self)
+{
+	ObjectID addressCard = DirectID(iServiceAddressCard);
+	AddUnique(iCollectingMailServices, addressCard);
+	AddUnique(iMailServices, self);		/* fixed: was installing address card */
+	AddUnique(iMailServiceProviders, addressCard);
+	AddUnique(iServices, addressCard);	/* fixed: was installing service */
+	AddUnique(iEnabledServicesList, addressCard);
+}
+
+/*
+	This method removes references to this service from all the system lists, undoing
+	the effects of InstallIntoSystemLists.
+*/
+Method void
+ShackMailService_RemoveFromSystemLists(ObjectID self)
+{
+	ObjectID addressCard = DirectID(iServiceAddressCard);
+	Remove(iCollectingMailServices, addressCard);
+	Remove(iMailServices, self);		/* fixed: was removing address card */
+	Remove(iMailServiceProviders, addressCard);
+	Remove(iServices, addressCard);		/* fixed: was removing service */
+	Remove(iEnabledServicesList, addressCard);
+}
+
+/*
+	This method calls InstallIntoSystemLists or RemoveFromSystemLists, depending on the new value 
+	of registered. If sucessful, it will update the value in the registered field.
+*/
+Method void
+ShackMailService_SetRegistered(ObjectID self, Boolean newValue)
+{
+	if (newValue == Field(self, registered))
+		return;
+		
+	if (newValue)
+		InstallIntoSystemLists(self);
+	else
+		RemoveFromSystemLists(self);
+		
+	SetField(self, registered, newValue);
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MessageStamp
+
+Method void
+MessageStamp_Confirmed(ObjectID self, ObjectID identifier, Boolean confirmFlag)
+{
+#pragma unused (self, identifier)
+	ObjectID message = HeldMessage(self);
+	if (HasObject(message)) {
+		if (confirmFlag) {
+			DeliverMessage(message);
+		} else {
+			Destroy(message);
+		}
+		SetHeldMessage(self, nilObject);
+	} else {
+		PlaySound(iErrorSound);
+	}
+}
+
+
+#undef CURRENTCLASS
+
+#define CURRENTCLASS ProxyMailScene
+  /*** NO CODE FOR NOW FOR PROXYMAILSCENE ***/
+#undef CURRENTCLASS
+@
+
+
+1.1
+log
+@The ProxyMail application - now all mail activites are integrated
+with the MagicCap mail paradigm.
+@
+text
+@d94 2
+d102 1
+d104 1
+d106 1
+d108 1
+d112 1
+d114 1
+d248 1
+d257 1
+d390 1
+a390 1
+	char        NDOCS[32], DSIZE[32];
+d397 6
+d524 1
+a524 1
+ProxyMailTransferTicket_ReceiveMessage(ObjectID self, ObjectID theMSlist)
+d533 1
+d535 7
+a541 1
+    theMSmsg = GetMSMessage(stream, theMSlist);
+d596 1
+d600 1
+d610 1
+d615 1
+d622 1
+d628 2
+a629 1
+
+d634 1
+d654 115
+d780 2
+d787 1
+d793 17
+a809 1
+	theMSlist = GetTOC(iModem);
+d819 17
+a835 1
+			message = ReceiveMessage(self, theMSlist);
+d843 1
+a843 1
+		{			
+d865 1
+d870 19
+d897 1
+d956 1
+d960 1
+a960 1
+	
+d962 1
+a962 4
+	ProcessTransfers(iPostOffice);
+	
+	/**** this may need to be dealt with?? ****/
+	//ClearWaitingMessages(Stream(self));
+d1096 1
+a1096 8
+	if (IncludeEncodedCard(Service(self))) {
+		//WriteByte(stream, kContentTypeEncodedMessage);
+		//WriteEncodedCard(self);
+		WriteTextOnly(self);  /*** For now, only do text only messages ***/
+	} else {
+		//WriteByte(stream, kContentTypeTextOnly);
+		WriteTextOnly(self);
+	}
+d1102 1
+a1102 1
+	ObjectID	stream = iModem;    /*** = Stream(self); ***/
+d1105 14
+a1118 10
+    Log(("TransferTicket_Abort has been called..."));
+	FailSoon(iPostOffice, serverAborted);
+	Log(("iPostOffice failsoon worked..."));
+    Disconnect(stream);
+	Log(("Disconnect worked..."));
+	Close(stream);
+	Log(("Close worked..."));
+	Retract(announcement);
+	Log(("Retraction worked..."));
+	Log(("Done TransferTicket_Abort"));
+a1179 1
+	
+d1194 1
+d1200 1
+d1237 4
+d1245 1
+d1251 4
+d1258 1
+d1264 14
+a1279 1
+	/** Now go ahead and handshake with annex **/
+d1342 1
+a1342 10
+	   
+	   //theFlags = Info_flags(nextMS);
+	   //if ((theFlags & MS_beenDeleted) && (theFlags & MS_wasReceived))
+	   //{
+	   //   lenDat += 3L;  /**** for "r <#>\r" ****/
+	   //   SPrintF(curStr, "%ld", i);
+	   //   curStrLen = CStringLength(curStr);
+	   //   lenDat += curStrLen;
+	   //}
+	}
+a1401 1
+	
+d1404 1
+d1406 2
+a1407 3
+    Write(iModem, "c #steve##magiccap#\r", 20);
+	
+	
+d1410 5
+a1414 2
+	Log(("Dumping changelog."));
+	DumpChangeLog(self, theStream);
+d1417 4
+a1445 1
+	Log(("InitiateConnection has been called..."));
+d1459 3
+d1463 1
+d1468 1
+d1505 3
+a1507 1
+	
+a1512 1
+	Retract(announcement);
+d1518 2
+d1522 5
+@

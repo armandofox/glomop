@@ -1,0 +1,181 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	96.08.23.19.57.47;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.07.25.22.12.27;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+
+#include "glomopTk.h"
+
+
+/* $Id: test2.c,v 1.5 96/08/22 19:14:35 glomop Exp $ */
+
+int main(int argc, char **argv) {
+  GM_ConnectId  cID;
+  GM_DocId      dID;
+  unsigned      numC, i;
+  GM_DocChunk  *chunks = NULL;
+  GM_DocLocator loc;
+  int maxx, maxy;
+  int scale;
+  GM_QosPrefs myPrefs;
+  char mimetype[256];
+  char htype[256];
+
+  if (glomop_main_synch() != 0) {
+    return 1;
+  }
+
+  if (argc != 4) {
+    fprintf(stderr, "Usage: test2 proxyhost proxyport uname\n");
+    return 1;
+  }
+
+  /* OK, connect to a proxy */
+  cID = GM_ConnectProxy_Unauth(argv[1], argv[2], argv[3], 0);
+  if (cID == 0) {
+    fprintf(stderr, "GM_ConnectProxy_Unauth failed.\n");
+    return 1;
+  }
+
+  printf("maxx (pixels): ");
+  if (scanf("%d", &maxx) != 0) {
+    sprintf(myPrefs.prefname, "maxx");
+    myPrefs.prefval = maxx;
+    myPrefs.prefweight = 255;
+    if (maxx != 0)
+      GM_SetQosPrefs(cID, "IcapImage4colour", 1, &myPrefs);
+  }
+
+  printf("maxy (pixels): ");
+  if (scanf("%d", &maxy) != 0){
+    sprintf(myPrefs.prefname, "maxy");
+    myPrefs.prefval = maxy;
+    myPrefs.prefweight = 255;
+    if (maxy != 0)
+      GM_SetQosPrefs(cID, "IcapImage4colour", 1, &myPrefs);
+  }
+
+  printf("mimetype: ");
+  if (scanf("%s", mimetype) == 0)
+    exit(1);
+  printf("htype: ");
+  if (scanf("%s", htype) == 0)
+    exit(1);
+  if (strcmp(mimetype, "n") != 0)
+    GM_ChangeMimeHTypeBinding(cID, mimetype, htype);
+
+  while(1) {
+    char input[1024];
+    char devtype[256];
+
+    printf("Client device type: ");
+    if (scanf("%s", &(devtype[0])) == 0)
+      break;
+    if (strcmp("n", devtype) != 0)
+      GM_RegisterDeviceClass(cID, devtype);
+    else
+      printf("Not sending type\n");
+
+    /* Grab a document */
+    printf("URL: ");
+    if (scanf("%s", &(input[0])) == 0)
+      break;
+    printf("scale (0-100): ");
+    if (scanf("%d", &scale) == 0)
+      break;
+    sprintf(myPrefs.prefname, "scale");
+    myPrefs.prefval = scale;
+    myPrefs.prefweight = 255;
+    if (scale != 0)
+      GM_SetQosPrefs(cID, "IcapImage4colour", 1, &myPrefs);
+
+    strcpy(loc.doc_url, input);
+    dID = GM_GetDocSynch(cID, loc, &numC, &chunks);
+    if (dID == 0) {
+      fprintf(stderr, "GM_GetDocSynch failed.\n");
+      return 1;
+    }
+
+    fprintf(stdout, "\n\nThere were %u chunks returned.\n", numC);
+    for (i=0; i<numC; i++) {
+      int q;
+
+      fprintf(stdout, "Chunk %u:\n", i);
+      fprintf(stdout, "  cID %ld\n", chunks[i].chunk_id);
+      fprintf(stdout, "  dID %ld\n", chunks[i].doc_id);
+      fprintf(stdout, "  rDL %s\n", chunks[i].refine_dl.doc_url);
+      fprintf(stdout, "  mTP %s\n", chunks[i].mime_type.mimetype);
+      fprintf(stdout, "  bLN %ld\n", chunks[i].blob_len);
+      fprintf(stdout, "  mLN %ld\n      ", chunks[i].metadata_len);
+
+      for (q=0; q< (10 < chunks[i].metadata_len ? 10 : chunks[i].metadata_len);
+	   q++)
+	fprintf(stdout, "%d ", ((unsigned char *) chunks[i].metadata_obj)[q]);
+      fprintf(stdout, "\n");
+    }
+
+    GM_CloseDoc(cID, dID);
+    free(chunks);
+  }
+  GM_DisconnectProxy(cID);
+
+  return 0;
+}
+@
+
+
+1.1
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d1 8
+d15 3
+a17 1
+#include "tcl.h"
+d25 5
+d31 1
+a31 1
+  if (glomop_main_synch() == TCL_ERROR) {
+d47 27
+d76 9
+d90 8
+d108 2
+d116 5
+@

@@ -1,0 +1,563 @@
+head	1.1;
+access;
+symbols
+	stable:1.1
+	current:1.1
+	release:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	96.05.31.22.21.08;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Hash function test files.
+@
+text
+@/*
+ * glomopTk_utils.c --
+ *
+ * This file provides utility routines for the core glomop functions.
+ * Included are:
+ *
+ *   o Time and Date routines
+ *   o socket convenience routines
+ *
+ * $Id: glomopTk_utils.c,v 1.2 1996/02/21 03:40:57 gribble Exp $
+ * 
+ * $Log: glomopTk_utils.c,v $
+ * Revision 1.2  1996/02/21 03:40:57  gribble
+ * Added linked-list data structure manipulation routines.
+ *
+ * Revision 1.1  1996/02/21 03:24:24  gribble
+ * Added socket convenience routines.  These have been extensively debugged
+ * in the past, so they should be ok.
+ *
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <errno.h>
+#include <netdb.h>
+#ifdef _AIX
+#include <sys/select.h>
+#endif
+
+#include "glomopTk_utils.h"
+
+extern int errno; 
+static char gm_rcsid[] = "$Id: glomopTk_utils.c,v 1.2 1996/02/21 03:40:57 gribble Exp $";
+
+
+/********* Socket convenience routines ***********/
+int saccept(int s)
+{
+    struct sockaddr_in from;
+    int     fromlen;
+    int     ns;
+
+    fromlen = sizeof (from);
+    if ((ns = accept (s, &from, &fromlen)) < 0)
+        return -1;
+    return ns;
+}
+
+int nbaccept(int s, int *rs)
+{
+   fd_set fdset;
+   static struct timeval timeout = {0, 0};  /* For a poll */
+   int    val, socket_talk;
+
+   FD_ZERO(&fdset);
+   FD_SET(s, &fdset);
+   val = select(FD_SETSIZE, (int *) &fdset, NULL, NULL, &timeout);
+
+   if ((val == 0) || (val == -1))
+     return val;
+
+   /* The socket is ready for an accept, so perform it. */
+   socket_talk = saccept(s);
+   if (socket_talk < 0)
+   {
+      if ((errno == EWOULDBLOCK) || (errno == EAGAIN))
+         return 0;
+      return -1;  /* ERROR */
+   }
+   *rs = socket_talk;
+   return 1;  /* SUCCESS */
+
+}
+
+int sconnect(char *hostname, char *servicename)
+{
+    struct sockaddr_in remote;
+    struct sockaddr_in local;
+    int     s;
+    int     protonum;
+
+    if (make_inetaddr (hostname, servicename, &remote) < 0)
+        return -1;
+
+    if ((protonum = protonumber ("tcp")) < 0)
+        return -1;
+
+    if ((s = socket (PF_INET, SOCK_STREAM, protonum)) < 0)
+        return -1;
+    
+    if (make_inetaddr ((char *) 0, (char *) 0, &local) < 0)
+        return -1;
+
+    if (bind (s, &local, sizeof (local)) < 0)
+        return -1;
+
+    if (connect (s, &remote, sizeof (remote)) < 0)
+        return -1;
+
+    return s;
+}
+
+int slisten(char *servicename)
+{
+    struct sockaddr_in inaddr;
+    int     s;
+    int     protonum;
+
+    if ((protonum = protonumber ("tcp")) < 0)
+        return -1;
+
+    if ((s = socket (PF_INET, SOCK_STREAM, protonum)) < 0)
+        return -1;
+
+    if (make_inetaddr ((char *) 0, servicename, &inaddr) < 0)
+        return -1;
+
+    if (bind (s, &inaddr, sizeof (inaddr)) < 0)
+        return -1;
+
+    if (listen (s, 3) < 0)
+        return -1;
+
+    return s;
+}
+
+int sportnum(int s)
+{
+    struct sockaddr sockname;
+    int     len;
+
+    len = sizeof (sockname);
+    if (getsockname (s, &sockname, &len) < 0)
+        return -1;
+
+    if (sockname.sa_family != AF_INET)
+        return -1;
+
+    return ((struct sockaddr_in *) (&sockname))->sin_port;
+}
+
+int make_inetaddr(char *hostname, char *servicename, 
+                  struct sockaddr_in *inaddr)
+{
+    struct hostent *host;
+    struct servent *service;
+
+    inaddr->sin_family = AF_INET;
+    if (hostname == 0)
+      inaddr->sin_addr.s_addr = 0;
+    else if (isdigit (*hostname))
+      inaddr->sin_addr.s_addr = inet_addr(hostname);
+    else
+    {
+        if ((host = gethostbyname(hostname)) == 0)
+        {
+            fprintf(stdout, "Unknown host..\n");
+            return -1;
+        }
+        if (host->h_addrtype != AF_INET)
+        {
+            fprintf(stdout, "Unknown af\n");
+            return -1;
+        }
+        /*bcopy (host->h_addr, &inaddr->sin_addr.s_addr, host->h_length);*/
+        memcpy(&inaddr->sin_addr.s_addr, host->h_addr, host->h_length);
+    }  
+
+    if (servicename == 0)
+      inaddr->sin_port = 0;
+    else if (isdigit (*servicename))
+      inaddr->sin_port = atoi (servicename);
+    else
+    {
+        if ((service = getservbyname (servicename, "tcp")) == 0)
+        {
+            fprintf(stdout, "Unknown service.\n");
+            return -1;
+        }
+        inaddr->sin_port = service->s_port;
+    }
+    return 0;
+}
+
+int protonumber(char *protoname)
+{
+    struct protoent *proto;
+
+    if ((proto = getprotobyname (protoname)) == 0)
+        return -1;
+
+    return proto->p_proto;
+}
+
+int test_readable(int s)
+{
+   fd_set fdset;
+   static struct timeval timeout = {0, 0};  /* For a poll */
+   int    val;
+
+   FD_ZERO(&fdset);
+   FD_SET(s, &fdset);
+   val = select(FD_SETSIZE, (int *) &fdset, NULL, NULL, &timeout);
+
+   if (val > 0)
+      return 1;
+
+   return val;
+}
+
+int test_writable(int s)
+{
+   fd_set fdset;
+   static struct timeval timeout = {0, 0};  /* For a poll */
+   int    val;
+
+   FD_ZERO(&fdset);
+   FD_SET(s, &fdset);
+   val = select(FD_SETSIZE, NULL, (int *) &fdset, NULL, &timeout);
+
+   if (val > 0)
+      return 1;
+
+   return val;
+}
+
+/********* Linked-list utilities ***********/
+
+#define LL_HEAPSIZE 50
+static ll heap_o_ll = NULL;   /* Heap of free nodes for alloc and dealloc */
+
+/* Some private functions */
+ll   Allocate_ll(void);
+void Free_ll(ll freeMe);
+
+int ll_add_to_end(ll *addToMe, void *data)
+{
+   ll temp;
+
+   temp = *addToMe;
+   if (temp == NULL)
+   {
+      *addToMe = temp = Allocate_ll();
+      temp->data = data;
+      temp->prev = temp->next = NULL;
+      return 1;
+   }
+
+   while (temp->next != NULL)
+     temp = temp->next;
+
+   temp->next = Allocate_ll();
+   (temp->next)->prev = temp;
+   (temp->next)->next = NULL;
+   (temp->next)->data = data;
+   return 1;
+}
+
+int ll_add_to_start(ll *addToMe, void *data)
+{
+   ll temp;
+
+   temp = *addToMe;
+   if (temp == NULL)
+   {
+      *addToMe = temp = Allocate_ll();
+      temp->data = data;
+      temp->prev = temp->next = NULL; 
+      return 1;
+   }
+
+   temp->prev = Allocate_ll();
+   (temp->prev)->next = temp;
+   (temp->prev)->prev = NULL;
+   (temp->prev)->data = data;
+   *addToMe = temp->prev;
+
+   return 1;
+
+}
+
+ll  ll_find(ll *findInMe, void *data, int (*compare)(void *d1, void *d2))
+{
+   ll temp = *findInMe;
+
+   while (temp != NULL)
+   {
+     if (compare(data, temp->data) == 0)  /* ie the same */
+        return temp;
+     
+     temp = temp->next;
+   }
+   return temp;
+}
+
+int  ll_del(ll *delFromMe, void *data, int (*compare)(void *d1, void *d2),
+            void (*nukeElement)(void *nukeMe))
+{
+   ll temp = *delFromMe;
+
+   while (temp != NULL)
+   {
+      if (compare(data, temp->data) == 0)  /* ie the same */
+      {
+         if (temp->prev != NULL)
+           (temp->prev)->next = temp->next;
+
+         if (temp->next != NULL)
+           (temp->next)->prev = temp->prev;
+
+         if (temp == *delFromMe)
+            *delFromMe = temp->next;
+
+         if (nukeElement != NULL)
+            nukeElement(temp->data);
+         Free_ll(temp);
+         return 1;
+      }
+      temp = temp->next;
+   }
+   return 0;
+}
+
+int ll_destroy(ll *destroyMe, void (*nukeElement)(void *nukeMe))
+{
+   ll temp = *destroyMe, next;
+
+   while (temp != NULL)
+   {
+      next = temp->next;
+      if (nukeElement != NULL)
+         nukeElement(temp->data);
+      Free_ll(temp);
+      temp = next;
+   }
+   *destroyMe = NULL;
+   return 1;
+}
+
+ll   Allocate_ll(void)
+{
+   int counter;
+   ll  temp_pointer;
+
+   /* if heap is null, am out of ll elements and must allocate more */
+   if (heap_o_ll == NULL)
+   {
+      heap_o_ll = (ll_node *) malloc(LL_HEAPSIZE * sizeof(ll_node));
+      if (heap_o_ll == NULL)
+      {
+         fprintf(stderr, "Out of memory!\n");
+         exit(1);
+      }
+      for (counter=0; counter < LL_HEAPSIZE - 1; counter++)
+      {
+          (heap_o_ll + counter)->data = NULL;
+          (heap_o_ll + counter)->prev = NULL;
+          (heap_o_ll + counter)->next = (heap_o_ll + counter + 1);
+      }
+      (heap_o_ll + LL_HEAPSIZE - 1)->next = NULL;
+   }
+
+   /* Have a workable heap.  Splice off top and return pointer. */
+   temp_pointer = heap_o_ll;
+   heap_o_ll = heap_o_ll->next;
+   temp_pointer->next = NULL;
+   return temp_pointer;
+}
+
+void Free_ll(ll freeMe)
+{
+   freeMe->next = heap_o_ll;
+   heap_o_ll = freeMe;
+}
+
+
+int ll_build(ll *buildMe, char *buildFromMe)
+{
+ /* Takes string of form [a, b, c, d, e] and builds linked list with
+    elements from the string.  Malloc's space for new linked list element
+    strings. */
+
+    char *end, *start, *data, *temp;
+
+    data = (char *) malloc(sizeof(char) * (strlen(buildFromMe)+1));
+    if (data == NULL)
+    {
+      fprintf(stderr, "Out of memory in ll_build!\n");
+      return 0;
+    }
+    strcpy(data, buildFromMe);
+    start = end = data + 1;
+    
+    while ((*end != ']') && (*end != '\0'))
+    {
+      while (*start == ' ')
+      {
+        start++;  end++;
+      }
+
+      if (*end == ',')
+      {
+          *end = '\0';
+          temp = (char *) (malloc(sizeof(char) * (strlen(start)+1)));
+          if (temp == NULL)
+          {
+             fprintf(stderr, "Out of memory in ll_build!\n");
+             return 0;
+          }
+          strcpy(temp, start);
+          ll_add_to_end(buildMe, (void *) temp);
+          start = end + 1;
+      }
+      end++;
+    }
+    *end = '\0';
+    temp = (char *) (malloc(sizeof(char) * (strlen(start)+1)));
+    if (temp == NULL)
+    {
+       fprintf(stderr, "Out of memory in ll_build!\n");
+       return 0;
+    }
+    strcpy(temp, start);
+    ll_add_to_end(buildMe, (void *) temp);
+    free(data);
+    return 1;
+}
+
+/****************** Hash table routines *****************/
+
+int chained_hash_create(int num_slots, hash_table *rt)
+{
+   hash_table  retval;
+   hash_el    *sArray;
+   int i;
+
+   /* Creating a chained hash table is as simple as allocating room
+      for all of the slots. */
+   
+   sArray = retval.slot_array = (hash_el *) malloc(num_slots*sizeof(hash_el));
+   if (retval.slot_array == NULL)
+      return -1;
+
+   retval.num_elements = num_slots;
+   *rt = retval;
+
+   /* Initialize all slots to have a null entry */
+   for (i=0; i<num_slots; i++)
+     sArray[i] = NULL;
+
+   return 0;
+}
+
+int chained_hash_destroy(hash_table ht, deletor d)
+{
+   int      i, numEl;
+   hash_el *sArray;
+
+   /* Destroying a hash table first implies destroying all of the
+      lists in the table, then freeing the table itself. */
+
+   for (i=0, numEl=ht.num_elements, sArray=ht.slot_array; i<numEl; i++)
+   {
+      if (sArray[i] != NULL)
+      {
+         /* We must destroy the list in this slot */
+         ll_destroy(&(sArray[i]), d);
+         sArray[i] = NULL;
+      }
+   }
+   free(sArray);
+   return 0;
+}
+
+int chained_hash_insert(hash_table ht, void *element, hash_function f)
+{
+   int  slotnum;
+   ll  *slotList;
+
+   slotnum = f(element, ht.num_elements);
+   if (! ((slotnum >= 0) && (slotnum < ht.num_elements)) )
+     return -1;   /* f is bad */
+
+   slotList = &(ht.slot_array[slotnum]);
+   if (ll_add_to_start(slotList, element) != 1)
+     return -1;   /* list insert failed */
+
+   return 0;
+}
+
+void *chained_hash_search(hash_table ht, void *element, hash_function f,
+                          sc_comparator c)
+{
+   ll   *slotList, foundEl;
+   int   slotnum;
+
+   slotnum = f(element, ht.num_elements);
+   if (! ((slotnum >= 0) && (slotnum < ht.num_elements)) )
+     return NULL;  /* f is bad */
+
+   slotList = &(ht.slot_array[slotnum]);
+   if (slotList == NULL)
+     return NULL;  /* no list, no element */
+
+   foundEl = ll_find(slotList, element, c);
+   if (foundEl == NULL)
+     return NULL;
+   return foundEl->data;
+}
+
+int chained_hash_delete(hash_table ht, void *element, hash_function f,
+                          deletor d, sc_comparator c)
+{
+   ll   *slotList;
+   int   slotnum;
+
+   slotnum = f(element, ht.num_elements);
+   if (! ((slotnum >= 0) && (slotnum < ht.num_elements)) )
+     return 0;  /* f is bad */
+
+   slotList = &(ht.slot_array[slotnum]);
+   if (slotList == NULL)
+     return 0;  /* no list, no element */
+
+   return ll_del(slotList, element, c, d);
+}
+
+@

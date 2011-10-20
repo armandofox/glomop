@@ -1,0 +1,2989 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	97.12.13.01.44.08;	author abrown;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.12.10.04.43.09;	author abrown;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.12.10.01.39.09;	author abrown;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.12.06.02.11.52;	author abrown;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.12.03.01.51.03;	author abrown;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.12.03.00.57.34;	author abrown;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.12.02.23.22.17;	author abrown;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.02.01.00.31;	author abrown;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.01.23.46.07;	author abrown;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.12.01.23.44.32;	author abrown;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@New implementation of backend that tracks child processes. Many bugs fixed.
+Many bugs probably introduced.
+
+Only restrictions on jobs now is that they not setuid and that they
+not mess with /proc or ptrace.
+
+Some bogons in CPU accounting remain.
+@
+text
+@/* $Id: backend.c,v 1.9 1997/12/10 04:43:09 abrown Exp $
+ *
+ * Executor back-end for CS294-8 project
+ *
+ * Can be compiled with -DTEST for unit testing.
+ *
+ * Copyright (c) 1997 The Regents of the University of California.
+ * All Rights Reserved.
+ *
+ * Author: Aaron Brown <abrown@@cs.berkeley.edu>
+ *
+ * $Log: backend.c,v $
+ * Revision 1.9  1997/12/10 04:43:09  abrown
+ * Make backend ignore negative pids, since otherwise we end up
+ * suspending/killing/etc the whole executor.
+ *
+ * Revision 1.8  1997/12/10 01:39:09  abrown
+ * Stop leaking stdout and stderr file descriptors
+ *
+ * Revision 1.7  1997/12/06 02:11:52  abrown
+ * Add some code stolen from top to make backend_query_nodestatus
+ * work. There's one glitch, in that the CPU utilization is for the
+ * last second of CPU; a background thread should accumulate this over
+ * longer time periods.
+ *
+ * Revision 1.6  1997/12/03 01:51:03  abrown
+ * First-cut implementation of backend. Not tested much. backend_exec() is known
+ * to work; the rest of the functions may or may not.
+ *
+ * Child process following not yet implemented, but CPU accounting is.
+ *
+ * Revision 1.5  1997/12/03 00:57:34  abrown
+ * Added CPU usage monitoring.
+ * Checkpoint before switching to cleaner, encapsulated /proc interface.
+ *
+ * Revision 1.4  1997/12/02 23:22:17  abrown
+ * Implement a very, very basic backend. Job execution and control should work,
+ * but monitoring functionality is minimal to non-existent.
+ *
+ * Revision 1.3  1997/12/02 01:00:31  abrown
+ * Enhance backend_exec to find the first child forked by the shell, and to
+ * return that as the process ID to the caller.
+ *
+ * Revision 1.2  1997/12/01 23:46:07  abrown
+ * Fix typo in function name (it *should* be backend_exec).
+ *
+ * Revision 1.1  1997/12/01 23:44:32  abrown
+ * Initial implementation of a piece of the executor backend
+ * (backend_exec()). This is almost a stub version for now.
+ *
+ */
+
+#include "backend.h"
+#include "top-interface.h"
+#include "config_cs294.h"
+
+#include <stdio.h>
+#include <procfs.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <signal.h>
+#include <dirent.h>
+#include <sys/fcntl.h>
+#include <sys/wait.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <assert.h>
+#include <errno.h>
+#include <ctype.h>
+#include <pthread.h>
+
+/*
+ * Structures
+ */
+typedef struct _backend_resources {
+	float 		ucpu;
+	float 		scpu;
+	float 		wcpu;
+	uint64_t	ucyc;
+	uint64_t	scyc;
+
+	int   		tmem;
+	int   		rmem;
+} b_resources;
+
+typedef struct _backend_child {
+	pid_t		pid;
+	pid_t		ppid;
+	struct _backend_child *next;
+} b_child;
+
+/*
+ * Local utility functions
+ */
+static int getprocfd(pid_t pid, char *subfile, int mode, int *fd);
+
+static int monitor_child_pid(pid_t masterpid, pid_t newpid);
+static int add_child_pid(pid_t masterpid, pid_t newpid);
+static int monitor_master_pid(pid_t masterpid, int catchkid);
+static int ignore_master_pid(pid_t masterpid);
+static int ignore_child_pid(pid_t masterpid, pid_t pid);
+static int remove_child_pid(pid_t masterpid, pid_t pid);
+static int known_pid(pid_t pid);
+static int get_children(pid_t masterpid, pid_t **kids, int *num);
+static int get_children_locked(pid_t masterpid, pid_t **kids, int *num);
+static void update_pid(pid_t pid, b_child **newprocs, b_child **deadprocs, 
+		       pid_t ppid, int restart);
+static int update_db(void);
+static int recover_db(void);
+static int enable_forktrap(int procfd);
+static int query_resources(pid_t mpid, b_resources *r);
+static int put_resources(pid_t mpid, b_resources *r);
+
+void *     backend_monitor_thread_fn(void *p); /* must update global_cpu_pct */
+
+/*
+ * Globals
+ */
+static float global_cpu_pct = 0.0;
+pthread_mutex_t cpupct_mutex;
+pthread_mutex_t mon_mutex;
+
+/*
+ * Test function for unit testing
+ */
+#ifdef TEST
+int
+main(int argc, char **argv)
+{
+	pid_t pid;
+	int rval;
+	int err, out;
+	float load[3];
+	float cpupct,mempct,swappct;
+
+	backend_initialize();
+
+	rval = backend_query_nodestatus(load, &cpupct, &mempct, &swappct);
+
+	if (rval != BACKEND_SUCCESS) {
+		fprintf(stderr,"query_nodestatus broken!\n");
+	} else {
+		printf("Load: %.2f/%.2f/%.2f CPU: %.1f%% Mem: %.1f%% Swap: %.1f%%\n",
+			load[0],load[1],load[2],
+			cpupct, mempct,swappct);
+	}
+	
+	if (argc != 2) {
+		fprintf(stderr,"Usage: backend command_string\n");
+		exit(1);
+	}
+
+	out = open("job_stdout", O_WRONLY|O_CREAT|O_TRUNC, 0666);
+	err = open("job_stderr", O_WRONLY|O_CREAT|O_TRUNC, 0666);
+	if (!out || !err) {
+		fprintf(stderr,
+			"Cannot open output files (outfd %d, errfd %d)\n",
+			out, err);
+		exit(1);
+	}
+	rval = backend_exec(argv[1], &pid, out, err);
+
+	if (rval == BACKEND_SUCCESS)
+		printf("Exec succeeded, pid %d\n",pid);
+	else
+		printf("Exec failed!\n");
+
+	return 0;
+}
+#endif
+
+
+/**
+ ** INTERNAL CONTROL FUNCTIONS
+ **/
+
+char *_foo1, *_foo2, *_foo3, *_foo4;
+/*
+ * Initialize the backend 
+ */
+int 
+backend_initialize(void)
+{
+	struct statics ss;
+	struct system_info si;
+	int err;
+
+	/* Set up the top module */
+	ss.procstate_names = &_foo1;
+	ss.cpustate_names = &_foo2;
+	ss.memory_names = &_foo3;
+	ss.order_names = &_foo4;
+	top_machine_init(&ss);
+	get_system_info(&si);	/* prime CPU monitoring */
+
+	if ((err = initialize_monitoring()) != BACKEND_SUCCESS)
+		return err;
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Reattach a lost process (for recovery)
+ */
+int
+backend_reattach(pid_t pid)
+{
+	/* XXX STUB (should find all existing children too) */
+
+	int fd, err;
+
+	DEBUG_LOG("backend_reattach(%d) -- called\n",
+		  pid, NULL, NULL, NULL);
+
+	if (known_pid(pid))
+		return BACKEND_EXISTS;
+
+	DEBUG_LOG("backend_reattach(%d) -- newPID\n",
+		  pid, NULL, NULL, NULL);
+
+	err = getprocfd(pid, "psinfo", O_RDONLY, &fd);
+	if (err) {
+		return err;
+	} else {
+		DEBUG_LOG("backend_reattach(%d) -- got procfd\n",
+			  pid, NULL, NULL, NULL);
+		close(fd);
+		err = monitor_master_pid(pid, 0);
+		if (err)
+			return err;
+	}
+
+	DEBUG_LOG("backend_reattach(%d) -- added\n",
+		  pid, NULL, NULL, NULL);
+
+	if (!known_pid(pid)) {
+		DEBUG_LOG("backend_reattach(%d) -- ADD FAILED!!!\n",
+			  pid, NULL, NULL, NULL);
+		return BACKEND_FAIL;
+	}
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Reap and stop monitoring a finished job
+ */
+int
+backend_reap(pid_t pid)
+{
+	int rtn, status;
+
+	if (!known_pid(pid)) 
+		return BACKEND_NOTFOUND;
+
+	rtn = wait4(pid, &status, WNOHANG, NULL);
+
+	if (rtn == 0)
+		return BACKEND_NOTZOMBIE;
+	else if (rtn == -1)
+		return BACKEND_NOTFOUND;
+	else {
+		return ignore_master_pid(pid);
+	}
+}
+
+/**
+ ** PROCESS CONTROL FUNCTIONS
+ **/
+
+/*
+ * Begin execution of a submitted job.
+ */
+int
+backend_exec(char *commandline, pid_t *pid, int stdout_fd, int stderr_fd)
+{
+	pid_t shellpid;
+	unsigned char *databuf;
+	int procfd, err;
+	long procop;
+	sysset_t fork_set;
+	DIR *d;
+	struct dirent *de;
+	int i;
+
+	if ((shellpid = fork()) == 0) {
+		/* 
+		 * Child
+		 *
+		 * We redirect the child outputs, set up this process (and
+		 * its children) to stop-on-fork, then spawn off a subshell 
+		 * to process the job's commandline and run the job
+		 */
+
+		/*
+		 * Close all file descriptors that we don't need.
+		 */
+		d = opendir("/proc/self/fd");
+		assert(d != NULL);
+
+		while ((de = readdir(d)) != NULL) {
+			i = atoi(de->d_name);
+			if (i != d->dd_fd && i != stdout_fd && i != stderr_fd
+			    && i > 2)
+				close(i);
+		}
+		closedir(d);
+
+		/* 
+		 * Setup stop-on-fork 
+		 */
+		err = getprocfd(0, "ctl", O_WRONLY, &procfd);
+		assert(err == BACKEND_SUCCESS);
+		enable_forktrap(procfd);
+		close(procfd);
+
+		/* Redirect stdout/stderr */
+		if (stdout_fd != 0)
+			dup2(stdout_fd, STDOUT_FILENO);
+		if (stderr_fd != 0)
+			dup2(stderr_fd, STDERR_FILENO);
+
+		/* Ignore SIGUSR1/SIGUSR2 */
+		signal(SIGUSR1, SIG_IGN);
+		signal(SIGUSR2, SIG_IGN);
+
+		/* Create a process group for this process and its children */
+		setpgid(0, 0);
+		
+		/* Spawn the shell to execute the command */
+		execl(_PATH_BSHELL, _PATH_BSHELL, "-c", commandline, NULL);
+
+		/* If we get here, something went wrong... */
+		assert(0);
+		exit(1);
+	} else if (shellpid == (pid_t) -1)
+		return BACKEND_FAIL;
+
+	/* 
+	 * Parent 
+	 *
+	 * Add the shell to the monitoring table. It will get picked
+	 * up and restarted by the background thread.
+	 */
+
+	/* Close the parent's stdout/stderr file descriptors */
+	close(stdout_fd);
+	close(stderr_fd);
+
+	/* Start monitoring by the shell */
+	if (monitor_master_pid(shellpid, 1) != BACKEND_SUCCESS) {
+		backend_kill(shellpid);
+		return BACKEND_FAIL;
+	}
+
+	/* Return shell PID */
+	*pid = shellpid;
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Suspend a job
+ */
+int
+backend_suspend(pid_t pid)
+{
+	return (backend_signal(pid, SIGSTOP, 2));
+}
+
+/*
+ * Resume a job
+ */
+int
+backend_resume(pid_t pid)
+{
+	return (backend_signal(pid, SIGCONT, 1));
+}
+
+/*
+ * Kill a job
+ */
+int
+backend_kill(pid_t pid)
+{
+	pid_t *kids;
+	int rval, state, num, ret, i;
+	b_child *scan, *tmp, *tokill = NULL;
+
+	if (!known_pid(pid))
+		return BACKEND_NOTFOUND;
+
+	/* 
+	 * Check if any child is stopped-on-fork. Accumulate list of
+	 * newly created processes to kill, and do so.
+	 */
+	/* stop the monitor */
+	if (pthread_mutex_lock(&mon_mutex) != 0)
+		return BACKEND_FAIL;
+
+	/* 
+	 * Kill all procs with SIGTERM 
+	 */
+	if (get_children(pid, &kids, &num) != BACKEND_SUCCESS) {
+		ret = BACKEND_FAIL;
+		goto out;
+	}
+
+	for (i = 0; i < num; i++) {
+		/* check for stragglers */
+		update_pid(kids[i], &tokill, NULL, pid, 0);
+		/* kill w/SIGTERM */
+		rval = kill(kids[i], SIGTERM);
+		/* 
+		 * Mask errors from PID not found; the monitor thread
+		 * will detect this and purge the table within a poll
+		 * interval 
+		 */
+		if (rval != 0 && errno != ESRCH) {
+			free(kids);
+			while(tokill) {
+				tmp = tokill->next;
+				free(tokill);
+				tokill = tmp;
+			}
+			if (errno == EINVAL)
+				ret = BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				ret = BACKEND_NOTFOUND;
+			else
+				ret = BACKEND_FAIL;
+			goto out;
+		}
+	}
+	for (scan = tokill; scan; ) {
+		/* kill w/SIGTERM */
+		rval = kill(scan->pid, SIGTERM);
+		/* 
+		 * Mask errors from PID not found; the monitor thread
+		 * will detect this and purge the table within a poll
+		 * interval 
+		 */
+		if (rval != 0 && errno != ESRCH) {
+			free(kids);
+			while(tokill) {
+				tmp = tokill->next;
+				free(tokill);
+				tokill = tmp;
+			}
+			if (errno == EINVAL)
+				ret = BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				ret = BACKEND_NOTFOUND;
+			else
+				ret = BACKEND_FAIL;
+			goto out;
+		}
+		tmp = scan->next;
+		scan = tmp;
+	}
+	rval = kill(pid, SIGTERM);
+	/* Again, mask ESRCH */
+	if (rval != 0 && errno != ESRCH) {
+		free(kids);
+		while(tokill) {
+			tmp = tokill->next;
+			free(tokill);
+			tokill = tmp;
+		}
+		if (errno == EINVAL)
+			ret = BACKEND_INVALIDSIGNAL;
+		else if (errno == EPERM)
+			ret = BACKEND_NOTFOUND;
+		else
+			ret = BACKEND_FAIL;
+		goto out;
+	}	
+
+	/* 
+	 * Check death toll 
+	 */
+	rval = backend_query_status(pid, &state, NULL);
+	if (rval == BACKEND_SUCCESS && state == BACKEND_STATE_ZOMBIE) {
+		free(kids);
+		while(tokill) {
+			tmp = tokill->next;
+			free(tokill);
+			tokill = tmp;
+		}
+		ret = BACKEND_SUCCESS;
+		goto out;
+	}
+
+	/* Wait 3 seconds */
+	sleep(3);
+
+	/* 
+	 * Kill all procs with SIGKILL
+	 */
+	for (i = 0; i < num; i++) {
+		rval = kill(kids[i], SIGKILL);
+		/* 
+		 * Mask errors from PID not found; the monitor thread
+		 * will detect this and purge the table within a poll
+		 * interval 
+		 */
+		if (rval != 0 && errno != ESRCH) {
+			free(kids);
+			while(tokill) {
+				tmp = tokill->next;
+				free(tokill);
+				tokill = tmp;
+			}
+			if (errno == EINVAL)
+				ret = BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				ret = BACKEND_NOTFOUND;
+			else
+				ret = BACKEND_FAIL;
+			goto out;
+		}
+	}
+	free(kids);
+	for (scan = tokill; scan; ) {
+		/* kill w/SIGKILL */
+		rval = kill(scan->pid, SIGKILL);
+		/* 
+		 * Mask errors from PID not found; the monitor thread
+		 * will detect this and purge the table within a poll
+		 * interval 
+		 */
+		if (rval != 0 && errno != ESRCH) {
+			while(scan) {
+				tmp = scan->next;
+				free(scan);
+				scan = tmp;
+			}
+			if (errno == EINVAL)
+				ret = BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				ret = BACKEND_NOTFOUND;
+			else
+				ret = BACKEND_FAIL;
+			goto out;
+		}
+		tmp = scan->next;
+		free(scan);
+		scan = tmp;
+	}
+	rval = kill(pid, SIGKILL);
+	/* Again, mask ESRCH */
+	if (rval != 0 && errno != ESRCH) {
+		if (errno == EINVAL)
+			ret = BACKEND_INVALIDSIGNAL;
+		else if (errno == EPERM)
+			ret = BACKEND_NOTFOUND;
+		else
+			ret = BACKEND_FAIL;
+		goto out;
+	}	
+
+	sleep(1);
+
+	rval = backend_query_status(pid, &state, NULL);
+	if (rval == BACKEND_SUCCESS && state == BACKEND_STATE_ZOMBIE)
+		ret = BACKEND_SUCCESS;
+	else
+		ret = BACKEND_FAIL;
+out:
+	/* start the monitor */
+	if (pthread_mutex_unlock(&mon_mutex) != 0)
+		return BACKEND_FAIL;
+	return ret;
+}
+
+/*
+ * Checkpoint a job
+ */
+int
+backend_checkpoint(pid_t pid)
+{
+	return (backend_signal(pid, SIGUSR1, 0));
+}
+
+/*
+ * Tell a job to do job-defined stuff
+ */
+int
+backend_usersignal(pid_t pid)
+{
+	return (backend_signal(pid, SIGUSR2, 0));
+}
+
+/*
+ * Send a signal to a job, its children, and possibly the controlling shell.
+ */
+int
+backend_signal(pid_t pid, int sig, int shell)
+{
+	pid_t pgid;
+	int rval, num, i;
+	pid_t *kids;
+
+	if (!known_pid(pid)) {
+		return BACKEND_NOTFOUND;
+	}
+
+#ifdef NO_TRACKCHILD
+	pgid = getpgid(pid);		/* try to find the process group */
+
+	if (pgid == (pid_t) -1)		/* oops, can't. Punt on all but pid */
+		pgid = pid;
+	else
+		pgid = (pid_t)-pgid;
+
+	/* send the signal */
+	rval = kill(pgid, sig);
+	if (rval != 0) {
+		if (errno == EINVAL)
+			return BACKEND_INVALIDSIGNAL;
+	        else if (errno == EPERM || errno == ESRCH)
+			return BACKEND_NOTFOUND;
+		else
+			return BACKEND_FAIL;
+	} else
+		return BACKEND_SUCCESS;
+#else
+	if (shell == 1) {
+		/* signal the shell */
+		rval = kill(pid, sig);
+		if (rval != 0) {
+			if (errno == EINVAL)
+				return BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM || errno == ESRCH)
+				return BACKEND_NOTFOUND;
+			else
+				return BACKEND_FAIL;
+		}
+	}
+	
+	/* Kill each child process */
+	if (get_children(pid, &kids, &num) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	for (i = 0; i < num; i++) {
+		rval = kill(kids[i], sig);
+		/* 
+		 * Mask errors from PID not found; the monitor thread
+		 * will detect this and purge the table within a poll
+		 * interval 
+		 */
+		if (rval != 0 && errno != ESRCH) {
+			if (errno == EINVAL)
+				return BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				return BACKEND_NOTFOUND;
+			else
+				return BACKEND_FAIL;
+		}
+	}
+
+	free(kids);
+
+	if (shell == 2) {
+		/* signal the shell */
+		rval = kill(pid, sig);
+		/* Again, mask ESRCH */
+		if (rval != 0 && errno != ESRCH) {
+			if (errno == EINVAL)
+				return BACKEND_INVALIDSIGNAL;
+			else if (errno == EPERM)
+				return BACKEND_NOTFOUND;
+			else
+				return BACKEND_FAIL;
+		}
+	}
+	
+	return BACKEND_SUCCESS;
+#endif
+}
+
+/**
+ ** PROCESS STATUS QUERYING FUNCTIONS
+ **/
+
+/*
+ * Query CPU time
+ */
+int
+backend_query_cputime(pid_t masterpid, float *user, float *sys, float *wall,
+		      uint64_t *ucycles, uint64_t *scycles)
+{
+	int statusfd, psfd, err, nkids, i;
+	pid_t pid, *kids;
+	pstatus_t procstatus;
+	psinfo_t ps_procstatus;
+	b_resources oldres;
+
+	DEBUG_LOG("backend_query_cputime(%d) -- called\n",
+		  masterpid, NULL, NULL, NULL);
+
+	if (!known_pid(masterpid))
+		return BACKEND_NOTFOUND;
+
+	DEBUG_LOG("backend_query_cputime(%d) -- pid found\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* get child procs to examine */
+	if (get_children(masterpid, &kids, &nkids) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	DEBUG_LOG("backend_query_cputime(%d) -- %d children found\n",
+		  masterpid, nkids, NULL, NULL);
+
+	/* Clear accumulators */
+	if (user)
+		*user = 0.;
+	if (sys)
+		*sys = 0.;
+	if (wall)
+		*wall = 0.;
+	if (ucycles)
+		*ucycles = 0;
+	if (scycles)
+		*scycles = 0;
+
+	/*
+	 * Add up usage for all known children.
+	 *
+	 * PROBLEM XXX XXX: child forked off, disconnects from parent,
+	 * exits/killed, inherited by init, now we've lost its resource
+	 * utilization.
+	 */
+	for (i = -1; i < nkids; i++) {
+		DEBUG_LOG("backend_query_cputime(%d) -- child %d (%d)\n",
+			  masterpid, i, i == -1 ? masterpid : kids[i], NULL);
+
+		pid = (i == -1 ? masterpid : kids[i]);
+
+		/* get a fd for /proc/<pid>/status */
+		err = getprocfd(pid, "status", O_RDONLY, &statusfd);
+		if (err != BACKEND_SUCCESS && err != BACKEND_NOTFOUND)
+			return err;
+
+		/* get a fd for /proc/<pid>/psinfo */
+		err = getprocfd(pid, "psinfo", O_RDONLY, &psfd);
+		if (err != BACKEND_SUCCESS && err != BACKEND_NOTFOUND)
+			return err;
+
+		if (statusfd < 1 && psfd >= 1) {
+			DEBUG_LOG("backend_query_cputime(%d) -- child %d (%d) zombie\n",
+				  masterpid, i, kids[i], NULL);
+			/* Zombie process...we can only use psifo. */
+			read(psfd, &ps_procstatus, sizeof(psinfo_t));
+		
+			if (user) {
+				*user += (float)(ps_procstatus.pr_time.tv_sec +
+						ps_procstatus.pr_ctime.tv_sec);
+				*user += ((float)(ps_procstatus.pr_time.tv_nsec
+				    + ps_procstatus.pr_ctime.tv_nsec))*1.0e-9;
+			}
+			if (sys) {
+				/* Can't get system time for zombies... */
+				*sys += 0.0;
+			}
+
+#if 0
+			/* wall clock not valid for zombie */
+			if (wall) {
+				struct timeval tv;
+				gettimeofday(&tv, NULL);
+				*wall += (float)(tv.tv_sec - 
+						ps_procstatus.pr_start.tv_sec);
+				*wall += ((float)(tv.tv_usec*1000 - 
+				      ps_procstatus.pr_start.tv_nsec))*1.0e-9;
+			}
+#endif
+			/* XXX Cycle counts not available in this version */
+			if (ucycles)
+				*ucycles += 0;
+			if (scycles)
+				*scycles += 0;
+
+			close(psfd);
+			continue;
+		} else if (statusfd < 1 && psfd < 1) {
+			DEBUG_LOG("backend_query_cputime(%d) -- child %d (%d) dead\n",
+				  masterpid, i, kids[i], NULL);
+			/* Process not found. Ignore error and contiune. */
+			/* XXX should restart: utilization non-monotonic! */
+			continue;
+		}
+	
+		DEBUG_LOG("backend_query_cputime(%d) -- child %d (%d) live\n",
+			  masterpid, i, kids[i], NULL);
+
+		/* We have a real, live process */
+		read(statusfd, &procstatus, sizeof(pstatus_t));
+		read(psfd, &ps_procstatus, sizeof(psinfo_t));
+		
+		if (user) {
+			*user += (float)(procstatus.pr_utime.tv_sec +
+					procstatus.pr_cutime.tv_sec);
+			*user += ((float)(procstatus.pr_utime.tv_nsec +
+					  procstatus.pr_utime.tv_nsec))*1.0e-9;
+		}
+
+		if (sys) {
+			*sys += (float)(procstatus.pr_stime.tv_sec +
+				       procstatus.pr_cstime.tv_sec);
+			*sys += ((float)(procstatus.pr_stime.tv_nsec +
+					 procstatus.pr_cstime.tv_nsec))*1.0e-9;
+		}
+
+		if (wall) {
+			float thiswall;
+			/* Use psinfo to get wall clock time */
+			struct timeval tv;
+			gettimeofday(&tv, NULL);
+			/* Use the *maximum* here ONLY! */
+			thiswall = (float)(tv.tv_sec - 
+					 ps_procstatus.pr_start.tv_sec);
+			thiswall += ((float)(tv.tv_usec*1000 - 
+				      ps_procstatus.pr_start.tv_nsec))*1.0e-9;
+			if (thiswall > *wall)
+				*wall = thiswall;
+		}
+
+		/* XXX Cycle counts not available in this version */
+		if (ucycles)
+			*ucycles += 0;
+		if (scycles)
+			*scycles += 0;
+
+		close(statusfd);
+		close(psfd);
+	}
+
+	/* Update saved resource maxes */
+	if (query_resources(masterpid, &oldres) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	if (user) {
+		if (*user > oldres.ucpu)
+			oldres.ucpu = *user;
+		else
+			*user = oldres.ucpu;
+	}
+	if (sys) {
+		if (*sys > oldres.scpu)
+			oldres.scpu = *sys;
+		else
+			*sys = oldres.scpu;
+	}
+	if (wall) {
+		if (*wall > oldres.wcpu)
+			oldres.wcpu = *wall;
+		else
+			*wall = oldres.wcpu;
+	}
+	if (ucycles) {
+		if (*ucycles > oldres.ucyc)
+			oldres.ucyc = *ucycles;
+		else
+			*ucycles = oldres.ucyc;
+	}
+	if (scycles) {
+		if (*scycles > oldres.scyc)
+			oldres.scyc = *scycles;
+		else
+			*scycles = oldres.scyc;
+	}
+
+	if (put_resources(masterpid, &oldres) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	free(kids);
+	DEBUG_LOG("backend_query_cputime(%d) -- done\n",
+		  masterpid, NULL, NULL, NULL);
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Query memory usage
+ */
+int
+backend_query_memusage(pid_t masterpid, int *totalKB, int *residentKB)
+{
+	int psfd, err, nkids, i;
+	pid_t pid, *kids;
+	psinfo_t ps_procstatus;
+	b_resources oldres;
+
+	if (!known_pid(masterpid))
+		return BACKEND_NOTFOUND;
+
+	/* get child procs to examine */
+	if (get_children(masterpid, &kids, &nkids) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	/* Clear accumulators */
+	if (totalKB)
+		*totalKB = 0;
+	if (residentKB)
+		*residentKB = 0;
+
+	/*
+	 * Add up usage for all known children.
+	 *
+	 * PROBLEM XXX XXX: child forked off, disconnects from parent,
+	 * exits/killed, inherited by init, now we've lost its resource
+	 * utilization.
+	 */
+	for (i = 0; i < nkids; i++) {
+		pid = kids[i];
+
+		/* Open psinfo from proc */
+		err = getprocfd(pid, "psinfo", O_RDONLY, &psfd);
+		if (err == BACKEND_NOTFOUND)
+			continue;
+		if (err != BACKEND_SUCCESS)
+			return err;
+	
+		/* We have a real, live process */
+		read(psfd, &ps_procstatus, sizeof(psinfo_t));
+	
+		if (totalKB) {
+			*totalKB += ps_procstatus.pr_size;
+		}
+		if (residentKB) {
+			*residentKB += ps_procstatus.pr_rssize;
+		}
+
+		close(psfd);
+	}
+
+	free(kids);
+
+	/*
+	 * Update saved resource max's
+	 */
+	if (query_resources(masterpid, &oldres) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+	
+	if (totalKB) {
+		if (*totalKB > oldres.tmem)
+			oldres.tmem = *totalKB;
+		else
+			*totalKB = oldres.tmem;
+	}
+	if (residentKB) {
+		if (*residentKB > oldres.rmem)
+			oldres.rmem = *residentKB;
+		else
+			*residentKB = oldres.rmem;
+	}
+	if (put_resources(masterpid, &oldres) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Query disk usage
+ */
+int
+backend_query_filespace(pid_t pid, uint64_t *bytesused)
+{
+	/* XXX NOTIMPLEMENTED */
+
+	if (!known_pid(pid)) 
+		return BACKEND_NOTFOUND;
+
+	if (bytesused)
+		*bytesused = 0;
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Query status
+ */
+int
+backend_query_status(pid_t pid, int *state, int *waitstat)
+{
+	int psfd, err;
+	psinfo_t psi;
+	pid_t *kids;
+	int num, i, rval, s2;
+	
+	DEBUG_LOG("query_status(%d) -- start\n",
+		  pid, NULL, NULL, NULL);
+
+	if (!known_pid(pid))
+		return BACKEND_NOTFOUND;
+
+	DEBUG_LOG("query_status(%d) -- pid known\n",
+		  pid, NULL, NULL, NULL);
+
+	/* Get the ps info for the process */
+	err = getprocfd(pid, "psinfo", O_RDONLY, &psfd);
+	if (err != BACKEND_SUCCESS)
+		return err;
+
+	DEBUG_LOG("query_status(%d) -- got procfd\n",
+		  pid, NULL, NULL, NULL);
+
+	read(psfd, &psi, sizeof(psinfo_t));
+
+	DEBUG_LOG("query_status(%d) -- read from proc; state %c\n",
+		  pid, (psi.pr_nlwp ? psi.pr_lwp.pr_sname : 'Z'), NULL, NULL);
+
+	if (state) {
+		if (psi.pr_nlwp == 0) /* zombie */
+			*state = BACKEND_STATE_ZOMBIE;
+		else {
+			switch (toupper(psi.pr_lwp.pr_sname)) {
+			case 'T':
+				*state = BACKEND_STATE_SUSPENDED;
+				break;
+			case 'Z':
+				*state = BACKEND_STATE_ZOMBIE;
+				break;
+			case 'O':
+			case 'S':
+			case 'R':
+				*state = BACKEND_STATE_RUNNING;
+				break;
+			default:
+				*state = BACKEND_STATE_UNKNOWN;
+				break;
+			}
+		}
+	}
+	close(psfd);
+
+	DEBUG_LOG("query_status(%d) -- checking kids\n",
+		  pid, NULL, NULL, NULL);
+
+	/* Check child processes */
+	if (get_children(pid, &kids, &num) != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	DEBUG_LOG("query_status(%d) -- got %d children\n",
+		  pid, num, NULL, NULL);
+
+	for (i = 0; i < num; i++) {
+		/* Get the ps info for the process */
+		err = getprocfd(kids[i], "psinfo", O_RDONLY, &psfd);
+		if (err != BACKEND_SUCCESS)
+			continue;
+
+		read(psfd, &psi, sizeof(psinfo_t));
+
+		DEBUG_LOG("query_status(%d) -- child %d (pid %d); state %c\n",
+			  pid, i, kids[i], 
+			  (psi.pr_nlwp ? psi.pr_lwp.pr_sname : 'Z'));
+
+		if (state) {
+			if (psi.pr_nlwp != 0) { /* not zombie */
+				switch (toupper(psi.pr_lwp.pr_sname)) {
+				case 'T':
+					s2 = BACKEND_STATE_SUSPENDED;
+					break;
+				case 'O':
+				case 'S':
+				case 'R':
+					s2 = BACKEND_STATE_RUNNING;
+					break;
+				default:
+					s2 = 0;
+					break;
+				}
+				if (s2 > *state) 
+					*state = s2;
+			}
+		}
+		close(psfd);
+		
+	}
+	DEBUG_LOG("query_status(%d) -- done checking kids; returning %d\n",
+		  pid, *state, NULL, NULL);
+
+	free(kids);
+
+	if (waitstat) {
+		*waitstat = psi.pr_wstat;
+	}
+
+	return BACKEND_SUCCESS;
+}
+
+/**
+ ** NODE STATUS QUERYING FUNCTIONS
+ **/
+
+/*
+ * Get load on node
+ */
+int
+backend_query_nodestatus(float *loadavg, float *cpu_pct, float *mem_pct,
+			 float *swap_pct)
+{
+	struct system_info si;
+
+	/* 
+	 * We need to use the mutex, since get_system_info is non-reentrant.
+	 */
+	if (pthread_mutex_lock(&cpupct_mutex) != 0)
+		return BACKEND_FAIL;
+	get_system_info(&si);
+
+	if (loadavg) {
+		loadavg[0] = (float)si.load_avg[0];
+		loadavg[1] = (float)si.load_avg[1];
+		loadavg[2] = (float)si.load_avg[2];
+	}
+
+	if (cpu_pct) {
+		*cpu_pct = global_cpu_pct;
+	}
+
+	if (mem_pct) {
+		*mem_pct = 100.0 - 100.0*((float)si.memory[2])/
+			((float)si.memory[0]);
+	}
+
+	if (swap_pct) {
+	        *swap_pct = 100.0*((float)si.memory[3])/
+			((float)si.memory[4]);
+	}
+	if (pthread_mutex_unlock(&cpupct_mutex) != 0)
+		return BACKEND_FAIL;
+
+	return BACKEND_SUCCESS;
+}
+
+/********************** UTILITY FUNCTIONS FOR /PROC ********************/
+
+/*
+ * Get a file descriptor for a file in /proc, based on pid and subfile
+ * 
+ * If pid == 0, opens /proc/self/<subfile>.
+ */
+static int
+getprocfd(pid_t pid, char *subfile, int mode, int *fd)
+{
+	char *procbase, *path;
+
+	/* 
+	 * Generate the path into /proc, trying to avoid buffer overruns
+	 * or stack overflows.
+	 *
+	 * We do assume that a pid fits into 24 decimal digits.
+	 */
+#define PROCBASELEN strlen(PROCBASE)+26
+	procbase = (char *)malloc(PROCBASELEN);
+	if (!procbase)
+		return BACKEND_FAIL;
+	if (pid > 0) {
+		snprintf(procbase, PROCBASELEN, "/proc/%d/", (int)pid);
+	} else {
+		strncpy(procbase, "/proc/self/", PROCBASELEN);
+	}
+	procbase[PROCBASELEN-1] = '\0';
+#undef PROCBASELEN
+
+	path = (char *) malloc(strlen(procbase)+strlen(subfile)+1);
+	if (!path) {
+		free(procbase);
+		return BACKEND_FAIL;
+	}
+	strcpy(path, procbase);
+	strcat(path, subfile);
+
+	/* get fd */
+	*fd = open(path, mode);
+
+	free(path);
+	free(procbase);
+
+	if (*fd < 1) {
+		/* Process not found. */
+		return BACKEND_NOTFOUND;
+	}
+	else
+		return BACKEND_SUCCESS;
+}
+
+static int
+enable_forktrap(int procfd)
+{
+	unsigned char *databuf;
+	sysset_t fork_set;
+	long procop;
+
+	databuf = (unsigned char *)
+		malloc(2*sizeof(long)+sizeof(sysset_t));
+	if (databuf == NULL)
+		return BACKEND_FAIL;
+
+	/* Enable inherit of stop-on-fork */
+	procop = PCSET;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = PR_FORK;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+
+	/* Enable stop-on-fork */
+	procop = PCSEXIT;
+	premptyset(&fork_set);
+	praddset(&fork_set, SYS_fork);
+	memcpy(databuf, &procop, sizeof(long));
+	memcpy(databuf+sizeof(long),&fork_set,sizeof(sysset_t));
+	write(procfd, databuf, sizeof(long)+sizeof(sysset_t));
+
+	free(databuf);
+
+	return BACKEND_SUCCESS;
+}
+
+/******************** CHILD TRACKING FUNCTIONS *******************/
+
+#if 0
+typedef struct _backend_child {
+	pid_t		pid;
+	pid_t		ppid;
+	struct _backend_child *next;
+} b_child;
+#endif
+
+typedef struct _backend_hashbucketentry {
+	pid_t		masterpid;
+
+	b_resources	res;
+	b_child		*kids;
+	int		nkids;
+
+	struct _backend_hashbucketentry *chain;
+} b_hashentry;
+
+/* The job table */	
+static b_hashentry 	*backend_jobtable[BACKEND_JOBTABLESIZE];
+pthread_mutex_t		jobtable_mutex;
+
+/* Monitor thread */
+pthread_t		backend_monitor_thread;
+
+/* Helpers */
+#define HASHPID(pid)	((pid) % BACKEND_JOBTABLESIZE)
+b_hashentry *
+LOOKUP(pid_t pid)
+{
+	b_hashentry *e = backend_jobtable[HASHPID(pid)];
+	while (e && e->masterpid != pid)
+		e = e->chain;
+	return e;
+}
+
+/*
+ * Set up the monitoring data structures and threads
+ */
+static int 
+initialize_monitoring(void)
+{
+	int err, i;
+
+	/*
+	 * Set up and acquire the two mutex locks.
+	 */
+	if ((err = pthread_mutex_init(&jobtable_mutex, NULL)) != 0)
+		return BACKEND_FAIL;
+	if ((err = pthread_mutex_init(&cpupct_mutex, NULL)) != 0)
+		return BACKEND_FAIL;
+	if ((err = pthread_mutex_init(&mon_mutex, NULL)) != 0)
+		return BACKEND_FAIL;
+	
+	err = pthread_mutex_lock(&jobtable_mutex);
+	err += pthread_mutex_lock(&cpupct_mutex);
+	if (err != 0)
+		return BACKEND_FAIL;
+	
+	/*
+	 * Initialize the monitoring state (job table & cpu usage)
+	 */
+	for (i = 0; i < BACKEND_JOBTABLESIZE; i++)
+		backend_jobtable[i] = NULL;
+	global_cpu_pct = 0.0;
+
+	/* Recover from DB, if exists */
+	recover_db();
+	update_db();
+
+	/*
+	 * Release the mutexes
+	 */
+	err = pthread_mutex_unlock(&jobtable_mutex);
+	err += pthread_mutex_unlock(&cpupct_mutex);
+	if (err != 0)
+		return BACKEND_FAIL;
+
+	/*
+	 * Start the monitoring thread
+	 */
+	err = pthread_create(&backend_monitor_thread,
+			     NULL,
+			     backend_monitor_thread_fn,
+			     NULL);
+	if (err != 0)
+		return BACKEND_FAIL;
+
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Check to see if the given (master) PID is known.
+ */
+static int 
+known_pid(pid_t pid)
+{
+	b_hashentry *e;
+
+	DEBUG_LOG("known_pid(%d) -- getting lock\n",
+		  pid, NULL, NULL, NULL);
+
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return 0;
+
+	DEBUG_LOG("known_pid(%d) -- got lock\n",
+		  pid, NULL, NULL, NULL);
+
+	e = LOOKUP(pid);
+
+	DEBUG_LOG("known_pid(%d) -- lookup returns %#x\n",
+		  pid, e, NULL, NULL);
+
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return 0;
+
+	return ((e != NULL) ? 1 : 0);
+}
+
+/*
+ * Add a new master PID to the monitor table. This routine BLOCKS until
+ * the specified pid forks; this improves latency in the common case
+ * of the masterpid being "sh -c ..."
+ */
+static int 
+monitor_master_pid(pid_t masterpid, int catchkid)
+{
+	int rval, bucket;
+	b_hashentry *e, *ne;
+	pid_t jobpid;
+	unsigned char *databuf;
+	int procfd, statusfd, err;
+	long procop;
+	pstatus_t procstatus;
+
+	DEBUG_LOG("monitor_master_pid(%d)\n",masterpid, NULL, NULL, NULL);
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	DEBUG_LOG("monitor_master_pid(%d) -- lock acquired\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Make sure this pid isn't already there */
+	if ((e = LOOKUP(masterpid)) != NULL) {
+		rval = BACKEND_EXISTS;
+		goto out;
+	}
+
+	DEBUG_LOG("monitor_master_pid(%d) -- pid not duplicate\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Create a new entry for the pid */
+	bucket = HASHPID(masterpid);
+	if (!(e = backend_jobtable[bucket])) {
+		e = backend_jobtable[bucket] = (b_hashentry *)
+			malloc(sizeof(b_hashentry));
+		if (!e) {
+			rval = BACKEND_FAIL;
+			goto out;
+		}
+	} else {
+		/* add to end of chain */
+		while (e->chain)
+			e = e->chain;
+		ne = (b_hashentry *)malloc(sizeof(b_hashentry));
+		if (!ne) {
+			rval = BACKEND_FAIL;
+			goto out;
+		}
+		e->chain = ne;
+		e = ne;
+	}
+
+	/* Initialize the new entry */
+	e->masterpid = masterpid;
+	e->kids = NULL;
+	e->nkids = 0;
+	e->chain = NULL;
+
+	e->res.ucpu = e->res.scpu = e->res.wcpu = 0.;
+	e->res.ucyc = e->res.scyc = 0;
+	e->res.tmem = e->res.rmem = 0;
+
+	DEBUG_LOG("monitor_master_pid(%d) -- added new table entry\n",
+		  masterpid, NULL, NULL, NULL);
+
+	if (!catchkid) {
+		rval = BACKEND_SUCCESS;
+		goto out;
+	}
+		
+	/* 
+	 * Wait for the first fork, and restart both parent and child
+	 */
+	
+	/* Open the shell's process control file */
+	err = getprocfd(masterpid, "ctl", O_WRONLY, &procfd);
+	if (err != BACKEND_SUCCESS) {
+		rval =  BACKEND_FAIL;
+		goto out;
+	}
+
+	databuf = (unsigned char *) malloc(2*sizeof(long)+sizeof(sysset_t));
+	if (!databuf) {
+		close(procfd);
+		rval = BACKEND_FAIL;
+		goto out;
+	}
+
+	DEBUG_LOG("monitor_master_pid(%d) -- waiting for shell...\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Wait for the shell to stop on fork() */
+	procop = PCWSTOP;
+	memcpy(databuf, &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long));
+
+	DEBUG_LOG("monitor_master_pid(%d) -- shell has stopped\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* 
+	 * Ok, at this point the shell has forked. We can now probe out
+	 * the child (job) PID. This is register %o0.
+	 * 
+	 */
+	err = getprocfd(masterpid, "status", O_RDONLY, &statusfd);
+	if (err != BACKEND_SUCCESS) {
+		close(procfd);
+		free(databuf);
+		rval =  BACKEND_FAIL;
+		goto out;
+	}
+
+	read(statusfd, &procstatus, sizeof(pstatus_t));
+	
+	/* get PID, but only if errno is 0 */
+	if (procstatus.pr_lwp.pr_errno != 0) {
+		close(procfd);
+		close(statusfd);
+		free(databuf);
+		rval = BACKEND_FAIL;
+		goto out;
+	}
+	jobpid = procstatus.pr_lwp.pr_rval1;
+
+	close(statusfd);
+
+	DEBUG_LOG("monitor_master_pid(%d) -- got child PID=%d\n",
+		  masterpid, (int)jobpid, NULL, NULL);
+
+	/* Restart the shell */
+	enable_forktrap(procfd);
+	procop = PCRUN;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = 0;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+
+	DEBUG_LOG("monitor_master_pid(%d) -- shell restarted\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Add child pid to monitor table. */
+	err = add_child_pid(masterpid, jobpid);
+	if (err != BACKEND_SUCCESS) {
+		close(procfd);
+		free(databuf);
+		rval = BACKEND_FAIL;
+		goto out;
+	}
+
+	DEBUG_LOG("monitor_master_pid(%d) -- added child to table\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/*
+	 * Switch to the child's process control file
+	 */
+	close(procfd);
+	err = getprocfd(jobpid, "ctl", O_WRONLY, &procfd);
+	if (err != BACKEND_SUCCESS) {
+		free(databuf);
+		rval = BACKEND_FAIL;
+		goto out;
+	}
+	
+	DEBUG_LOG("monitor_master_pid(%d) -- waiting for child\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Wait for the child to stop on fork (it inherited stop-on-fork) */
+	procop = PCWSTOP;
+	memcpy(databuf, &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long));
+
+	DEBUG_LOG("monitor_master_pid(%d) -- child has stopped\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Restart child */
+	enable_forktrap(procfd);
+	procop = PCRUN;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = 0;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+	
+	DEBUG_LOG("monitor_master_pid(%d) -- child restarted. Done.\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Cleanup */
+	close(procfd);
+		
+	free(databuf);
+
+
+	/* All done. */
+	rval = BACKEND_SUCCESS;
+out:
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	return rval;
+}
+
+/* 
+ * Start watching a child process
+ */
+static int
+monitor_child_pid(pid_t masterpid, pid_t newpid)
+{
+	int rval;
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	rval = add_child_pid(masterpid, newpid);
+
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	return rval;
+}
+
+/* 
+ * Start watching a child process (assumes table locked)
+ */
+static int 
+add_child_pid(pid_t masterpid, pid_t newpid)
+{
+	int rval;
+	b_hashentry *he;
+	b_child *e, *ne;
+	
+	DEBUG_LOG("add_child_pid(m=%d, c=%d) -- called\n",
+		  masterpid, newpid, NULL, NULL);
+
+	he = LOOKUP(masterpid);
+	if (!he) {
+		return BACKEND_FAIL;
+	}
+	
+	DEBUG_LOG("add_child_pid(m=%d, c=%d) -- master found\n",
+		  masterpid, newpid, NULL, NULL);
+
+	/* Add new child data structure. */
+	if (!(e = he->kids)) {
+		he->kids = (b_child *)malloc(sizeof(b_child));
+		if (!he->kids) {
+			return BACKEND_FAIL;
+		}
+		e = he->kids;
+	} else {
+		while (e->next)
+			e = e->next;
+		e->next = (b_child *)malloc(sizeof(b_child));
+		if (!e->next) {
+			return BACKEND_FAIL;
+		}
+		e = e->next;
+	}
+	he->nkids++;
+	
+	DEBUG_LOG("add_child_pid(m=%d, c=%d) -- child added (nkids=%d)\n",
+		  masterpid, newpid, he->nkids, NULL);
+
+	/* Initialize child data structures */
+	e->pid = newpid;
+	e->ppid = masterpid;
+	e->next = NULL;
+
+	/* All done. */
+	rval = BACKEND_SUCCESS;
+	return rval;
+}
+
+/* 
+ * Stop monitoring a job. 
+ */
+static int 
+ignore_master_pid(pid_t masterpid)
+{
+	b_hashentry *e, *pe;
+	int rval, bucket;
+	
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	e = LOOKUP(masterpid);
+	if (!e) {
+		rval = BACKEND_NOTFOUND;
+		goto out;
+	} else if (e->nkids > 0) {
+		rval = BACKEND_NOTZOMBIE;
+		goto out;
+	}
+	
+	/* Remove from table */
+	bucket = HASHPID(masterpid);
+	pe = backend_jobtable[bucket];	
+	if (pe->masterpid == masterpid) {
+		backend_jobtable[bucket] = pe->chain;
+		e = pe;
+	} else {
+		while (pe->chain->masterpid != masterpid) 
+			pe = pe->chain;
+		e = pe->chain;
+		pe->chain = e->chain;
+	} 
+	free(e);
+
+	/* All done. */
+	rval = BACKEND_SUCCESS;
+out:
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	return rval;
+}
+
+/*
+ * Stop monitoring the child
+ */
+static int
+ignore_child_pid(pid_t masterpid, pid_t pid)
+{
+	int rval;
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	rval = ignore_child_pid(masterpid, pid);
+
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	return rval;
+}
+
+/*
+ * Stop monitoring the child (assumes table locked)
+ */
+static int 
+remove_child_pid(pid_t masterpid, pid_t pid)
+{
+	b_hashentry *he;
+	b_child *e, *pe;
+	int rval;
+
+	DEBUG_LOG("remove_child_pid(master=%d, pid=%d) -- called\n",
+		  masterpid, pid, NULL, NULL);
+
+	he = LOOKUP(masterpid);
+	if (!he || !he->kids) {
+		return BACKEND_NOTFOUND;
+	} 
+	
+	DEBUG_LOG("remove_child_pid(master=%d, pid=%d) -- parent w/%d kids\n",
+		  masterpid, pid, he->nkids, NULL);
+
+	/* Remove from table */
+	pe = he->kids;	
+	if (pe->pid == pid) {
+		he->kids = pe->next;
+		e = pe;
+	} else {
+		while (pe->next != NULL && pe->next->pid != pid) 
+			pe = pe->next;
+		if (pe->next == NULL) {
+			return BACKEND_NOTFOUND;
+		}
+		e = pe->next;
+		pe->next = e->next;
+	} 
+	free(e);
+	he->nkids--;
+
+	DEBUG_LOG("remove_child_pid(master=%d, pid=%d) -- done (%d kids)\n",
+		  masterpid, pid, he->nkids, NULL);
+
+	/* All done. */
+	rval = BACKEND_SUCCESS;
+	return rval;
+}
+
+/*
+ * Return an array containing the pids of all the children of masterpid 
+ */
+static int 
+get_children(pid_t masterpid, pid_t **kids, int *num) 
+{
+	int rval;
+	DEBUG_LOG("get_children(%d) -- called\n",
+		  masterpid, NULL, NULL, NULL);
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	DEBUG_LOG("get_children(%d) -- lock acquired\n",
+		  masterpid, NULL, NULL, NULL);
+
+	rval = get_children_locked(masterpid, kids, num);
+
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	return rval;
+}
+
+/*
+ * Return an array containing the pids of all the children of masterpid 
+ * Assumes table locked.
+ */
+static int 
+get_children_locked(pid_t masterpid, pid_t **kids, int *num) 
+{
+	int rval, i;
+	b_hashentry *he;
+	b_child *cp;
+
+	he = LOOKUP(masterpid);
+	if (!he) {
+		rval = BACKEND_NOTFOUND;
+		goto out;
+	} 
+	
+	DEBUG_LOG("get_children(%d) -- pid found\n",
+		  masterpid, NULL, NULL, NULL);
+
+	*kids = (pid_t *)malloc(he->nkids * sizeof(pid_t));
+	if (!*kids) {
+		rval = BACKEND_FAIL;
+		goto out;
+	}
+
+	*num = he->nkids;
+	
+	DEBUG_LOG("get_children(%d) -- about to copy %d entries\n",
+		  masterpid, *num, NULL, NULL);
+
+	i = 0;
+	cp = he->kids;
+	while (cp != NULL) {
+		(*kids)[i++] = cp->pid;
+		cp = cp->next;
+	}
+	
+	DEBUG_LOG("get_children(%d) -- Copy done. Finished. (%d kids)\n",
+		  masterpid, he->nkids, NULL, NULL);
+
+	/* All done. */
+	rval = BACKEND_SUCCESS;
+out:
+	return rval;
+}
+
+/* 
+ * Get the cached resource structure
+ */
+static int 
+query_resources(pid_t mpid, b_resources *r)
+{
+	int rval;
+	b_hashentry *he;
+	b_resources *tr;
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	he = LOOKUP(mpid);
+	if (!he) {
+		rval = BACKEND_NOTFOUND;
+		goto out;
+	}
+	tr = &(he->res);
+
+	memcpy(r, tr, sizeof(b_resources));
+
+	rval = BACKEND_SUCCESS;
+out:
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	return rval;
+}
+
+/*
+ * Update the cached resources to max(r, he->r)
+ */
+static int 
+put_resources(pid_t mpid, b_resources *r)
+{
+	int rval;
+	b_hashentry *he;
+	b_resources *tr;
+
+	/* Lock the table */
+	if (pthread_mutex_lock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+	
+	he = LOOKUP(mpid);
+	if (!he) {
+		rval = BACKEND_NOTFOUND;
+		goto out;
+	}
+	tr = &(he->res);
+
+#define UR(x) if (r->##x > tr->##x) tr->##x = r->##x; 	
+	UR(ucpu);
+	UR(scpu);
+	UR(wcpu);
+	UR(ucyc);
+	UR(scyc);
+	UR(tmem);
+	UR(rmem);
+#undef UR
+
+	rval = BACKEND_SUCCESS;
+out:
+	/* Unlock the table */
+	if (pthread_mutex_unlock(&jobtable_mutex) != 0)
+		return BACKEND_FAIL;
+
+	return rval;
+}
+
+/*
+ * Update the on-disk copy of the database. Must be called with the table
+ * locked! Opens the DB if necessary.
+ */
+static int 
+update_db(void)
+{
+	/* XXX NOTIMPLEMENTED */
+	return BACKEND_SUCCESS;
+}
+
+/* 
+ * Recover the table from the on-disk copy of the database. Must be
+ * called with the table locked! Opens the DB if necessary.  
+ */
+static int 
+recover_db(void)
+{
+	/* XXX NOTIMPLEMENTED */
+	return BACKEND_SUCCESS;
+}
+
+/*
+ * Worker function for the monitor thread. Checks for births, deaths;
+ * restarts job if necessary.
+ */
+static void 
+update_pid(pid_t pid, b_child **newprocs, b_child **deadprocs, pid_t ppid,
+	   int restart)
+{
+	b_child *cp;
+	pid_t childpid;
+	unsigned char *databuf;
+	int procfd, statusfd, err;
+	long procop;
+	pstatus_t procstatus;
+	int do_dp;
+
+	/* Open the process's status file */
+	err = getprocfd(pid, "status", O_RDONLY, &statusfd);
+	if (err == BACKEND_NOTFOUND) {
+		/* Job has vanished -- add to deadprocs */
+		if (deadprocs) {
+			cp = (b_child *) malloc(sizeof(b_child));
+			if (!cp)
+				return;
+			cp->pid = pid;
+			cp->ppid = ppid;
+			cp->next = *deadprocs;
+			*deadprocs = cp;
+		}
+	} else if (err != BACKEND_SUCCESS) {
+		return;
+	} else {
+		/* Job exists */
+		databuf = (unsigned char *) 
+			malloc(2*sizeof(long)+sizeof(sysset_t));
+		if (!databuf) {
+			close(statusfd);
+			return;
+		}
+
+		/* See if the process is stopped on fork() */
+		read(statusfd, &procstatus, sizeof(pstatus_t));
+	
+		if (!(procstatus.pr_lwp.pr_flags & PR_ISTOP)) {
+			/* not forking */
+			free(databuf);
+			close(statusfd);
+			return;
+		}
+		
+		DEBUG_LOG("update_pid(%d) -- has forked\n",
+			  pid, NULL, NULL, NULL);
+
+		/* 
+		 * Ok, at this point the process has forked. We can now probe 
+		 * out the child (job) PID. This is register %o0.
+		 */
+
+		/* get PID, but only if errno is 0 */
+		if (procstatus.pr_lwp.pr_errno != 0) {
+			close(statusfd);
+			free(databuf);
+			return;
+		}
+		childpid = procstatus.pr_lwp.pr_rval1;
+
+		DEBUG_LOG("update_pid(%d) -- forked child is pid %d\n",
+			  pid, childpid, NULL, NULL);
+
+		close(statusfd);
+
+		if (restart) {
+			/* Restart the process */
+			err = getprocfd(pid, "ctl", O_WRONLY, &procfd);
+			if (err != BACKEND_SUCCESS) {
+				free(databuf);
+				return;
+			}
+			enable_forktrap(procfd);
+			procop = PCRUN;
+			memcpy(databuf, &procop, sizeof(long));
+			procop = 0;
+			memcpy(databuf+sizeof(long), &procop, sizeof(long));
+			write(procfd, databuf, sizeof(long)*2);
+
+			/* Cleanup */
+			close(procfd);
+		}
+		free(databuf);
+
+		/* Add child pid to monitor table. */
+		if (newprocs) {
+			cp = (b_child *) malloc(sizeof(b_child));
+			if (!cp)
+				return;
+			cp->pid = childpid;
+			cp->ppid = ppid;
+			cp->next = *newprocs;
+			*newprocs = cp;
+		}
+	}
+	return;
+}
+
+/*
+ * The monitor thread. Keeps everything up-to-date, asynchronously, once
+ * every MONITORINTERVAL seconds.
+ */
+void *
+backend_monitor_thread_fn(void *p)
+{
+	struct system_info si;
+	b_child *newprocs = NULL, *deadprocs = NULL, *scan, *sav;
+	b_hashentry *he;
+	int i, procfd, err;
+	long procop;
+	unsigned char *databuf;
+
+	databuf = (unsigned char *) malloc(2*sizeof(long)+sizeof(sysset_t));
+	if (!databuf)
+		return (void *)-1;
+
+	while(1) {
+		/* Wait a bit */
+		sleep(BACKEND_MONITORINTERVAL);
+
+		/* grab the monitor lock */
+		if (pthread_mutex_lock(&mon_mutex) != 0)
+			continue;
+
+		/* 
+		 * Update the CPU usage 
+		 */
+		if (pthread_mutex_lock(&cpupct_mutex) != 0)
+			goto out2;
+		get_system_info(&si);
+		/* Compute nonidle CPUtime (includes user/kernel/iowait/swap) */
+		global_cpu_pct = (((float)si.cpustates[1]) + 
+				  ((float)si.cpustates[2]) + 
+				  ((float)si.cpustates[3]) + 
+				  ((float)si.cpustates[4]))/10.0;
+		if (pthread_mutex_unlock(&cpupct_mutex) != 0)
+			goto out2;
+
+		/* Lock table */
+		if (pthread_mutex_lock(&jobtable_mutex) != 0)
+			goto out2;
+
+		DEBUG_LOG("monitor -- acquired lock\n",
+			  NULL, NULL, NULL, NULL);
+
+		/*
+		 * Scan table, looking for newly forked processes. Add the
+		 * new PIDs to newprocs. Restart all stopped processes.
+		 * Add dead processes to deadprocs.
+		 */
+		deadprocs = newprocs = NULL;
+		for (i = 0; i < BACKEND_JOBTABLESIZE; i++) {
+			for (he = backend_jobtable[i]; he; he = he->chain) {
+				update_pid(he->masterpid, &newprocs, NULL, 
+					   0, 1);
+				for (scan = he->kids; scan; scan = scan->next)
+					update_pid(scan->pid,
+						   &newprocs, 
+						   &deadprocs,
+						   he->masterpid,
+						   1);
+			}
+		}
+		
+		DEBUG_LOG("monitor -- finished table scan\n",
+			  NULL, NULL, NULL, NULL);
+
+		/*
+		 * Remove deadprocs from table.
+		 * Add newprocs to table, and restart them.
+		 */
+		for (scan = deadprocs; scan; ) {
+			remove_child_pid(scan->ppid, scan->pid);
+
+			sav = scan->next;
+			free(scan);
+			scan = sav;
+		}
+
+		DEBUG_LOG("monitor -- removed dead procs\n",
+			  NULL, NULL, NULL, NULL);
+
+		for (scan = newprocs; scan; ) {
+			add_child_pid(scan->ppid, scan->pid);
+			
+			/* Restart child process */
+			err = getprocfd(scan->pid, "ctl", O_WRONLY, &procfd);
+			if (err != BACKEND_SUCCESS)
+				goto cont;
+			procop = PCWSTOP;
+			memcpy(databuf, &procop, sizeof(long));
+			write(procfd, databuf, sizeof(long));
+			enable_forktrap(procfd);
+			procop = PCRUN;
+			memcpy(databuf, &procop, sizeof(long));
+			procop = 0;
+			memcpy(databuf+sizeof(long), &procop, sizeof(long));
+			write(procfd, databuf, sizeof(long)*2);
+			close(procfd);
+		cont:
+			sav = scan->next;
+			free(scan);
+			scan = sav;
+		}
+		DEBUG_LOG("monitor -- added new procs\n",
+			  NULL, NULL, NULL, NULL);
+
+	out:
+		/* Unlock table */
+		pthread_mutex_unlock(&jobtable_mutex);
+		/* release the monitor lock*/
+	out2:
+		pthread_mutex_unlock(&mon_mutex);
+
+		DEBUG_LOG("monitor -- released lock\n",
+			  NULL, NULL, NULL, NULL);
+
+
+	}
+}
+
+@
+
+
+1.9
+log
+@Make backend ignore negative pids, since otherwise we end up
+suspending/killing/etc the whole executor.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.8 1997/12/10 01:39:09 abrown Exp $
+d13 4
+d55 1
+d62 1
+d71 21
+d98 26
+a184 1
+	/* XXX STUB */
+d187 1
+d195 1
+a195 1
+	get_system_info(&si);
+d197 2
+a198 1
+	/* DO OTHER STUFF! */
+d209 1
+a209 1
+	/* XXX STUB */
+d213 9
+d226 2
+d229 12
+a240 1
+		return BACKEND_SUCCESS;
+d242 2
+d252 1
+a252 1
+	/* XXX STUB */
+d254 2
+a255 1
+	int rtn, status;
+d263 3
+a265 2
+	else
+		return BACKEND_SUCCESS;
+d278 1
+a278 1
+	pid_t shellpid, jobpid;
+d280 1
+a280 1
+	int procfd, statusfd, err;
+d283 3
+a285 1
+	pstatus_t procstatus;
+d296 14
+d315 1
+a315 20
+
+		databuf = (unsigned char *)
+			malloc(2*sizeof(long)+sizeof(sysset_t));
+		assert(databuf != NULL);
+
+		/* Enable inherit of stop-on-fork */
+		procop = PCSET;
+		memcpy(databuf, &procop, sizeof(long));
+		procop = PR_FORK;
+		memcpy(databuf+sizeof(long), &procop, sizeof(long));
+		write(procfd, databuf, sizeof(long)*2);
+
+		/* Enable stop-on-fork */
+		procop = PCSEXIT;
+		premptyset(&fork_set);
+		praddset(&fork_set, SYS_fork);
+		memcpy(databuf, &procop, sizeof(long));
+		memcpy(databuf+sizeof(long),&fork_set,sizeof(sysset_t));
+		write(procfd, databuf, sizeof(long)+sizeof(sysset_t));
+
+d343 2
+a344 74
+	 * In the initial implementation, we trace the subshell until
+	 * it forks the first time, then return the pid of that child
+	 * (which we assume is the job) back to the caller.
+	 */
+
+	/* Open the shell's process control file */
+	err = getprocfd(shellpid, "ctl", O_WRONLY, &procfd);
+	if (err != BACKEND_SUCCESS)
+		return BACKEND_FAIL;
+
+	databuf = (unsigned char *) malloc(2*sizeof(long)+sizeof(sysset_t));
+	if (!databuf) {
+		close(procfd);
+		return BACKEND_FAIL;
+	}
+
+	/* Wait for the shell to stop on fork() */
+	/* XXX this should be add_shell_to_asynch_watch_table + return */
+	procop = PCWSTOP;
+	memcpy(databuf, &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long));
+
+	/* 
+	 * Ok, at this point the shell has forked. We can now probe out
+	 * the child (job) PID. This is register %o0.
+	 * 
+	 * XXX we assume the job is the first process forked by the shell!
+	 */
+	err = getprocfd(shellpid, "status", O_RDONLY, &statusfd);
+	if (err != BACKEND_SUCCESS) {
+		close(procfd);
+		free(databuf);
+		return BACKEND_FAIL;
+	}
+
+	read(statusfd, &procstatus, sizeof(pstatus_t));
+	
+	/* get PID, but only if errno is 0 */
+	if (procstatus.pr_lwp.pr_errno != 0) {
+		close(procfd);
+		close(statusfd);
+		free(databuf);
+		return BACKEND_FAIL;
+	}
+	jobpid = procstatus.pr_lwp.pr_rval1;
+
+	close(statusfd);
+
+	/*
+	 * Clear tracing flags on the shell process
+	 * 
+	 * XXX this should be removed once we monitor all children
+	 */
+	procop = PCSEXIT;
+	premptyset(&fork_set);
+	memcpy(databuf, &procop, sizeof(long));
+	memcpy(databuf+sizeof(long),&fork_set,sizeof(sysset_t));
+	write(procfd, databuf, sizeof(long)+sizeof(sysset_t));
+
+	procop = PCUNSET;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = PR_FORK;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+
+	/* Restart the shell */
+	procop = PCRUN;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = 0;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+
+	/*
+	 * Switch to the child's process control file
+a345 1
+	close(procfd);
+d347 1
+a347 3
+	/* 
+	 * Close the parent's stdout/stderr file descriptors
+	 */
+d351 3
+a353 3
+	err = getprocfd(jobpid, "ctl", O_WRONLY, &procfd);
+	if (err != BACKEND_SUCCESS) {
+		free(databuf);
+a355 34
+	
+	/* Wait for the child to stop on fork (it inherited stop-on-fork) */
+	procop = PCWSTOP;
+	memcpy(databuf, &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long));
+
+	/* 
+	 * Clear tracing flags on job and its children 
+	 *
+	 * XXX this should be removed once we monitor all children
+	 */
+	procop = PCSEXIT;
+	premptyset(&fork_set);
+	memcpy(databuf, &procop, sizeof(long));
+	memcpy(databuf+sizeof(long),&fork_set,sizeof(sysset_t));
+	write(procfd, databuf, sizeof(long)+sizeof(sysset_t));
+
+	procop = PCUNSET;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = PR_FORK;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+
+	/* Restart job */
+	procop = PCRUN;
+	memcpy(databuf, &procop, sizeof(long));
+	procop = 0;
+	memcpy(databuf+sizeof(long), &procop, sizeof(long));
+	write(procfd, databuf, sizeof(long)*2);
+	
+	/* Cleanup */
+	close(procfd);
+		
+	free(databuf);
+d357 2
+a358 2
+	/* Return child PID */
+	*pid = jobpid;
+d369 1
+a369 1
+	return (backend_signal(pid, SIGSTOP, 1));
+d387 188
+a574 1
+	return (backend_signal(pid, SIGKILL, 1));
+a600 2
+	/* XXX STUB */
+	
+d602 2
+a603 1
+	int rval;
+d605 1
+a605 1
+	if (pid <= 0) {
+d608 2
+d628 53
+d691 1
+a691 1
+backend_query_cputime(pid_t pid, float *user, float *sys, float *wall,
+d694 2
+a695 3
+	/* XXX STUB */
+
+	int statusfd, psfd, err;
+d698 29
+d728 39
+a766 4
+	/* get a fd for /proc/<pid>/status */
+	err = getprocfd(pid, "status", O_RDONLY, &statusfd);
+	if (err != BACKEND_SUCCESS && err != BACKEND_NOTFOUND)
+		return err;
+d768 29
+a796 4
+	/* get a fd for /proc/<pid>/psinfo */
+	err = getprocfd(pid, "psinfo", O_RDONLY, &psfd);
+	if (err != BACKEND_SUCCESS && err != BACKEND_NOTFOUND)
+		return err;
+d798 2
+a799 2
+	if (statusfd < 1 && psfd >= 1) {
+		/* Zombie process...we can only use psifo. */
+d803 4
+a806 4
+			*user = (float)(ps_procstatus.pr_time.tv_sec +
+					ps_procstatus.pr_ctime.tv_sec);
+			*user += ((float)(ps_procstatus.pr_time.tv_nsec +
+				       ps_procstatus.pr_ctime.tv_nsec))*1.0e-9;
+d808 1
+d810 4
+a813 2
+			/* Can't get system time for zombies... */
+			*sys = 0.0;
+d817 2
+d821 4
+a824 3
+			*wall = (float)(tv.tv_sec - 
+					ps_procstatus.pr_start.tv_sec);
+			*wall += ((float)(tv.tv_usec*1000 - 
+d826 2
+d832 1
+a832 1
+			*ucycles = 0;
+d834 1
+a834 1
+			*scycles = 0;
+d836 1
+a837 4
+		return BACKEND_SUCCESS;
+	} else if (statusfd < 1 && psfd < 1) {
+		/* Process not found. */
+		return BACKEND_NOTFOUND;
+d839 5
+a843 5
+	
+	/* We have a real, live process */
+	read(statusfd, &procstatus, sizeof(pstatus_t));
+	read(psfd, &ps_procstatus, sizeof(psinfo_t));
+		
+d845 4
+a848 5
+		/* XXX watch out with child time in polling version */
+		*user = (float)(procstatus.pr_utime.tv_sec +
+			 procstatus.pr_cutime.tv_sec);
+		*user += ((float)(procstatus.pr_utime.tv_nsec +
+			  procstatus.pr_utime.tv_nsec))*1.0e-9;
+a849 1
+
+d851 4
+a854 5
+		/* XXX watch out with child time in polling version */
+		*sys = (float)(procstatus.pr_stime.tv_sec +
+			 procstatus.pr_cstime.tv_sec);
+		*sys += ((float)(procstatus.pr_stime.tv_nsec +
+			  procstatus.pr_cstime.tv_nsec))*1.0e-9;
+a855 1
+
+d857 16
+a872 6
+		/* Use psinfo to get wall clock time */
+		struct timeval tv;
+		gettimeofday(&tv, NULL);
+		*wall = (float)(tv.tv_sec - ps_procstatus.pr_start.tv_sec);
+		*wall += ((float)(tv.tv_usec*1000 - 
+				  ps_procstatus.pr_start.tv_nsec))*1.0e-9;
+d875 7
+a881 9
+	/* XXX Cycle counts not available in this version */
+	if (ucycles)
+		*ucycles = 0;
+	if (scycles)
+		*scycles = 0;
+
+	close(statusfd);
+	close(psfd);
+
+d889 1
+a889 1
+backend_query_memusage(pid_t pid, int *totalKB, int *residentKB)
+d891 17
+a907 1
+	/* XXX STUB */
+d909 9
+a917 2
+	int psfd, error;
+	psinfo_t ps_procstatus;
+d919 6
+a924 4
+	/* Open psinfo from proc */
+	error = getprocfd(pid, "psinfo", O_RDONLY, &psfd);
+	if (error)
+		return error;
+d926 20
+a945 2
+	/* We have a real, live process */
+	read(psfd, &ps_procstatus, sizeof(psinfo_t));
+d948 4
+a951 1
+		*totalKB = ps_procstatus.pr_size;
+d954 4
+a957 1
+		*residentKB = ps_procstatus.pr_rssize;
+d959 2
+a961 1
+	close(psfd);
+d971 1
+a971 1
+	/* XXX STUB -- NOTIMPLEMENTED */
+d973 2
+a974 4
+	int rval = kill(pid, 0);
+
+	if (rval != 0)
+		return BACKEND_NOTFOUND;	/* pid is bogus! */
+a987 2
+	/* XXX STUB */
+
+d990 11
+d1007 3
+d1012 3
+d1037 50
+a1091 2
+	close(psfd);
+
+d1109 1
+a1109 2
+	 * We need to poll twice for this, since cpu usage is accumulated
+	 * between polls. This incurs a 1-second latency for this function.
+d1111 2
+a1112 7
+	get_system_info(&si);
+	/*
+	 * XXXXXX XXX The update thread should poll this periodically,
+	 * and cache the last 15 seconds or 30 seconds of CPU usage.
+	 * 1 second is too bursty!
+	 */
+	sleep(1);
+d1122 1
+a1122 8
+		/* 
+		 * Compute all but idle CPU time (includes user, kernel,
+		 * iowait, and swap
+		 */
+		*cpu_pct = (((float)si.cpustates[1]) + 
+			    ((float)si.cpustates[2]) + 
+			    ((float)si.cpustates[3]) + 
+			    ((float)si.cpustates[4]))/10.0;
+d1134 2
+d1191 937
+@
+
+
+1.8
+log
+@Stop leaking stdout and stderr file descriptors
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.7 1997/12/06 02:11:52 abrown Exp $
+d13 3
+d451 3
+@
+
+
+1.7
+log
+@Add some code stolen from top to make backend_query_nodestatus
+work. There's one glitch, in that the CPU utilization is for the
+last second of CPU; a background thread should accumulate this over
+longer time periods.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.6 1997/12/03 01:51:03 abrown Exp $
+d13 6
+d339 6
+@
+
+
+1.6
+log
+@First-cut implementation of backend. Not tested much. backend_exec() is known
+to work; the rest of the functions may or may not.
+
+Child process following not yet implemented, but CPU accounting is.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.5 1997/12/03 00:57:34 abrown Exp $
+d13 6
+d41 1
+d72 4
+d77 10
+d116 1
+d124 13
+d668 2
+a669 1
+backend_query_nodestatus(float *loadavg, float *cpu_pct, float *mem_pct)
+d671 14
+a684 1
+	/* XXX STUB */
+a685 1
+	/* XXXXXX implement */
+d687 3
+a689 1
+		loadavg[0] = loadavg[1] = loadavg[2] = 0.0;
+d693 8
+a700 1
+		*cpu_pct = 0.0;
+d704 7
+a710 1
+		*mem_pct = 0.0;
+@
+
+
+1.5
+log
+@Added CPU usage monitoring.
+Checkpoint before switching to cleaner, encapsulated /proc interface.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.4 1997/12/02 23:22:17 abrown Exp $
+d13 4
+d48 1
+d113 1
+a113 2
+	int fd;
+	char buf[64];
+d115 4
+a118 3
+	sprintf(buf,"/proc/%d/psinfo");
+	fd = open(buf, O_RDONLY);
+	if (fd >= 1) {
+d121 1
+a121 2
+	} else
+		return BACKEND_NOTFOUND;
+a154 1
+	char *procbase, *procpath, *statuspath;
+d156 1
+a156 1
+	int procfd, statusfd;
+d173 2
+a174 4
+		procpath = (char *)malloc(strlen("/proc/self/ctl")+1);
+		strcpy(procpath,"/proc/self/ctl");
+		procfd = open(procpath, O_WRONLY);
+		assert(procfd >= 1);
+d178 2
+a179 1
+		
+a195 2
+		free(procpath);
+		free(databuf);
+d227 3
+a229 15
+	/* 
+	 * Generate the path into /proc, trying to avoid buffer overruns
+	 * or stack overflows.
+	 */
+#define PROCBASELEN strlen(PROCBASE)+10
+	procbase = (char *)malloc(PROCBASELEN);
+	if (!procbase)
+		return BACKEND_FAIL;
+	snprintf(procbase, PROCBASELEN, "/proc/%d/", (int)shellpid);
+	procbase[PROCBASELEN-1] = '\0';
+#undef PROCBASELEN
+	
+	procpath = (char *) malloc(strlen(procbase)+16);
+	if (!procpath) {
+		free(procbase);
+a230 1
+	}
+a231 9
+	sprintf(procpath,"%sctl",procbase);
+
+	/* Open the shell's process control file */
+	procfd = open(procpath, O_WRONLY);
+	if (procfd < 1) {
+		free(procbase);
+		free(procpath);
+		return BACKEND_FAIL;
+	}
+d234 1
+a234 2
+		free(procbase);
+		free(procpath);
+d250 3
+a252 4
+	statuspath = (char *) malloc(strlen(procbase)+16);
+	if (!statuspath) {
+		free(procbase);
+		free(procpath);
+a255 1
+	sprintf(statuspath, "%sstatus",procbase);
+d257 6
+a262 4
+	statusfd = open(statuspath, O_RDONLY);
+	if (statusfd < 1) {
+		free(procbase);
+		free(procpath);
+a263 1
+		free(statuspath);
+a265 3
+
+	read(statusfd, &procstatus, sizeof(pstatus_t));
+	/* XXX should check errno before assuming rval is good! */
+a268 1
+	free(statuspath);
+d298 3
+a300 16
+#define PROCBASELEN strlen(PROCBASE)+10
+	snprintf(procbase, PROCBASELEN, "/proc/%d/", (int)jobpid);
+	procbase[PROCBASELEN-1] = '\0';
+#undef PROCBASELEN
+	free(procpath);
+	procpath = (char *)malloc(strlen(procbase)+16);
+	if (!procpath) {
+		free(procbase);
+		free(databuf);
+		return BACKEND_FAIL;
+	}
+	sprintf(procpath,"%sctl",procbase);
+	procfd = open(procpath, O_WRONLY);
+	if (procfd < 1) {
+		free(procbase);
+		free(procpath);
+a337 2
+	free(procbase);
+	free(procpath);
+d434 1
+a434 2
+	char *procbase, *procpath, *pspath;
+	int statusfd, psfd;
+d438 9
+a446 25
+#define PROCBASELEN strlen(PROCBASE)+10
+	procbase = (char *)malloc(PROCBASELEN);
+	if (!procbase)
+		return BACKEND_FAIL;
+	snprintf(procbase, PROCBASELEN, "/proc/%d/", (int)pid);
+	procbase[PROCBASELEN-1] = '\0';
+#undef PROCBASELEN
+
+	procpath = (char *) malloc(strlen(procbase)+16);
+	if (!procpath) {
+		free(procbase);
+		return BACKEND_FAIL;
+	}
+	sprintf(procpath, "%sstatus",procbase);
+
+	statusfd = open(procpath, O_RDONLY);
+	
+	pspath = (char *) malloc(strlen(procbase)+16);
+	if (!pspath) {
+		free(procbase);
+		free(procpath);
+		return BACKEND_FAIL;
+	}
+	sprintf(pspath, "%spsinfo",procbase);
+	psfd = open(pspath, O_RDONLY);
+d454 3
+a456 3
+					procstatus.pr_ctime.tv_sec);
+			*user += ((float)(procstatus.pr_time.tv_nsec +
+					  procstatus.pr_ctime.tv_nsec))*1.0e-9;
+a478 3
+		free(procpath);
+		free(procbase);
+		free(pspath);
+a481 3
+		free(procpath);
+		free(procbase);
+		free(pspath);
+d522 1
+a522 3
+	free(pspath);
+	free(procpath);
+	free(procbase);
+d549 1
+a549 1
+		*residentKB = ps_procstatus.pr_rrssize;
+d579 1
+a579 1
+backend_query_status(pid_t pid, int *state, int *exitval)
+d583 32
+a614 1
+	int rval = kill(pid, 0);
+d616 3
+a618 2
+	if (rval != 0)
+		return BACKEND_NOTFOUND;	/* pid is bogus! */
+d620 1
+a620 1
+	/* XXXXXX do status here!!!! */
+d665 6
+a670 1
+	/* We assume a pid fits in 24 decimal digits */
+@
+
+
+1.4
+log
+@Implement a very, very basic backend. Job execution and control should work,
+but monitoring functionality is minimal to non-existent.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.3 1997/12/02 01:00:31 abrown Exp $
+d13 4
+d45 8
+d292 1
+d477 30
+a506 1
+	int rval = kill(pid, 0);
+d508 29
+a536 2
+	if (rval != 0)
+		return BACKEND_NOTFOUND;	/* pid is bogus! */
+d538 47
+a584 1
+	/* XXXXXX get time here!!!! */
+d586 5
+a600 1
+	int rval = kill(pid, 0);
+d602 2
+a603 2
+	if (rval != 0)
+		return BACKEND_NOTFOUND;	/* pid is bogus! */
+d605 14
+a618 1
+	/* XXX get usage here!!!! */
+d620 1
+d630 1
+a630 1
+	/* XXX STUB */
+d687 47
+@
+
+
+1.3
+log
+@Enhance backend_exec to find the first child forked by the shell, and to
+return that as the process ID to the caller.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.2 1997/12/01 23:46:07 abrown Exp $
+d13 4
+d39 1
+d64 1
+a64 1
+	if (rval == EXEC_SUCCESS)
+d73 59
+d191 7
+d205 1
+a205 1
+		return EXEC_FAIL;
+d222 1
+a222 1
+		return EXEC_FAIL;
+d230 1
+a230 1
+		return EXEC_FAIL;
+d240 1
+a240 1
+		return EXEC_FAIL;
+d246 1
+a246 1
+		return EXEC_FAIL;
+d266 1
+a266 1
+		return EXEC_FAIL;
+d276 1
+a276 1
+		return EXEC_FAIL;
+d322 1
+a322 1
+		return EXEC_FAIL;
+d329 2
+a330 1
+		return EXEC_FAIL;
+d372 10
+a381 1
+	return EXEC_SUCCESS;
+d384 8
+d393 8
+d402 153
+@
+
+
+1.2
+log
+@Fix typo in function name (it *should* be backend_exec).
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.c,v 1.1 1997/12/01 23:44:32 abrown Exp $
+d13 3
+d33 1
+d74 7
+a80 1
+	pid_t shellpid;
+d86 3
+a88 2
+		 * All we need to do is to redirect the child outputs, and
+		 * then spawn off a shell to process it
+d91 30
+d144 19
+a162 1
+	/* Prepare to capture the first fork by the shell */
+d164 132
+d297 2
+a298 1
+	*pid = shellpid;
+@
+
+
+1.1
+log
+@Initial implementation of a piece of the executor backend
+(backend_exec()). This is almost a stub version for now.
+@
+text
+@d1 1
+a1 1
+/* $Id$
+d12 5
+a16 1
+ * $Log$
+d53 1
+a53 1
+	rval = do_exec(argv[1], &pid, out, err);
+d68 1
+a68 1
+do_exec(char *commandline, pid_t *pid, int stdout_fd, int stderr_fd)
+@

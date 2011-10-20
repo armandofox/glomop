@@ -1,0 +1,1032 @@
+head	1.19;
+access;
+symbols
+	release:1.18
+	geoworks:1.18.2.1
+	pregeo:1.18
+	geoworks-0701:1.18.2.1
+	geoworks-062696:1.18
+	dev:1.15
+	demo:1.15.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.19
+date	96.07.04.02.38.49;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	96.04.04.01.46.36;	author fox;	state Exp;
+branches
+	1.18.2.1;
+next	1.17;
+
+1.17
+date	96.03.09.23.36.11;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	96.02.16.21.47.19;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.11.14.07.10.49;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.11.14.06.54.14;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.10.31.07.08.15;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.10.28.01.53.58;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.10.17.01.46.51;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.09.29.05.40.27;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.09.27.20.34.33;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.09.19.21.03.59;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.09.17.20.42.55;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.09.15.20.39.01;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.09.13.02.09.40;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.09.10.00.34.19;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.09.07.21.03.01;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.09.07.18.06.31;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.11;	author fox;	state Exp;
+branches;
+next	;
+
+1.18.2.1
+date	96.07.04.03.18.48;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.19
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.18 1996/04/04 01:46:36 fox Exp $
+#
+#  Munge HTML going back to a client as follows.
+#  - Determine n= number of IMG tags in this document.
+#  - Munge each IMG tag to have URL of this document plus semicolon plus a
+#  string of n digits.  Each digit indicates a refinement level for the
+#  corresponding inline image.
+#  - When the IMG URL's are requested, they will have the refinement info
+#  tacked on.  Those URL's are interpreted specially by the forward_gif routine
+#  in child.pl.
+#
+
+package munge_html;
+
+# will appear on every page.  '%s' will be replaced by Registration page URL. 
+$PythiaPromo =
+    '<p><a href="%s">Change Pythia Prefs</a> | ' .
+    '<a href="mailto:fox@@cs.berkeley.edu">Report Bug</a></p>';
+
+#----------------------------------------------------------------------
+#  collect HTML and pass it to client.  if we see any IMG tags, add a "Refine"
+#  button immediately following them (modify HTML in place).  Since HTML tags
+#  may span lines, we have to read the entire HTML first.  Bummer.
+#
+#  Assumptions: global var $Socket is valid socket object back to client.
+#  Side effects: sends munged HTML back over the client socket.
+
+for (keys %main::Begin) {
+    $main::Begin{$_}  = "munge_html::tag_begin_default";
+    $main::End{$_} = "munge_html::tag_end_default";
+}
+$main::Begin{"A"} = "munge_html::begin_anchor";
+$main::End{"A"} = "munge_html::end_anchor";
+
+$main::Begin{"IMG"} = "munge_html::munge_img_tag";
+
+$main::Begin{"BODY"} = "munge_html::begin_body";
+
+$main::Begin{"SCRIPT"} = "munge_html::begin_script";
+$main::End{"SCRIPT"} = "munge_html::end_script";
+
+$main::HtmlContent = "munge_html::do_content";
+$main::HtmlWhitespace = "munge_html::do_whitespace";
+
+
+sub do_content {
+    #$munge_html::new_html .= shift unless $Squelch;
+    $new_html .= shift unless $Squelch;
+}
+sub do_whitespace {
+    $new_html .= shift unless $Squelch;
+}
+
+sub begin_anchor {
+    my ($elt, $tagtext) = @@_[0,1];
+    # indicate we are inside an anchor, to prevent Pythia from inserting a
+    # refinement link as a nested anchor.
+    $InAnchor = 1;
+    $new_html .= $tagtext;
+}
+
+sub end_anchor {
+    my ($elt,$explicit) = @@_;
+    $InAnchor = 0;
+    $new_html .= "</$elt>" if $explicit;
+    foreach (@@AnchorStack) {
+        $new_html .= " $_";
+    }
+    @@AnchorStack = ();
+}
+
+sub begin_script {
+    if ($SuppressScript) {
+        $new_html .=
+            '<b>[Script squelched by Pythia <i>NetCondom</i>] </b>';
+        $Squelch = 1;
+    } else {
+        shift;
+        $new_html .= shift;
+    }
+}
+
+sub end_script {
+    shift;
+    $new_html .= shift;
+    $Squelch = 0;
+}
+
+# Insert "Pythia promo" tag at beginning of body for each page.
+sub begin_body {
+    shift;
+    $_ = shift;
+    s/background=\S+//im if $Prefs{'b'} eq 'on';
+    $new_html .= $_;
+    $HTML_has_body = 1;
+}
+
+# Insert refinement link to left of image tag.  Possibly remove some image tag
+# attributes, depending on user's pref profile.
+sub munge_img_tag {
+    local ($element, $tagtext, *attribs) = @@_;
+
+    # if the user prefers "optimized layout", remove any "width=" or "height="
+    # attributes from the IMG tag.  (We should really be *replacing* them with
+    # correct values, but at this time we don't know what the values are.)
+
+    if ($Prefs{'f'} eq 'on') {
+        $tagtext =~ s/width=\S+//gi;
+        $tagtext =~ s/height=\S+//gi;
+    }
+
+    # output the refinement link, UNLESS this appears to be a cgi-bin kind of
+    # thingy.
+    if  ($tagtext !~ m!/cgi(-bin)?/! ) {
+        my $refineurl = $attribs{"src"} . ';2';
+        my $anchor = "<a href=\"$refineurl\"><strong>&#164;</strong></a>";
+        # output the original IMG tag followed by the new one.
+        if ($InAnchor) {
+            # we're inside a <a>...</a> construct.  They don't nest, so push
+            # this refinement tag onto the list of things to output *after* we
+            # have closed the </a>.
+            push(@@AnchorStack, $anchor);
+            $new_html .= $tagtext;
+        } else {
+            # not inside an anchor: just add the refine tag
+            # $new_html .= $tagtext . " " . $anchor;
+            # not inside an anchor, and image is not an imagemap:
+            # make the image itself *be* the "refine" button
+            $new_html .= "<a href=\"$refineurl\">${tagtext}</a>";
+        }
+    } else {
+        # looks like a cgi-bin: just output the original tag.
+        # BUG::should still do conditional removal of attributes here.
+        $new_html .= $tagtext;
+    }
+}
+sub tag_begin_default {
+    local($elt,$tagtext) = @@_;
+    if ($elt =~ /^html$/i) {
+        $HTML_has_html = 1;
+    }
+    $new_html .= $tagtext;
+}
+sub tag_end_default {
+    local($elt, $explicit) = @@_;
+    if ($elt =~ /title$/) {
+        $HTML_has_endtitle = 1;
+    }
+    $new_html .= "</$elt>" if $explicit;
+}
+sub main::forward_html {
+    my($url) = shift;                    # original URL, sans refinetag
+    my($refinetag) = shift;              # refine tag, if any
+    my(%hdrs) = %{shift @@_};             # http hdrs from server
+    my($html) = $ {shift @@_};
+
+    %Prefs = % {shift @@_};              # user prefs
+    
+    my(@@refinetags);
+    local($") = '';                         #" 
+
+    &main::debug('conn',"Sending headers");
+    delete $hdrs{"Content-length"};
+
+    &main::send_headers(\%hdrs);
+
+    # initialize "global" variables (relative to parser anyway) and parse the
+    # page.
+    
+    $new_html = '';
+    $SuppressScript = 1 if $Prefs{'y'} eq 'on';
+    $Squelch = 0;                           # toggle for turning output on/off
+    $InAnchor = 0;                          # currently in an <A> construct?
+    $HTML_has_html =
+        $HTML_has_endtitle =
+            $HTML_has_body = 0;
+    
+
+    &main::parse_html_string($html);
+
+    # if original HTML had a <BODY> tag, insert the promo message right after
+    # it.
+    # Otherwise, if it had a </TITLE> tag, insert the promo message right
+    # after that.
+    # Otherwise, if it had a <HTML> tag, insert the promo message right after
+    # it.
+    # Otherwise, insert it at the very beginning.
+
+    my $msg = sprintf($PythiaPromo, $main::Const{RegisterPage});
+
+    if ($HTML_has_body) {
+        $new_html =~ s/(<body[^>]*>)/$1.$msg/ei;
+    } elsif ($HTML_has_endtitle) {
+        $new_html =~ s!(</title>)!$1.$msg!ei;
+    } elsif ($HTML_has_html) {
+        $new_html =~ s/(<html[^>]*>)/$1.$msg/ei;
+    } else {
+        $new_html = $msg . $new_html;
+    }
+    
+    &main::send_client( $new_html );
+}
+    
+1;
+@
+
+
+1.18
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.17 1996/03/09 23:36:11 fox Exp $
+d18 2
+a19 1
+    "<h4>Brought to you by <a href=\"%s\">Pythia</a></h4>";
+a71 1
+    
+d76 1
+a76 1
+            '<b> [JavaScript squelched by Pythia <i>NetCondom</i>] </b>';
+d99 2
+a100 1
+# Insert refinement link to left of image tag.
+d104 9
+d117 1
+a117 1
+        my $anchor = "<a href=$refineurl><strong>&#164;</strong></a>";
+d127 4
+a130 1
+            $new_html .= $tagtext . " " . $anchor;
+d133 2
+a134 1
+        # just output the original tag
+@
+
+
+1.18.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.18 1996/04/04 01:46:36 fox Exp $
+d18 1
+a18 1
+    '<P><FONT SIZE="-2"><A HREF="%s">PREFS</a></FONT></P>';
+d39 2
+a40 11
+# $main::Begin{"SCRIPT"} = "munge_html::begin_script";
+# $main::End{"SCRIPT"} = "munge_html::end_script";
+
+for (qw(SCRIPT FRAMESET)) {
+    $main::Begin{$_} = "munge_html::tag_begin_omit";
+    $main::End{$_} = "munge_html::tag_end_omit";
+}
+
+for (qw(FONT)) {
+    $main::Begin{$_} = $main::End{$_} = "munge_html::tag_ignore";
+}
+d71 1
+d76 1
+a76 1
+            '<b>[Script squelched by Pythia <i>NetCondom</i>] </b>';
+d94 1
+a94 1
+    s/background=\S+//im if $munge_html::Prefs{'b'} eq 'on';
+d99 1
+a99 14
+# Remove specific attribs from a tag.  Modify it in place.
+
+sub remove_attribs {
+    my @@atts = @@_;
+    shift @@atts;
+
+    foreach $at (@@atts) {
+        $_[0] =~  s/\W$at=\"[^\"]+\"//ig  && next;    #" 
+        $_[0] =~ s/\W$at=[^>]+\b//ig;  
+    }
+}
+
+# Insert refinement link to left of image tag.  Possibly remove some image tag
+# attributes, depending on user's pref profile.
+a102 8
+    # if the user prefers "optimized layout", remove any "width=" or "height="
+    # attributes from the IMG tag.  (We should really be *replacing* them with
+    # correct values, but at this time we don't know what the values are.)
+
+    if ($munge_html::Prefs{'f'} eq 'on') {
+        &munge_html::remove_attribs($tagtext, "width", "height");
+    }
+
+d107 1
+a107 1
+        my $anchor = "<a href=\"$refineurl\"><strong>&#164;</strong></a>";
+d117 1
+a117 4
+            # $new_html .= $tagtext . " " . $anchor;
+            # not inside an anchor, and image is not an imagemap:
+            # make the image itself *be* the "refine" button
+            $new_html .= "<a href=\"$refineurl\">${tagtext}</a>";
+d120 1
+a120 2
+        # looks like a cgi-bin: just output the original tag.
+        # BUG::should still do conditional removal of attributes here.
+a137 10
+#
+#  Ignore a (pair of) tags, but output the content between them.
+#
+sub tag_ignore {}
+#
+#  Omit everything between a given pair of tags
+#
+sub tag_begin_omit { $Squelch++ }
+sub tag_end_omit { $Squelch-- }
+
+d139 4
+a142 7
+    my $con = shift;
+    %munge_html::Prefs = % {shift @@_};              # user prefs
+
+    my $url = $con->{"URL"};                # orig. URL sans refinetag
+    my $refinetag = $con->{"refine"};       # refinetag if any
+    my %hdrs = %{$con->{"server_headers"}};
+    my($html) = $con->{"data"};
+d144 1
+d151 2
+a152 2
+    $con->{"server_headers"} = \%hdrs;
+    &main::send_server_headers($con);
+d158 1
+a158 1
+    $SuppressScript = 1;
+d178 6
+a183 14
+#     if ($HTML_has_body) {
+#         $new_html =~ s/(<body[^>]*>)/$1.$msg/ei;
+#     } elsif ($HTML_has_endtitle) {
+#         $new_html =~ s!(</title>)!$1.$msg!ei;
+#     } elsif ($HTML_has_html) {
+#         $new_html =~ s/(<html[^>]*>)/$1.$msg/ei;
+#     } else {
+#         $new_html = $msg . $new_html;
+#     }
+    
+    if ($HTML_has_html) {
+        $new_html =~ s!(</html[^>]*>)!$msg.$1!ei;
+    } elsif ($HTML_has_body) {
+        $new_html =~ s!(</body[^>]*>)!$msg.$1!ei;
+d185 1
+a185 1
+        $new_html .= $msg;
+d188 1
+a188 1
+    &main::send_client($con, $new_html );
+@
+
+
+1.17
+log
+@latest version: uses perl HTML parser from net (with some additions and
+bug fixes by me); SafeSurf (NetCondom) removes Java/JavaScript tags; no
+longer has problems accidentally nesting <A>'s for refinement tags;
+understands new format handoff messages; pathnames for external
+distillers now in .cf file, not in code; minor changes to registration
+page; "About Pythia" link (to reg page) now appears on every page served
+by Pythia; random other buglets fixed.
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.16 1996/02/16 21:47:19 fox Exp $
+d93 3
+a95 1
+    $new_html .= shift;
+d143 2
+a144 1
+    my(%prefs) = % {shift @@_};              # user prefs
+d158 1
+a158 1
+    $SuppressScript = 1 if $prefs{'y'} eq 'on';
+@
+
+
+1.16
+log
+@various modularity changes
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.15 1995/11/14 07:10:49 fox Exp $
+d14 6
+d28 109
+a136 1
+sub forward_html {
+d141 2
+a144 4
+    my($bbox0,$bbox1,$bbox2);
+    my($anchor) = '';
+    my($num_images);
+    my($tmp);
+a145 1
+    local($*);
+d149 1
+a149 1
+    &send_headers(\%hdrs);
+d151 11
+a161 55
+    #
+    #  Determine how many inlined IMG tags there are.
+    #
+
+    $_ = $html;
+    s/\n//g;
+    $num_images = s/<\s*IMG//ig;
+
+    # BUG: this method will also modify IMG tags that occur inside a comment
+    # (harmless) and IMG tags that occur inside PRE text (annoying).  But at
+    # least it's consistent.
+    #
+
+    $refinetag = &make_zero_vector($num_images)
+        if $refinetag eq '';
+    
+    &main::debug('refine',"Using refine tag: $refinetag");
+
+    # Must do following regexp in two steps, because first one may fail (if
+    # original URL did not include a refinetag, we assume the refinetag is
+    # implicitly all zeros).
+    $newurl = $url;
+    $newurl .= sprintf($Const{SubblockKeyPrint}, $refinetag);
+    &main::debug('refine',"New url is: $newurl");
+
+    # do substitution for everything of form  IMG SRC=foo.  Catch cases where
+    # the URL is in double quotes too.  The new SRC attribute should be the
+    # original SRC attribute plus ;n where n is a refinement level.  The value
+    # of n for the i'th image is substr($refinetag,$n+1,1).
+    # The href for the Refine button should cause this same page to be
+    # refetched but with a '1' in the refinement bit string in the appropriate
+    # place.  We create an array of these in advance.
+
+    local(@@hrefs);
+    local($imgtag) = "_i$$".".";
+    for (0..$num_images-1) {
+        $hrefs[$_] = $newurl;
+        substr($hrefs[$_], -($num_images-$_), 1) = $MaxRefine;
+        $hrefs[$_] .= "#$imgtag$_" if $MyPrefs{r} eq 'r';
+    }
+
+    # Compute the bounding box x and y sizes, so we can pass them to the client
+    # as an optimization (it can wrap the text while the images are still
+    # outstanding). 
+
+    $bx = $by = $MyPrefs{"s"};               # BUG: should come from prefs
+
+    # in the evil regexp below, $1 will be all the text up to and including
+    # 'IMG SRC = ', $2 will be the original IMG SRC value, $3 will be the
+    # remaining attribute tags up to but not including the closing >.
+
+    @@refinetags = split(//, $refinetag);
+    foreach (@@refinetags) { $_ = sprintf($Const{SubblockKeyPrint}, $_); }
+    $i = 0;
+    #$html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<${1}${2}$refinetags[$i] width=$bx height=$by ${3}><b><a href=$hrefs[$i++]>[R]</a></b>"|eig;
+d163 1
+a163 1
+    # Turn on multiline regexp matching, and cross your fingers
+d165 16
+a180 4
+    $* = 1;
+    
+    if ($MyPrefs{r} eq 'r') {
+        $html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<a name=$imgtag$i><${1}\"${2}$refinetags[$i]\"${3}><b><a href=\"$hrefs[$i++]\">\&#164\;</a></b>"|eig;
+d182 1
+a182 1
+        $html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<${1}\"${2}$refinetags[$i]\"${3}><b><a href=\"$hrefs[$i++]\">\&#164\;</a></b>"|eig;
+d184 2
+a185 13
+    # (Gack!)
+
+    # if desired by user, omit irritating background graphics
+
+    $html =~ s!<(\s*body.*)(background\s*=\s*[^\s>]+)!<$1!ig
+        if $MyPrefs{b} eq 'on';
+
+    # finally, add a tag at the end of the page for modifying Pythia prefs.
+
+    # $html =~ s#(</html>\s*)?$#<p><font size=-2><a href=$Const{UnregisteredUserPage}>$Const{Proxy} Profile</a></font></p>\1#
+    # if $MyPrefs{l} eq 'on';
+
+    &send_client( $html );
+a187 12
+#---------------------------------------------------------------------------
+#  make_zero_vector
+#
+#  return a vector of a given length containing all zeros.
+#---------------------------------------------------------------------------
+
+sub make_zero_vector {
+    my $len = shift || 1;
+
+    return '0' x $len;
+}
+
+@
+
+
+1.15
+log
+@fixed typo in body/bgnd regex
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.14 1995/11/14 06:54:14 fox Exp $
+d23 10
+a32 10
+    local($url) = shift;                    # original URL, sans refinetag
+    local($refinetag) = shift;              # refine tag, if any
+    local(@@html) = @@_;                     # http hdrs recd so far.
+    local(@@refinetags);
+    local($") = '';
+    local($html, $html_copy);
+    local($bbox0,$bbox1,$bbox2);
+    local($anchor) = '';
+    local($num_images);
+    local($tmp);
+d35 2
+d38 1
+a38 20
+    #  Collect and forward remaining headers verbatim.  End of headers is
+    #  marked by a blank line.
+
+    while ($_ = $Svr->readsock_raw()) {
+        push(@@html, $_);
+        last if /^\s*$/;
+    }
+
+    &http_error("500 Premature EOF from server")
+        if $Svr->eof();
+    
+    &debug('conn',"Sending headers");
+    $Socket->writesock(@@html);
+    #print $Socket "Content-type: text/html$Const{Crlf}$Const{Crlf}";
+    @@html = ();
+    
+    # collect HTML from server.
+    push(@@html, $_) while ($_ = $Svr->readsock_raw());
+
+    $html = join('', @@html);
+d47 1
+a47 3
+    #@@html = split(/\n/, $html);
+    #$num_images = $#html;
+    #
+d53 1
+a53 1
+    $refinetag = ('0' x $num_images)
+d56 1
+a56 1
+    &debug('refine',"Using refine tag: $refinetag") if $gb{debug};
+d61 1
+a61 1
+    ($newurl = $url) =~ s/$Const{SubblockKey}//o;
+d63 1
+a63 1
+    &debug('refine',"New url is: $newurl") if $gb{debug};
+d85 1
+a85 1
+    $bx = $by = $MyPrefs{s};               # BUG: should come from prefs
+d109 1
+a109 1
+    $html =~ s!<(\s*body.*)((background|bgcolor)\s*=\s*[^\s>]+)!<\1!ig
+d120 11
+@
+
+
+1.14
+log
+@random bug fixes
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.13 1995/10/31 07:08:15 fox Exp $
+d128 1
+a128 1
+    $html =~ s|<(\s*body.*)((background|bgcolor)\s*=\s*[^\s>]+)|<\1|ig
+@
+
+
+1.13
+log
+@the seeds of scalability have been sown.
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.11 1995/10/17 01:46:51 fox Exp $
+d128 1
+a128 1
+    $html =~ s|<(\s*body.*)(background\s*=\s*[^\s>]+)|<\1|ig
+@
+
+
+1.12
+log
+@Closer....basic registration works, remapping doesn't seem to
+@
+text
+@d47 1
+a47 1
+    &log("Sending headers");
+d75 1
+a75 1
+    &log("Using refine tag: $refinetag") if $gb{debug};
+d82 1
+a82 1
+    &log("New url is: $newurl") if $gb{debug};
+d97 1
+a97 1
+        $hrefs[$_] .= "#$imgtag$_" if $MyPrefs{rerender} eq 'r';
+d104 1
+a104 1
+    $bx = $by = $MyPrefs{size};               # BUG: should come from prefs
+d119 1
+a119 1
+    if ($MyPrefs{rerender} eq 'r') {
+d129 1
+a129 1
+        if $MyPrefs{bg} eq 'n';
+d134 1
+a134 1
+    # if $MyPrefs{link} eq 'y';
+@
+
+
+1.11
+log
+@smaller "refine" markers
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.9 1995/09/27 20:34:33 fox Exp $
+d19 1
+a19 1
+#  Assumptions: global var $Socket is valid socket filehandle back to client.
+d39 1
+a39 1
+    while (<SVR>) {
+d45 1
+a45 1
+        if eof(SVR);
+d48 1
+a48 1
+    print $Socket @@html;
+d53 1
+a53 1
+    push(@@html, $_) while <SVR>;
+d133 2
+a134 2
+    $html =~ s#(</html>\s*)?$#<p><font size=-2><a href=$Const{UnregisteredUserPage}>$Const{Proxy} Profile</a></font></p>\1#
+        if $MyPrefs{link} eq 'y';
+@
+
+
+1.10
+log
+@Removed some redundant files
+@
+text
+@d120 1
+a120 1
+        $html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<a name=$imgtag$i><${1}\"${2}$refinetags[$i]\"${3}><b><a href=\"$hrefs[$i++]\">[R]</a></b>"|eig;
+d122 1
+a122 1
+        $html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<${1}\"${2}$refinetags[$i]\"${3}><b><a href=\"$hrefs[$i++]\">[R]</a></b>"|eig;
+@
+
+
+1.9
+log
+@Successfully uses POSIX nonblocking waitpid to reap children.  Need to
+be sure that POSIX nonblocking waitpid is supported on host, even tho
+Perl5 provides POSIX interface.
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.4 1995/09/10 00:34:19 fox Exp $
+a136 1
+    &log($html);
+@
+
+
+1.8
+log
+@Registration works.  Misfeature: when updating prefs, you should be able
+to start from your old prefs and make incremental changes, instead of
+starting from a default prefs screen.  Posting still doesn't work.
+@
+text
+@a30 2
+    local($bb) = $g{bboxsize};
+    local($cols) = $g{stampcolors};
+d128 1
+a128 1
+    $html =~ s|<(\s*body.*)(background\s*=\s*\S+)|<\1|ig
+@
+
+
+1.7
+log
+@registration broken because it needs to occur in parent, not child,
+process. d'oh!
+@
+text
+@a21 17
+
+# if ($DEBUGGING) {
+#     open(FILE, "/home/barad-dur/now/grad/fox/public_html/test.html") || die $!;
+#     @@file = <FILE>;
+#     $Socket = STDOUT;
+#     &forward_html("http://www.cs.berkeley.edu/~fox/test.html", @@file);
+# }
+#
+#  forward_html: munges html and forwards to client.
+#
+#  Assumptions: $Socket is a valid filehandle to client socket.
+#               SVR is a valid filehandle from HTTP server.  Some headers have
+#               already been fetched and are passed in arglist.
+#               $MaxRefine is a number that indicates max refinement level.
+#  Side effects: Sends munged HTML text back to client.
+#
+
+d99 1
+a99 1
+        $hrefs[$_] .= "#$imgtag$_" if $gb{keepplace};
+d106 1
+a106 1
+    $bx = $by = $g{bboxsize};               # BUG: should come from prefs
+d121 1
+a121 1
+    if ($gb{keepplace}) {
+d131 6
+a136 1
+        if $gb{nobackground};
+@
+
+
+1.6
+log
+@Working version that can also do jpeg distillation, and omit irritating
+background patterns on pages.
+@
+text
+@d68 1
+a68 1
+    #print $Socket "Content-type: text/html$Crlf$Crlf";
+d99 2
+a100 2
+    ($newurl = $url) =~ s/$SubblockKey//o;
+    $newurl .= sprintf($SubblockKeyPrint, $refinetag);
+d130 1
+a130 1
+    foreach (@@refinetags) { $_ = sprintf($SubblockKeyPrint, $_); }
+@
+
+
+1.5
+log
+@Fixed munge_html so that line breaks are mostly preserved.  Posting
+still doesn't work right.
+@
+text
+@d80 3
+a82 4
+    $html_copy = $html;
+    $num_images = 0;
+    $html_copy =~ s/\n//g;
+    $html_copy =~ s/<\s*IMG/$num_images++/eig;
+d144 6
+a149 1
+    
+d151 1
+@
+
+
+1.4
+log
+@various minor changes.
+@
+text
+@d2 1
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/munge_html.pl,v 1.1.1.1 1995/08/29 21:44:11 fox Exp $
+d45 1
+a45 1
+    local($html);
+d53 2
+d73 1
+d80 6
+a85 5
+    local($*) = 1;
+    $html =~ s/\n/ /g;
+    $html =~ s/<IMG/\n<IMG/ig;
+    @@html = split(/\n/, $html);
+    $num_images = $#html;
+d134 5
+@
+
+
+1.3
+log
+@selective rerendering seems to sorta work
+@
+text
+@d90 1
+d109 1
+d113 1
+d130 5
+a134 1
+    $html =~ s|<(\s*IMG[^>]+SRC\s*=\s*)\"?([^\"\s>]+)\"?([^>]*)>|"<${1}${2}$refinetags[$i] ${3}><b><a href=$hrefs[$i++]>[R]</a></b>"|eig;
+@
+
+
+1.2
+log
+@added http error reporting and robustness
+@
+text
+@d3 9
+a11 3
+#  Munge HTML going back to a client, to massage the IMG tags so that they are
+#  followed by a "refine" button which fetches the original image when clicked.
+#  This version is for use with conventional browsers.
+d22 17
+d40 4
+a43 1
+    local(@@reply) = @@_;                     # http hdrs recd so far.
+a44 1
+    local(@@html);
+d50 2
+d53 2
+a54 5
+    &log("Forwarding html: >>>\n@@reply\nContent-type: text/html\n<<<")
+        if $gb{debug};
+
+    print $Socket @@reply;
+    print $Socket "Content-type: text/html\n";
+d56 13
+d73 25
+a97 11
+    # add Refine tags anywhere we see <IMG ...> tags. For simple browser
+    # version, the Refine button retrieves the whole original image.  This is
+    # done by appending the subblock-key string with cords (0,0,-1,-1), where
+    # (-1,-1) is understod by the subblock extractor to mean "whole image".
+    # Note that we have to look inside the IMG tag for the SRC attribute, to be
+    # able to construct the URL of the image correctly.
+
+
+    $bbox0 = sprintf($SubblockKeyStr, 0,0,-1,-1,0);
+    $bbox1 = sprintf($SubblockKeyStr, $bb,$bb,$cols,0,0);
+    $bbox2 = sprintf($SubblockKeyStr, $bb,$bb,255,0,0);
+d100 28
+a127 3
+    # the URL is in double quotes too.
+
+    $html =~ s#<\s*IMG[^>]+SRC\s*=\s*\"?([^\"\s>]+)[^>]*>#$& <b><a href=${1}$bbox0>[R</a><a href=${1}$bbox1>|1|</a><a href=${1}$bbox2>2]</a></b>#ig;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+a2 1
+#  $Header: /home/barad-dur/now/grad/fox/digest/bin/RCS/munge_html.pl,v 1.2 1995/08/22 03:42:21 fox Exp $
+d13 2
+d25 4
+d54 1
+a54 1
+    print $Socket $html;
+@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

@@ -1,0 +1,726 @@
+<!doctype html public "-//IETF//DTD HTML 2.0//EN">
+<HTML><HEAD>
+<TITLE>A Lexical Analyzer for HTML and Basic SGML</TITLE>
+</HEAD><BODY><P><!-- $Id: sgml-lex.html,v 1.19 1996/01/24 16:34:03 connolly
+Exp $ -->
+<H1><A HREF="/pub/WWW/Consortium/"><IMG align=bottom
+src="/pub/WWW/Icons/WWW/w3c_48x48"></A>A Lexical Analyzer for HTML and Basic
+SGML
+</H1><ADDRESS>W3C Working Draft<BR>
+Dan Connolly <TT>connolly@w3.org</TT><BR>
+<TT>http://www.w3.org/pub/WWW/TR/WD-sgml-lex<BR></TT>$Date: 1996/01/24 16:34:03
+$ <BR>
+</ADDRESS><P><HR>
+<H3>Status of this document
+</H3><P>This is a W3C Working Draft for review by W3C members and other
+interested
+parties. It is a draft document and may be updated, replaced or obsoleted
+by
+other documents at any time. It is inappropriate to use W3C Working Drafts
+as reference material or to cite them as other than "work in progress".
+A list of current W3C tech reports can be found at:
+<A
+href="/pub/WWW/TR/">http://www.w3.org/pub/WWW/TR/</A>.
+<P>Please direct comments and questions to
+<TT><A HREF="http://www.w3.org/pub/WWW/Mail/Lists#www-html">www-html@w3.org</A></TT>,
+an open discussion forum. Include the keyword "sgml-lex" in the subject.
+<P><HR>
+<H2>Abstract
+</H2><P>
+The Standard Generalized Markup Language (SGML) is a complex system
+for developing markup languages. It is used to define the Hypertext
+Markup Language (HTML) used in the World Wide Web, as well as
+several other hypermedia document representations.
+<P>
+Systems with interactive performance constraints use only the
+simplest features of SGML. Unfortunately, the specification of
+those features is subtly mixed into the specification of SGML
+in all its generality. As a result, a number of ad-hoc SGML lexical
+analyzers have been developed and deployed on the Internet, and
+reliability has suffered.
+<P>
+We present a self-contained specification of a lexical analyzer
+that uses automated parsing techniques to handle SGML document
+types limited to a tractable set of SGML features. An implementation is available
+as well.<HR>
+<H2>Introduction
+</H2><BLOCKQUOTE>The hypertext markup language is an SGML format.
+<ADDRESS>--Tim Berners-Lee, in "About HTML"
+</ADDRESS></BLOCKQUOTE><P>
+The result of that design decision is something of a collision
+between the World Wide Web development community and the SGML
+community -- between the quick-and-dirty software community and the
+formal ISO standards community. It also creates a collision between
+the interactive, online hypermedia technology and the bulk, batch
+print publications technology.
+<P>SGML, Standard General Markup Language, is a complex, mature,
+stable technology. The international standard, ISO
+8879:1986<A
+href="#SGML">[SGML]</A>, is nearly ten years old, and GML-based
+systems pre-date the standard by years. On the other hand, HTML,
+Hypertext Markup Lanugage, is a relatively simple, new and rapidly
+evolving technology.
+<P>
+SGML has a number of degrees of freedom which are bound in HTML.
+SGML is a system for defining markup languages, and HTML is one
+such language; in standard terminology, HTML is an SGML application.
+<H3>Lexical Analysis of Basic SGML Documents
+</H3><P>The degrees of freedom in SGML which the HTML 2.0
+specification<A
+href="#HTML2.0">[HTML2.0]</A> binds can be separated into high-level,
+document structure considerations on the one hand, and low-level,
+lexical details on the other.  The document structure issues are
+specific to the domain of application of HTML, and they are evolving
+rapidly to reflect new features in the web.
+<P>
+The lexical properties of HTML 2.0 are very stable by comparison.
+HTML documents fit into a category termed <EM>basic SGML documents</EM>
+in the SGML standard, with a few exceptions &nbsp;(see
+<A HREF="#differences">below</A>).
+These properties are independent of the domain of application
+of HTML. They are shared by a number of contemporary SGML applications,
+such as TEI<A href="#TEI">[TEI]</A>, DocBook<A href="#DocBook">[DocBook]</A>,
+HTF<A href="#HTF">[HTF]</A>, and
+IBM-IDDOC<A href="#IBM-IDDOC">[IBM-IDDOC]</A>.
+<P>
+The specification of this straightforward category of SGML documents
+is, unfortunately, subtly mixed into the specification of SGML
+in all its generality.
+<P>
+An unfortunate result is that a number of lexically incompatible
+HTML parser implementations have been developed and deployed.[REF!
+Mosaic 2.4, Cern libwww parser].
+<P>
+The objectives of the document are to:
+<OL><LI>refine the notion of "basic SGML document" to the
+precise set of features used in HTML 2.0.
+<LI>present a more traditional automated model of lexical analysis
+and parsing for these SGML documents<A href="#dragon">[Dragon]</A>.
+<LI>make a rigorous specification of this lexical analyzer that
+can be understood without prior knowledge of SGML freely available
+to the web development community.
+</OL><P>While this report focuses on the SGML features necessary for HTML
+2.0 user agents, it should be applicable to future HTML versions and to
+extensions of the HTML standard<A HREF="#HTMLDIALECT">[HTMLDIALECT]</A>,
+as well as other SGML applications used on the
+internet<A HREF="#SGMLMEDIA">[SGMLMEDIA]</A>. See the <A HREF="#future">"Future
+Work"</A> section for discussion.
+<P><HR>
+<H2>SGML and Document Types
+</H2><H3>SGML Documents
+</H3><P>
+An SGML document is a sequence of characters organized as one or more entities
+for storage and transmission, with a logical hierarchy of elements imposed.
+<P>The organization of an SGML document into entities is analagous to
+the organization of a C program into source files<A
+href="#KnR2">[KnR2]</A>. This report does not formally address entity
+structure.  We restrict our discussion to documents consisting of a
+single entity.
+<P>
+The element hierarchy of an SGML document is actually the last
+of three parts. The first two are the SGML declaration and the
+prologue.
+<P>The SGML declaration binds certain variables such as the character
+strings that serve delimiter roles, and the optional features
+used. The SGML declaration also specifies the document character set
+-- the set of characters allowed in the document and their
+corresponding character numbers.
+For a discussion of the&nbsp;SGML declaration, see
+<A HREF="#SGMLDECL">[SGMLDECL]</A>.
+<P>
+The prologue, or DTD, declares the element types allowed in the
+document, along with their attributes and content models. The
+content models express the order and occurence of elements in
+the hierarchy.
+<H3>Document Types and Element Structure
+</H3><P>
+SGML facilitates the development of <EM>document types</EM>, or
+specialized markup languages. An <EM>SGML application</EM> is
+a set of rules for using one or more document types. Typically,
+a community such as an industry segment, after identifying a need
+to interchange data in a rigorous method, develops an SGML application
+suited to their practices.
+<P>
+The document type definition includes two parts: a formal part,
+expressed in SGML, called a document type declaration or DTD,
+and a set of application conventions. An overview of the syntax of a DTD
+follows. For a more complete discussion, see
+<A HREF="#SGMLINTRO">[SGMLINTRO]</A>.
+<P>
+The DTD essentially gives a grammar for the element structure
+of the specialized markup language: the start symbol is the document
+element name; the productions are specified in element declarations,
+and the terminal symbols are start-tags, end-tags, and data characters.
+For example:
+<PRE><P>
+&lt;!doctype Memo [
+&lt;!element Memo         - - (Salutation, P*, Closing?)&gt;
+&lt;!element Salutation   O O (Date &amp; To &amp; Address?)&gt;
+&lt;!element (P|Closing|To|Address) - O (#PCDATA)&gt;
+&lt;!element Date - O EMPTY&gt;
+&lt;!attlist Date
+	numeric CDATA #REQUIRED
+]&gt;
+</PRE><P>
+These four element declarations specify that a Memo consists
+of a Salutation, zero or more P elements, and an optional Closing.
+The Salutation is a Date, To, and optionally, an Address.
+<P>The notation "- -" specifies that both start and end tags
+are required; "O O" specifies both are optional, and "-
+O" specifies that the start tag is required, but the end tag is
+optional. The notation <TT>#PCDATA</TT> refers to parsed character
+data -- data characters with auxiliary markup such as comments mixed
+in. An element declared <TT>EMPTY</TT> has no content and no end-tag.
+<P>The <TT>ATTLIST</TT> declaration specifies that the <TT>Date</TT>
+element has an attribute called <TT>numeric</TT>. The
+<TT>#REQUIRED</TT> notation says that each <TT>Date</TT> start-tag
+must specify a value for the Date attribute.
+<P>
+The following is a sample instance of the memo document type:
+<PRE><P>
+&lt;!doctype memo system&gt;
+&lt;Memo&gt;
+&lt;Date numeric="1994-06-12"&gt; 
+&lt;To&gt;Third Floor
+&lt;p&gt;Please limit coffee breaks to 10 minutes.
+&lt;Closing&gt;The Management
+&lt;/Memo&gt;
+</PRE><P>
+The following left-derivation shows the nearly self-evident structure
+of SGML documents when viewed at this level:
+<PRE><P>
+Memo -&gt; &lt;Memo&gt;, Salutation, P, Closing, &lt;/Memo&gt;	
+Salutation -&gt; Date, To	
+Date -&gt; &lt;Date numeric="1994-06-12"&gt;	
+To -&gt; &lt;To&gt;, "Third Floor"	
+P -&gt; &lt;P&gt;, "Please limit coffee breaks to 10 minutes."	
+Closing -&gt; &lt;Closing&gt;, "The Management"
+</PRE><P>
+This lexical analyzer in this report reports events at this level:
+start-tags, end-tags, and data.
+
+<HR>
+<H2>Basic SGML Language Constructs
+</H2><P>Basic SGML documents are like ordinary text files, but the
+text is enhanced with certain constructs called <EM>markup</EM>.
+The markup constructs add structure to documents.
+<P>The lexical analyzer separates the characters of a document into
+markup and data characters. Markup is separated from data charcters by
+delimiters. The SGML delimiter recognition rules include a certain
+amount of context information. For example, the delimiter string
+"&lt;/" is only recognized as markup when it is followed by a letter.
+<P>For a formal specification of the language constructs, see
+<A
+HREF="sgml.l">the lex specification</A> (which is part of the implementation
+source distribution<A HREF="#DIST">[DIST]</A>).  The following is an informal
+overview.
+<H3>Markup Declarations
+</H3><P>Each SGML document begins with a document type declaration. Comment
+declarations and marked section delcarations are other types of markup
+declarations.
+<P>The string <TT>&lt;!</TT> followed by a name begins a markup
+declaration.  The name is followed by parameters and a <TT>&gt;</TT>. A
+<TT>[</TT> in the parameters opens a <EM>declaration subset</EM>,
+which is a construct prohibited by this report.
+<P>The string <TT>&lt;!--</TT> begins a comment declaration.  The
+<TT>--</TT> begins a comment, which continues until the next
+occurrence of <TT>--</TT>. A comment declaration can contain zero or
+more comments. The string <TT>&lt;!&gt;</TT> is an empty comment declaration.
+<P>The string <TT>&lt;![</TT> begins a marked section declaration, which
+is
+prohibited by this report.
+<P>For example:
+<PRE><P>
+&lt;!doctype foo&gt;
+&lt;!DOCTYPE foo SYSTEM&gt;
+&lt;!doctype bar system "abcdef"&gt;
+&lt;!doctype BaZ public "-//owner//DTD description//EN"&gt;
+&lt;!doctype BAZ Public "-//owner//DTD desc//EN" "sysid"&gt;
+&lt;!&gt;
+another way to escape &lt; and &amp;: &lt;&lt;!&gt;xxx &amp;&lt;!&gt;abc;
+&lt;!-- xyz --&gt;
+&lt;!-- xyz -- --def--&gt;
+&lt;!---- ---- ----&gt;
+&lt;!------------&gt;
+&lt;!doctype foo --my document type-- system "abc"&gt;
+</PRE><P>
+The following examples contain no markup. They illustrate that
+"&lt;!" does not always signal markup.
+<PRE>&lt;! doctype&gt; &lt;!,doctype&gt; &lt;!23&gt;
+&lt;!- xxx -&gt; &lt;!-&gt; &lt;!-!&gt;
+</PRE><P>
+The following are errors:
+<PRE>&lt;!doctype xxx,yyy&gt;
+<P>&lt;!usemap map1&gt;
+<P>&lt;!-- comment-- xxx&gt;
+<P>&lt;!-- comment -- -&gt;
+<P>&lt;!-----&gt;
+</PRE><P>The following are errors, but they are not reported by this lexical
+analyzer.
+<PRE>&lt;!doctype foo foo foo&gt;
+&lt;!doctype foo 23 17&gt;
+&lt;!junk decl&gt;
+</PRE><P>
+The following are valid SGML constructs that are prohibited by
+this report:
+<PRE><P>
+&lt;!doctype doc [ &lt;!element doc - - ANY&gt; ]&gt;
+&lt;![ IGNORE [ lkjsdflkj sdflkj sdflkj  ]]&gt;
+&lt;![ CDATA [ lskdjf lskdjf lksjdf ]]&gt;
+</PRE><H3>Tags
+</H3><P>Tags are used to delimit elements. Most elements have a start-tag,
+some content, and end-tag. Empty elements have only a start-tag. For
+some elements, the start-tag and/or end-tag are optional. @@
+<P>A start-tag begins with <TT>&lt;</TT> followed by a name, and ends
+with <TT>&gt;</TT>. The name refers to an element declaration
+in the DTD. An end-tag is
+similar, but begins with <TT>&lt;/</TT>.
+<P>For example:
+<PRE>&lt;x&gt; yyy &lt;/X&gt;
+&lt;abc.DEF   &gt; ggg &lt;/abc.def &gt;
+&lt;abc123.-23&gt;
+&lt;A&gt;abc def &lt;b&gt;xxx&lt;/b&gt;def&lt;/a&gt;
+&lt;A&gt;abc def &lt;b&gt;xxxdef&lt;/a&gt;
+</PRE><P>
+The following examples contain no markup. They illustrate that
+a the <TT>&lt;</TT> and <TT>&lt;/</TT> strings do not always
+signal markup.
+<PRE>&lt; x &gt; &lt;324 &lt;/234&gt;
+&lt;==&gt; &lt; b&gt;
+&lt;%%%&gt; &lt;---&gt; &lt;...&gt; &lt;---&gt;
+</PRE><P>
+The following examples are errors:
+<PRE>&lt;xyz!&gt; &lt;abc/&gt;
+&lt;/xxx/&gt; &lt;xyz&amp;def&gt; &lt;abc_def&gt;
+</PRE><P>
+These last few examples illustrate valid SGML constructs that
+are prohibited in the languages described by this report:
+<PRE>&lt;&gt; xyz &lt;/&gt;
+&lt;xxx&lt;yyy&gt; &lt;/yyy&lt;/xxx&gt;
+&lt;xxx/content/
+</PRE><H3>Names
+</H3><P>A name is a name-start characer -- a letter -- followed by any
+number <!--@@limit?--> of name characters -- letters, digits, periods,
+or hyphens. Entity names are case sensitive, but all other names are
+not.
+<H3>Attributes
+</H3><P>Start tags may contain attribute specifications. An attribute
+specification consists of a name, an "=" and a value
+specification. The name refers to an item in an <TT>ATTLIST</TT>
+declaration.
+<P>The value can be a name token or an attribute value literal. A name
+token is one or more name characters. An attribute value literal is a
+string delimited by double-quotes (<TT>"</TT>) or a string delimited
+by single-quotes (<TT>'</TT>). Interpretation of attribute value literals
+is covered in the <A href="#API">discussion of the lexical analyzer API</A>.
+<P>If the <TT>ATTLIST</TT> declaration specifies an enumerated list of
+names, and the value specification is one of those names, the
+attribute name and "=" may be omitted.
+<P>For example:
+<PRE>&lt;x attr="val"&gt;
+&lt;x ATTR ="val" val&gt;
+&lt;y aTTr1= "val1"&gt;
+&lt;yy attr1='xyz' attr2="def" attr3='xy"z' attr4="abc'def"&gt;
+&lt;xx abc='abc&amp;#34;def'&gt;
+&lt;xx aBC="fred &amp;amp; barney"&gt;
+&lt;z attr1 = val1 attr2 = 23 attr3 = 'abc'&gt;
+&lt;xx val1 val2 attr3=.76meters&gt;
+&lt;a href=foo.html&gt; ..&lt;/a&gt; &lt;a href=foo-bar.html&gt;..&lt;/a&gt;
+</PRE><P>
+The following examples illustrate errors:
+<PRE>&lt;x attr = abc$#@&gt;
+&lt;y attr1,attr2&gt;
+&lt;tt =xyz&gt;
+&lt;z attr += 2&gt;
+&lt;xx attr=50%&gt;
+&lt;a href=http://foo/bar/&gt;
+&lt;a href="http://foo/bar/&gt; ... &lt;/a&gt; ... &lt;a href="xyz"&gt;...&lt;/a&gt;
+&lt;xx "abc"&gt;
+&lt;xxx abc=&gt;
+</PRE><H3>Character References and Entity References
+</H3><P>Characters in the document character set can be referred to by
+numeric character references. Entities declared in the DTD can be
+referred to by entity references.
+<P>An entity reference begins with
+"&amp;" followed by a name, followed by an optional semicolon.
+<P>A numeric character reference begins with "&amp;#" followed by a
+number followed by an optional semicolon. (The string "&amp;#"
+followed by a name is a construct prohibited by this report.)  A
+number is a sequence of digits.
+<P>The
+following examples illustrate character references and entity
+references:
+<PRE><P>
+&amp;#38; &amp;#200;
+&amp;amp; &amp;ouml;
+&amp;#38 &amp;#200,xxx
+&amp;amp &amp;abc() &amp;xy12/..\
+To illustrate the X tag, write &amp;lt;X&amp;gt;
+</PRE><P>
+These examples contain no markup. They illustrate that "&amp;" does
+not always signal markup.
+<PRE>a &amp; b, a &amp;# b
+a &amp;, b &amp;. c
+a &amp;#-xx &amp;100
+</PRE><P>
+These examples are errors:
+<PRE><P>
+&amp;#2000000; &amp;#20.7 &amp;#20-35
+&amp;#23x;
+</PRE><P>
+The following are valid SGML, but prohibited by this report:
+<PRE><P>
+&amp;#SPACE;
+&amp;#RE;
+</PRE><H3>Processing Instructions
+</H3><P>Processing instructions are a mechanism to capture platform-specific
+idioms. A processing instruction begins with <TT>&lt;?</TT> and ends with
+<TT>&gt;</TT>.
+<P>For example:
+<P>
+&lt;?&gt;<BR>
+&lt;?style tt = font courier&gt;<BR>
+&lt;?page break&gt;<BR>
+&lt;?experiment&gt; ... &lt;?/experiment&gt;
+
+<HR>
+<H2><A name="API">The Application Programmer Interface (API) to the
+Lexical Analyzer</A>
+</H2><P>An implementation of this specification is
+available<A HREF="#DIST">[DIST]</A>, in the form of an ANSI C library. This
+section documents the API to the library. Note that the library is undergoing
+testing and revision. <EM>The API is expected to change</EM>.
+<P>The client of the lexical analyzer creates a data structure to hold
+the state of the lexical analyzer with a call to
+<TT>SGML_newLexer</TT>, and uses calls to <TT>SGML_lex</TT> to scan
+the data. Constructs are reported to the caller via three callback
+functions. <TT>SGML_lexNorm</TT>is used to set case folding of names and
+whitespace normalization, and
+<TT>SGML_lexLine </TT>can be used to get the number of lines the lexer has
+encountered.
+<P>The output of the lexical analyzer, for each construct, is an an
+array of strings, and an array of enumerated types in one-to-one
+correspondence with the strings.
+<H3>Data Characters
+</H3><P>Data characters are passed to the primary callback function as an
+array of one single string containing the data characters and
+<TT>SGML_DATA</TT> as the type.
+<P>Note that the output contains all newlines (record end characters)
+from the input verbatim. Implementing the rules for ignoring record
+end characters as per section 7.6.1 of SGML is left to the client.
+<H3>Tags and Attributes
+</H3><P>Start-tags and end-tags are also passed to the primary callback
+function.
+<P>For a start-tag, the first element of the output array is a string
+of the form <TT>&lt;name</TT> with <TT>SGML_START</TT> as the
+corresponding type. If requested (via SGML_lexNorm), the name is folded to
+lower-case.  The
+remaining elements of the array give the attributes; see below.  For
+an end tag, the first element of the array is a case-folded string of
+the form <TT>&lt;/name</TT> with <TT>SGML_END</TT> as the type.
+<P>The output for attributes is included with the tag in which they
+appear. Attributes are reported as name/value pairs. The attribute name is
+output as a string of the form <TT>name</TT>
+and SGML_ATTRNAME as the type. An ommitted
+name is reported as NULL.
+<P>An attribute value literal is output as a string of the form "xxx"
+or 'xxx' including the quotes, with SGML_LITERAL as the type
+<!--(@@
+split literal into parameter, minimum, and attribute value?)-->.
+Other attribute values are returned as a string with
+<TT>SGML_NMTOKEN</TT> as the type. For example:
+<PRE>&lt;xX val1 val2 aTTr3=".76meters"&gt;
+</PRE><P>is passed as an array of six strings:
+<PRE>[Tag/Data]
+Start Tag: `&lt;xx'
+  Attr Name: `'
+  Name: `val1'
+  Attr Name: `'
+  Name: `val2'
+  Attr Name: `attr3'
+  Name Token: `.76meters'
+  Tag Close: `&gt;'
+</PRE><P>Note that attribute value literals are output verbatim.
+Interpretation is left to the client.  Section 7.9.3 of SGML says that
+an attribute value literal is interpreted as an attribute value by:
+<UL><LI>Removing the quotes
+<LI>Replacing character and entity references
+<LI>Deleting character 10 (ASCII LF)
+<LI>Replacing character 9 and 13 (ASCII HT and CR) with character 32 (SPACE)
+</UL><H3>Character and Entity References
+</H3><P>A character reference refers to the character in
+the document character set whose number it specifies. For example, if
+the document character set is ISO 646 IRV (aka ASCII), then
+<TT>&amp;#65;</TT> is another way to write <TT>"A"</TT>.
+<P>A numeric character reference is passed to the primary callback as
+an event whose first token type is <TT>SGML_NUMCHARREF</TT> and whose
+string takes the form <TT>&amp;#999</TT>. The second token, if
+present, has type <TT>SGML_REFC</TT>, and consists of a <TT>;</TT> or
+a newline.
+<P>A general entity reference is passed as an event whose first token
+is of the form <TT>&amp;name</TT> with <TT>SGML_GEREF</TT> as its
+type.  The second token, if present, has type <TT>SGML_REFC</TT>, and
+consists of a semicolon or a newline.
+<P> The reference should be checked against those declared in the DTD
+by the client.
+<H3>Other Markup
+</H3><P>Other markup is passed to the second callback function.
+<P>A comment declaration is reported the string <TT>&lt;!</TT> with
+type <TT>SGML_MARKUP_DECL</TT>, followed by zero or more strings of
+the form <TT>-- comment --</TT> with <TT>SGML_COMMENT</TT> as the
+type, followed by <TT>&gt; </TT>with type <TT>TAGC</TT> (@@should be MDC).
+<P>Other markup declarations are output as a string of the form
+<TT>&lt;!doctype</TT> followed by strings of type <TT>SGML_NAME</TT>,
+<TT>SGML_NUMBER</TT>, <TT>SGML_LITERAL</TT>, and/or
+<TT>SGML_COMMENT</TT>, followed by <TT>TAGC</TT>.
+<P>For example:
+<PRE>&lt;!Doctype Foo --my document type-- System "abc"&gt;
+</PRE><P>is reported as
+<PRE>[Aux Markup]
+Markup Decl: `&lt;!doctype'
+  Name: `foo'
+  Comment: `--my document type--'
+  Name: `system'
+  Literal: `"abc"'
+  Tag Close: `&gt;'
+</PRE><P>A processing instructions is passed as a string of the form
+<TT>&lt;?pi stuff&gt;</TT> with type <TT>SGML_PI</TT>.
+<H3>Errors and Limitations
+</H3><P>Errors are passed to the third callback function.  Two strings and
+two types are passed. For errors, the first string is a descriptive
+message, and the type is <TT>SGML_ERROR</TT>.  The second string is
+the offending data, the the type is <TT>SGML_DATA</TT>.
+<P>Limitations imposed in this report are output similarly, but with
+type <TT>SGML_LIMITATION</TT> instead of <TT>SGML_ERROR</TT>. The
+lexical analyzer skips to a likely end of the error construct before
+continuing.
+<P>For example:
+<PRE>&lt;tag xxx=yyy ?&gt;xxx &lt;![IGNORE[ a&lt;b&gt;c]]&gt; zzz
+</PRE><P>
+causes six callbacks:
+<PRE>[Err/Lim]
+!!Error!!: `bad character in tag'
+  Data: `?'
+[Tag/Data]
+Start Tag: `&lt;tag'
+  Attr Name: `xxx'
+  Name Token: `yyy'
+  Tag Close: `&gt;'
+[Tag/Data]
+Data: `xxx '
+[Err/Lim]
+!!Limitation!!: `marked sections not supported'
+  Data: `&lt;!['
+[Err/Lim]
+!!Limitation!!: `declaration subset: skipping'
+  Data: `IGNORE[ a&lt;b&gt;c'
+[Tag/Data]
+Data: ` zzz'
+</PRE><P><HR>
+<H2><A ID=differences>Differences from Basic SGML</A>
+</H2><P>In section 15.1.1 of the SGML standard, a Basic SGML document is
+defined as an SGML document that uses the reference concrete syntax
+and the <TT>SHORTTAG</TT> and OMITTAG features. A concrete syntax is a
+binding of the SGML abstract syntax to concrete values. The reference
+concrete syntax binds the delimiter role <VAR>stago</VAR> to the
+string <TT>&lt;</TT>, the role of <VAR>etago</VAR> to <TT>&lt;/</TT>,
+and so on. The <TT>OMITTAG</TT> feature allows documents to omit tags
+in certain cases that do not introduce ambiguity -- without OMITTAG,
+every element's start and end tags must occur in the document. The
+<TT>SHORTTAG</TT> feature allows for some short-hand syntax in
+attributes and tags.
+<P><EM>Some of these exceptions
+are likely to be reflected in the ongoing revision of SGML</EM>
+<A HREF="#SGMLREV">[SGMLREV]</A>.
+<H3>Arbitrary Limitations Removed
+</H3><P>The reference concrete syntax includes certain limitations
+(capacities and quantities, in the language of the standard).
+For most purposes, these limitations are unnecessary. We remove
+them:
+<DL><DT>Long Names
+<DD>The reference concrete syntax binds the parameter <TT>NAMELEN</TT>
+to 8. This means that names are limited to 8 characters. We remove
+this limitation. Arbitrarily long names are allowed.
+<DT>Long Attribute Value Literals
+<DD>We similarly remove the limitation of setting <TT>LITLEN</TT>
+to 960 and <TT>ATTSPLEN</TT> to 240.
+</DL><H3>Simplifications
+</H3><P>We require the SGML declaration to be implicit and the DTD to
+be included by reference only:
+<DL><DT>SGML Declaration
+<DD>The SGML declaration is generally transmitted out of band
+-- assumed by the sender and the receiver. The lexical analyzer
+will accept an in-line SGML declaration, but it will not adhere
+to the declarations therein. The lexical analyzer client should
+signal an error.
+<DT>Internal Declaration Subset
+<DD>The DTD is often included by reference, but some documents
+contain additional entity, element and attribute declarations
+in the <TT>&lt;!DOCTYPE</TT> declaration. We prohibit additional
+declarations in the <TT>&lt;!DOCTYPE</TT> declaration (see
+<A HREF="#decl-subset">"Internal Declaration Subsets"</A> in the future work
+section).
+<DT>Parameter Entity Reference
+<DD>The <TT>%name;</TT> construct is a parameter entity reference
+-- similar to a reference to a C macro. There is little use for
+these given the above limitations. An occurrence of a parameter
+entity in a markup declaration is prohibited.
+<DT>Named Character References
+<DD>The construct <TT>&amp;#SPACE;</TT> refers to a space character.
+With changes to the SGML declaration prohibited, this adds no
+expressive capability to the language. We prohibit it to avoid
+interoperability problems.
+<DT>Marked Sections
+<DD>The construct <TT>&lt;![ IGNORE [ ... ]]&gt; </TT>is similar
+to the <TT>#ifdef</TT> construct in the C preprocessor. It is
+a novel construct that can be used to represent effectivity (applicability
+of parts of a document to various environments, depending on locale,
+client capabilities, user preferences, etc.). We expect that it
+will be deployed eventually (see <A HREF="marked-sections">"Marked
+Sections"</A> in the section on "Future Work"), but to avoid interoperability
+issues,
+we prohibit its use.
+</DL><H3>Shorthand Markup Prohibited
+</H3><P>Some constructs save typing, but add no expressive capability to
+the languages. And while they technically introduce no ambiguity, they
+reduce the robustness of documents, especially when the language is
+enhanced to include new elements. The SHORTTAG constructs related to
+attributes are widely used and implemented, but those related to tags
+are not.
+<P>These are relatively straightforward to support, but they are not
+widely deployed. While documents that use them are conforming SGML
+documents, they will not work with the deployed HTML tools. This lexical
+analyzer signals a limitation when encountering these constructs.
+<DL><DT>NET tags
+<DD><TT>&lt;name/.../</TT>
+<DT>Unclosed Start Tag
+<DD><TT>&lt;name1&lt;name2&gt;</TT>
+<DT>Empty Start Tag
+<DD><TT>&lt;&gt;</TT>
+<DT>Empty End Tag
+<DD><TT>&lt;/&gt;</TT>
+</DL><P>In addition, the lexical analyzer assumes no short references
+are used.
+<H2><A NAME=future>Future Work</A>
+</H2><P>This report presents technology that is usable, but not complete.
+Work is ongoing in the folloing areas. Contributions are welcome. Send a
+note to
+<TT><A HREF="http://www.w3.org/pub/WWW/Mail/Lists#www-html">www-html@w3.org</A></TT>
+with "sgml-lex" in the subject.
+<H3><A NAME=marked-sections>Marked Sections</A>
+</H3><P>Support for marked sections is an integral part of a strategy for
+interoperability among HTML user agents supporting different HTML
+dialects<A HREF="#HTMLDIALECT">[HTMLDIALECT]</A>. It has other valueable
+applicatoins, and it is a straightforward addition to the lexical analyzer
+in this report.
+<H3><A NAME=i18n>Internationalization </A>
+</H3><P>Support for character encodings and coded character sets other
+than ASCII is a requirement for production use. Support for the X Windows
+compound text encoding (related to ISO-2022) and the UTF-8 or perhaps UCS-2
+encoding of Unicode (ISO-10646), with extensibility for other character encodings
+seems most desirable.
+<H3><A NAME=decl-subset>Internal declaration subset support</A>
+</H3><P>Internal declaration subsets are not expected to become a part of
+HTML. But the technology in this report is applicable to other SGML applications,
+and internal declaration subsets are a straightfoward addition to this lexical
+analyzer. Relavent mechanisms include:
+<UL><LI>General entity declarations with URIs as system identifiers
+<LI>General entity declarations as "macros"
+<LI>Parameter entity declarations for "switches" and
+"hooks"
+</UL><H3>Short References and Empty End-tags
+</H3><P>While they may increase the complexity of the lexical analyzer, short
+references may be necessary to support math markup in HTML. Empty end-tags
+are not likely to be used in HTML, as they interact badly with conventions
+for handling undeclared element tags. But in other SGML applications, they
+are a useful feature.
+<H2>References
+</H2><DL><DT>[GOLD90]
+<DD>C. F. Goldfarb. "The SGML Handbook." Y. Rubinsky, Ed.,
+Oxford University Press, 1990.
+<DT><A name="SGML" href="http://www.iso.ch/cate/d16387.html">[SGML]</A>
+<DD>ISO 8879. Information Processing -- Text and Office
+Systems - Standard Generalized Markup Language (SGML), 1986.
+<DT><A ID=SGMLREV>[SGMLREV]</A>
+<DD>@@SGML revision materials on ftp.ifi.uio.no
+<DT><A name="HTML2.0" href="/pub/WWW/MarkUp/html-spec/html-spec_toc.html">HTML
+2.0</A>
+<DD>T. Berners-Lee, D. Connolly. "Hypertext Markup Language - 2.0"
+<A href="ftp://ds.internic.net/rfc/rfc1866.txt">RFC 1866</A>,
+MIT/W3C, November 1995.
+<DT><A NAME=SGMLMEDIA>[SGMLMEDIA]</A>
+<DD><A href="http://info.internet.isi.edu/in-notes/rfc/files/rfc1874.txt">rfc1874.txt</A>
+-- SGML Media Types. E. Levinson. December 1995. (Format: TXT=12515 bytes)
+<DT><A name="TEI" href="http://www.ebt.com/usrbooks/teip3">[TEI]</A>
+<DD>C. M. Sperberg-McQueen and Lou Burnard, Eds
+"Guidelines for Electronic Text Encoding and
+Interchange", 16 May 1994
+<DT><A ID=SGMLINTRO>[SGMLINTRO]</A>
+<DD><A HREF="http://www.sq.com/sgmlinfo/primbody.html">The SGML
+PRIMER</A><BR>SoftQuad's Quick Reference Guide to the Essentials fo the Standard:
+The SGML Needed for Reading a DTD and Marked-Up Documents and Discussing
+Them Reasonably.
+<DT><A ID=SGMLDECL>[SGMLDECL]</A>
+<DD><CITE><A HREF="http://www.sil.org/sgml/wlw11.html">The DTD May Not Be
+Enough: SGML Declarations</A></CITE>, Wayne L. Wohler, &lt;TAG&gt; 5/10
+<DD>(October 1992) 6-9, &lt;TAG&gt; 6/1 (January 1993) 1-7; &lt;TAG&gt; 6/2
+(February 1993) 1-6.
+<DT><A name="DocBook" href="ftp://ftp.ora.com/pub/davenport/README.html">[DocBook]</A>
+<DD>Eve Maler, "DocBook V2.3 Maintainer's Guide" ArborText, Inc.
+Revision 1.1, 25 September 1995
+<DT><A name="HTF" href="http://hyperg.tu-graz.ac.at:80/D310BBC3/A0x811b9908_0x0005846e">[HTF]</A>
+<DD>@@
+<DT><A href="ftp://ftp.ifi.uio.no/pub/SGML/IBMIDDoc/" name="IBM-IDDOC">[IBM-IDDOC]</A>
+<DD>Wayne Wholer,
+Don R. Day,
+W. Eliot Kimber,
+Simch Gralla
+Mike Temple
+"IBM ID Doc Language Reference, Draft 1.4"
+February 13, 1994
+<DT><A name="dragon">[Dragon]</A>
+<DD>Aho, Alfred V., Sethi, Ravi, Ullman, Jeffrey D.
+<CITE>Compilers, principles, techniques, and tools</CITE>,
+1988, Addison-Wesley. ISBN 0-201-10088-6
+<DT><A name="KnR2">[KnR2]</A>
+<DD>Brian W. Kernighan, Dennis M. Ritchie,
+<CITE>The C Programming Language</CITE>, 2nd Edition.
+Prentice Hall, NJ 1988.
+ISBN 0-13-110370-9
+<DT>
+<DT><A href="http://www.sil.org/sgml/openpos1.html">SGML Open recommendations
+on HTML 3</A>
+<DD><PRE><P>
+Message-Id: &lt;199503202311.SAA23789@EBT-INC.EBT.COM&gt;
+Date: Mon, 20 Mar 1995 18:21:23 -0500
+To: html-wg@oclc.org, sgml-internet@ebt.com
+From: sjd@ebt.com (Steven J. DeRose)
+Subject: SGML Open recommendations on HTML 3
+</PRE><DT>[OnSGML]
+<DD><CITE>On Improving SGML</CITE>, <EM>Electronic Publishing --
+Origination, Dissemination and Design</EM>, 3(2)93--98, May, 1990,
+<A
+href="mailto:mjk@ztivax.zfe.siemens.de">Mike Kaelbling</A>.  Also
+available as
+<A
+href="http://www.cis.ohio-state.edu/hypertext/tech-report.html">Ohio
+State Tech Report</A> 88-22.
+<DT>[flex]
+<DD>Vern Paxson Systems Engineering Bldg. 46A, Room 1123 Lawrence
+Berkeley Laboratory University of California Berkeley, CA 94720
+vern@ee.lbl.gov
+<DT><A
+href="http://www.acl.lanl.gov/HTML_WG/html-wg-95q1.messages/0011.html">Paul
+Grosso on capacities</A>
+<DD>from HTML-WG archive
+<DT><A href="/pub/WWW/MarkUp/SGML#sgml-lex">[SGMLRES]</A>
+<DD><CITE>SGML and the Web</CITE> -- Work in Progress. Dan Connolly, W3C.
+Jan 1996.
+<DT><A NAME=HTMLDIALECT>[HTMLDIALECT]</A>
+<DD><CITE><A HREF="../../WD-doctypes">HTML Dialects: Internet Media and SGML
+Document Types</A></CITE>. Dan Connolly, W3C. Work in progress. Jan 1996.
+<DT><A HREF="../#sgml-lex">[DIST]</A>
+<DD>sgml-lex source distribution. Nov 15, 1995.
+<PRE>MD5 Checksum			  Filename
+26b0676d00c4c346d630de3959a72473  sgml-lex-19951115.tar.gz
+</PRE></DL></BODY></HTML>

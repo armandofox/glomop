@@ -1,0 +1,947 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.06.30.17.18.29;	author iang;	state dead;
+branches;
+next	1.3;
+
+1.3
+date	97.05.21.21.50.25;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.20.00.51.04;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.19.00.44.52;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@.
+@
+text
+@/***********************************************************************
+ *
+ *	Copyright (c) Palm Computing 1996 -- All Rights Reserved
+ *
+ * PROJECT:  Pilot TCP/IP Interface
+ * FILE:     Socket.c
+ *
+ * DESCRIPTION:
+ *	  This module must be linked in with Pilot applications that wish to
+ *  use the BSD Sockets API.
+ *
+ **********************************************************************/
+
+#include <SysAll.h>
+#include <NetMgr.h>
+
+#include <sys/socket.h>
+
+
+
+//====================================================================
+// Globals used by the Sockets API
+//====================================================================
+
+// Global that holds the refNum of the Net Library. This global MUST
+// be initialized before any sockets API calls are made. The app can
+// initialize it by calling:
+//  err = SysLibFind("Net.lib", &AppNetRefnum);
+// and making sure err is 0.
+Word			AppNetRefnum=0;			
+
+// Global that is also declard by standard C library, if linked in.
+// Rather than declare it here, possibly redundantly, we'll rely on the
+//  app to declare it somewhere in it's source code if it doesn't already
+//  link in the standard C library.
+//Err			errno;
+
+// Global used by the gethostbyname, gethostbyaddr() functions
+Err			h_errno=0;
+
+// Default timeout for Net calls
+Long			AppNetTimeout = sysTicksPerSecond*2;		
+
+// Global string used for the inet_ntoa call.
+Char			AppINETString[32] = {""};
+
+// Global used for the gethostbyname and gethostbyaddr functions
+NetHostInfoBufType	AppHostInfo = {};
+
+// Global used for the getservbyname
+NetServInfoBufType	AppServInfo = {};
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    setdomainname
+ *
+ * DESCRIPTION: Sets the domain name of the current host. Returns 0
+ *					if no error, -1 if error. If an error occurs, errno
+ *				   will contain the error code.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nameP 					- pointer to new name
+ *					 namelen					- length of new name
+ *
+ * RETURNED:    0 						- no error
+ *					 -1						- error occurred, error code in errno.
+ *
+ ***********************************************************************/
+SWord		setdomainname(CharPtr nameP, SWord namelen)
+{
+	Err			err;
+	
+	// Set the appropriate preference in the Net Library
+	err = NetLibSettingSet(AppNetRefnum, netSettingDomainName, nameP, namelen+1);
+
+	errno = err;
+	if (err) return -1;
+	else return 0;
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    getdomainname
+ *
+ * DESCRIPTION: Gets the domain name of the current host. Returns 0
+ *					if no error, -1 if error. If an error occurs, errno
+ *				   will contain the error code.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nameP 					- pointer to name buffer
+ *					 namelen					- length of name buffer
+ *
+ * RETURNED:    0 						- no error
+ *					 -1						- error occurred, error code in errno.
+ *
+ ***********************************************************************/
+SWord		getdomainname(CharPtr nameP, SWord namelen)
+{
+	Err			err;
+	Word			bufLen;
+	
+	// Get the appropriate preference in the Net Library
+	bufLen = namelen;
+	MemSet(nameP, namelen, 0);
+	err = NetLibSettingGet(AppNetRefnum, netSettingDomainName, nameP, &bufLen);
+
+	// Ignore netErrBufTooSmall errors since the sockets API doesn't
+	//   return them - it just truncates the result (which NetLibSettingGet will
+	//  do).
+	if (err == netErrBufTooSmall) err = 0;
+	
+	// Return error code
+	errno = err;
+	if (err) return -1;
+	else return 0;
+}
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    sethostname
+ *
+ * DESCRIPTION: Sets the host name of the current host. Returns 0
+ *					if no error, -1 if error. If an error occurs, errno
+ *				   will contain the error code.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nameP 					- pointer to new name
+ *					 namelen					- length of new name
+ *
+ * RETURNED:    0 						- no error
+ *					 -1						- error occurred, error code in errno.
+ *
+ ***********************************************************************/
+SWord		sethostname(CharPtr nameP, SWord namelen)
+{
+	Err			err;
+	
+	// Set the appropriate preference in the Net Library
+	err = NetLibSettingSet(AppNetRefnum, netSettingHostName, nameP, namelen+1);
+
+	errno = err;
+	if (err) return -1;
+	else return 0;
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    gethostname
+ *
+ * DESCRIPTION: Gets the host name of the current host. Returns 0
+ *					if no error, -1 if error. If an error occurs, errno
+ *				   will contain the error code.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nameP 					- pointer to name buffer
+ *					 namelen					- length of name buffer
+ *
+ * RETURNED:    0 						- no error
+ *					 -1						- error occurred, error code in errno.
+ *
+ ***********************************************************************/
+SWord		gethostname(CharPtr nameP, SWord namelen)
+{
+	Err			err;
+	Word			bufLen;
+	
+	// Get the appropriate preference in the Net Library
+	bufLen = namelen;
+	MemSet(nameP, namelen, 0);
+	err = NetLibSettingGet(AppNetRefnum, netSettingHostName, nameP, &bufLen);
+
+	// Ignore netErrBufTooSmall errors since the sockets API doesn't
+	//   return them - it just truncates the result (which NetLibSettingGet will
+	//  do).
+	if (err == netErrBufTooSmall) err = 0;
+	
+	// Return error code
+	errno = err;
+	if (err) return -1;
+	else return 0;
+}
+
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    select
+ *
+ * DESCRIPTION: Waits on multiple file descriptors for I/O
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nameP 					- pointer to name buffer
+ *					 namelen					- length of name buffer
+ *
+ * RETURNED:    0 						- no error
+ *					 -1						- error occurred, error code in errno.
+ *
+ ***********************************************************************/
+SWord		select(SWord width, fd_set* readfds, fd_set* writefds,
+					fd_set* exceptfds, struct timeval* timeout)
+{
+	SDWord		ticks;
+	
+	
+	// Convert the timeout value to ticks
+	if (timeout == 0) ticks = -1;
+	else ticks = (timeout->tv_sec * sysTicksPerSecond) + 
+					 (timeout->tv_usec /  (1000000L / sysTicksPerSecond)) ;
+					 
+					 
+	// call Net Lib function
+	return NetLibSelect(AppNetRefnum, width, readfds, writefds, exceptfds,
+					ticks, &errno);
+
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    inet_makeaddr
+ *
+ * DESCRIPTION: Merges a network number and local network address into an
+ *							IP address.
+ *
+ * Some examples:
+ *    (0x7F,0x02) 			-> 0x7F000002
+ *    (0x80,0x02)				-> 0x00800002
+ *    (0xF0,0x02)				-> 0x00F00002
+ *    (0xF0F0,0x02)			-> 0xF0F00002
+ *    (0xF0F0F0,0x02)		-> 0xF0F0F002
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  net 					- network number in NBO
+ *					 lna					- local network address in NBO
+ *
+ * RETURNED:    32-bit IP address
+ *
+ ***********************************************************************/
+struct	in_addr 	inet_makeaddr(DWord net, DWord lna)
+{
+	struct in_addr result;
+	
+	result.s_addr = 0;
+	
+	// If the network address <= 127, move to upper byte
+	if (net <= 0x07F)
+		result.s_addr = (net << 24) | lna;
+		
+	// If the network address fits in 16 bits, move to upper word
+	else if (net <= 0x0FFFF)
+		result.s_addr = (net << 16) | lna;
+		
+	// Else, move to upper 24 bits
+	else
+		result.s_addr = (net << 8) | lna;
+	
+	return result;
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    inet_network
+ *
+ * DESCRIPTION: Returns the network number portion of an IP address
+ *
+ * Some examples:
+ *    "127.128.129.130" 	-> 0x7F808182
+ *    "127.128.129"    		-> 0x007F8081
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  net 					- network number in NBO
+ *					 lna					- local network address in NBO
+ *
+ * RETURNED:    32-bit IP address
+ *
+ ***********************************************************************/
+DWord			 		inet_network(CharPtr name)
+{
+  UInt		i;
+  CharPtr	piece;
+  DWord		result=0;
+
+  /* Skip leading whitespace */
+	while ((*name == ' ') || (*name == '\t'))
+		name++;
+
+	for (i = 0; i < 4; i++) {
+		piece = name;
+		
+		// Skip to the end of this dotted decimal
+		while ((*name >= '0') && (*name <= '9'))
+			name++;
+			
+		// Drop out if 0 length
+		if (piece == name)
+			return 0;                 /* zero length piece */
+			
+		// Convert this section to a byte
+		result = (result << 8) + (Byte)StrAToI(piece);
+		
+		// Drop out if last byte
+		if (i == 3)
+			break;                    /* don't need a . after last piece */
+			
+		// Also drop out if not followed by a '.'
+		if (*name != '.')
+			break;	                /* do need a . after other pieces */
+			
+		// On to next section
+		name++;
+  		}
+
+  return result;
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    inet_netof
+ *
+ * DESCRIPTION: Return the network number of an IP address. This
+ *					function is smart enough to distinguish class A,B and C
+ *					address and extract the correct network number portion.
+ *
+ * Some examples:
+ *    0x7F010203				-> 0x7F
+ *    0x80010203   			-> 0x8001
+ *    0xC0010203   			-> 0xC00102
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  net 					- network number in NBO
+ *					 lna					- local network address in NBO
+ *
+ * RETURNED:    32-bit IP address
+ *
+ ***********************************************************************/
+DWord					inet_netof(struct in_addr in)
+{
+	if (in.s_addr & 0xC0000000) return (in.s_addr >> 8);
+	else if (in.s_addr & 0x80000000) return (in.s_addr >> 16);
+	else return (in.s_addr >> 24);
+
+}
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    inet_lnaof
+ *
+ * DESCRIPTION: Return the local network address of an IP address. This
+ *					function is smart enough to distinguish class A,B and C
+ *					address and extract the correct local net portion.
+ *
+ * Some examples:
+ *    0x7F010203				-> 0x010203
+ *    0x80010203   			-> 0x8001
+ *    0xC0010203   			-> 0xC0
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  net 					- network number in NBO
+ *					 lna					- local network address in NBO
+ *
+ * RETURNED:    32-bit IP address
+ *
+ ***********************************************************************/
+DWord					inet_lnaof(struct in_addr in)
+{
+	if (in.s_addr & 0xC0000000) return (in.s_addr & 0x000000FF);
+	else if (in.s_addr & 0x80000000) return (in.s_addr & 0x0000FFFF);
+	else return (in.s_addr & 0x00FFFFFF);
+
+}
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    gettimeofday
+ *
+ * DESCRIPTION: Return the time of day and current timezone information
+ *					 The time of day is returned in Greenwich time and is specified
+ *					in seconds and microseconds since Midnite, Jan 1, 1970. 
+ *
+ *					The time zone information is for informative purposes only
+ *					and can be used by the caller to calculate the time in the
+ *					local area accounting for daylight savings and time zone
+ *					differences. 
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  tp		- current time is returned here.
+ *					 tzp		- current time zone information is returned here
+ *								  This parameter can be null.
+ *
+ * RETURNED:    0 if no error
+ *					-1 on error, errno contains error code
+ *
+ ***********************************************************************/
+static 	DWord		PrvSecondsOffset = 0;
+#define	offset1970	0x7C25B080
+
+SWord		gettimeofday(struct timeval* tP, struct timezone* tzP)
+{
+	DWord		ticks, secondsOn, subTicksOn, estSeconds;
+	DWord		actSeconds;
+	Long		dSecs;
+	
+	
+	// If tzP is non-nil, get the time zone info
+	if (tzP) {
+		tzP->tz_minuteswest = PrefGetPreference(prefMinutesWestOfGMT);
+		tzP->tz_dsttime = DST_NONE;
+		}
+		
+	// If no tP, do nothing
+	if (!tP) return 0;
+	
+	
+	// Get the current value from our real-time clock and our current
+	//  tick count.
+	actSeconds = TimGetSeconds();
+	ticks = TimGetTicks();
+
+	
+	//---------------------------------------------------------------
+	// We use ticks to estimate the time since we desire microseconds
+	//  granularity, not 1 second granularity like our real-time clock
+	//  provides.
+	//---------------------------------------------------------------
+	secondsOn = ticks / sysTicksPerSecond;
+	subTicksOn = ticks % sysTicksPerSecond;
+	
+	
+	// If we have a calculated offset (this is not the first invocation),
+	//   add that to our current seconds calculation to get the seconds
+	//   since 1970.
+	estSeconds = secondsOn + PrvSecondsOffset;
+		
+		
+		
+	//---------------------------------------------------------------
+	// Now, make sure we're in the ballpark by comparing our tick time
+	//  with our real-time clock time.
+	//---------------------------------------------------------------
+	// If way off, re-calculate PrvSecondsOffset;
+	dSecs = actSeconds - estSeconds;
+	if (dSecs < 0) dSecs = -dSecs;
+	if (dSecs > 10) {
+		PrvSecondsOffset = actSeconds - secondsOn;
+		estSeconds = actSeconds;
+		subTicksOn = 0;
+		}
+		
+		
+	// Use subTicksOn to estimate microseconds and return the time
+	//  since 1970, not 1904 like our native code does.
+	tP->tv_sec = estSeconds - offset1970;
+	tP->tv_usec = (subTicksOn * 1000000L) / sysTicksPerSecond;
+
+
+	// Exit	
+	errno = 0;
+	return 0;
+}
+
+/***********************************************************************
+ *
+ * FUNCTION:    settimeofday
+ *
+ * DESCRIPTION: Set the time of day and current timezone information
+ *					 The time of day is set in Greenwich time and is specified
+ *					in seconds and microseconds since Midnite, Jan 1, 1970. 
+ *
+ *					The time zone information is for informative purposes only
+ *					and can be used by the caller to calculate the time in the
+ *					local area accounting for daylight savings and time zone
+ *					differences. 
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  tp		- current time 
+ *					 tzp		- current time zone information
+ *
+ * RETURNED:    0 if no error
+ *					-1 on error, errno contains error code
+ *
+ ***********************************************************************/
+SWord		settimeofday(struct timeval* tP, struct timezone* tzP)
+{
+	// If no tP, do nothing
+	if (!tP) return 0;
+	
+	// if timezone info, set that
+	if (tzP) {
+		PrefSetPreference(prefMinutesWestOfGMT, tzP->tz_minuteswest);
+		}
+	
+	// Set the time
+	TimSetSeconds(tP->tv_sec + offset1970);
+	
+	// Exit
+	errno = 0;
+	return 0;
+}
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    fcntl
+ *
+ * DESCRIPTION:	In general, this call is used to put a file descriptor
+ *		into different modes. Specifically to the sockets library, it
+ *		is only used to put sockets into and out of non-blocking mode.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  fd		- socket descriptor
+ *					 cmd		- command, either F_SETFL or F_GETFL
+ *					 arg		- for F_SETFL, the new mode flags
+ *
+ *	The mode flags can be one or more of the following ORed together:
+ *		FNDELAY - non-blocking 
+ *		FASYNC  - allow receipt of async signals - not implemented
+ *
+ * RETURNED:    for the F_SETFL command, 0 if no err, -1 if err
+ *					 for the F_GETFL command, the current mode flags
+ *					
+ *
+ ***********************************************************************/
+SWord		NetFCntl(SWord fd, SWord cmd, SWord arg)
+{
+	SWord	result;
+	DWord	value;
+	Word	valueLen;
+	
+	
+
+	
+	
+	// Map this call to our SocketOptionSet/Get calls and use
+	//  our Pilot-specific options to implement it.
+	switch (cmd) {
+		case F_SETFL:
+			value = arg & FNDELAY;
+			
+			result = NetLibSocketOptionSet(AppNetRefnum, fd, 
+				netSocketOptLevelSocket, netSocketOptSockNonBlocking,
+				&value, sizeof(value), AppNetTimeout, &errno);
+			break;
+			
+		case F_GETFL:
+			valueLen = sizeof(value);
+			result = NetLibSocketOptionGet(AppNetRefnum, fd, 
+				netSocketOptLevelSocket, netSocketOptSockNonBlocking,
+				&value, &valueLen, AppNetTimeout, &errno);
+			
+			if (result == 0) {
+				if (value) 
+					result |= FNDELAY;
+				}
+			else
+				result = 0;
+			break;
+		}
+		
+		
+	return result;
+}
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    MemCalloc
+ *
+ * DESCRIPTION: Implements the functionality of the C library function
+ *			calloc.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  nmemb	- # of members
+ *					 size		- size of each member
+ *
+ * RETURNED:    ptr to new chunk, or 0 if error.
+ *
+ ***********************************************************************/
+VoidPtr	MemCalloc(DWord nmemb, DWord size)
+{
+	BytePtr	p;
+	DWord		totSize;
+	
+	// Calc total size
+	totSize = nmemb*size;
+	p = MemPtrNew(totSize);
+	if (p) MemSet(p, totSize, 0);
+	return p;
+}
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    MemRealloc
+ *
+ * DESCRIPTION: Implements the functionality of the C library function
+ *			realloc.
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  p	- pointer to reallocate
+ *					 newSize - new size of ptr
+ *
+ * RETURNED:    ptr to new chunk, or 0 if error.
+ *
+ ***********************************************************************/
+VoidPtr	MemRealloc(VoidPtr p, DWord newSize)
+{
+	BytePtr	newP=0;
+	DWord		oldSize;
+	
+	// First, try a simple resize
+	oldSize = MemPtrSize(p);
+	if (MemPtrResize(p, newSize)) {
+		newP = MemPtrNew(newSize);
+		if (newP) {
+			MemMove(newP, p, oldSize);
+			MemPtrFree(p);
+			}
+		}
+	else
+		newP = p;
+		
+	return newP;
+}
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    NetUTCPOpen
+ *
+ * DESCRIPTION: High level convenience function that opens up a TCP socket
+ *		and connects it to a server. 
+ *	
+ *		This code was modified from the tcp_open() routine from Richard Stevens' 
+ *		book 'Unix Network  Programming'. 
+ *
+ *		NOTE: This routine is not really "production" quality but is provided
+ *		as a quick and dirty way of creating a connection and as a sample code
+ *		that can be used as reference. One big problem it has: it does not return 
+ *		specific reasons for failure if there is a failure. 
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  hostName	- name or dotted decimal address of host
+ *					 serviceName - service name. If null then port parameter is used.
+ *					 port			 - which port to connect to on server. Ignored if
+ *										serviceName is not nil. 
+ *
+ * RETURNED:    socket refnum, or -1 if error. 
+ *
+ ***********************************************************************/
+NetSocketRef		NetUTCPOpen(CharPtr host, CharPtr service, SWord port)
+{
+	struct servent			tcp_serv_info;	/* from getservbyname() */
+	struct sockaddr_in	tcp_srv_addr;	/* server's Internet socket addr */
+	NetSocketRef			fd;
+	DWord						inaddr;
+	struct servent			*sp;
+	struct hostent			*hp;
+	struct hostent			tcp_host_info;	/* from gethostbyname() */
+
+
+
+	/************************************************************************
+	 * Initialize the server's Internet address structure.
+	 * We'll store the actual 4-byte Internet address and the
+	 * 2-byte port# below.
+	 ************************************************************************/
+	bzero((char *) &tcp_srv_addr, sizeof(tcp_srv_addr));
+	tcp_srv_addr.sin_family = AF_INET;
+
+	if (service != NULL) {
+		if ( (sp = getservbyname(service, "tcp")) == NULL) 
+			return(-1);
+		tcp_serv_info = *sp;								/* structure copy */
+		if (port > 0)
+			tcp_srv_addr.sin_port = htons(port); 	/* caller's value */
+		else
+			tcp_srv_addr.sin_port = sp->s_port;		/* service's value */
+		} 
+		
+	else {
+		if (port <= 0) 
+			return(-1);
+		tcp_srv_addr.sin_port = htons(port);
+		}
+
+
+
+	/************************************************************************
+	 * First try to convert the host name as a dotted-decimal number.
+	 * Only if that fails do we call gethostbyname().
+	 ************************************************************************/
+	if ( (inaddr = inet_addr(host)) != INADDR_NONE) {    /* it's dotted-decimal */
+		bcopy((char *) &inaddr, (char *) &tcp_srv_addr.sin_addr,
+					sizeof(inaddr));
+		tcp_host_info.h_name = NULL;
+		}
+		
+	else {
+		if ( (hp = gethostbyname(host)) == NULL) {
+			return(-1);
+			}
+		tcp_host_info = *hp;	/* found it by name, structure copy */
+		bcopy(hp->h_addr, (char *) &tcp_srv_addr.sin_addr,
+			hp->h_length);
+		}
+
+
+	if (port >= 0) {
+		if ( (fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) 
+			return(-1);
+		}
+
+
+	/*************************************************************************
+	 * Connect to the server.
+	 ************************************************************************/
+	if (connect(fd, (struct sockaddr *) &tcp_srv_addr,
+						sizeof(tcp_srv_addr)) < 0) {
+		close(fd);
+		return(-1);
+		}
+
+	return(fd);	/* all OK */
+}
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    NetUWriteN
+ *
+ * DESCRIPTION: High level convenience function that writes N bytes to
+ *		a socket. 
+ *	
+ *		This code was modified from the writen() routine from Richard Stevens' 
+ *		book 'Unix Network  Programming'. 
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  fd			- socket refnum
+ *					 ptr			- buffer pointer
+ *					 nbytes		- number of bytes to write
+ *
+ * RETURNED:    # of bytes written, or <0 if error
+ *
+ ***********************************************************************/
+SDWord				NetUWriteN(NetSocketRef fd, BytePtr ptr, DWord nbytes)
+{
+	DWord		nleft;
+	Word		chunk;
+	SWord 	nwritten;
+
+	nleft = nbytes;
+	while (nleft > 0) {
+	
+		if (nleft > 0x7000) chunk = 0x7000;
+		else chunk = nleft;
+		
+		nwritten = write(fd, ptr, chunk);
+		if (nwritten <= 0)
+			return(nwritten);		/* error */
+
+		nleft -= nwritten;
+		ptr   += nwritten;
+	}
+	return(nbytes - nleft);
+}
+
+
+
+
+
+
+/***********************************************************************
+ *
+ * FUNCTION:    NetUReadN
+ *
+ * DESCRIPTION: High level convenience function that reads N bytes from
+ *		a socket. 
+ *	
+ *		This code was modified from the readn() routine from Richard Stevens' 
+ *		book 'Unix Network  Programming'. 
+ *
+ * CALLED BY:	 Applications.
+ *
+ * PARAMETERS:  fd			- socket refnum
+ *					 ptr			- buffer pointer
+ *					 nbytes		- number of bytes to read
+ *
+ * RETURNED:    # of bytes read, or <0 if error
+ *
+ ***********************************************************************/
+SDWord				NetUReadN(NetSocketRef fd, BytePtr ptr, DWord nbytes)
+{
+	DWord		nleft;
+	SWord	 	nread;
+	Word		chunk;
+
+	nleft = nbytes;
+	while (nleft > 0) {
+		if (nleft > 0x7000) chunk = 0x7000;
+		else chunk = nleft;
+		
+		nread = read(fd, ptr, chunk);
+		if (nread < 0)
+			return(nread);		/* error, return < 0 */
+		else if (nread == 0)
+			break;			/* EOF */
+
+		nleft -= nread;
+		ptr   += nread;
+	}
+	return(nbytes - nleft);		/* return >= 0 */
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+@
+
+
+1.3
+log
+@Worked around "uninitialized globals not being relocated" bug.
+@
+text
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d45 1
+a45 1
+Char			AppINETString[32];
+d48 1
+a48 1
+NetHostInfoBufType	AppHostInfo;
+d51 1
+a51 1
+NetServInfoBufType	AppServInfo;
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 16
+a16 2
+#include <Pilot.h>
+#include <sys/types.h>
+d19 845
+a863 7
+Err h_errno;
+Err errno;
+Long AppNetTimeout = evtWaitForever;
+NetHostInfoBufType AppHostInfo;
+NetServInfoBufType AppServInfo;
+Word AppNetRefnum = 0;
+Char AppINETString[16];
+@

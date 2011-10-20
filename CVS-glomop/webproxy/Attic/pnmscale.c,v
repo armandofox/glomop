@@ -1,0 +1,372 @@
+head	1.2;
+access;
+symbols
+	dev:1.1.1.1
+	demo:1.1.1.1.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	96.04.04.01.46.38;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.11;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@/* pnmscale.c - read a portable anymap and scale it
+**
+** Copyright (C) 1989, 1991 by Jef Poskanzer.
+**
+** Permission to use, copy, modify, and distribute this software and its
+** documentation for any purpose and without fee is hereby granted, provided
+** that the above copyright notice appear in all copies and that both that
+** copyright notice and this permission notice appear in supporting
+** documentation.  This software is provided "as is" without express or
+** implied warranty.
+*/
+
+#include <math.h>
+#include "pnm.h"
+
+#define SCALE 4096
+#define HALFSCALE 2048
+
+void Scale(pixels, cols, rows, maxval, newcols, newrows)
+     pixel **pixels;
+     int cols, rows;
+     pixval maxval;
+     int newcols, newrows;      /* max size of new image */
+{
+    xel* xelrow;
+    xel* tempxelrow;
+    xel* newxelrow;
+    register xel* xP;
+    register xel* nxP;
+    int specxscale, specyscale, specxsize, specysize;
+    int rowsread;
+    register int row, col, needtoreadrow;
+    float xscale, yscale;
+    long sxscale, syscale;
+    register long fracrowtofill, fracrowleft;
+    long* rs;
+    long* gs;
+    long* bs;
+    int format, newformat;
+    
+    format = newformat = PPM_TYPE;
+    
+    specxscale = specyscale = 0;
+    
+    if ( (float) newcols / (float) newrows > (float) cols / (float) rows )
+        specxsize = 0;
+    else
+        specysize = 0;
+    
+    if ( specxsize )
+	xscale = (float) newcols / (float) cols;
+    else if ( specxscale )
+	newcols = cols * xscale + 0.999;
+
+    if ( specysize )
+	yscale = (float) newrows / (float) rows;
+    else if ( specyscale )
+	newrows = rows * yscale + 0.999;
+    else
+	if ( specxsize )
+	    {
+	    yscale = xscale;
+	    newrows = rows * yscale + 0.999;
+	    }
+	else
+	    {
+	    yscale = 1.0;
+	    newrows = rows;
+	    }
+    
+    if ( ! ( specxsize || specxscale ) )
+	if ( specysize )
+	    {
+	    xscale = yscale;
+	    newcols = cols * xscale + 0.999;
+	    }
+	else
+	    {
+	    xscale = 1.0;
+	    newcols = cols;
+	    }
+
+    sxscale = xscale * SCALE;
+    syscale = yscale * SCALE;
+
+    xelrow = pnm_allocrow( cols );
+    if ( newrows == rows )	/* shortcut Y scaling if possible */
+	tempxelrow = xelrow;
+    else
+	tempxelrow = pnm_allocrow( cols );
+    rs = (long*) pm_allocrow( cols, sizeof(long) );
+    gs = (long*) pm_allocrow( cols, sizeof(long) );
+    bs = (long*) pm_allocrow( cols, sizeof(long) );
+    rowsread = 0;
+    fracrowleft = syscale;
+    needtoreadrow = 1;
+    for ( col = 0; col < cols; ++col )
+	rs[col] = gs[col] = bs[col] = HALFSCALE;
+    fracrowtofill = SCALE;
+
+    pnm_writepnminit( stdout, newcols, newrows, maxval, newformat, 1 );
+    newxelrow = pnm_allocrow( newcols );
+
+    for ( row = 0; row < newrows; ++row )
+	{
+	/* First scale Y from xelrow into tempxelrow. */
+	if ( newrows == rows )	/* shortcut Y scaling if possible */
+	    {
+/*                pnm_readpnmrow( ifp, xelrow, cols, maxval, format ); */
+                xelrow = *pixels;
+                pixels += 1;
+	    }
+	else
+	    {
+	    while ( fracrowleft < fracrowtofill )
+		{
+		if ( needtoreadrow )
+		    if ( rowsread < rows )
+			{
+/*			pnm_readpnmrow( ifp, xelrow, cols, maxval, */
+/*format ); */
+                            xelrow = *pixels;
+                            pixels += 1;
+                            ++rowsread;
+                            /* needtoreadrow = 0; */
+			}
+                switch ( PNM_FORMAT_TYPE(format) )
+                    {
+                    case PPM_TYPE:
+		    for ( col = 0, xP = xelrow; col < cols; ++col, ++xP )
+			{
+			rs[col] += fracrowleft * PPM_GETR( *xP );
+			gs[col] += fracrowleft * PPM_GETG( *xP );
+			bs[col] += fracrowleft * PPM_GETB( *xP );
+			}
+                    break;
+
+                  default:
+		    for ( col = 0, xP = xelrow; col < cols; ++col, ++xP )
+			gs[col] += fracrowleft * PNM_GET1( *xP );
+                    break;
+                    }
+		fracrowtofill -= fracrowleft;
+		fracrowleft = syscale;
+		needtoreadrow = 1;
+		}
+	    /* Now fracrowleft is >= fracrowtofill, so we can produce a row. */
+	    if ( needtoreadrow )
+		if ( rowsread < rows )
+		    {
+/*		    pnm_readpnmrow( ifp, xelrow, cols, maxval, format ); */
+                        xelrow = *pixels;
+                        pixels += 1;
+                        ++rowsread;
+                        needtoreadrow = 0;
+		    }
+	    switch ( PNM_FORMAT_TYPE(format) )
+		{
+		case PPM_TYPE:
+		for ( col = 0, xP = xelrow, nxP = tempxelrow;
+		      col < cols; ++col, ++xP, ++nxP )
+		    {
+		    register long r, g, b;
+
+		    r = rs[col] + fracrowtofill * PPM_GETR( *xP );
+		    g = gs[col] + fracrowtofill * PPM_GETG( *xP );
+		    b = bs[col] + fracrowtofill * PPM_GETB( *xP );
+		    r /= SCALE;
+		    if ( r > maxval ) r = maxval;
+		    g /= SCALE;
+		    if ( g > maxval ) g = maxval;
+		    b /= SCALE;
+		    if ( b > maxval ) b = maxval;
+		    PPM_ASSIGN( *nxP, r, g, b );
+		    rs[col] = gs[col] = bs[col] = HALFSCALE;
+		    }
+		break;
+
+		default:
+		for ( col = 0, xP = xelrow, nxP = tempxelrow;
+		      col < cols; ++col, ++xP, ++nxP )
+		    {
+		    register long g;
+
+		    g = gs[col] + fracrowtofill * PNM_GET1( *xP );
+		    g /= SCALE;
+		    if ( g > maxval ) g = maxval;
+		    PNM_ASSIGN1( *nxP, g );
+		    gs[col] = HALFSCALE;
+		    }
+		break;
+		}
+	    fracrowleft -= fracrowtofill;
+	    if ( fracrowleft == 0 )
+		{
+		fracrowleft = syscale;
+		needtoreadrow = 1;
+		}
+	    fracrowtofill = SCALE;
+	    }
+
+	/* Now scale X from tempxelrow into newxelrow and write it out. */
+	if ( newcols == cols )	/* shortcut X scaling if possible */
+	    pnm_writepnmrow( stdout, tempxelrow, newcols, maxval, newformat, 1 );
+	else
+	    {
+	    register long r, g, b;
+	    register long fraccoltofill, fraccolleft;
+	    register int needcol;
+
+	    nxP = newxelrow;
+	    fraccoltofill = SCALE;
+	    r = g = b = HALFSCALE;
+	    needcol = 0;
+	    for ( col = 0, xP = tempxelrow; col < cols; ++col, ++xP )
+		{
+		fraccolleft = sxscale;
+		while ( fraccolleft >= fraccoltofill )
+		    {
+		    if ( needcol )
+			{
+			++nxP;
+			r = g = b = HALFSCALE;
+			}
+		    switch ( PNM_FORMAT_TYPE(format) )
+			{
+			case PPM_TYPE:
+			r += fraccoltofill * PPM_GETR( *xP );
+			g += fraccoltofill * PPM_GETG( *xP );
+			b += fraccoltofill * PPM_GETB( *xP );
+			r /= SCALE;
+			if ( r > maxval ) r = maxval;
+			g /= SCALE;
+			if ( g > maxval ) g = maxval;
+			b /= SCALE;
+			if ( b > maxval ) b = maxval;
+			PPM_ASSIGN( *nxP, r, g, b );
+			break;
+
+			default:
+			g += fraccoltofill * PNM_GET1( *xP );
+			g /= SCALE;
+			if ( g > maxval ) g = maxval;
+			PNM_ASSIGN1( *nxP, g );
+			break;
+			}
+		    fraccolleft -= fraccoltofill;
+		    fraccoltofill = SCALE;
+		    needcol = 1;
+		    }
+		if ( fraccolleft > 0 )
+		    {
+		    if ( needcol )
+			{
+			++nxP;
+			r = g = b = HALFSCALE;
+			needcol = 0;
+			}
+		    switch ( PNM_FORMAT_TYPE(format) )
+			{
+			case PPM_TYPE:
+			r += fraccolleft * PPM_GETR( *xP );
+			g += fraccolleft * PPM_GETG( *xP );
+			b += fraccolleft * PPM_GETB( *xP );
+			break;
+
+			default:
+			g += fraccolleft * PNM_GET1( *xP );
+			break;
+			}
+		    fraccoltofill -= fraccolleft;
+		    }
+		}
+	    if ( fraccoltofill > 0 )
+		{
+		--xP;
+		switch ( PNM_FORMAT_TYPE(format) )
+		    {
+		    case PPM_TYPE:
+		    r += fraccoltofill * PPM_GETR( *xP );
+		    g += fraccoltofill * PPM_GETG( *xP );
+		    b += fraccoltofill * PPM_GETB( *xP );
+		    break;
+
+		    default:
+		    g += fraccoltofill * PNM_GET1( *xP );
+		    break;
+		    }
+		}
+	    if ( ! needcol )
+		{
+                switch ( PNM_FORMAT_TYPE(format) )
+                    {
+                    case PPM_TYPE:
+		    r /= SCALE;
+		    if ( r > maxval ) r = maxval;
+		    g /= SCALE;
+		    if ( g > maxval ) g = maxval;
+		    b /= SCALE;
+		    if ( b > maxval ) b = maxval;
+		    PPM_ASSIGN( *nxP, r, g, b );
+                    break;
+
+                    default:
+		    g /= SCALE;
+		    if ( g > maxval ) g = maxval;
+		    PNM_ASSIGN1( *nxP, g );
+                    break;
+                    }
+		}
+	    pnm_writepnmrow( stdout, newxelrow, newcols, maxval, newformat, 1 );
+	    }
+	}
+
+    pm_close( stdout );
+
+    exit( 0 );
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

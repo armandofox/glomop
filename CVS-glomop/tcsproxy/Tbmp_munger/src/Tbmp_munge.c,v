@@ -1,0 +1,613 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.5.2.1
+	Yatin:1.5.0.2
+	pre-yatin-merge:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	98.01.16.22.15.49;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.25.01.07.56;	author fox;	state Exp;
+branches
+	1.5.2.1;
+next	1.4;
+
+1.4
+date	97.09.19.19.12.40;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.19.18.47.30;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.19.00.36.28;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.18.18.59.19;	author fox;	state Exp;
+branches;
+next	;
+
+1.5.2.1
+date	98.01.16.20.35.04;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@/*
+ *  Tbmp_munge: a "shell" around Ian Goldberg's ppmtoTbmp program, to
+ *  allow it to be used as a distiller.
+ *  A. Fox 9/97
+ */
+
+#include "../include/ARGS.h"
+#include "distinterface.h" 
+#include "ppmbufs.h"
+#include <string.h>
+
+/* ppmtoTbmp.c - read a portable pixmap and write a pilot Tbmp file
+ *
+ * Program by Ian Goldberg <iang@@cs.berkeley.edu>
+ *
+ * Based on ppmtopuzz.c by Jef Paskanzer, from the netpbm-1mar1994 package.
+ */
+
+DistillerStatus ppm_to_tbmp(DistillerInput *din, DistillerOutput *dout,
+                            int bitsperpixel);
+MonitorClientID mon;
+
+typedef DistillerStatus DistillerInitFunc(C_DistillerType, int, const char * const *);
+typedef DistillerStatus DistillerMainFunc(Argument *args, int nargs,
+                                            DistillerInput *din, DistillerOutput *dout);
+
+#define MSGSIZE 256
+
+
+DistillerStatus
+DistillerInit(C_DistillerType dType, int argc, const char * const *argv)
+{
+  DistillerStatus result;
+  extern DistillerInitFunc giftoppm_DistillerInit;
+  extern DistillerInitFunc jpgtoppm_DistillerInit;
+  extern DistillerInitFunc pnmscale_DistillerInit;
+  
+  mon = DistillerGetMonitorClientID();
+  if ((result = giftoppm_DistillerInit(dType,argc,argv)) != distOk) {
+    Message("giftoppm init failed!");
+    return result;
+  }
+  if ((result = jpgtoppm_DistillerInit(dType,argc,argv)) != distOk) {
+    Message("jpgtoppm init failed!");
+    return result;
+  }
+  if ((result = pnmscale_DistillerInit(dType,argc,argv)) != distOk) {
+    Message("pnmbufscale init failed!");
+    return result;
+  }
+  Message("ppmtoTbmp munger started");
+  return distOk;
+}
+
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+              DistillerInput *din, DistillerOutput *dout)
+{
+  int bitsperpixel = 1;
+  DistillerStatus status = distOk;
+  DistillerOutput d_tmp[3];
+  int i;
+
+  extern DistillerMainFunc ppmquant_DistillerMain;
+  extern DistillerMainFunc pnmscale_DistillerMain;
+  extern DistillerMainFunc giftoppm_DistillerMain;
+  extern DistillerMainFunc jpgtoppm_DistillerMain;
+
+  for (i = 0; i < nargs; i++) {
+    switch(ARG_ID(args[i])) {
+    case TBMP_2BIT:
+      if (ARG_INT(args[i]) == 1)
+        bitsperpixel = 2;
+      break;
+    default:
+      break;
+    }
+  }
+
+  memset(d_tmp,  0, sizeof(d_tmp));
+
+  /*
+   *  Convert gif or jpg to ppm if necessary
+   */
+  if ( (strcasecmp(MimeType(din), "image/jpeg") == 0)
+       || (strcasecmp(MimeType(din), "image/jpg") == 0) ) {
+    status = jpgtoppm_DistillerMain(args, nargs, din, &d_tmp[0]);
+  } else if (strcasecmp(MimeType(din), "image/gif") == 0) {
+    status = giftoppm_DistillerMain(args, nargs, din, &d_tmp[0]);
+  } else if (strcasecmp(MimeType(din), "image/ppm") != 0) {
+    Message("Bad input: not JPEG, GIF, or ppm");
+    return distBadInput;
+  }
+  if (status != distOk) {
+    Message("giftoppm or jpgtoppm failed");
+    return status;
+  }
+
+  /*
+   *  Scale down the image
+   */
+  status = pnmscale_DistillerMain(args, nargs, &d_tmp[0], &d_tmp[1]);
+  if (status != distOk) {
+    Message("pnmscale failed");
+    goto FINISH;
+  }
+
+  /*
+   *  Quantize to 4 colors
+   */
+  status = ppmquant_DistillerMain(args, nargs, &d_tmp[1], &d_tmp[2]);
+  if (status != distOk) {
+    Message("ppmquant failed");
+    goto FINISH;
+  }
+  /*
+   *  Convert to Tbmp
+   */
+  status = ppm_to_tbmp(&d_tmp[2], dout, bitsperpixel);
+  if (status != distOk) {
+    Message("ppmtotbmp failed");
+    goto FINISH;
+  }
+  
+  FINISH:
+  /*
+   *  all done...copy d_tmp to dout for real
+   */
+  for (i=0; i<sizeof(d_tmp)/sizeof(DistillerData); i++) {
+    if (d_tmp[i].data.freeMe == gm_True) 
+      DistillerFree(DataPtr(&d_tmp[i]));
+    if (d_tmp[i].metadata.freeMe == gm_True)
+      DistillerFree(MetadataPtr(&d_tmp[i]));
+  }
+
+  return status;
+}
+
+/*
+ *  actual ppmtoTbmp code starts here.
+ */
+
+static int colcompare(const void *a, const void *b)
+{
+    colorhist_vector ch1 = (colorhist_vector)a;
+    colorhist_vector ch2 = (colorhist_vector)b;
+    return
+	(int) PPM_GETR(ch1->color) - (int) PPM_GETR(ch2->color) +
+	(int) PPM_GETG(ch1->color) - (int) PPM_GETG(ch2->color) +
+	(int) PPM_GETB(ch1->color) - (int) PPM_GETB(ch2->color);
+}
+
+DistillerStatus
+ppm_to_tbmp(DistillerInput *din, DistillerOutput *dout, int bitsperpixel)
+{
+  pixel** pixels;
+  register pixel* pP;
+  colorhist_vector chv;
+  colorhash_table cht;
+  int rows, cols, row, colors;
+  register int col;
+  pixval maxval;
+  unsigned char outbyte, outbit;
+  int chars_per_row;
+  DistillerStatus retcode = distFatalError;   /* failsafe */
+#ifdef DEBUGGING
+  char msg[MSGSIZE];
+#endif /* DEBUGGING */
+  struct ppmbuf outbuf;  
+  
+  pixels = ppmbuf_readppm( DataPtr(din), &cols, &rows, &maxval );
+
+  DebugMsg( "computing colormap..." );
+  chv = ppm_computecolorhist( pixels, cols, rows, 1<<bitsperpixel, &colors );
+  if ( chv == (colorhist_vector) 0 )
+    {
+      Message( "too many colors - run ppmquant first");
+      goto FINISH;
+    }
+  qsort((char *)chv, colors, sizeof(struct colorhist_item), colcompare);
+#ifdef DEBUGGING
+  sprintf(msg, "%d colors found", colors );
+  DebugMsg(msg);
+#endif /*DEBUGGING*/
+
+  /* alloc the output buffer. */
+
+  chars_per_row = 2 * (bitsperpixel == 2 ? ((cols+7)/8) : ((cols+15)/16));
+  ppmbuf_alloc(&outbuf, chars_per_row*rows + 24); /* for headers etc */
+
+    /* Write Tbmp header. */
+  ppmbuf_putshort(&outbuf, cols*bitsperpixel);   /* width */
+  ppmbuf_putshort(&outbuf, rows );                    /* height */
+  if (bitsperpixel == 2) {
+    ppmbuf_putshort(&outbuf, chars_per_row );      /* chars/row */
+  } else {
+    ppmbuf_putshort(&outbuf, chars_per_row);
+  }
+  ppmbuf_putshort(&outbuf, 0 );                       /* flags */
+  ppmbuf_putlong(&outbuf,  0 );                        /* pad */
+  ppmbuf_putlong(&outbuf,  0 );                        /* pad */
+
+    /* Convert color vector to color hash table, for fast lookup. */
+  cht = ppm_colorhisttocolorhash( chv, colors );
+  ppm_freecolorhist( chv );
+
+    /* And write out the data. */
+  for ( row = 0; row < rows; ++row ) {
+    outbyte = 0x00;
+    outbit = (bitsperpixel == 2) ? 6 : 7;
+    for ( col = 0, pP = pixels[row]; col < cols; ++col, ++pP ) {
+      register int color;
+
+      color = ppm_lookupcolor( cht, pP );
+      if ( color == -1 ) {
+        Message("Color not found! Bleah!");
+        ppmbuf_free(&outbuf);
+        goto FINISH;
+      }
+      /*
+        pm_error("color not found?!?  row=%d col=%d  r=%d g=%d b=%d",
+        row, col, PPM_GETR(*pP), PPM_GETG(*pP),
+        PPM_GETB(*pP) );
+        */
+      if (bitsperpixel==2) {
+        if (color == 0) {
+          outbyte |= (3 << outbit);
+        } else if (color == 1 && colors != 2) {
+          outbyte |= (2 << outbit);
+        } else if (color == 2 && colors == 4) {
+          outbyte |= (1 << outbit);
+        }
+      } else {
+        if (color == 0) {
+          outbyte |= (1 << outbit);
+        }
+      }
+      if (!outbit) {
+        ppmbuf_putc(&outbuf,outbyte);
+        outbyte = 0x00;
+        outbit = (bitsperpixel==2 ? 6 : 7);
+      } else {
+        outbit -= (bitsperpixel==2 ? 2 : 1);
+      }
+    }
+    if (bitsperpixel==2) {
+      /* Output any partial byte remaining */
+      if (cols & 0x03) {
+        ppmbuf_putc(&outbuf,outbyte);
+      }
+      if (!((cols+7) & 0x04)) {
+        ppmbuf_putc(&outbuf,0x00);
+      }
+    } else {                /* 1 bit per pixel */
+      /* Output any partial byte remaining */
+      if (cols & 0x07) {
+        ppmbuf_putc(&outbuf,outbyte);
+      }
+      if (!((cols+15) & 0x08)) {
+        ppmbuf_putc(&outbuf,0x00);
+      }
+    }
+  }
+
+  /* all done. */
+
+  if (bitsperpixel == 2) {
+    SetMimeType(dout, "image/tbmp2");
+  } else {
+    SetMimeType(dout, "image/tbmp");
+  }
+  SetMetadataLength(dout, 0);
+  MetadataNeedsFree(dout, gm_False);
+
+  SetDataLength(dout, ppmbuf_length(&outbuf));
+  SetData(dout, ppmbuf_base(&outbuf));
+  DataNeedsFree(dout, gm_True);
+
+  retcode = distOk;
+
+FINISH:
+  if (cht)
+    ppm_freecolorhash(cht);
+  ppm_freearray(pixels, rows);
+  return retcode;
+}
+@
+
+
+1.5
+log
+@the whole monty now seems to work - haven't yet tested for leaks
+@
+text
+@d29 1
+d135 1
+a135 1
+  
+@
+
+
+1.5.2.1
+log
+@changes
+@
+text
+@a28 1
+
+d134 1
+a134 1
+
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d10 1
+d23 3
+d32 5
+d38 12
+d59 2
+a60 2
+  DistillerStatus status;
+  DistillerOutput d_tmp;
+d63 4
+a66 2
+  extern DistillerStatus ppmquant(Argument *args,int nargs,
+                                  DistillerInput *din,DistillerOutput *dout);
+d79 14
+a92 2
+  memset(&d_tmp,  0, sizeof(struct ppmbuf)); /* BUG:: */
+  status = ppmquant(args, nargs, din, &d_tmp);
+d94 1
+a96 1
+  status = ppm_to_tbmp(&d_tmp, dout, bitsperpixel);
+d99 27
+d128 7
+a134 5
+  if (d_tmp.data.freeMe == gm_True) 
+    DistillerFree(DataPtr(&d_tmp));
+  if (d_tmp.metadata.freeMe == gm_True)
+    DistillerFree(MetadataPtr(&d_tmp));
+
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@a55 1
+#if 0
+d70 1
+a70 4
+#else
+  status =ppm_to_tbmp(din, dout, bitsperpixel);
+  
+#endif
+d217 2
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d39 1
+d41 4
+a44 1
+  
+d56 19
+a74 1
+  status = ppm_to_tbmp(din, dout, bitsperpixel);
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d18 4
+d25 35
+d71 1
+a71 1
+DistillerInit(C_DistillerType dType, int argc, const char * const *argv)
+d73 10
+a82 22
+  mon = DistillerGetMonitorClientID();
+  Message("ppmtoTbmp munger started");
+  return distOk;
+}
+
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+              DistillerInput *din, DistillerOutput *dout)
+{
+    pixel** pixels;
+    register pixel* pP;
+    colorhist_vector chv;
+    colorhash_table cht;
+    int rows, cols, row, colors;
+    int i;
+    register int col;
+    pixval maxval;
+    unsigned char outbyte, outbit;
+    DistillerStatus retcode;
+    int bitsperpixel = 1;
+    struct ppmbuf outbuf;
+    int chars_per_row;
+d84 1
+a84 1
+    char msg[MSGSIZE];
+d86 10
+a95 9
+    for (i = 0; i < nargs; i++) {
+      switch(ARG_ID(args[i])) {
+      case TBMP_2BIT:
+        if (ARG_INT(args[i]) == 1)
+          bitsperpixel = 2;
+        break;
+      default:
+        break;
+      }
+d97 1
+a97 13
+
+    retcode = distFatalError;   /* failsafe */
+    
+    pixels = ppmbuf_readppm( DataPtr(din), &cols, &rows, &maxval );
+
+    DebugMsg( "computing colormap..." );
+    chv = ppm_computecolorhist( pixels, cols, rows, 1<<bitsperpixel, &colors );
+    if ( chv == (colorhist_vector) 0 )
+	{
+          Message( "too many colors - run ppmquant first");
+          goto FINISH;
+	}
+    qsort((char *)chv, colors, sizeof(struct colorhist_item), colcompare);
+d99 2
+a100 2
+    sprintf(msg, "%d colors found", colors );
+    DebugMsg(msg);
+d103 1
+a103 1
+    /* alloc the output buffer. */
+d105 2
+a106 2
+    chars_per_row = 2 * (bitsperpixel == 2 ? ((cols+7)/8) : ((cols+15)/16));
+    ppmbuf_alloc(&outbuf, chars_per_row*rows + 24); /* for headers etc */
+d109 10
+a118 10
+    ppmbuf_putshort(&outbuf, cols*bitsperpixel);   /* width */
+    ppmbuf_putshort(&outbuf, rows );                    /* height */
+    if (bitsperpixel == 2) {
+      ppmbuf_putshort(&outbuf, chars_per_row );      /* chars/row */
+    } else {
+      ppmbuf_putshort(&outbuf, chars_per_row);
+    }
+    ppmbuf_putshort(&outbuf, 0 );                       /* flags */
+    ppmbuf_putlong(&outbuf,  0 );                        /* pad */
+    ppmbuf_putlong(&outbuf,  0 );                        /* pad */
+d121 2
+a122 2
+    cht = ppm_colorhisttocolorhash( chv, colors );
+    ppm_freecolorhist( chv );
+d125 54
+a178 55
+    for ( row = 0; row < rows; ++row ) {
+	outbyte = 0x00;
+	outbit = (bitsperpixel == 2) ? 6 : 7;
+	for ( col = 0, pP = pixels[row]; col < cols; ++col, ++pP ) {
+	    register int color;
+
+	    color = ppm_lookupcolor( cht, pP );
+	    if ( color == -1 ) {
+              Message("Color not found! Bleah!");
+              ppmbuf_free(&outbuf);
+              goto FINISH;
+            }
+            /*
+              pm_error("color not found?!?  row=%d col=%d  r=%d g=%d b=%d",
+              row, col, PPM_GETR(*pP), PPM_GETG(*pP),
+              PPM_GETB(*pP) );
+              */
+	    if (bitsperpixel==2) {
+		if (color == 0) {
+		    outbyte |= (3 << outbit);
+		} else if (color == 1 && colors != 2) {
+		    outbyte |= (2 << outbit);
+		} else if (color == 2 && colors == 4) {
+		    outbyte |= (1 << outbit);
+		}
+	    } else {
+		if (color == 0) {
+		    outbyte |= (1 << outbit);
+		}
+	    }
+	    if (!outbit) {
+		ppmbuf_putc(&outbuf,outbyte);
+		outbyte = 0x00;
+		outbit = (bitsperpixel==2 ? 6 : 7);
+	    } else {
+		outbit -= (bitsperpixel==2 ? 2 : 1);
+	    }
+	}
+	if (bitsperpixel==2) {
+	    /* Output any partial byte remaining */
+	    if (cols & 0x03) {
+		ppmbuf_putc(&outbuf,outbyte);
+	    }
+	    if (!((cols+7) & 0x04)) {
+		ppmbuf_putc(&outbuf,0x00);
+	    }
+	} else {                /* 1 bit per pixel */
+	    /* Output any partial byte remaining */
+	    if (cols & 0x07) {
+		ppmbuf_putc(&outbuf,outbyte);
+	    }
+	    if (!((cols+15) & 0x08)) {
+		ppmbuf_putc(&outbuf,0x00);
+	    }
+	}
+d180 1
+d182 1
+a182 9
+    /* all done. */
+
+    if (bitsperpixel == 2) {
+      SetMimeType(dout, "image/tbmp2");
+    } else {
+      SetMimeType(dout, "image/tbmp");
+    }
+    SetMetadataLength(dout, 0);
+    MetadataNeedsFree(dout, gm_False);
+d184 11
+a194 3
+    SetDataLength(dout, ppmbuf_length(&outbuf));
+    SetData(dout, ppmbuf_base(&outbuf));
+    DataNeedsFree(dout, gm_True);
+d196 1
+a196 1
+    retcode = distOk;
+d199 2
+a200 2
+    ppm_freearray(pixels, rows);
+    return retcode;
+@

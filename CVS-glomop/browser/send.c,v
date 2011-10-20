@@ -1,0 +1,685 @@
+head	1.22;
+access;
+symbols
+	v15b:1.22
+	v10b3:1.20
+	v10b2:1.17
+	v10b1:1.15;
+locks; strict;
+comment	@ * @;
+
+
+1.22
+date	97.11.15.00.26.12;	author aspolito;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.11.11.21.24.40;	author aspolito;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.10.30.02.02.02;	author aspolito;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.10.25.19.50.30;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.10.24.03.30.32;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.10.22.00.11.30;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.21.03.30.31;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.30.18.51.42;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.25.00.47.04;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.22.23.38.26;	author iang;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.19.22.32.04;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.19.22.23.01;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.14.23.41.14;	author lcddave;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.11.19.59.31;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.10.23.49.25;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.10.19.58.11;	author aspolito;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.08.19.36.44;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.03.00.49.24;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.28.01.16.30;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.09.00.10.23;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.08.00.10.32;	author lcddave;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.31;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.22
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@#include <Pilot.h>
+#include <sys/socket.h>
+#include "globals.h"
+#include "trans.h"
+#include "send.h"
+#include "cache.h"
+#include "notify.h"
+#include "metadata.h"
+#include "pagedisplay.h"
+#include "aggform.h"
+#include "history.h"
+
+/* the following function is an ugly hack; used to support stop loadings;
+   should be implemented properly in next release */
+
+void cancelSend(ConID conID) {
+  if (conID != -1) {
+      CloseConnection(conID, false);      
+      StatusDraw(1);
+      tcurHistory = -1;
+  }
+}
+
+/* 
+** returns true if it actually sends the url over the connection
+** returns false if the request is ignored (becasue connection not opened)
+*/
+static Boolean SendURLNoCache(ConID *conID, VoidHand URL, Boolean nocache) {
+  Chunk c;
+  Word URLLength;
+  Word err;
+  Word but;
+
+  /* if we have no conection yet, make one */
+  if (*conID == -1) {
+    FormPtr frm;
+
+    frm = FrmInitForm(OpenConForm);
+    but = FrmDoDialog(frm);
+    if (but == OpenYes) {
+      /* start network */      
+      err = StartTrans();
+      if (err != netErrAlreadyOpen) {
+	ErrFatalDisplayIf(err, "Error opening transport layer");     
+      }
+      *conID = OpenConnection(proxyServer, proxyPort, storageDB);     
+      if ((*conID == -1) && fallbackServer[0] && fallbackPort) {
+	*conID = OpenConnection(fallbackServer, fallbackPort, storageDB);     
+      }
+      if (*conID == -1) {
+	FrmDeleteForm(frm);
+	StopTrans();
+	frm = FrmInitForm(CantOpenConForm);
+	FrmDoDialog(frm);
+      } else {
+	RegisterNotify(*conID);
+      }    
+    } 
+    FrmDeleteForm(frm);
+  }
+  if (*conID != -1) {
+    VoidHand metahand = NULL;
+    MetaField metafields[2];
+    int nummeta = 0;
+
+    URLLength = MemHandleSize(URL);    
+    c.conID = *conID;
+    c.requestID = 0; /* set to zero to let transport layer deal with it */
+    if (nocache) {
+	metafields[nummeta].type = MetaNoCache;
+	metafields[nummeta].len = 0;
+	metafields[nummeta].data = NULL;
+	++nummeta;
+    }
+    if (NeedAggList()) {
+	metafields[nummeta].type = MetaAggList;
+	metafields[nummeta].len = 0;
+	metafields[nummeta].data = NULL;
+	++nummeta;
+    }
+    c.metaHand = metahand = MakeMetaData(metafields, nummeta, &(c.metaSize));
+    c.dataSize = URLLength;
+    c.dataHand = URL;
+    SendChunk(&c);
+    if (metahand) {
+	MemHandleFree(metahand);
+    }
+    currRequestID = c.requestID;
+    return true;
+  }
+  return false;
+}
+
+/* 
+** returns true (and sets hPage) if the URL was in the cache
+** returns false otherwise
+*/
+static Boolean LookInCacheForURL(VoidHand URL) {
+  Word URLLength;
+  char * url;
+  VoidHand data;
+
+  URLLength = MemHandleSize(URL);
+  url = MemHandleLock(URL);
+  data = InCache(url, URLLength, offlineInfoDB, offlineDB);
+  if (!data) {
+    data = InCache(url, URLLength, cacheInfoDB, cacheDB);
+  }
+  MemHandleUnlock(URL);
+  if (data) {
+    hPage = data;
+    UpdateHiLiPiece(-2, NULL, 0, 0);
+    ScrollReset();
+    return true;
+  }
+  return false;
+}
+
+
+/* 
+**  returns 2 if the data was found in cache..
+**  1 if the data was sent off to the net...
+**  0 if the request was never made
+**  sets hapge and all those icky tcurURL and curURL fields
+*/
+
+/* ### HEY DUMBASS, FIGURE OUT WHAT ALL THIS tcurURL transURL stuff IS ### */
+/* ### RELOAD!  RELOAD!  ACK!  ACK!  ACK! ### */
+int SendURL (ConID *conID, VoidHand URL, Boolean addToHist, 
+	     Boolean checkCache, Boolean nocache, Boolean changeURL) {
+
+  ULong URLLength;
+
+  URLLength = MemHandleSize(URL);
+
+  if (*conID > -1) {
+    cancelSend(*conID);
+  }
+  if (checkCache && LookInCacheForURL(URL)) {
+    if (changeURL) {
+      if (curURL) {
+	MemHandleFree(curURL);
+      }
+      curURL = URL;
+      curURLLength = URLLength;
+    }
+    if (addToHist) {
+      PutInHistory(URL, URLLength);
+    }
+    EraseMainWindow();
+    if (hPage) {
+      WinDrawProxyString(hPage, currXPosOffset, currYPosOffset);
+    }   
+    return 2;
+  } else {
+    if (SendURLNoCache(conID, URL, nocache)) {
+      if (changeURL) {
+	if (transURL) {
+	  MemHandleFree(transURL);
+	}
+	transURL = URL;
+	transURLLength = URLLength;  
+      }
+      if (addToHist) {
+	tcurHistory = curHistory;	
+      } else {
+	tcurHistory = -1;	
+      }
+      return 1;
+    } else {
+      return 0;
+    }    
+  }	 
+}
+
+@
+
+
+1.21
+log
+@out of memory handled gracefully.  Fallback proxies added
+@
+text
+@d11 1
+d16 1
+a16 1
+void cancelSend(void) {
+d20 1
+d25 2
+a26 2
+** returns 1 if it actually sends the url over the connection
+** returns 0 if the request is ignored (becasue connection not opened)
+d28 1
+a28 1
+int SendURLNoCache(VoidHand URL, int nocache) {
+d35 1
+a35 1
+  if (conID == -1) {
+d46 3
+a48 3
+      conID = OpenConnection(proxyServer, proxyPort, storageDB);     
+      if ((conID == -1) && fallbackServer[0] && fallbackPort) {
+	conID = OpenConnection(fallbackServer, fallbackPort, storageDB);     
+d50 1
+a50 1
+      if (conID == -1) {
+d56 1
+a56 1
+	RegisterNotify(conID);
+d61 1
+a61 1
+  if (conID != -1) {
+a65 2
+    cancelSend();
+
+d67 1
+a67 1
+    c.conID = conID;
+d89 1
+a89 1
+    return 1;
+d91 1
+a91 1
+  return 0;
+d95 2
+a96 3
+** returns 2 (and sets *hpage) if the URL was in the cache
+** returns 1 if sends the url over the connection
+** returns 0 if the request is ignored (becasue connection not opened)
+d98 1
+a98 1
+int SendURL(VoidHand URL, VoidHand *hpage) {
+d111 1
+a111 1
+    *hpage = data;
+d114 40
+d156 18
+a173 2
+    return SendURLNoCache(URL, 0);
+  }
+@
+
+
+1.20
+log
+@*** empty log message ***
+@
+text
+@d45 3
+@
+
+
+1.19
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@d17 1
+a17 2
+      CloseConnection(conID);
+      conID = -1;
+a18 2
+      conID = OpenConnection(proxyServer, proxyPort, storageDB);
+      RegisterNotify(conID);
+@
+
+
+1.18
+log
+@Added a scroll bar
+@
+text
+@d113 1
+a113 1
+    UpdateHiLiPiece(-2, NULL, 0);
+a114 1
+    currYPosOffset = 0;
+@
+
+
+1.17
+log
+@All the agglist retrieval seems to work now! :-)
+@
+text
+@d114 1
+@
+
+
+1.16
+log
+@Added support for non-page pages (agglists and prcs)
+@
+text
+@d10 1
+d61 2
+d70 4
+a73 5
+	MetaField fields[1] = {{ MetaNoCache, 0, NULL }};
+	c.metaHand = metahand = MakeMetaData(fields, 1, &(c.metaSize));
+    } else {
+	c.metaSize = 0;
+	c.metaHand = NULL;
+d75 7
+@
+
+
+1.15
+log
+@Don't Cancel if we're not connected
+@
+text
+@d67 1
+a67 1
+	MetaField fields[1] = {{ NoCache, 0, NULL }};
+@
+
+
+1.14
+log
+@o Fixed a bug that gets tickled when the pen is being held on a link at the
+  time a new page appears.
+o Added URLs to the status bar when you hold down on a link
+@
+text
+@d15 7
+a21 5
+  CloseConnection(conID);
+  conID = -1;
+  StatusDraw(1);
+  conID = OpenConnection(proxyServer, proxyPort, storageDB);
+  RegisterNotify(conID);
+@
+
+
+1.13
+log
+@o When loading a page with the Open form, the yoffset would incorrectly
+  be set to 0 (top) when the request was _sent_.  This caused a ghost
+  image to appear, overlaid on the real one.  Fixed.
+o If a download was canceled in the middle, and then you "Open" a URL in
+  your cache, the partway-done status bar would remain on the screen.  Fixed.
+@
+text
+@d102 1
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d17 1
+a17 1
+  StatusDraw();
+@
+
+
+1.11
+log
+@FIXED UGLY BUG
+@
+text
+@d9 1
+@
+
+
+1.10
+log
+@Following has been added
+
+1. Stop/cancel load functionality (but buggy, transport layer state not reset)
+
+2. Moved PutInHistory to only when a new page is loaded
+   (this is a consequence of the cancel function/otherwise URL is
+    put in history even if cancel is hit; this lead to history
+    errors.)
+
+3. changed event loop to drop every 200 ticks; my pilot batteries go dead
+   way to fast
+
+4. can now move back and forward by backspace/space
+@
+text
+@d10 11
+d57 2
+@
+
+
+1.9
+log
+@Added ability for browser to send "Pragma: no-cache" is the user hits "Reload"
+@
+text
+@d94 1
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d8 1
+d14 1
+a14 1
+int SendURLNoCache(VoidHand URL) {
+d45 2
+d50 7
+a56 2
+    c.metaSize = 0;
+    c.metaHand = NULL;
+d60 3
+d91 1
+a91 1
+    return SendURLNoCache(URL);
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d59 2
+a60 1
+** returns 1 if it actually finds the page or sends the url over the connection
+d78 1
+a78 1
+    return 1;
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d17 1
+d21 5
+a25 1
+    if (FrmAlert(OpenProxyConf) == 0) {
+d33 1
+d35 2
+a36 1
+	(void) FrmAlert(OpenProxyFail);
+d41 1
+a42 1
+
+@
+
+
+1.5
+log
+@various on/off-line fixes
+@
+text
+@a16 1
+  Word but;
+d20 1
+a20 5
+    FormPtr frm;
+
+    frm = FrmInitForm(OpenConForm);
+    but = FrmDoDialog(frm);
+    if (but == OpenYes) {
+a27 1
+	FrmDeleteForm(frm);
+d29 1
+a29 2
+	frm = FrmInitForm(CantOpenConForm);
+	FrmDoDialog(frm);
+a33 1
+    FrmDeleteForm(frm);
+d35 1
+@
+
+
+1.4
+log
+@OFFLINE MODE WORKS
+@
+text
+@d2 1
+d26 1
+a26 1
+      /* start network */
+d28 4
+a31 2
+      ErrFatalDisplayIf(err, "Error opening transport layer");     
+      conID = OpenConnection(proxyServer, proxyPort, storageDB);
+d34 1
+@
+
+
+1.3
+log
+@bug fixes and offline cache
+@
+text
+@d6 1
+d9 2
+a10 2
+** returns a handle to the current url if it is in the cache, and 0 if
+** it has to send out to the net for the url.  Yah, it isn't pretty 
+d12 47
+a58 1
+VoidHand SendURL(VoidHand URL, ConID conID) {
+a60 1
+  Chunk c;
+d71 5
+a75 1
+    return data;
+a76 9
+  c.conID = conID;
+  c.requestID = 0; /* set to zero to let transport layer deal with it */
+  c.metaSize = 0;
+  c.metaHand = NULL;
+  c.dataSize = URLLength;
+  c.dataHand = URL;
+  SendChunk(&c);
+  currRequestID = c.requestID;
+  return 0;
+@
+
+
+1.2
+log
+@Fixed click memory bug. Implemented a possible catch to down server
+bug that destorys the pilot.
+@
+text
+@d2 1
+a2 1
+#include "globals.h" /* used to set currRequestID */
+d19 4
+a22 1
+  data = InCache(url, URLLength);
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d2 1
+d25 1
+d31 1
+@

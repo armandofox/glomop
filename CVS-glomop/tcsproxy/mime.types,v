@@ -1,0 +1,168 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.01.24.22.51.09;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@#
+# Thanks to sanjay@@clef.lcs.mit.edu
+# This is the mime.types shipped with the NCSA http server
+# with some additions by Armando Fox <fox@@cs.berkeley.edu>
+
+application/frame               fm fm5 fmd
+application/mspowerpoint	ppt
+application/mspowerpoint	ppz
+application/mspowerpoint	pps
+application/mspowerpoint	pot
+application/msword              doc
+application/octet-stream	bin
+application/oda			oda
+application/pdf			pdf
+application/postscript		ai eps ps
+application/rtf			rtf
+application/x-bcpio		bcpio
+application/x-cpio		cpio
+application/x-csh		csh
+application/x-dvi		dvi
+application/x-gtar		gtar
+application/x-gzip		gz
+application/x-hdf		hdf
+application/x-latex		latex
+application/x-mif		mif
+application/x-netcdf		nc cdf
+application/x-patch		patch
+application/x-psgz		ps.gz
+application/x-sh		sh
+application/x-shar		shar
+application/x-sv4cpio		sv4cpio
+application/x-sv4crc		sv4crc
+application/x-shockwave-flash	swf
+application/x-tar		tar
+application/x-tcl		tcl
+application/x-tex		tex
+application/x-texinfo		texinfo texi
+application/x-troff		t tr roff
+application/x-troff-man		man
+application/x-troff-me		me
+application/x-troff-ms		ms	       
+application/x-wais-source	src
+application/x-ustar		ustar
+application/zip			zip
+audio/basic			au snd
+audio/x-aiff			aif aiff aifc
+audio/x-wav			wav
+image/gif			gif
+image/ief			ief
+image/jpeg			jpeg jpg jpe
+image/tiff			tiff tif
+image/x-cmu-raster		ras
+image/x-portable-anymap		pnm
+image/x-portable-bitmap		pbm
+image/x-portable-graymap	pgm
+image/x-portable-pixmap		ppm
+image/x-rgb			rgb
+image/x-xbitmap			xbm
+image/x-xpixmap			xpm
+image/x-xwindowdump		xwd
+text/html			html htm
+text/plain			txt c cc h text
+text/richtext			rtx
+text/tab-separated-values	tsv
+text/x-setext			etx
+video/mpeg			mpeg mpg mpe
+video/quicktime			qt mov
+video/x-msvideo			avi
+video/x-sgi-movie		movie
+x-conference/x-cooltalk		ice
+x-world/x-vrml			wrl
+application/x-compress          Z
+video/infopad-vq                vq
+@

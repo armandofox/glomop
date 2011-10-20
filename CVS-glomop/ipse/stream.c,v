@@ -1,0 +1,409 @@
+head	1.5;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	97.06.18.01.07.13;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.06.17.19.38.38;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.17.18.14.56;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.17.01.56.29;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Made many changes..
+@
+text
+@#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include "packet.h"
+#include "stream.h"
+
+#include "utils.h"
+
+/* We will now be storing a hash table full of the stream_t elements */
+static hash_table stream_table;
+void timeout_hash(hash_table ht);
+
+#define STREAM_HEAP_ALLOCSIZE 10000
+static stream_t *stream_heap = NULL;
+stream_t *get_stream_t(void);
+void      release_stream_t(stream_t *releaseme);
+int       stream_t_hash(void *element, int num_slots);
+int       stream_t_comp(void *el1, void *el2);
+void      stream_t_deletor(void *element);
+
+void stream_init(int num_stream_buckets)
+{
+  if (chained_hash_create(num_stream_buckets, &stream_table) != 0) {
+    fprintf(stderr, "stream hash table init failed.\n");
+    exit(1);
+  }
+}
+
+int stream_get_node(streamid_t *streamid, stream_t **stream,
+    int (*uichoose)(stream_t *, void *), void *handstate)
+{
+  /* Check to see if this guy is in the hash table.  If so, use
+     it.  If not, add a new one to the table. */
+
+  stream_t *res, srch;
+  struct timeval now_t;
+
+  memcpy(&(srch.id), streamid, sizeof(streamid_t));
+  res = (stream_t *) chained_hash_search(stream_table, (void *) &srch,
+					 stream_t_hash, stream_t_comp);
+  if (res == NULL) {
+    gettimeofday(&now_t, NULL);
+
+    res = get_stream_t();
+    memcpy(&(res->id), streamid, sizeof(streamid_t));
+    res->inuse = 1;
+    gettimeofday(&(res->lastheard_time), NULL);
+    *stream = res;
+    if (chained_hash_insert(stream_table, (void *) res, stream_t_hash) != 0) {
+      release_stream_t(res);
+      return 1;
+    }
+    timeout_hash(stream_table);
+    return uichoose(*stream, handstate);
+  } else {
+    *stream = res;
+    return 0;
+  }
+  return 1;
+}
+
+void stream_turf(stream_t *stream)
+{
+  /* If the UI has been defined and opened, close it down, and reset
+     all of the accounting to zero for the next stream that's opened. */
+
+  if (!stream)
+    return;
+
+  if (stream->ui) {
+    if (stream->ui->uiclose)
+      stream->ui->uiclose(stream);
+    stream->closed[0] = stream->closed[1] = 0;
+    stream->syn_seq[0] = stream->syn_seq[1] = 0;
+    stream->inuse = 0;
+  }
+  if (stream->uistate) {
+    free(stream->uistate);
+    stream->uistate = NULL;
+  }
+
+  if (chained_hash_delete(stream_table, (void *) stream,
+			  stream_t_hash, stream_t_deletor,
+			  stream_t_comp) != 1) {
+    fprintf(stderr, "Hash delete failed!!\n");
+  }
+}
+
+void stream_clean(void)
+{
+    chained_hash_destroy(stream_table, (void(*)(void*))stream_turf);
+}
+
+char *stream_ntoa(unsigned long addr)
+{
+    static char buf[100];
+    sprintf(buf, "%lu.%lu.%lu.%lu",
+        (addr >> 24),
+        (addr >> 16) % 256,
+        (addr >> 8) % 256,
+        (addr) % 256);
+    return buf;
+}
+
+int stream_display(stream_t *stream, ip_packet_t *packet, streamdir packetdir)
+{
+  unsigned dataoffset;
+  unsigned char *dataloc;
+  int datalen;
+  int res;
+
+  if ((!stream) || (!packet))
+    return 0;
+  gettimeofday(&(stream->lastheard_time), NULL);
+
+  /* Figure out where the data is and how much there is */
+  if (stream->id.protocol == IPPROTO_TCP) {
+    dataoffset = sizeof(packet->iphead)+packet->p.tcp.head.th_off*4;
+    dataloc = packet->p.tcp.data + 4*(packet->p.tcp.head.th_off)
+      - sizeof(packet->iphead);
+  } else if (stream->id.protocol == IPPROTO_UDP) {
+    dataoffset = sizeof(packet->iphead)+sizeof(packet->p.udp.head);
+    dataloc = packet->p.udp.data;
+  } else {
+    /* Huh? What protocol is this?! */
+    return 1;
+  }
+
+  datalen = htons(packet->iphead.ip_len) - dataoffset;
+  if (datalen > 1500) datalen = 1500;
+  dataloc[datalen] = '\0';  /* OK as we've set aside 1600 for data */
+
+  /* Do some bookkeeping on the TCP headers */
+  if (stream->id.protocol == IPPROTO_TCP) {
+
+    /* Record the current sequence number */
+    stream->seq[packetdir] = htonl(packet->p.tcp.head.th_seq);
+
+    /* Remove repeated packets */
+    if (stream->syn_seq[packetdir] > 0 &&
+	(stream->seq[packetdir] < stream->nextseq[packetdir]))
+      {
+	return 0;
+      }
+
+    /* Calculate the next sequence number */
+    stream->nextseq[packetdir] = stream->seq[packetdir]
+      + htons(packet->iphead.ip_len)
+      - dataoffset;
+
+    /* Is this a SYN? */
+    if (packet->p.tcp.head.th_flags & TH_SYN)
+      {
+	stream->syn_seq[packetdir] = htonl(packet->p.tcp.head.th_seq);
+
+	/* Is it the second SYN? */
+	if (stream->syn_seq[!packetdir] > 0) {
+	  /* Yup; open the ui */
+	  stream->closed[0] = stream->closed[1] = 0;
+	  stream->ui->uiopen(stream);
+	}
+      }
+  } else if (stream->id.protocol == IPPROTO_UDP) {
+    /* Just make sure the ui is open */
+    stream->ui->uiopen(stream);
+  }
+
+  /* Is this a FIN? */
+  if (packet->iphead.ip_p == IPPROTO_TCP && packet->p.tcp.head.th_flags & TH_FIN)
+    {
+      stream->closed[packetdir] = 1;
+
+      /* Write the data, if the syns were seen */
+      if (stream->syn_seq[0] && stream->syn_seq[1]) {
+	int i;
+
+	res = stream->ui->uiwrite(stream, packetdir, dataloc, datalen);
+      }
+
+      /* Is this the 2nd FIN? */
+      if (stream->closed[!packetdir]) {
+	stream_turf(stream);
+      }
+    } else {
+      /* Write the data, if the streams are open */
+      if ((stream->id.protocol != IPPROTO_TCP) ||
+	  (stream->syn_seq[0] && stream->syn_seq[1])) {
+	res = stream->ui->uiwrite(stream, packetdir, dataloc, datalen);
+      }
+    }
+    
+  /* Is this an RST? */
+  if (packet->iphead.ip_p == IPPROTO_TCP && packet->p.tcp.head.th_flags & TH_RST)
+    {
+      /* Bonk out right away on a reset */
+      stream_turf(stream);
+    }
+  return 0;
+}
+
+stream_t *get_stream_t(void)
+{
+  int i;
+  stream_t *retval;
+
+  if (stream_heap == NULL) {
+    stream_heap = (stream_t *) calloc(STREAM_HEAP_ALLOCSIZE, sizeof(stream_t));
+    if (stream_heap == NULL) {
+      fprintf(stderr, "Out of memory in get_stream_t\n");
+      exit(1);
+    }
+
+    for (i=0; i<STREAM_HEAP_ALLOCSIZE; i++) {
+      if (i != STREAM_HEAP_ALLOCSIZE-1)
+	stream_heap[i].next = &(stream_heap[i+1]);
+      else
+	stream_heap[i].next = NULL;
+    }
+  }
+
+  retval = stream_heap;
+  stream_heap = stream_heap->next;
+  retval->next = NULL;
+  return retval;
+}
+void      release_stream_t(stream_t *releaseme)
+{
+  bzero(releaseme, sizeof(stream_t));
+  releaseme->next = stream_heap;
+  stream_heap = releaseme;
+}
+
+int       stream_t_hash(void *element, int num_slots)
+{
+  stream_t *el = (stream_t *) element;
+  int       hashval;
+
+  if (el == NULL)
+    return 0;
+
+  hashval = (int)
+    (((unsigned long) (el->id.laddr + el->id.lport)) % num_slots);
+
+  return hashval;
+}
+
+int       stream_t_comp(void *el1, void *el2)
+{
+  stream_t *tel1 = (stream_t *) el1,
+           *tel2 = (stream_t *) el2;
+
+  return memcmp(&(tel1->id), &(tel2->id), sizeof(streamid_t));
+}
+
+void      stream_t_deletor(void *element)
+{
+  stream_t *el = (stream_t *) element;
+
+  release_stream_t(el);
+}
+
+#define NUM_ROUNDS_TO_CLEAN 5
+
+/* Every now and then, run through a hash bucket and time out stale
+   entries.  Needed as IP packets may be dropped. */
+void timeout_hash(hash_table ht)
+{
+  static int round = 0;
+  static int cur_slot = 0;
+  hash_el    tll;
+  struct timeval t_now;
+  
+  if (round != NUM_ROUNDS_TO_CLEAN) {
+    round++;
+    return;
+  }
+  round = 0;
+
+  gettimeofday(&t_now, NULL);
+
+  tll = ht.slot_array[cur_slot];
+  while (tll != NULL) {
+    stream_t  *next_s = (stream_t *) tll->data;
+    long int   diff;
+
+    diff = t_now.tv_sec - next_s->lastheard_time.tv_sec;
+
+    if (diff > 60L) {
+      if (next_s->closed[0] || next_s->closed[1]) {
+	stream_turf(next_s);
+	return;
+      } else if (diff > 1800L) {
+	stream_turf(next_s);
+	return;
+      }
+    }
+    tll = tll->next;
+  }
+  cur_slot++;
+  if (cur_slot >= ht.num_elements)
+    cur_slot = 0;
+}
+@
+
+
+1.4
+log
+@Misc minor changes
+@
+text
+@d179 3
+a181 1
+      if (stream->syn_seq[0] && stream->syn_seq[1])
+d183 1
+@
+
+
+1.3
+log
+@OK...getting there...
+@
+text
+@a118 1
+
+@
+
+
+1.2
+log
+@Yes, more changes..
+@
+text
+@a8 1
+/*#include <netinet/protocols.h>*/
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d9 1
+a9 1
+#include <netinet/protocols.h>
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

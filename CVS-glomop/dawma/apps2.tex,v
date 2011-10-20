@@ -1,0 +1,1567 @@
+head	1.13;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.13
+date	99.08.05.23.53.47;	author daw;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	99.08.03.00.45.12;	author daw;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.11.16.11.14.36;	author daw;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.11.16.10.24.52;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.11.16.07.41.34;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.11.16.05.23.12;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.11.16.02.53.29;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.11.16.00.48.50;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.11.15.22.38.41;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.11.14.12.38.25;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.14.12.04.41;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.14.10.34.44;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@\chapter{Applications}
+\label{applications}
+
+There are many applications for the Janus tool.
+All are centered around the confinement problem, but each has
+somewhat different operational and policy-level characteristics.
+In this chapter, we explain how Janus can help to solve these
+problems, including how we have used it to help improve the security
+of troublesome legacy system components such as 
+\begin{itemize}
+\item {\tt sendmail} and other security-critical daemons,
+\item execution of Java applets, and
+\item Netscape and web browsing.
+\end{itemize}
+We will also describe how we have used Janus to enable new functionality,
+such as allowing users to upload executable customization settings to
+an Internet service.
+% and how we may use it in the future to enable fine-grained
+% delegation built on top of signed mobile code.
+
+The primary uses of Janus can be divided into two broad categories.
+First, it can be used to confine wholly untrusted applications (such as
+mobile code) to a subset of entirely harmless privileges.
+In this case, we attempt to devise a tight enough sandbox to prevent
+the applications from causing any harm whatsoever;
+this is the classical formulation of confinement.
+Alternatively, Janus can be used to reduce the impact of future security
+holes in dangerous but important system services (such as {\tt sendmail})
+that are not themselves malicious but may fail to protect themselves
+adequately against adversarial inputs.
+These services often contain subtle security holes that might let
+an adversary take control and execute malicious code under the
+service's good name. 
+For these applications, we try to limit the harm they can cause
+if compromised, and the techniques we use tend to look more
+like compartmentalization then confinement.
+
+In this chapter
+we will discuss each of these categories in turn, indicating our
+experience with how well Janus has performed in each of the problem spaces.
+
+\section{Classical confinement and wholly untrusted applications}
+
+Quite often in computer security we encounter applications that
+are thoroughly untrusted (or untrustworthy), and we desire some way
+to restrict them from causing any harm.
+Perhaps the program's author is unknown, uncertified, untrusted, or
+known to be malicious;
+or perhaps the code was downloaded over an insecure link or via an
+untrusted intermediary.
+In all these cases, we want to protect the system from the untrusted
+software, and in no case should we allow the untrusted code to perform
+any harmful operation.
+
+Fortunately, in many cases we can devise a very limited set of privileges
+that is both sufficient for the application's needs and limited enough
+to prevent deleterious consequences.
+The confinement problem then is reduced to defining a cautious security
+policy and expressing it in Janus's policy language.
+This can require significant domain-specific knowledge, so we describe
+several important examples.
+
+%{\sc Mobile code: \,\,}
+\subsection{Mobile code}
+The case of sandboxing unsigned mobile code, such as Java applet
+execution, is an excellent example of this sort of usage of the Janus tool.
+We can set a highly restrictive security policy (such as ``no filesystem
+access, no network access except back to the host where the applet originally
+came from, access to the X display only when this display content is
+well-labeled as untrusted,'' to take a well-known example) and build
+a relatively straightforward Janus policy configuration file (disable
+all {\tt open} system calls, carefully filter {\tt connect} calls,
+and so on).
+
+In practice for best security we would want to use Janus as a wrapper
+around the pre-existing Java VM subsystem, in a ``belt-and-suspenders''
+configuration.
+This does have one small disadvantage: it may require adding extra
+permissions to the Janus policy file to accomodate the Java VM's needs
+(such as access to system shared libraries and so on).
+Fortunately, so long as the security policy is simple and severe, the
+``policy creep'' will typically be minimal.
+
+The advantage of this approach is that we gain defense in depth.
+Java \cite{java} is seeing widespread deployment, but
+a number of implementation bugs \cite{java-bugs}
+have started to shake confidence in its security model.
+Each of these loopholes resulted in total system access for malicious
+applets, which is an extremely severe failure mode.
+The vulnerabilities found so far have been patched,
+and Java's security features seem to be stabilizing as it matures,
+but it leaves a number of
+fundamental concerns about the Java's security
+architecture\cite{java-bugs}.
+For example, the Java implementation
+includes many thousands of lines of security-critical code, and yet
+% \marginpar{How many?}
+security-critical programs of this scale are notorious for being riddled
+with bugs and vulnerabilities.
+Janus helps us address these issues by providing a way to build a
+robust second line of defense: even if the Java VM is subverted,
+the attacker will still have to get past Janus's (largely independent)
+protection mechanisms.
+Although the user may not trust either Java or Janus alone to protect
+their critical systems, we argue that the ``belt-and-suspenders''
+combination ought to be good enough for many practical uses.
+
+In our experience
+this approach to confining mobile code works reasonably well for
+security policies that are simple and highly restrictive, but complexity
+introduces significant implementation difficulties.
+Of course, complex policies are hard to get right.
+Also, they are often hard to capture in a simple policy language,
+and Janus's low-level system-call-oriented policy language quickly
+becomes cumbersome, at best, or unworkable, at worst,
+for expressing higher-level security policies.
+Consider the following example: ``applets may send arbitrary email
+messages, except when they contain obscenities or commercial solicitations.''
+
+The problem with complex policies goes deeper than this.
+When using both Java and Janus for security, it is difficult to
+assure that the policies they implement remain coherent, especially
+when the underlying policies are complicated.
+Contributing to this effect is a fundamental mismatch in the granularity
+of their mechanisms: Janus can only implement policies that are
+expressible in terms of system-call filtering, while Java supports
+a much richer set of application-level security semantics.
+Thus, many natural Java access rules are simply not expressible (or
+implementable) in Janus's model; as the security policies we wish to
+enforce become more complex and more expressive, the mismatch between
+the Java model and the Janus model will only become more and more glaring.
+In the face of such a conflict, we have only two choices: make Janus's
+policy either more permissive or more restrictive than Java's.
+Neither tactic is particularly attractive:
+the former reduces the benefit of Janus as a second line of defense,
+whereas the latter may prevent many legitimate applications from running.
+This is especially problematic, since the primary motivation behind
+developing more complex security policies is usually to support more
+sophisticated applications.
+We don't see any good solution to this.
+The primary appeal behind Janus stems from its simplicity and its focus
+on controlling a relatively simple, low-level interface; any change in
+this philosophy would seriously impact its assurance level.
+This is an important lesson: Janus is weak at implementing
+complex security policies.
+
+But we are happy with the Janus model.
+Because of the difficulty of getting complex policies right\footnote{Even
+simple policies often exhibit unexpected behavior, to say nothing of
+surprises in more complex specifications.}, we are fundamentally suspicious
+of any use of Janus that relies on complex policy specifications.
+We prefer an approach that is simple (and secure) to one that is
+complex and expressive (and insecure).
+%To put it another way, if your policy is too complicated for Janus's
+%policy language, you are probably missing the point of Janus.
+%The strength of Janus lies precisely in its forceful simplicity.
+
+%{\sc Uploading personalized agents: \,\,}
+\subsection{Uploading personalized agents}
+Sandboxing is also an important technique for securing
+mobile agents and other uploaded code.
+To demonstrate the applicability of Janus in this arena,
+we extended TranSend \cite{tacc,pythia}
+(a proxy-based Internet
+service for speeding up web browsing performance, built on top
+of a general service-construction toolkit called TACC \cite{tacc})
+to support secure agent uploading.
+TACC is designed to support
+scalable, highly available, massively customized Internet services
+running on clusters of commodity workstations.
+In the TACC model,
+the service developer builds ``workers'' to transform and aggregate data
+on behalf of the end user;
+TranSend's workers perform data transcoding and compression.
+We designed and implemented a secure mechanism
+for dynamically uploading workers to a TACC-based service
+such as TranSend.
+This enables construction of extensible services,
+reduces barriers to third-party innovation, and allows
+us to take service customization and personalization farther than
+previously considered.
+% \marginpar{and ease of development for service prototypes}
+As a natural by-product, our mechanism also immediately enables secure use
+of mobile agents.
+
+Security is especially critical in such an environment.
+The security problem arises because
+the users uploading new workers are invariably unknown
+and untrusted.
+If we simply ran their uploaded code without further care,
+they would be free to execute arbitrary code on the system,
+compromise its integrity, crash it at will, snoop on other users,
+rewire its internal logic, and generally take total control
+of the service.
+Because Internet services may serve millions of users,
+both the exposure to risk and the potential impact of security
+compromise are extremely high.
+
+A pivotal technique in our implementation is the use
+of a transparent wrapper for security.
+We take the untrusted worker, and apply a wrapper around
+it to get a nested worker; the wrapper securely confines
+the underlying untrusted code in an appropriately restricted
+sandbox, so the nested worker is now a secure, trustworthy,
+safely usable object.
+%View this as a candy with a crunchy outer coating (the secure wrapper)
+%around a creamy inner filling (the insecure worker).
+The crucial aspect of this technique is transparency:
+the nested worker looks just like a normal worker to
+the PTM, frontend, etc., so the wrapper is transparent
+to the rest of the system; furthermore, the programmer
+need not do anything special when developing an
+untrusted worker, so the security wrapper is transparent
+to the underlying worker.
+
+This sort of transparency is an effective way to minimize
+the burden of security and avoid excess complexity.
+For example, the PTM programmer doesn't want to have to keep track
+of which workers are trusted and which are not;
+similarly, we don't want the PTM to be security-critical,
+so we wouldn't trust the PTM's lists even if it were
+to maintain them.
+Also, because our protection mechanism is transparent,
+to implement Perl workers (for example)
+we can run the entire Perl interpreter
+inside the sandbox; this way, we need not trust the correctness
+of the Perl interpreter,
+which is far too large to trust directly.
+
+A sandboxing approach is especially attractive in this context
+because TACC workers tend to satisfy several key properties:
+\begin{itemize}
+\item Distillers are typically stateless.
+        (More specifically, they typically keep no state across requests.
+        If they do need to manage state, they will typically store it in
+        the cache or in the user-profile database.)
+\item Distillers typically require little or no interaction with the
+        rest of the system.
+\item Distillers typically need little access to the underlying
+        filesystem, network, and other machine resources.
+        Almost all data flow goes via {\tt stdin} and {\tt stdout}
+        (or rather, their TACC analog).  Workers are largely a
+        vehicle for expressing well-encapsulated data
+        transformation tasks.
+\end{itemize}
+Since the TACC model is roughly analogous to the Unix pipeline
+model---it encourages programmers to organize their computation into
+a series of small, modular, stateless filters that implement
+some sort of transformation on the data---we see that these
+desirable properties are largely a consequence of the TACC model.
+Nonetheless, we expect that they would also apply
+to many other programming models for mobile agents.
+
+In short, the approach of wrapping an untrusted object
+with a secure sandbox tool has many compelling advantages.
+We found Janus to be very well-suited for this task:
+it allowed us to protect arbitrary workers, no matter what
+language they were written in (including C, Perl, Java)
+at no extra cost; and it allowed us to keep the size and
+complexity of the trusted computing base down, thereby
+increasing the assurance level of our implementation.
+
+There are some downsides to sandboxing.
+Sandboxing typically is poorly suited to controlling
+communications-oriented interaction, and this problem is
+especially severe with Janus.
+In the face of heavy use of network-based fine-grained interaction,
+we can only control the initial
+access to the underlying network medium---for instance, we can specify
+which (host,port) pairs the untrusted worker is allowed to connect to---but
+we have essentially no control over the content of the messages.
+In other words, Janus gives us only coarse-grained control over
+worker-system interactions.
+Since we didn't need fine-grained control over network
+communications, these disadvantages didn't affect us much,
+but it is conceivable that they might be more
+problematic in other settings.
+
+Re-using existing Janus code made
+implementation of sandboxing relatively easy.
+Not many changes to Janus were needed: we added extra support
+to Janus for mediating the {\tt sendto} system call, for controlling some
+{\tt setsockopt} and {\tt getsockopt} features that TACC used,
+and for allowing IP multicast.
+Apart from these minor, well-confined modifications, though,
+we used Janus as is.
+The hardest part was picking an appropriate security policy.
+% which we will discuss in detail next.
+
+We derived our security policy by initially prohibiting access to all
+interesting machine resources and watching what broke when
+workers run under this incomplete environment.
+This gave us a fairly complete list of the resources to which
+workers (and worker stubs) need access.
+We went through this list and evaluated each one to see whether
+allowing it would open any new security vulnerabilities.
+Finally, with a list of minimal necessary permissions (verified safe and
+refined to respect the principle of least privilege) in hand,
+we enabled them in the Janus policy configuration file.
+
+To summarize the policy, we allow:
+\begin{itemize}
+\item {\bf Network access} to a few specific locations:
+        untrusted workers may contact two local trusted high-security
+	DNS servers, the Harvest cache, the PTM, and
+        multicast groups corresponding to the monitor and the PTM.
+        These permissions are specified at a (host,port) level
+        of granularity.
+
+\item {\bf Filesystem access} to a number of files:
+        local configuration files, libraries, TranSend executables,
+        TranSend's configuration file, and the area where the executables
+        for uploaded workers live.
+        These permissions are exclusively limited to read access
+        (with a few specific exceptions for write access,
+        e.g., {\tt /dev/null}).
+
+\item {\bf Hand-screened OS system calls} that perform basic,
+        required, roughly risk-free functionality.
+        These primarily consist of system calls that can be used to modify
+        one's own sandbox but cannot affect anything outside the sandbox.
+        Most of them are necessary for program execution, to support
+        dynamically linking in shared libraries, managing signal
+        handlers, and similar tasks.
+        This is built from core Janus code that has remained
+	stable for over a year or more.
+\end{itemize}
+This policy also ensures per-user isolation,
+which helps protect mutually distrusting users from each other
+so one user can't assail the integrity of another user's web
+browsing experience.
+Selection and verification of this policy was made easier
+because it is primarily a refinement of a policy developed
+earlier (see Section~\ref{policy}) for
+confining generic mobile code for web browsing.
+We gave a detailed argument that this policy is safe in
+\cite{inetsvcs-project-writeup};
+see that document for more details.
+
+We also found it important to develop several other mechanisms to help
+protect the security of the system, including extensive auditing for
+problem tracing, simple ``trusted path'' techniques \cite{orange-book}
+to deter Trojan horses
+and viruses, and human-factors engineering to help prevent accidental
+security lapses caused by configuration and other administration errors.
+However, Janus remained the bedrock of our security architecture;
+the other components were relatively minor.
+
+In short, Janus performed admirably well at this task.
+It adapted well: although it was not initially designed for this
+application, only minor extensions to the code were needed.
+Our experience with implementing secure agent uploading
+helped convince us that Janus is useful as a general-purpose
+tool for implementing confinement and sandboxing mechanisms.
+
+
+%{\sc Programming contests: \,\,}
+\subsection{Programming contests}
+We imagine that Janus might also be appropriate for a
+programming contest environment in which contestants must have
+very restricted access to the underlying system.
+However, we have no experience with this configuration,
+so we can only suggest it as a potential area for further work.
+
+
+\section{Compartmented systems and partially untrusted applications}
+
+Next we discuss the case of partially untrusted applications.
+Classically, confinement is intended for wholly untrusted code;
+here we show how to apply confinement techniques to protect a
+system that includes partially untrusted code.
+The idea is to partition the system into a number of non-interacting
+subsystems, one for each potential point of compromise, and then
+wall them off from each other.
+This way if one subsystem is penetrated, at least the rest of the
+system stands a chance of remaining secure.
+This approach is analogous to the concept
+of ``watertight compartments'' in maritime construction,
+where each compartment is separated from the others
+by a very strong bulkhead.
+Such a containment strategy enhances robustness in ship design,
+and it does likewise for system security.
+
+%{\sc Helper applications for web browsing: \,\,}
+\subsection{Helper applications for web browsing}
+One example of securing partially untrusted applications with Janus
+can be found in helper applications for web browsers.
+Web browsers and {\tt .mailcap} files make it convenient
+for users to view information in a wide variety of formats
+by demultiplexing documents to helper applications
+based on the document format.
+For example, when a user downloads a Postscript document
+from a remote network site, it may be automatically
+handled by {\tt ghostview}.
+
+The helper applications these browsers rely upon are security-critical,
+as they handle unauthenticated data from the network,
+but the implementations are not particularly trustworthy themselves.
+Since that downloaded data could be under adversarial control,
+it is completely untrustworthy.
+We are concerned that an adversary could send malicious
+data that subverts the document viewer
+(through some unspecified security bug or misfeature),
+compromising the user's security.
+Older versions of {\tt ghostscript}, for example, allowed
+maliciously generated documents to spawn processes and to read
+or write an unsuspecting user's files
+\cite{cert-gs,fc-email,fc-50,uphoff-gs,wet-gs}.
+In general, the helper applications are generally too big and complex to be 
+bug-free, and large bloated programs are notoriously insecure.
+(For instance, {\tt ghostscript} is more than 60,000 lines of C; and
+{\tt mpeg\_play} is more than 20,000 lines long.)
+Also, many helper programs
+were initially envisioned as a viewer for a friendly user
+and were not designed with adversarial inputs in mind.
+Furthermore, {\tt ghostscript} implements a full programming language,
+with complete access to the filesystem;
+many other helper applications are also very general.
+Finally, careless coding (such as using {\tt gets}, {\tt strcpy},
+or {\tt sprintf} without protecting against buffer overflow)
+may allow remote adversaries to totally subvert the
+helper application and replace it with an arbitrary executable that has
+full access to the machine.
+In short, there are significant security concerns.
+
+As a result, we consider helper applications largely untrusted,
+and we would like to place them outside the host's trust perimeter.
+We propose to reduce the risk of a security breach by creating
+a secure restricted environment to contain the untrusted programs,
+so that even if a remote adversary gains total control over the
+helper application, the adversary cannot harm the rest of the system.
+This ensures that the damage a compromised application can cause
+is drastically curtailed by the restricted environment in which it executes.
+In contrast, an unprotected Unix application that is compromised
+will have all the privileges of the account
+from which it is running, which is unacceptable, because in practice
+that will typically lead to compromise of the whole system.
+
+In short, we take the view that vulnerabilities in these complex
+applications are a {\em fait accompli} which we must accept and live
+with as best as possible.
+Rather than trying to prevent such compromises, we pessimistically
+assume that these programs will exhibit adversarial behavior at the most
+inconvenient times possible, so we focus on preventing harmful effects.
+We institute severe restrictions on what privilege the applications may
+obtain, and scrutinize their actions closely.
+
+With this philosophy firmly in place, it should be clear how
+confinement techniques can be used to good effect.
+We advocate the use of Janus to help secure unwieldy helper applications,
+based on the security policies applied to mobile code above.
+
+Our measurements indicate that the use of Janus imposes virtually
+no performance penalty on these applications \cite{janus-usenix}.
+The negligible performance impact can be attributed to
+the unintrusive nature of our implementation.
+Of course, all computations and memory references
+that do not involve the OS
+will execute at full speed, so system calls
+can be the only source of performance overhead.
+System calls are already so time-consuming
+that the additional overhead of the Janus filtering
+is often relatively insignificant compared to the total
+process execution time.
+Furthermore, most of the heavily used system calls
+(such as {\tt read} and {\tt write})
+require no access checks and therefore run at full speed.
+By staying out of the application's way and
+optimizing for the common case,
+we have allowed typical applications to run with
+negligible performance overhead.
+
+%{\sc MIME-aware mail agents: \,\,}
+\subsection{MIME-aware mail agents}
+Nowadays many of the most popular mail agents are MIME-aware,
+which means that they can interpret many formats of data.
+Such support is almost always implemented by use of specialized
+helper applications, one for each data format that is too
+complex to implement in the mailer itself.
+These are usually the same helper applications found in web
+browsers; for instance, Postscript attachments might be
+displayed by invoking {\tt ghostview} on the data, and GIF
+images by executing {\tt xv}.
+Of course, email can come from arbitrary sources, and the
+data should be considered untrusted.
+This presents a serious problem, since many of the helper
+applications are too complex to handle adversarial data securely.
+
+So it should be clear that the solution to this problem
+is essentially the same as that for web browser helper applications,
+above.  As before, we could edit the {\tt .mailcap} configuration
+file to replace each helper application with a Janus-wrapped
+version.  In the case of MIME-aware mailers, one small improvement is
+possible, since mailers typically execute the {\tt metamail}
+program and let it dispatch the data to the appropriate
+helper application.
+Therefore, we may simply wrap the {\tt metamail} application;
+Janus will confine not only {\tt metamail} but also all the
+helper applications it spawns.
+Wrapping {\tt metamail} is probably preferable in any case,
+since it is rather poorly written, and has been known to have
+security holes in the past \cite{cert-metamail,cox-metamail}.
+
+%{\sc Protected web browsing: \,\,}
+\subsection{Protected web browsing}
+The arguments that leave us suspicious of helper
+applications also apply to web browsers:
+in both cases, large complex programs are interpreting
+data that may be under adversarial control, and this
+indicates a propensity for security holes.
+For example, a buffer overrun bug was found
+in an earlier version of the Netscape browser \cite{hack-netscape}.
+
+A natural extension of the work on confining helper applications
+involves running web browsers under the Janus secure environment.
+The recursive tracing of child processes
+ensures that running a browser under Janus
+will protect all spawned helper applications as well.
+
+The main challenge is that browsers legitimately require many
+more privileges;
+for instance, most manage configuration files, data caches,
+long-term state stored in the filesystem, and make numerous
+network connections.
+Nonetheless, these can still be confined to a relatively small
+``browsing'' subsystem.
+
+We have implemented a simple prototype Janus configuration intended
+to protect the integrity of the rest of the system from a
+potentially compromised browser.
+We allow the browser (Netscape Navigator, in our tests) full
+access to everything under {\tt \$HOME/.netscape}.
+File downloads are restricted to a special ``downloads'' sandbox
+directory; after downloading an interesting file, it is the
+user's responsibility to check it over for safety and copy it out
+of the sandbox to its end destination.
+The browser is run inside a filtering X proxy ({\tt Xnest}) to
+prevent it from manipulating other windows on the same X display.
+Using {\tt Xnest} has some user-interface implications---it runs
+inside another window, and one cannot cut-and-paste between Netscape and other
+X applications---but these limitations could be corrected by moving
+to a better X11 proxy (e.g. \cite{x11-proxy}).
+
+The resulting prototype works well enough, in our experience,
+for day-to-day use,
+so long as we remember not to try to save anything outside the special
+``downloads'' directory.
+However, our prototype has seen only limited testing,
+because Janus is not available on our preferred platform (Linux).
+Still, our experience suggests that a
+production-quality system could probably be built with little
+additional effort.
+
+%{\sc Sendmail: \,\,}
+\subsection{Sendmail}
+The {\tt sendmail} mail agent is infamous within the security
+community as a favorite point of attack for hackers.
+It was one of the security holes exploited by the 1988 Internet Worm;
+and in years since,
+various versions have had dozens of other security vulnerabilities
+discovered and exploited.
+Nonetheless, {\tt sendmail} remains the {\em de facto} deployed standard
+for Internet mail communications: one 1996 survey found that
+``80\% of the reachable SMTP servers---more than half a million IP
+addresses---were running sendmail'' and
+``no SMTP package other than sendmail is running on more than 2\% of the
+reachable SMTP servers.''
+In this sense, {\tt sendmail} represents a trial-by-fire: if a
+security mechanism can help improve {\tt sendmail}'s security,
+that mechanism is potentially interesting.
+
+To give the flavor of a typical {\tt sendmail} hole and motivate
+our approach to the problem, we first describe the vulnerability
+(also known as ``the wizard hole'') exploited
+by the 1988 Internet Worm.
+\footnote{Thanks to Steve Bellovin for this war story \cite{smb-wizard}.}
+% http://geek-girl.com/bugtraq/1995_1/0350.html
+
+The wizard mode feature was a special privileged debugging mode;
+network access to the privileged mode was
+protected by a password specified in the configuration file.
+To avoid parsing the configuration file every time {\tt sendmail} starts up,
+as an optimization {\tt sendmail} would save
+a pre-parsed frozen configuration.
+This was implemented by merely writing out the entire {\tt bss}
+and {\tt heap} segments to a file.
+(Recall that the {\tt bss} segment holds those C program variables that aren't
+explicitly initialized in the source code;
+the OS zeroes out that segment at program
+loading time.)
+Therefore, the {\tt sendmail}
+implementor merely had to ensure that all parsed data be
+contained in the {\tt bss} or {\tt heap} segment for the frozen configuration
+optimization to work.
+
+However, one implementation of {\tt sendmail} wizard mode made
+the mistake of declaring the pointer to the parsed password as
+\begin{verbatim}
+    char *wizpw = NULL;
+\end{verbatim}
+in the source (instead of ``{\tt char *wizpw;}''),
+which meant that it was explicitly initialized
+and thus contained in the {\tt data} segment.
+Therefore, the parsed password was not written to the frozen file,
+and when sendmail was started from a frozen configuration, it acted
+as though no protective password was enabled:
+anyone could connect to the SMTP port, begin wizard mode, and
+get privileged access to an interactive debugging shell without
+needing a password.
+The moral is that complex code (such as that found in {\tt sendmail})
+is subtle and hard to get right; no matter how many times we test our
+applications, we can never be sure whether there is one more hidden bug
+lurking in the code.
+
+Certainly {\tt sendmail}'s status as legacy code has contributed
+(at least in part) to its security problems.
+{\tt Sendmail} was adopted as
+a {\em de facto} standard at a time when 
+security was less of a concern.
+As a result, the code is modular and well-engineered,
+but the module boundaries are not based on a security-oriented decomposition;
+instead, security-critical code can be found throughout the program.
+This certainly contributes at least in part to {\tt sendmail}'s history
+of longstanding security problems; but it is not the whole story.
+
+A much more important factor is {\tt sendmail}'s
+status as an {\em evolving} legacy application.
+Since {\tt sendmail}'s early days, much has changed.
+As was already mentioned, the threat model changed during
+{\tt sendmail}'s lifetime: where the net was once comprised of
+researchers, today it is teeming with corporations (with assets
+that are important to protect) and hackers (with the skill and
+will to mount sophisticated attacks).
+More subtly, the underlying infrastructure has also changed.
+For instance, a hostname query used to be a lookup in a local database
+({\tt /etc/hosts}), which thus had no security implications.
+However, as the net grew, systems moved to a distributed name service (DNS)
+where hostname queries involved a remote network lookup and thus
+could not be trusted.
+But this change was transparent to {\tt sendmail}.
+All that changed was the semantics of some library functions,
+but that was enough: {\tt sendmail} code
+that was once secure suddenly became a potential avenue of attack.
+And in fact, at least one security hole can be directly attributed
+to this silent evolution of the underlying infrastructure.
+How can anyone blame {\tt sendmail} for these security problems, when the
+semantics of the programming model changed out from under it invisibly?
+Clearly this class of security failures is hard to anticipate and
+protect against at design time.
+
+
+
+%The large number of security problems discovered in {\tt sendmail}
+%in the years since its introduction arise because it
+%became a de facto standard before most people became
+%very concerned with security.
+%Today there is the need to
+%retrofit security to this pre-existing (and rapidly changing) application,
+%making {\tt sendmail} a classic example of an evolving, insecure
+%legacy system.
+
+%In addition, {\tt sendmail} is very complex, and it lacks a compelling
+%security architecture.
+%It provides many sophisticated mail-handling features that users demand,
+%yet those powerful features make it inherently complicated and dynamic.
+
+
+Because of these factors, large numbers of security vulnerabilities
+have been found in {\tt sendmail} over the years, and
+the Unix community has been forced into a {\em plug-and-patch} methodology,
+where implementors end up fixing bugs one at a time as they appear.
+This has been a losing battle
+\cite{%
+8lgm-sendmail-1,8lgm-sendmail-2,8lgm-sendmail-4,8lgm-sendmail-3,%
+cert-sendmail-1,cert-sendmail-2,cert-sendmail-3,cert-sendmail-4,%
+cert-sendmail-5,cert-sendmail-6,cert-sendmail-7,cert-sendmail-8%
+}.
+% \cite[16,17,20,21]{8lgm}
+% \cite[88:01,90:01,93:15,93:16,94:12,95:05,95:08,95:11,95:13,
+% 96:04,96:20,96:24,96:25,97:05]{CERT}.
+% [8lgm] Advisories 16, 17, 20, 21.
+% CERT Advisories 88:01, 90:01, 93:15, 93:16,
+% 94:12, 95:05, 95:08, 95:11, (95:13?),
+% 96:04, 96:20, 96:24, 96:25, 97:05
+Eric Allman ({\tt sendmail}'s creator)
+has worked extremely hard to make the best of this
+unpalatable situation, but this is a fundamentally difficult task.
+
+In short, the history of {\tt sendmail} is checkered with serious
+security problems.
+Because {\tt sendmail} handles email that could potentially come from
+anywhere on the net, often the effect of a new {\tt sendmail}
+hole is an extremely broad exposure:
+attacks could come from any of the millions of Internet users.
+Furthermore, in most cases penetration of {\tt sendmail} would compromise
+the entire system it runs on, even though {\tt sendmail}
+legitimately needs access only to a very small subset of the system.
+
+These crucial facts dictate our approach to the problem.
+We consider it prudent to assume that {\tt sendmail} may be invisibly
+penetrated at any time by parties unknown.
+Rather than trying to limit the probability of compromise, we focus on
+reducing the harmful effects of a potential compromise, and in this
+way aim to limit and manage the risks as best as possible.
+Our solution, then, uses a custom Janus configuration
+to confine {\tt sendmail} in a minimalist environment,
+under the assumption that it may be acting with
+hostile intent at any time; we allow {\tt sendmail} access only to those
+parts of the system legitimately necessary for mail delivery, and no
+more.
+{\tt Sendmail} still runs
+as root, but many dangerous operations are prevented by Janus's
+system-call filtering.
+
+This allows us to drastically limit the impact of a future {\tt sendmail}
+compromise on the rest of the system.
+Of course, in the event that {\tt sendmail} is penetrated, the integrity
+and confidentiality of the mail subsystem will be compromised---Janus
+cannot help in that regard---but at least we have some assurance that
+the rest of the system will not fall with it.
+
+Our security policy for {\tt sendmail} is our most complicated policy
+developed to date.
+First, we allow unlimited access to the mail queue (where
+mail waiting to be processed is stored) and to the mail spool
+directory tree (where users' mail files are kept).
+Second, we allow several forms of network access: {\tt sendmail}
+may bind to the SMTP port and may connect to SMTP ports on other hosts.
+Also, {\tt sendmail} is allowed to perform DNS queries.
+(Our approach involves allowing sending to UDP port 53 and binding
+to high-numbered local UDP sockets.)
+Third, we allow read-only access to certain relevant configuration
+files (e.g. {\tt /etc/sendmail.cf}).
+Fourth, we also allow read-only access to {\tt /etc/passwd}, so
+that {\tt sendmail} may extract GECOS information.
+(Note that this is potentially dangerous if shadow passwords are not
+in use, since a compromised {\tt sendmail} could leak encrypted
+password entries to a dictionary search engine;
+for now, we insist that the site use shadow passwords, since
+{\tt sendmail} very strongly wants other information contained
+in the password file.)
+Finally, any other access not explicitly allowed in the list above
+is prohibited.
+(For example, in our prototype, {\tt sendmail} cannot access users'
+{\tt .forward} files; this policy could be easily changed with a slight
+modification to the configuration file.)
+
+This draws a tight (though admittedly somewhat complicated) boundary
+around {\tt sendmail}.
+The key point is that {\tt sendmail} is only permitted access to the
+mail subsystem, so that a compromised {\tt sendmail} daemon cannot
+adversely affect the other subsystems.
+This is just the principle of least privilege applied to mail handling.
+Because we are using the Janus tool, our boundaries are specified in
+terms of the interface between {\tt sendmail} and the OS: namely,
+as a list of the system calls to be allowed.
+
+Our prototype successfully protects stock Solaris 2.5.1's {\tt sendmail}
+version SMI-8.6.\footnote{In future work we will port the custom
+configuration to work with Eric Allman's {\tt sendmail} version 8.8.8.}
+We disabled NIS, because of its poor security properties.
+We have not performed extensive stress-testing of all {\tt sendmail}
+functionality; however, we have informally verified that it works for
+mail transport, forwarding, and delivery.\footnote{We expect that our
+prototype may deny certain obscure but legitimate operations from
+{\tt sendmail}.  However, this is from an inadvertent lack of knowledge
+of every corner of {\tt sendmail} functionality, rather than from
+any fundamental limitation in our technique.
+For instance, we know that currently our security
+policy does not make {\tt .forward} files available to {\tt sendmail},
+though that would be very easy to change.  In other words, this is
+an indication of the immaturity of our {\tt sendmail} prototype,
+rather than a fundamental flaw in our approach.}
+
+For concreteness, we describe the harmful actions a compromised
+{\tt sendmail} can take when our security protection is in
+force\footnote{It is hard to guarantee with 100\% reliability
+that this list is complete, because the list of harmful actions
+is given at a different level of abstraction than the policy
+(system calls vs. application semantics).  Still, this problem
+is no more acute for Janus than it is for firewalls, and we can
+make a pretty good assessment of the risks.  The basic approach
+is very simple: for each policy rule which allows some set of
+actions, we estimate what a malicious application could do with
+those actions.  Fortunately, the set of allowed actions
+in our policy for {\tt sendmail} is quite small, and it is this
+property which makes our task feasible.}.
+It can selectively prevent messages from reaching their destination,
+or delete messages from the mail spool files.
+It can perform denial of service attacks on SMTP or DNS servers,
+but then anyone with network access can already do that.
+It could snoop on all email passing through the site, but
+of course, anyone with a sniffer on your local network can often do the same.
+It could forge email, or modify email in transit through the site,
+but then, anyone already can forge email.
+So in sum the possible harmful effects
+are very limited, and most are already a threat anyway.
+This limited worst-case impact is a sign that we have successfully
+compartmentalized the mail subsystem.
+
+This form of protection for {\tt sendmail} can have huge security benefits.
+In recent years, {\tt sendmail} has been the source of a
+tremendous number of security holes, and we can
+be sure that there will be more in the future.
+Normally, an attacker who successfully compromises {\tt sendmail} with one
+of these holes will have the run of the system.
+The benefit of our security mechanism
+is that the successful attacker will not be able to corrupt
+the rest of the system---only the mail subsystem will be at risk.
+In other words, we have added a robust second line of defense
+that prevents catastrophic security failures.
+
+One attractive property of this direction to securing {\tt sendmail}
+is that it complements other approaches nicely.
+We know that, at worst, even if Janus fails to do its job, our
+configuration will be no less secure than running without Janus;
+of course, in practice we do expect Janus to reduce risks significantly.
+Furthermore, even if other techniques are developed to reduce
+the incidence of bugs in {\tt sendmail} (e.g. perhaps through careful
+auditing, code restructuring, formal methods, or other as-yet-unidentified
+methods), they compose nicely with Janus so that one could
+get the best of both worlds.
+
+Our customized solution based on Janus has a number of advantages.
+First, development time was relatively small (especially as compared to the
+difficulty of securing {\tt sendmail} by traditional means).
+We were able to re-use the Janus tool with only a few modifications needed.
+Second, the solution's complexity is very modest.
+Third, our solution with Janus provides a way to introduce a
+security-oriented code decomposition, where all security-critical
+code is collected in a small module, to legacy code not
+originally structured in this way.
+Finally, because of its simplicity and orthogonality,
+assurance is likely to be quite high;
+certainly there are no guarantees, but our chance of correctness
+is significantly higher than with just the current plug-and-patch methodology
+for {\tt sendmail}.
+In short, the sandboxing approach yields a
+solid high-assurance tool for securing {\tt sendmail};
+Janus is a good fit for this application.
+
+%{\sc Other system daemons: \,\,}
+\subsection{Other system daemons}
+Just as Janus was used to secure {\tt sendmail} in case of penetration,
+we expect that other security-critical system daemons could be protected
+in a similar way.
+Potential candidates include {\tt httpd} (a web server), {\tt bind},
+{\tt inetd}, etc.
+
+Securing a web server would perhaps be the most compelling application.
+Like {\tt sendmail}, web servers are well-known to be very high security risks,
+yet by their very nature web servers typically require only very limited
+access to the system.
+{\tt inetd} also makes for an interesting possibility, because it usually
+spawns many other net daemons that also need protection.
+Since Janus recursively confines all children of a confined process,
+wrapping {\tt inetd} in a Janus wrapper would be an attractive technique
+to secure many network services at once.
+
+Our expectation is that Janus could be used as a general-purpose tool
+to help manage the risk of security vulnerabilities in many critical network
+daemons.
+However, we do not have implementation experience with such a configuration,
+so we can only suggest this as a promising area for further study.
+
+
+
+% {\sc Active certificates: \,\,}
+% \marginpar{Get infra proposal desc.  Cut and paste.}
+
+%{\sc CGI scripts: \,\,}
+\subsection{CGI scripts}
+We speculate that Janus may prove useful at sandboxing
+user-written CGI scripts at sensitive sites (e.g. Internet service
+providers).
+As a system administrator, one of the biggest risks with allowing
+users to write their own CGI scripts is that one of the scripts may
+inadvertently open up a hole that allows remote adversaries full
+access to the site.
+Of course, most users are neither very experienced at writing
+security-critical programs, nor very knowledgeable about security issues,
+so this is a real concern.
+Running all user-written CGI scripts inside a sandbox enforced by Janus
+might help alleviate some of the security concerns.
+However, we have no experience with this, so we will leave it to
+other researchers to explore the space of possible solutions.
+
+\section{Summary}
+
+This section enumerated many appealing applications for Janus,
+and gave implementation experience with a number of them.
+These includes providing security for mobile code and mobile agents,
+securing legacy systems, and protecting ourselves from future failures
+of critical system daemons such as {\tt sendmail}.
+This illustrates the potential benefits from confinement-based mechanisms,
+shows that our basic approach is workable, and demonstrates the
+success of Janus as a general-purpose tool for confinement.
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d543 10
+a552 1
+Initial experience looks promising.
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d12 1
+a12 1
+\item Execution of Java applets, and
+d561 1
+a561 1
+that mechanism must be very interesting indeed.
+d713 2
+a714 1
+Our security policy for {\tt sendmail} is rather complicated.
+d766 13
+a778 2
+For completeness, we describe the harmful actions a compromised
+{\tt sendmail} can take when our security protection is in force.
+d796 1
+a796 1
+Normally, an attacker who successful compromises {\tt sendmail} with one
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d504 41
+a845 40
+%{\sc Protected web browsing: \,\,}
+\subsection{Protected web browsing}
+The arguments that leave us suspicious of helper
+applications also apply to web browsers:
+in both cases, large complex programs are interpreting
+data that may be under adversarial control, and this
+indicates a propensity for security holes.
+For example, a buffer overrun bug was found
+in an earlier version of the Netscape browser \cite{hack-netscape}.
+
+A natural extension of the work on confining helper applications
+involves running web browsers under the Janus secure environment.
+The recursive tracing of child processes
+ensures that running a browser under Janus
+will protect all spawned helper applications as well.
+
+The main challenge is that browsers legitimately require many
+more privileges;
+for instance, most manage configuration files, data caches,
+long-term state stored in the filesystem, and make numerous
+network connections.
+Nonetheless, these can still be confined to a relatively small
+``browsing'' subsystem.
+
+We have implemented a simple prototype Janus configuration intended
+to protect the integrity of the rest of the system from a
+potentially compromised browser.
+We allow the browser (Netscape Navigator, in our tests) full
+access to everything under {\tt \$HOME/.netscape}.
+File downloads are restricted to a special ``downloads'' sandbox
+directory; after downloading an interesting file, it is the
+user's responsibility to check it over for safety and copy it out
+of the sandbox to its end destination.
+The browser is run inside a filtering X proxy ({\tt Xnest}) to
+prevent it from manipulating other windows on the same X display.
+Using {\tt Xnest} has some user-interface implications---it runs
+inside another window, and one cannot cut-and-paste between Netscape and other
+X applications---but these limitations could be corrected by moving
+to a better X11 proxy (e.g. \cite{x11-proxy}).
+Initial experience looks promising.
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d63 2
+a64 1
+{\sc Mobile code: \,\,}
+d158 2
+a159 1
+{\sc Uploading personalized agents: \,\,}
+d162 2
+a163 3
+
+To test the applicability of Janus to securing uploaded code
+and mobile agents, we extended TranSend \cite{tacc,pythia}
+d357 2
+a358 1
+{\sc Programming contests: \,\,}
+d384 2
+a385 1
+{\sc Helper applications for web browsing: \,\,}
+d473 2
+a474 1
+{\sc MIME-aware mail agents: \,\,}
+d504 2
+a505 1
+{\sc Sendmail: \,\,}
+d597 1
+a597 1
+semantics of the program model changed out from under it invisibly?
+d780 2
+a781 1
+{\sc Other system daemons: \,\,}
+d805 2
+a806 1
+{\sc Protected web browsing: \,\,}
+d849 2
+a850 1
+{\sc CGI scripts: \,\,}
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d69 1
+a69 1
+well-labelled as untrusted,'' to take a well-known example) and build
+d233 1
+a233 1
+        (More specificically, they typically keep no state across requests.
+d249 1
+a249 1
+desireable properties are largely a consequence of the TACC model.
+d507 1
+a507 1
+Nonetheless, {\tt sendmail} remains the de facto deployed standard
+d563 1
+a563 1
+a de facto standord at a time when 
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d1 2
+a2 2
+\section{Applications}
+\label{apps}
+d4 1
+a4 1
+We have identified a number of applications for the Janus tool.
+d7 1
+a7 1
+In this section, we explain how Janus can help to solve these
+d37 3
+a39 1
+We will discuss each of these categories in turn, indicating our
+d42 1
+a42 1
+\subsection{Classical confinement and wholly untrusted applications}
+d364 1
+a364 1
+\subsection{Compartmented systems and partially untrusted applications}
+d858 1
+a858 1
+\subsection{Summary}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d91 1
+a91 1
+architecture\cite{princeton-java}.
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d748 1
+a748 1
+of course, in practice we do expect Janus to significantly reduce risks.
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d544 1
+a544 1
+in the source (instead of {\tt char *wizpw;}),
+d553 42
+d596 17
+a612 9
+The large number of security problems discovered in {\tt sendmail}
+in the years since its introduction arise because it
+became a de facto standard before most people became
+very concerned with security.
+Today there is the need to
+retrofit security to this pre-existing (and rapidly changing) application,
+making {\tt sendmail} a classic example of an evolving, insecure
+legacy system.
+Because security was not built into the original design of {\tt sendmail},
+d630 1
+a630 11
+unpalatable situation, but securing legacy code one bug at a time
+is a fundamentally difficult problem.
+
+In addition, {\tt sendmail} is very complex, and it lacks a compelling
+security architecture.
+It provides many sophisticated mail-handling features that users demand,
+yet those powerful features make it inherently complicated and dynamic.
+It is modular and well-engineered, but the module boundaries are not
+based on a security-oriented decomposition;
+instead, security-critical code can be found throughout the program.
+This contributes to {\tt sendmail}'s longstanding security problems.
+d637 1
+a637 1
+a vulnerability to attacks from any of the millions of Internet users.
+d654 1
+a654 1
+{\tt sendmail} still runs
+d694 1
+a694 1
+adversely affect the (e.g.) filesystem subsystems.
+d721 1
+a721 1
+It can perform denial of service attacks on SMTP or DNS servers;
+d723 1
+a723 1
+It could snoop on all email passing through the site;
+d725 1
+a725 1
+It could forge email, or modify email in transit through the site;
+d750 1
+a750 1
+the incidence of bugs in sendmail (e.g. perhaps through careful
+d755 1
+a755 1
+The customized Janus solution has a number of advantages.
+d757 1
+a757 1
+difficulty of securing sendmail by traditional means).
+d760 4
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d22 2
+a23 2
+First, it can be used to confine wholly-untrusted applications (such as
+mobile code) to a subset of entirely-harmless privileges.
+d40 1
+a40 1
+\subsection{Classical confinement and wholly-untrusted applications}
+d57 1
+a57 1
+policy and expressing it in Janus's system-call-centric policy language.
+d64 1
+a64 1
+We can set a highly-restrictive security policy (such as ``no filesystem
+d99 1
+a99 1
+the attacker will still have to get past Janus's (largely-independent)
+d101 1
+a101 1
+While the user may not trust either Java or Janus alone to protect
+d107 1
+a107 1
+security policies that are simple and highly-restrictive, but complexity
+d114 2
+a115 2
+(Consider the following example: ``applets may send arbitrary email
+messages, except when they contain obscenities or commercial solicitations.'')
+d133 2
+a134 2
+whereas the latter may prevent many legitimate applications from running
+(which is especially problematic since the primary motivation behind
+d136 1
+a136 1
+sophisticated applications).
+d139 1
+a139 1
+on controlling a relatively-simple, low-level interface; any change in
+d147 7
+a153 5
+more complex specifications}, we are fundamentally suspicious of any
+use of Janus that relies on complex policy specifications.
+To put it another way, if your policy is too complicated for Janus,
+you are probably missing the point.
+The strength of Janus lies precisely in its forceful simplicity.
+d160 1
+a160 1
+and mobile agents, we extended Transend \cite{tacc,pythia}
+d165 3
+a167 3
+TACC is engineered to transparently support scalable, highly-available,
+massively-customized Internet services on clusters of commodity
+workstations.
+d171 1
+a171 1
+Transend's workers (``distillers'') perform data transcoding and compression.
+d174 1
+a174 1
+such as Transend.
+d202 1
+a202 1
+safely-usable object.
+d216 1
+a216 1
+of which workers are trusted and which aren't;
+d221 2
+a222 1
+to implement e.g. Perl workers we can run the entire Perl interpreter
+d224 2
+a225 2
+of the Perl interpreter\footnote{And this is fortunate, because
+the Perl interpreter is far too large to trust.}.
+d233 1
+a233 1
+        the cache or in the user profile database.)
+d240 1
+a240 1
+        technique for expressing well-encapsulated data
+d290 2
+a291 2
+This gave us a pretty complete list of the resources that various
+workers (and worker stubs) needed access to.
+d308 2
+a309 2
+        local configuration files, libraries, Transend executables,
+        Transend's configuration file, and the area where the executables
+d312 2
+a313 2
+        (with a few specific exceptions for write access to
+        e.g. {\tt /dev/null}).
+d320 1
+a320 1
+        e.g. dynamically linking in shared libraries, managing one's signal
+d326 1
+a326 1
+which helps protect mutually-distrusting users from each other
+d341 1
+a341 1
+and virii, and human factors engineering to help prevent accidental
+d362 1
+a362 1
+\subsection{Compartmented systems and partially-untrusted applications}
+d364 2
+a365 2
+Next we discuss the case of partially-untrusted applications.
+Classically, confinement is intended for wholly-untrusted code;
+d367 1
+a367 1
+system that includes partially-untrusted code.
+d381 1
+a381 1
+One example of securing partially-untrusted applications with Janus
+d385 1
+a385 1
+by de-multiplexing documents to helper applications
+d401 1
+a401 1
+maliciously-generated documents to spawn processes and to read
+d445 2
+a446 3
+We advocate the use of Janus to help secure unwieldy helper applications.
+using essentially the same security policies as applied to mobile
+code, above.
+d528 3
+a530 3
+This was implemented by merely writing out the entire bss and heap segments
+to a file.
+(Recall that the bss segment holds those C program variables that aren't
+d536 1
+a536 1
+contained in the bss or heap segment for the frozen configuration
+d546 1
+a546 1
+and thus contained in the data segment.
+d684 2
+a685 2
+of course, anyone with a sniffer on your local network could do the same.
+It could forge email;
+d778 1
+a778 1
+potentially-compromised browser.
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d57 1
+a57 1
+policy, and expressing it in Janus's system-call-centric policy language.
+d117 1
+a117 1
+But the problem with complex policies goes deeper than this.
+d123 1
+a123 1
+expressible in terms of system call filtering, while Java supports
+d141 11
+a151 2
+This is an important lesson: Janus seems to suffer from the inherent
+limitation that it doesn't scale well to more complex security policies.
+d614 1
+a614 1
+system call filtering.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d29 1
+a29 1
+which are not themselves malicious but may fail to protect themselves
+d42 1
+a42 1
+Quite often in computer security we encounter applications which
+d54 1
+a54 1
+which is both sufficient for the application's needs and limited enough
+d95 1
+a95 1
+security-critical programs of that scale are notorious for being riddled
+d115 3
+a117 2
+messages, except when they contain obscenities or commercial solicitations''.)
+But the problem goes deeper than that.
+d120 1
+a120 1
+as policies become more complex.
+d140 1
+a140 1
+philosophy would seriously impact its assurance level.
+d142 1
+a142 1
+limitation that it is doesn't scale well to more complex security policies.
+d158 2
+a159 2
+the service developer writes ``workers,'' which perform data
+transformation and aggregation on behalf of the end user;
+d212 2
+a213 1
+of the Perl interpreter (which is far too large to trust anyway).
+d236 2
+a237 2
+Nonetheless, we expect that in many cases they would also apply
+to other programming models for mobile agents.
+d249 1
+a249 1
+Sandboxing typically isn't so great at controlling
+d259 3
+a261 3
+It turned out that these disadvantages didn't affect us much,
+as it turned out, since we didn't need fine-grained control over network
+communications, but it is conceivable that they might be more
+d264 2
+a265 2
+The fact that we could re-use the existing Janus tool made implementation
+of sandboxing relatively easy.
+d267 1
+a267 1
+to Janus for mediating {\tt sendto}, for controlling some
+d272 2
+a273 2
+The hardest part was picking an appropriate security policy,
+which we will discuss in detail next.
+d275 2
+a276 3
+We derived the security policy by starting out with an extremely
+minimal environment that allowed essentially no access to any
+interesting machine resources, and watching what breaks when
+d303 1
+a303 1
+\item {\bf Hand-screened OS system calls} which perform basic,
+d306 1
+a306 1
+        one's own sandbox, but can't affect anything outside the sandbox.
+d309 3
+a311 3
+        handlers, and that sort of operation.
+        This is core Janus code which has remained stable for over a year or
+        more.
+d314 1
+a314 1
+which helps protect mutually-distrusting users from each other,
+d317 2
+a318 2
+Selection and verification of this policy was made easier due
+to the fact that it is primarily a refinement of a policy developed
+d335 2
+a336 3
+It adapted well: only minor extensions were required
+to support the needs of this undertaking, despite the
+fact that it was not initially envisioned for such an application.
+d461 1
+a461 1
+helper applications, one for each data format which is too
+d574 1
+a574 1
+It provides many sophisticated mail-handling features which users demand,
+d583 1
+a583 1
+Because {\tt sendmail} handles email which could potentially come from
+d588 1
+a588 1
+the entire system it runs on, despite the fact that {\tt sendmail}
+d620 3
+a622 3
+Also, {\tt sendmail} is allowed to perform DNS queries
+(which involves allowing UDP sends to port 53 and allowing UDP binds
+to high-numbered local sockets).
+d647 1
+a647 1
+which system calls are allowed.
+d724 4
+a727 3
+Securing a web server would perhaps be the most compelling application:
+like {\tt sendmail}, web servers are well-known to be very high security risks;
+yet by their very nature, web servers typically require only very limited
+d729 3
+a731 3
+{\tt inetd} also makes for an interesting possibility, because it is usually
+spawns many other net daemons which also need protection;
+because Janus recursively confines all children of a confined process,
+d743 1
+a743 1
+The arguments which leave us suspicious of helper
+d745 3
+a747 2
+both are large, complex programs that interpret
+data which may be under adversarial control.
+d791 1
+a791 1
+inadvertently open up a hole which allows remote adversaries full
+@
+
+
+1.1.1.1
+log
+@Adding in my master's to CVS control.
+This version reflects the draft that I gave to Eric (I think).
+
+@
+text
+@@

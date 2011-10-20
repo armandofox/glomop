@@ -1,0 +1,85 @@
+#
+#  Simple distiller test harness
+#
+
+BEGIN {
+    $main::DEBUGGING = 1;
+
+    # find the options file
+    my $username = (getpwuid($<))[0] || "user";
+    my $optfile;
+    for ("../gm_options.$username", "gm_options.$username",
+         "../gm_options", "gm_options") {
+        $optfile = $_, last if -r;
+    }
+    $optfile = $ENV{'GM_OPTIONS'} if defined $ENV{'GM_OPTIONS'};
+    die "Can't find gm_options.$username or gm_options; setenv GM_OPTIONS "
+        . "to override default search rules\n"
+            unless $optfile;
+    open(O,$optfile) or die "Can't open $optfile: $!\n";
+    # look for proxy.perlmod
+    while (<O>) {
+        (warn("Looking for Perl modules in $1\n"),
+         push(@INC, split(/\s+/,$1)))
+            if /^proxy\.perlmod:\s*(.*)$/;
+    }
+    close O;
+    # find xs
+    @xs = qw(../xs/lib  xs/lib);
+    for (@xs) {
+        push(@INC, $_), $xs = $_, last
+            if (-d && -r);
+    }
+    $"=":";                                 #" 
+    die "Looking for xs in (@xs)...where is it???\n"
+        unless (-d $xs  &&  -r $xs);
+}
+
+sub usage {
+    warn "Usage:  $0 [-d] [arg1=val1 ... argN=valN] distillername URL\n";
+    0;
+}
+require 'util.pl';
+
+%arglist = ();
+while ($_ = shift @ARGV) {
+    &util::dbg_list(qw(layout)), next
+        if /^-d/;
+    $arglist{$1} = $2, next
+        if (  /^([sif]\d+)="([^"]*)"$/        #" 
+    || /^([sif]\d+)=(\S+)$/ ); # 
+last;
+}
+unshift(@ARGV,$_);
+
+$dist = shift @ARGV or &usage;
+$url = shift @ARGV or &usage;
+$file = shift @ARGV;
+
+use LWP;
+use clib;
+use TACCutils;
+require $dist;
+
+&DistillerInit;
+
+($stat,$hdrs,$data) = &Clib_Fetch($url,"Pragma: no-cache\r\n\r\n");
+die unless $stat == 0;
+$hdrs =~ s/\r\n/\r\nLocation: $url\r\n/;
+$type = ( $hdrs =~ /content-type:\s*(\S+)/i ? $1 : 'text/html');
+
+($data,$hdrs,$result,$code) = &DistillerMain($data, $hdrs, $type,%arglist);
+
+if ($file) {
+    open(FILE, ">$file") or die $!;
+    print FILE $data;
+    close FILE;
+} else {
+    print STDOUT $data;
+}
+
+warn ( "Warning: DistillerMain returned error code $code\n")
+    if $code;
+
+
+

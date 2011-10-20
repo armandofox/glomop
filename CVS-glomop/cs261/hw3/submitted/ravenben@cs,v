@@ -1,0 +1,183 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.01;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From ravenben@@joker.CS.Berkeley.EDU  Fri Nov 20 13:02:24 1998
+Return-Path: ravenben@@joker.CS.Berkeley.EDU
+Received: from joker.CS.Berkeley.EDU (joker.cs.Berkeley.EDU [128.32.33.53]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA17412 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 13:02:24 -0800
+Received: from localhost (ravenben@@localhost)
+	by joker.CS.Berkeley.EDU (8.9.1/8.9.1) with SMTP id NAA12590
+	for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 13:02:39 -0800
+Date: Fri, 20 Nov 1998 13:02:39 -0800 (PST)
+From: "Ben Y. Zhao" <ravenben@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw3
+Message-ID: <Pine.LNX.3.96.981120130018.12345C-100000@@joker.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+                              CS261 Homework 3
+
+Question 1
+
+The following program is intended to allow unprivileged users to edit the
+moderators file, which is used for configuration of Usenet news servers.
+(You don't need to understand anything about Usenet or the moderators file
+to do this assignment.) It is installed setuid root. The code is available
+here.
+Find as many security vulnerabilities as you can in the code.
+
+
+line 148, use simlink to add arbitrary text to progname
+in debug: can use simlink to make progname large and can do
+buffer overrun in sprintf into the Line string array
+
+in secure_open_as_user: can break in middle of giving up
+privileges, so you can get more privileges
+
+in debug: set your umask to 077, so if you're the first to create the
+debug file, then no one else can write to it.  which means users who
+can write to debug can later modify it at will.
+
+debug file: can create the file to start, and set perms so people running the
+program can write to it.  you can then read the contents of the debug file.
+
+debug files and lock files are both in /tmp, so if you mount the file using
+NFS, then you can run 2 instances on different machines.  locks only work for
+the same machine.  But this is ok, considering the file is primarily meant to
+be machine dependent.
+
+line 162: tmpnam probably uses the clock or PID to generate the temp filename
+so you can anticipate the temp filename.  you can create the file and close
+write permissions, so that the copyfile doesn't actually copy, and error
+return codes are ignored.
+
+line 117: vi: vi can execute shell commands, and since you're executing as
+root, you can just execute a bash.  Also can use the race condition to remove
+the temporary file that's just been copied, before vi starts, and replace it
+with a link to /etc/passwd.  Since you're running as root, it will edit that
+file instead, and you can save changes to /etc/passwd, and then use a race
+condition again to replace the link with a reasonable moderator file before
+it's copied back.
+
+line 168-169: race condition between checking file and renaming. you can just
+ctrl-Z and copy fake file over to bypass looksok()
+
+Race condition in secure_open_as_user:  since the signal handler calls debug,
+you could potentially time an interrupt so that the handler is called
+immediately after line 36 is executed.  Now another instance of
+secure_open_as_user will be run right after line 36, leaving the permissions
+at root once it finishes, so that you can open any file with line 38. Now
+anyone who executes the program has full access to write to any file.
+
+Question 2
+
+This question asks you to explore some of the consequences of active
+networks, where packets can contain mobile code that is executed by the
+routers along the path.
+
+For concreteness, we can think of 'adaptive routing' as a sample
+application: if your TCP connection to France is too slow because of poor
+bandwidth on the transatlantic link and for some reason you happen to know
+that there is a much faster route to France via China, you might wish to
+adaptively update the route your TCP packets take. In this case, you would
+"push" some mobile code into each router along the way; the mobile code
+would run at each router before the packet is forwarded and select which
+interface to send it out over.
+
+1. a) network overload, standard denial of service a la source routing
+
+2. a) memory overrun a the router
+   b) no authentication on the flowID, so set mobile code anticipating
+someone's flowID, so you can route their packets wherever.  you need to
+authenticate flowID with packets
+
+3. a) infinite loops to tie up the router
+
+4. a) increase TTL to make permanent packets for congestion
+   b) forge data on packets. can do stuff like change packet headers after it
+passes through a firewall to look like a local packet.
+   c) basically have a chameleon packet that can do anything 5. a) give you
+more power, now data across packets allows you to collect aggregate data
+across packets.  now can collect network data on the inside of the firewall
+and then direct attacks to specific hosts 6. a) now can use one packet to get
+inside to then create a whole bunch of packets to collectively attack
+(e.g. reduce workload on password guessing)
+   b) now can create your own packet fragments for attacks 7. a) can now
+exploit all the bugs that Java has.  Overwrite system areas and access
+network with application level access. You can do ANYTHING.  The bugs in Java
+erase any bounds that the router may have tried to place on the mobile code.
+
+Question 3
+
+As we discussed in class, the firewall security model doesn't compose well
+with mobile code. This questions asks you to consider various attempts to
+deal with this tension.
+
+2. authentication or signature, proof-carrying code
+
+
+
+  1. If it is acceptable to block all mobile code at the firewall, how
+     would you do so and what problems might you expect to encounter?
+
+Well, it depends on what you define as mobile code.  Mobile code can be
+completely integrated with normal documents and network traffic, to the point
+where they are incredibly hard to detect.  To start, I would have the
+frewall block any and all attempts to download java applets and ActiveX
+controls.  Then I would detect downloading of .exe and similar binary
+executables (which is extremely hard, since we can't really tell what is
+an executable and what is not, ie all those shell scripts and Tcl like
+executables.) I can also block binary attachments to email, and javascript
+fragments in HTML code.  A normal firewall can't do much to detect this,
+since it only does simple header checking.  A more sophisticated application
+level proxy would still have trouble filtering out the mobile code, which can
+be hidden or even encrypted, making detection impossible.
+
+  2. Suppose next that you can't get away with blocking all mobile code:
+     you are asked to block dangerous mobile code and let through (the
+     majority of) safe mobile code. (But it is ok to be cautious and
+     occasionally block some mobile code which might have been safe.) What
+     additional problems does this introduce, and how might you try to
+     solve them?
+
+Depending on what you define as safe, we can either allow
+authenticated/signed code to get through, or only allow proof-carrying code
+or self-verifying code through.  The problem is that it's very hard to
+statically proof code to be correct.  We could have a code verifier sitting
+at the firewall, that takes mobile code and attempts to statically verify the
+code, and if successful, pass them on with a signature.  That would be a job
+for a highend application level proxy.
+
+  3. For each of the problems you listed, who is to blame? The firewall, or
+     the end host?
+The problem of encrypted code is due to the end host, for establishing the
+encrypted session.  The firewall is to blame for not being smart enough to
+delve inside the packets and seeking out all instances of mobile code.  It's
+also very difficult for the firewall to be updated with all the different
+forms of mobile code out there (i.e. tcl, perl, .o, .dll, .js, .java etc).
+
+
+_____________________________________________________________
+Ben Y. Zhao WWW: www.cs.berkeley.edu/~ravenben  bzhao@@acm.org
+
+@

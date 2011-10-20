@@ -1,0 +1,110 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.12.08.02.24.05;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.27.04.31.40;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Much progress made in parsing and dispatching of commands.
+@
+text
+@/*
+ *  Declarations for multithreading control routines
+ */
+
+#ifndef _THR_CNTL_H
+#define _THR_CNTL_H
+
+#include "config_cs294.h"
+#include  <sys/time.h>
+/*
+ *  Structure used for synchronization of worker threads
+ */
+
+typedef void *TaskArg;
+typedef void *ThrFunc(void *);
+typedef ThrFunc *ThrFuncPtr;
+
+typedef struct _task_t {
+  TaskArg task_data;
+  UINT32 task_id;
+  UINT16 task_priority;
+  int thrindex;
+  ThrFuncPtr task_go_proc;
+} task_t, *QUEUE_PTR;
+
+typedef void *GoProc(task_t *);
+
+#define TASK_GO_PROC(t)         (t)->task_go_proc
+#define TASK_DATA(t)            (t)->task_data
+#define TASK_ID(t)              (t)->task_id
+#define TASK_THRINDEX(t)        (t)->thrindex
+#define SET_TASK_GO_PROC(t,p)   (t)->task_go_proc = (p)
+#define SET_TASK_DATA(t,p)      (t)->task_data = (TaskArg)(p)
+#define SET_TASK_ID(t,p)        (t)->task_id = (UINT32)(p)
+#define CALL_TASK_GO_PROC(t)    assert(TASK_GO_PROC(t) != (ThrFuncPtr)NULL); \
+                                (*((t)->task_go_proc))(t);
+
+/*
+ *  Function prototypes for worker-thread interfaces
+ */
+
+#define THR_OK 0
+#define THR_COULDNT_OPEN_LISTEN_PORT 1
+#define THR_THREAD_POOL_FAILED 2
+
+int make_threads(int nthreads);
+int dispatch(task_t *newtask);
+int spawn_listening_thread(int port, ThrFuncPtr f);
+
+#ifdef __GNUC__
+
+static int _res  __attribute__ ((unused)) = 0;
+#define THR_OP(what,func) \
+  if ((_res=(func))) { \
+    DEBUG_LOG("[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res), NULL); }
+
+#else /* not __GNUC__ */
+
+#define THR_OP(what,func) { int _res=(func); if (_res) { \
+    DEBUG_LOG("[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res), NULL); }}
+
+#endif /* __GNUC__ */
+
+#define new_task(t)      (*t) = SAFEMALLOC(1,task_t)
+#define release_task(t) FREE(t)
+
+#endif /* ifndef _THR_CNTL_H */
+@
+
+
+1.1
+log
+@Pulled over the thread worker pool code from transend.  Now we can
+telnet to the executor and have a worker thread dispatched for us!
+@
+text
+@d55 1
+a55 1
+    fprintf(stderr, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }
+d60 1
+a60 1
+  fprintf(stderr, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }}
+@

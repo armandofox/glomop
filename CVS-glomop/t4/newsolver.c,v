@@ -1,0 +1,2163 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	99.02.24.03.57.59;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.02.19.05.42.46;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.02.19.05.38.09;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.02.19.05.32.01;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.02.19.05.12.57;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.02.19.05.03.50;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.02.19.01.38.31;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Added unification of cycles.
+@
+text
+@/* Have to make an assumption about the semantics of `S + 5' when `S'
+   is empty.  I will just assume throughout that all sets (`S') mentioned
+   are non-empty; this resolves the definitional problems, I think. */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <values.h>
+#include <string.h>
+#include <ctype.h>
+
+
+/* poor man's varargs. :-) */
+#define fatal(f, rest...) do { char buf[1024]; sprintf(buf, f, ##rest); \
+                            fprintf(stderr, "Error: %s\n", buf); exit(100); } \
+                          while (0)
+static void *mymalloc(size_t len) {
+        void *p = malloc(len);
+        if (!p)
+                fatal("Out of memory.");
+        return p;
+}
+static void *myrealloc(void *old, size_t len) {
+        void *p = realloc(old, len);
+        if (!p)
+                fatal("Out of memory.");
+        return p;
+}
+
+
+/* A signed int type, with +Infinity and -Infinity. */
+typedef int intinf; /* XXX: replace it with a `struct { int; }' */
+#define INF ((intinf)MAXSHORT)
+#define NEGINF ((intinf)(-MAXSHORT))
+
+static intinf inf(long int x) {
+        if (x <= NEGINF) {
+                fprintf(stderr, "Warning: inf() possible underflow (%ld)\n", x);
+                return NEGINF;
+        } else if (x >= INF) {
+                fprintf(stderr, "Warning: inf() possible overflow (%ld)\n", x);
+                return INF;
+        } else
+                return (intinf)x;
+}
+static const intinf infzero = (intinf)0;
+static char *infstr(intinf x) {
+        static char buf[40];
+        if (x <= NEGINF)
+                sprintf(buf, "-Infinity");
+        else if (x >= INF)
+                sprintf(buf, "+Infinity");
+        else
+                sprintf(buf, "%d", (int)x);
+        return buf;
+}
+/* Returns 0 if x=0, 2 if x=+Inf, -2 if x=-Inf, else sign(x). */
+static int infsign(intinf x) {
+        if (x >= INF)
+                return 2;
+        else if (x <= NEGINF)
+                return -2;
+        else if (x > infzero)
+                return 1;
+        else if (x < infzero)
+                return -1;
+        else
+                return 0;
+}
+static intinf infadd(intinf x, intinf y) {
+        if (x < INF && x > NEGINF && y < INF && y > NEGINF)
+                return inf( ((long int)x) + ((long int)y) );
+        switch(infsign(x)+infsign(y)) {
+                case  1: case  2: case  3: case  4: return INF;
+                case -1: case -2: case -3: case -4: return NEGINF;
+                case  0: fatal("INF + NEGINF");
+                default: fatal("impossible infadd().");
+        }
+}
+static intinf infnegate(intinf x) {
+        if (x >= INF)
+                return NEGINF;
+        else if (x <= NEGINF)
+                return INF;
+        assert((-x) > NEGINF && (-x) < INF);
+        return -x;
+}
+static intinf infsub(intinf x, intinf y) {
+        return infadd(x, infnegate(y));
+}
+static intinf infmul(intinf x, intinf y) {
+        if (x < INF && x > NEGINF && y < INF && y > NEGINF)
+                return inf( ((long int)x) * ((long int)y) );
+        switch(infsign(x)*infsign(y)) {
+                case  2: case  4: return INF;
+                case -2: case -4: return NEGINF;
+                case  0: fatal("0 * +/- Infinity.");
+                default: fatal("impossible infmul().");
+        }
+}
+static intinf infdiv(intinf x, intinf y) {
+        if (!y && !x)
+                fatal("0 / 0");
+        else if (!y)
+                return (x>0) ? INF : NEGINF;
+        else if (x < INF && x > NEGINF && y < INF && y > NEGINF) {
+                long int d = ((long int)x) / ((long int)y);
+                if (d*((long int)y) != ((long int)x))
+                        fatal("%d / %d: not evenly divisible.", x, y);
+                return inf(d);
+        } else if ((x >= INF || x <= NEGINF) && (y >= INF || y <= NEGINF))
+                fatal("+/-Infinity / +/-Infinity");
+        else if (x >= INF && y < INF && y > NEGINF)
+                return (y>0) ? INF : NEGINF;
+        else if (x <= NEGINF && y < INF && y > NEGINF)
+                return (y>0) ? NEGINF : INF;
+        else
+                return infzero;
+}
+
+/* The range of integers from `lo' to `hi' (inclusive). */
+typedef struct {
+        intinf lo;
+        intinf hi;
+} range_t;
+
+static const range_t zerorange = {(intinf)0, (intinf)0};
+
+static char *rangestr(range_t x) {
+        static char buf[80];
+        sprintf(buf, "%s..", infstr(x.lo));
+        strcat(buf, infstr(x.hi));
+        return buf;
+}
+static range_t rangeadd(range_t x, range_t y) {
+        range_t new;
+        new.lo = infadd(x.lo, y.lo);
+        new.hi = infadd(x.hi, y.hi);
+        return new;
+}
+static range_t rangemul(intinf x, range_t y) {
+        range_t new;
+        if (x >= 0) {
+                new.lo = infmul(x, y.lo);
+                new.hi = infmul(x, y.hi);
+        } else {
+                new.lo = infmul(x, y.hi);
+                new.hi = infmul(x, y.lo);
+        }
+        return new;
+}
+static range_t rangesub(range_t x, range_t y) {
+        return rangeadd(x, rangemul(inf(-1L), y));
+}
+static int rangesubset(range_t x, range_t y) {
+        return (x.lo >= y.lo || y.lo <= NEGINF)
+            && (x.hi <= y.hi || y.hi >= INF);
+}
+static int rangeempty(range_t x) {
+        return (x.lo > x.hi)
+               || (x.lo >= INF && x.hi >= INF)
+               || (x.lo <= NEGINF && x.hi <= NEGINF);
+}
+static range_t rangeunion(range_t x, range_t y) {
+        range_t new;
+        new.lo = (x.lo > y.lo) ? y.lo : x.lo;
+        new.hi = (x.hi < y.hi) ? y.hi : x.hi;
+        return new;
+}
+
+/* A list of equations. */
+typedef struct eqnlist_s {
+        struct eqn_s *e;
+        struct eqnlist_s *next;
+} eqnlist_t;
+
+/* Represents the affine function $x \mapsto ax+b$. */
+typedef struct {
+        intinf a;
+        range_t b;
+} affine_t;
+
+static const affine_t affineidentity = {(intinf)1, {(intinf)0, (intinf)0}};
+
+/* Returns $f(x)$. */
+static range_t affineapp(affine_t f, range_t x) {
+        return rangeadd(rangemul(f.a, x), f.b);
+}
+
+/* Returns $g \circ f$, i.e. the composition of f and g (applying f first). */
+static affine_t affinecomp(affine_t f, affine_t g) {
+        affine_t gf = {infmul(f.a,g.a), rangeadd(rangemul(g.a, f.b), g.b)};
+        return gf;
+}
+
+/* Given $h=g \circ f$ and $f$, returns $g$. */
+static affine_t affinedecomp(affine_t h, affine_t f) {
+        intinf a = infdiv(h.a, f.a);
+        range_t b = rangesub(h.b, rangemul(a, f.b));
+        affine_t g = {a,b};
+        return g;
+}
+
+static char *affinestr(affine_t af) {
+        static char buf[160];
+        sprintf(buf, "$x \\mapsto %s x", infstr(af.a));
+        sprintf(buf, "%s + %s$", buf, rangestr(af.b));
+        return buf;
+}
+
+/* ALIVE:     currently a "live" set (still changing)
+   SURVIVES:  will remain "live" in the next iteration
+   FINALIZED: true when we're done changing this set,
+   QUERIED:   we're asked to output the possible values of this set,
+   RELEVANT:  relevant to some query,
+   MARKED:    a generic ``marker'' for any of many graph searches,
+   GRAY:      another marker for DFS
+              (indicates an edge has been discovered but not yet finished),
+*/
+typedef enum {ALIVE=1, SURVIVES=2, FINALIZED=4, QUERIED=8, RELEVANT=16,
+              MARKED=32, GRAY=64} setflags_t;
+
+/* A set variable. */
+typedef struct set_s {
+        /* (In my algorithm, sets start out as empty, then grow as required
+            by the eqn's.) */
+        range_t r; /* current approximation */
+        range_t hardbound; /* hard lower and upper bounds */
+
+        setflags_t flags;
+
+        eqnlist_t *affects; /* If s changes, what eqns does s affect? */
+        eqnlist_t *affectedby; /* What eqns affect s? */
+
+        char *name;
+
+        struct set_s *nextset; /* For `allsets'. */
+
+        /* For the DFS; see findcycles(). */
+
+        /* dfs_backptr_*: The DFS predecessor tree:
+           _s contains the prev vertex,
+           _e contains the edge used to get from _s to this. */
+        struct set_s *dfs_backptr_s;
+        struct eqn_s *dfs_backptr_e;
+        /* runningaf: A running composition of the affine's on all the
+           edges traversed from the root of the predecessor tree to me.
+           i.e. we have the eqn `runningaf(root of pred. tree) subset this' */
+        affine_t runningaf;
+        /* Identifies which tree in the predecessor forest we're talking
+           about. */
+} set_t;
+
+/* A term. */
+typedef struct {
+        intinf coeff;
+        set_t *s;
+} term_t;
+/* A SORTED list of terms. */
+typedef struct termlist_s {
+        term_t *t;
+        struct termlist_s *next;
+} termlist_t;
+
+/* A set constraint (``equation''). */
+typedef struct eqn_s {
+        /* Represents the set constraint
+           `sum of the lhs terms  +  c   op  rhs term'. */
+        termlist_t *lhs;
+        range_t c; /* A constant additive term added to the left side. */
+        enum {SUBSET, EQUALS} op;
+        term_t rhs;
+        enum {DELETED=1} eflags;
+} eqn_t;
+
+/* Generate a printable representation of e for debugging purposes. */
+static char *debug_dumpeqn(eqn_t *e) {
+        static char buf[1024];
+        termlist_t *p;
+        buf[0] = '\0';
+        assert(e && e->rhs.s && e->rhs.s->name);
+        for (p=e->lhs; p; p=p->next) {
+                assert(p->t && p->t->s && p->t->s->name);
+                if (p->t->coeff != 1)
+                        sprintf(buf, "%s%d*", buf, p->t->coeff);
+                sprintf(buf, "%s%s + ", buf, p->t->s->name);
+        }
+        sprintf(buf, "%s%s %s %s%s", buf, rangestr(e->c),
+                (e->op==SUBSET)?"subset":((e->op==EQUALS)?"=":"???"),
+                e->rhs.s->name, (e->eflags & DELETED) ? " [deleted]" : "");
+        return buf;
+}
+
+/* Delete _all instances_ of `e' from a list of equations. */
+static eqnlist_t *deleqn(eqnlist_t *list, eqn_t *e) {
+        int ndeletions = 0;
+        eqnlist_t *p, *q;
+        assert(e && list);
+        while (list && list->e == e) {
+                /* XXX: free(list); ? */
+                list = list->next;
+                ndeletions++;
+        }
+        for (p=list; p; p=p->next)
+                while (p->next && p->next->e == e) {
+                        q = p->next;
+                        p->next = q->next;
+                        free(q);
+                        ndeletions++;
+                }
+        if (ndeletions <= 0)
+                fatal("deleqn() failed.");
+        else if (ndeletions > 1)
+                fprintf(stderr, "Debug: deleqn() del'ing %d instances of %s\n",
+                        ndeletions, debug_dumpeqn(e));
+        return list;
+}
+/* Prepend `e' to a list of equations.
+   (May create duplicates!) */
+static eqnlist_t *inseqn(eqnlist_t *list, eqn_t *e) {
+        eqnlist_t *node = mymalloc(sizeof(eqnlist_t));
+        assert(!(e->eflags & DELETED));
+        node->next = list;
+        node->e = e;
+        return node;
+}
+/* Duplicate an equation list (shallow copy: dup just `next' fields). */
+static eqnlist_t *dupeqn(eqnlist_t *orig) {
+        eqnlist_t *new = NULL, *p;
+        for (p=orig; p; p=p->next)
+                new = inseqn(new, p->e);
+        return new;
+}
+
+/* Delete `t' from a list of terms. */
+static termlist_t *delterm(termlist_t *list, term_t *t) {
+        termlist_t *p, *q;
+        assert(t && list);
+        if (list->t == t) {
+                p = list->next;
+                free(list->t);
+                free(list);
+                return p;
+        }
+        for (p=list; p->next; p=p->next)
+                if (p->next->t == t) {
+                        q = p->next;
+                        p->next = q->next;
+                        free(q->t);
+                        free(q);
+                        return list;
+                }
+        fatal("delterm() failed.");
+}
+/* Prepend `t' to a list of terms. */
+/* Note: we promise not to end up with something like `0*x' or `x + 3*x'. */
+static termlist_t *insterm(termlist_t *list, term_t *t) {
+        termlist_t *node = mymalloc(sizeof(termlist_t)), *p;
+        node->next = list;
+        node->t = t;
+        assert(t && t->s);
+        assert(!list || (list->t && list->t->s));
+        if (!list || t->s < list->t->s)
+                return node;
+        if (t->s == list->t->s) {
+                fprintf(stderr, "Debug insterm(): (%d+%d)*%s = %d*%s (head)\n",
+                        list->t->coeff, t->coeff, t->s->name,
+                        list->t->coeff + t->coeff, list->t->s->name);
+                list->t->coeff += t->coeff;
+                if (list->t->coeff == 0) {
+                        termlist_t *save = list;
+                        list = list->next;
+                        free(save->t);
+                        free(save);
+                }
+                free(t);
+                free(node);
+                return list;
+        }
+        for (p=list; p->next; p=p->next) {
+                assert(p->next && p->next->t
+                       && p->next->t->s && p->next->t->coeff);
+                if (t->s < p->next->t->s) {
+                        node->next = p->next;
+                        p->next = node;
+                        return list;
+                } else if (t->s == p->next->t->s) {
+                        fprintf(stderr, "Debug insterm(): (%d+%d)*%s = %d*%s\n",
+                                list->t->coeff, t->coeff, t->s->name,
+                                list->t->coeff + t->coeff, list->t->s->name);
+                        p->next->t->coeff += t->coeff;
+                        if (p->next->t->coeff == 0) {
+                                termlist_t *save = p->next;
+                                p->next = p->next->next;
+                                free(save->t);
+                                free(save);
+                        }
+                        free(t);
+                        free(node);
+                        return list;
+                }
+        }
+        node->next = NULL;
+        p->next = node;
+        return list;
+        fatal("insterm() failed.");
+}
+/* Duplicate a list of terms (shallow copy: dup just `next' fields). */
+static termlist_t *dupterm(termlist_t *orig) {
+        termlist_t *new = NULL, *p;
+        for (p=orig; p; p=p->next)
+                new = insterm(new, p->t);
+        return new;
+}
+
+
+/* Aww hell, the whole damn constraint system is infeasible. */
+static void infeasible(void) {
+        printf("This problem is infeasible\n");
+        exit(1);
+}
+
+/* Update `y' to include `x'.  Return 1 if `y' changed, else 0. */
+static int rangeinrange(range_t x, range_t *y) {
+        int changed = 0;
+        assert(y);
+        if (x.lo < y->lo) {
+                assert(x.lo >= NEGINF);
+                y->lo = x.lo;
+                changed = 1;
+        }
+        if (x.hi > y->hi) {
+                assert(x.hi <= INF);
+                y->hi = x.hi;
+                changed = 1;
+        }
+        return changed;
+}
+/* s->r just changed; make sure it doesn't violate the hard bounds. */
+static void checkhardbounds(set_t *s) {
+        assert(s);
+        if (s->r.lo < s->hardbound.lo) {
+                fprintf(stderr, "Error: %s lo=%s, ", s->name, infstr(s->r.lo));
+                fprintf(stderr, " hardlo=%s.\n", infstr(s->hardbound.lo));
+                infeasible();
+        }
+        if (s->r.hi > s->hardbound.hi) {
+                fprintf(stderr, "Error: %s hi=%s, ", s->name, infstr(s->r.hi));
+                fprintf(stderr, " hardhi=%s.\n", infstr(s->hardbound.hi));
+                infeasible();
+        }
+}
+
+/* Force the set `s' to include the range `r',
+   as though we had written the constraint `r subset s'.
+   Also touch `s' if it changes.
+   Returns 1 if `s' changed, 0 otherwise. */
+static int rangeinset(range_t r, set_t *s) {
+        assert(s);
+        fprintf(stderr, "Debug:  force `%s in %s'", rangestr(r), s->name);
+        if (rangeinrange(r, &(s->r))) {
+                // touch(s);
+                fprintf(stderr, " (now includes %s).\n", rangestr(s->r));
+                s->flags |= SURVIVES;
+                checkhardbounds(s);
+                return 1;
+        }
+        fprintf(stderr, ".\n");
+        return 0;
+}
+
+/* Simplify an equation by folding in 'finalized' sets. */
+static void simplify(eqn_t *e, int modify_graph) {
+        termlist_t *p, *next;
+        set_t *s;
+
+        assert(e && e->rhs.s && e->rhs.coeff == 1);
+        assert(e->op == SUBSET);
+        assert(!(e->eflags & DELETED));
+        // fprintf(stderr, "Debug simplify(): before: %s\n", debug_dumpeqn(e));
+
+        p = e->lhs;
+        while (p) {
+                assert(p->t && p->t->s && p->t->coeff);
+                next = p->next;
+                s = p->t->s;
+                if (s->flags & FINALIZED || p->t->coeff == 0) {
+                        fprintf(stderr, "Debug: folding `%s' into %s.\n",
+                                s->name, debug_dumpeqn(e));
+                        /* Fold s into the constant term of e. */
+                        e->c = rangeadd(e->c, rangemul(p->t->coeff, s->r));
+                        if (modify_graph)
+                                s->affects = deleqn(s->affects, e);
+                        e->lhs = delterm(e->lhs, p->t);
+                }
+                p = next;
+        }
+        // fprintf(stderr, "Debug simplify(): after: %s\n", debug_dumpeqn(e));
+}
+
+static void finalize(set_t *s);
+static void killeqn(eqn_t *e);
+
+
+/* Prune this equation if it is no longer relevant.
+   (i.e. if there are no more set variables on the left-hand-side)
+   Returns 1 if pruned, else 0.  */
+static int prune(eqn_t *e) {
+        set_t *rhs;
+        assert(e && e->rhs.s);
+        if (e->lhs)
+                return 0; /* LHS not empty; no pruning needed. */
+
+        // fprintf(stderr, "Debug: pruning %s.\n", debug_dumpeqn(e));
+
+        /* Ok, this equation is irrelevant.
+           It should already have been deleted out of every s->affects,
+           and the constant term has already been propagated to the RHS, so
+           all we have to do is delete it from the relevant s->affectedby. 
+           and make sure the constant term gets propagated to the RHS. */
+        rhs = e->rhs.s;
+        killeqn(e); /* Delete it. (XXX: Ok?) */
+        /* ^^^ killeqn(e) deletes e from rhs->affectedby. */
+
+        /* Oh, and it's possible that this might have been the last
+           eqn to affect rhs; if so, rhs will never be
+           changed again, and can be marked FINALIZED. */
+        if (!rhs->affectedby)
+                finalize(rhs);
+
+        return 1;
+}
+
+static void simplifyprune(eqn_t *e) {
+        assert(e && e->rhs.s);
+        simplify(e, 1);
+        if (!e->lhs) {
+                (void)rangeinset(e->c, e->rhs.s);
+                (void)prune(e);
+        }
+}
+
+static void finalize(set_t *s) {
+        eqnlist_t *ep;
+        assert(s);
+        fprintf(stderr, "Debug: finalizing %s.\n", s->name);
+        if (s->flags & FINALIZED) {
+                fprintf(stderr, "Debug finalize(): already finalized!\n");
+                return;
+        }
+        s->flags |= FINALIZED;
+
+        /* Simplify (and maybe prune?) other eqns. */
+        // touch(s);
+        for (ep=s->affects; ep; ep=ep->next)
+                simplifyprune(ep->e);
+}
+
+
+static int neqns = 0, eqnssiz = 0;
+static eqn_t *eqns = NULL;
+static eqn_t *neweqn(void) {
+        eqn_t *e;
+        if (neqns >= eqnssiz) {
+                eqnssiz = (eqnssiz<1024) ? 1024 : (2*eqnssiz);
+                eqns = myrealloc(eqns, eqnssiz*sizeof(eqn_t));
+        }
+        e = &eqns[neqns++];
+        e->c = zerorange;
+        e->lhs = NULL;
+        e->rhs.s = NULL; e->rhs.coeff = 1;
+        e->op = SUBSET;
+        e->eflags = 0;
+        return e;
+}
+
+/* Delete this equation from the global list of equations. */
+static void killeqn(eqn_t *e) {
+        termlist_t *t;
+        fprintf(stderr, "Debug: killeqn(%s)\n", debug_dumpeqn(e));
+        if (e->eflags & DELETED) {
+                fprintf(stderr, "Debug:  already dead.\n");
+                return;
+        }
+        e->eflags |= DELETED;
+        for (t=e->lhs; t; t=t->next) {
+                assert(t && t->t && t->t->s && t->t->coeff);
+                t->t->s->affects = deleqn(t->t->s->affects, e);
+        }
+        assert(e->rhs.s && e->rhs.coeff);
+        e->rhs.s->affectedby = deleqn(e->rhs.s->affectedby, e);
+        /* e->rhs.s = NULL ??  probably bad, because of aftermath() */
+        /* XXX: Can't free, because aftermath() checks all equations.
+           And anyway, equations aren't malloc'ed. */
+}
+
+/* Show _all_ the current equations. */
+static void debug_dumpalleqns(void) {
+        int i;
+        fprintf(stderr, "Debug: -- dumping all constraints:\n");
+        for (i=0; i<neqns; i++)
+                fprintf(stderr, "   %s\n", debug_dumpeqn(&eqns[i]));
+        fprintf(stderr, "Debug: -- end dump.\n");
+}
+
+/* Checks whether `e' is a duplicate of another equation already
+   in the graph.  (This works whether `e' is currently in the graph
+   or not.)
+   Output: 1 if `e' is redundant, 0 otherwise.
+   (May modify an eqn in the graph slightly, if there is another
+   equation with the same terms as `e' but with a different constant
+   term, but this shouldn't matter to anyone.) */
+static int isdup(eqn_t *e) {
+        eqnlist_t *ep;
+        termlist_t *t;
+
+        assert(!(e->eflags & DELETED));
+        // fprintf(stderr, "Debug:  isdup(%s)\n", debug_dumpeqn(e));
+        for (ep=e->rhs.s->affectedby; ep; ep=ep->next) {
+                termlist_t *t2;
+                assert(ep->e);
+                if (ep->e == e)
+                        continue;
+                // fprintf(stderr, "Debug:   checking against %s\n", debug_dumpeqn(ep->e));
+                for (t=ep->e->lhs,t2=e->lhs; t && t2; t=t->next,t2=t2->next) {
+                        assert(t->t && t->t->s && t2->t && t2->t->s);
+                        if (t->t->coeff != t2->t->coeff
+                                       || t->t->s != t2->t->s)
+                                break;
+                }
+                if (t || t2)
+                        continue;
+
+                /* `op' mismatches can cause subtle bugs. */
+                if (e->op == EQUALS && ep->e->op == SUBSET)
+                        return 0;
+                else if (e->op == SUBSET && ep->e->op == EQUALS)
+                        return rangesubset(e->c, ep->e->c);
+                assert(e->op == ep->e->op);
+
+                /* Found another equation with the same terms, don't need
+                   to add a new one.  But if they have different constant
+                   terms, we must take their union, since both have to hold. */
+                // fprintf(stderr, "Debug:  already exists, rangeunion()\n");
+                /* XXX: should really free e->lhs here. */
+                if (rangeinrange(e->c, &(ep->e->c)) && ep->e->lhs) {
+                        assert(ep->e->lhs->t && ep->e->lhs->t->s);
+                        ep->e->lhs->t->s->flags |= SURVIVES;
+                }
+                return 1;
+        }
+        return 0;
+}
+
+
+/* Input: an equation `tmp', that was allocated locally in the caller
+   (NOT with `neweqn()'!!), and that is NOT referenced in the graph.
+   Operation: We add `tmp' to the graph (updating all the necessary
+   affects and affectedby lists), _unless_ it would create a duplicate.
+   Returns: 0 if it was a duplicate, 1 if it added new information
+   to the graph.
+   It's the caller's responsibility to "touch" a LHS set if this equation
+   is added. */
+static int addeqn_unlessdup(eqn_t *tmp) {
+        eqn_t *prm; /* permanent */
+        termlist_t *t;
+
+        /* See if there is already another equation with the same
+           terms as `tmp'. */
+        assert(tmp && tmp->rhs.s);
+        assert(!(tmp->eflags & DELETED));
+        fprintf(stderr, "Debug: addeqn_unlessdup(%s)\n", debug_dumpeqn(tmp));
+        if (isdup(tmp))
+                return 0;
+
+        /* This is a totally new equation, so add it for real. */
+        prm = neweqn();
+        *prm = *tmp;
+        prm->rhs.s->affectedby = inseqn(prm->rhs.s->affectedby, prm);
+        for (t=prm->lhs; t; t=t->next) {
+                assert(t->t && t->t->s);
+                t->t->s->affects = inseqn(t->t->s->affects, prm);
+        }
+        fprintf(stderr, "Debug:  it's new, added %s.\n", debug_dumpeqn(prm));
+        return 1;
+}
+
+
+/* A linked list of all the sets in existence, linked by s->nextset fields. */
+static set_t *allsets = NULL;
+
+
+/* Finds cycles among the "live" sets.
+   (A set is "live" if it is in one of the queues, or if it is
+    reachable from another live set.)
+   We ignore eqns `S + T + ... + c subset Z' where c is empty
+   (probably shouldn't happen, but who knows).
+
+   Every cycle lets us deduce new information about the sets involved in it.
+   There are three cases:
+   <1> The sum of the hi values around the cycle is > 0.
+   <2> The sum of the lo values around the cycle is < 0.
+   <3> Every edge on the cycle has lo=hi, and moreover
+       the sum of those values is = 0.
+   (To see that these cases enumerate all the possibilities,
+    note that lo<hi for all edges on the cycle, and take sums.
+    Thus, if you're not in <1> or <2>, we have
+    0 <= sum(lo's) <= sum(hi's) <= 0, i.e. sum(lo's) = sum(hi's) = 0
+    and we're in <3>.)
+   Each of these cases gives some new information, as follows:
+   <1> Deduce that every set in the cycle has the form {n,n+1,n+2,...}
+   <2> Deduce that every set in the cycle has the form {n,n-1,n-2,...}
+   <3> Deduce that all the sets in the cycle can be unified.
+   (Proof: <1>, <2> are trivial.  <3> requires some thought, but it's ok.)
+
+   Given this principle, the algorithm is very simple.
+   We just do a depth-first search; each back-edge gives a cycle
+   that can be eliminated.
+
+   Many nice properties can be proven:
+   1. If findcycles() is called, at least one cycle will be found.
+      (Proof: run() only calls findcycles() if there are no nodes of
+       in-degree zero, so at least one cycle exists.)
+   2. Suppose we call findcycles() repeatedly.  Then each call to
+      findcycles() removes at least one new cycle forever (with
+      multiplicities, i.e. if a cycle falls into two cases simultaneously,
+      it may be discovered two times, but it the second time will be
+      classified into a different case than the first time), and
+      no cycle will be removed twice.
+      (Proof: First, if there are no new cycles to discover, the
+      iteration terminates immediately.  Second, no cycle can be
+      discovered twice, because no "flow" can be pushed through it
+      and thus none of its sets will get "touched".  If a set S
+      is not reachable from any "touched" set, then S can be finalized.
+      Third, if there is a new cycle, the DFS will find it.)
+
+   We use ALIVE to mark currently "live" sets, SURVIVES to mark
+   sets which will be "live" in the next iteration, MARKED to indicate
+   sets which have already been traversed by the DFS.
+
+   Returns 0 when there are no further "live" sets to traverse,
+   1 otherwise.
+*/
+static void dfsvisit(set_t *s, int lvl);
+static int findcycles(void) {
+        set_t *s;
+        int rv = 0, i;
+
+        for (s=allsets; s; s=s->nextset) {
+                setflags_t f = s->flags;
+                if (f & SURVIVES) {
+                        s->flags = (f|ALIVE) & ~(SURVIVES|MARKED|GRAY);
+                        rv = 1;
+                } else {
+                        s->flags = f & ~(ALIVE|SURVIVES|MARKED|GRAY);
+                }
+                s->dfs_backptr_s = NULL;
+                s->dfs_backptr_e = NULL;
+                s->runningaf = affineidentity;
+        }
+
+        /* Do a DFS. */
+        fprintf(stderr, "Debug findcycles(): doing DFS\n");
+        i = 0;
+        for (s=allsets; s; s=s->nextset) {
+                if ((s->flags & (ALIVE|MARKED)) == ALIVE) {
+                        dfsvisit(s, 0);
+                }
+        }
+
+        for (i=0; i<neqns; i++)
+                if (!(eqns[i].eflags & DELETED))
+                        simplifyprune(&eqns[i]);
+
+        return rv;
+}
+
+/* Returns the label on the edge from `s' to `e->rhs.s' via `e'.
+   (By ``edge label'' we mean the affine function $f$ such that
+   `e' induces `f(s) subset e->rhs.s'.) */
+static affine_t edgelbl(set_t *s, eqn_t *e) {
+        termlist_t *tp;
+        term_t *stp = NULL;
+        affine_t af = affineidentity;
+        assert(e->op == SUBSET);
+        af.b = e->c;
+        for (tp=e->lhs; tp; tp=tp->next) {
+                assert(tp->t && tp->t->s);
+                if (tp->t->s == s) {
+                        stp = tp->t;
+                        continue;
+                }
+                af.b = rangeadd(af.b, rangemul(tp->t->coeff, tp->t->s->r));
+        }
+        assert(stp && stp->coeff && stp->s == s);
+        assert(e->rhs.coeff == 1);
+        af.a = stp->coeff;
+        fprintf(stderr, "Debug: edgelbl(%s->%s by %s) = %s\n",
+                s->name, e->rhs.s->name, debug_dumpeqn(e), affinestr(af));
+        return af;
+}
+
+static void handlecycle(set_t *s, eqn_t *e);
+
+static void dfsvisit(set_t *s, int lvl) {
+        eqnlist_t *ep;
+
+        assert(s && s->name && !(s->flags & (MARKED|GRAY)));
+        fprintf(stderr, "Debug dfs(): visit `%s' (depth %d)\n", s->name, lvl);
+        s->flags |= MARKED|GRAY;
+        for (ep=s->affects; ep; ep=ep->next) {
+                set_t *rhs = ep->e->rhs.s;
+                affine_t af;
+
+                assert(ep->e && ep->e->rhs.s && rhs && ep->e->op == SUBSET);
+                af = edgelbl(s, ep->e);
+
+                if (!rangeinset(affineapp(af, s->r), rhs))
+                        continue; /* Not modified, so _DO NOT_ visit it!! */
+
+                /* We modified the RHS of this edge, so it will be
+                   "live" in the next iteration.
+                   Also, we visit it, if we haven't already. */
+                assert(!(rhs->flags & FINALIZED));
+                if (rhs->flags & MARKED) {
+                        /* We already visited it.  Is it a cycle? */
+                        if (rhs->flags & GRAY)
+                                handlecycle(s, ep->e); /* back-edge => cycle */
+                        continue;
+                } else {
+                        /* We haven't visited it yet, so recurse. */
+                        rhs->dfs_backptr_s = s;
+                        rhs->dfs_backptr_e = ep->e;
+                        rhs->runningaf = affinecomp(s->runningaf, af);
+                        dfsvisit(rhs, lvl+1);
+                }
+        }
+        s->flags &= ~GRAY; /* Done with this vertex. */
+}
+
+/* We found a cycle.  It starts at e->rhs.s, then follows the DFS graph,
+   then traverses s (as the next-to-last vertex), and the final edge in
+   the cycle is e.  The cycle can be recovered (in reverse order) by
+   retracing the `dfs_backptr_*' edges, starting at `s'.
+
+   See above for what information can be deduced from each cycle. */
+/* Pictorially:
+
+   __
+  /  \
+ /    \
+|      !  <-- the . in the ! is lastedge->rhs.s
+ \    %|
+  \__, |
+     ^ |   the % is lastedge
+     |
+    the , is lastset
+*/
+/*
+ This is too cool.  I get to use a fixed point theorem!
+ Thm. Suppose $\{d,\ldots,e\} \in S$ (for $d\le e$),
+      and $a \times S + \{b,\ldots,c\} \subset S$ (for $a>0$ and $b\le c$).
+      (Everything in sight is over the integers.)
+      Then there are two cases:
+      1. $ad+b < d$, in which case $-\infty \in S$.
+      2. $ae+c > e$, in which case $+\infty \in S$.
+      These two cases exhaust the possibilities
+      (but are not necessarily mutually exclusive),
+      unless $a=1$ and $b=c=0$.
+ Prf. WLOG, consider case 1, and suppose there is a least element $x$ of $S$.
+      Then $ax+b \in S$, so $ax+b \ge x$; but also $x\le d$,
+      so $(a-1)x+b \le (a-1)d+b < 0$ and $ax+b < x$, contradiction.
+      On to the last statement of the theorem.
+      First, if $a=1$, $b<c$, and $d<e$,
+      then $(ae+c)-(ad+b)>e-d$, so 
+      $\{ad+b,\ldots,ae+c\}$ cannot be contained in $\{d,\ldots,e\}$.
+      Second, if $a>1$ and $d<e$, then again $(ae+c)-(ad+b)\ge a(e-d)>e-d$.
+      Third, suppose $a>1$, $d=e$, and $b<c$: if $ad+b \ge d$
+      then $ad+c \ge d+c-b > d$, and similarly if $ad+c \le d$
+      then $ad+b \le d+b-c < d$.
+      Finally, if $a=1$, $b=c \ne 0$, and $d=e$, then
+      either $ad+b<d$ (if $b<0$) or $ae+c>e$ (if $c>0$).
+      QED.
+ Corollary.
+      Suppose we get the relation $a \times S + \{b,\ldots,c\} \subset S$
+      from a cycle, and we already know $\{d,\ldots,e\} \subset S$.
+      Then we can extract all useful information from the relation in
+      constant time.
+ Prf. Suppose first $a>0$ and not all of $a=1,b=c=0$ hold;
+      then the previous theorem solves the problem.
+      Next, suppose that $a=1,b=c=0$; I claim that all the sets on
+      the cycle can be unified (up to addition by a constant).
+      Note that every relation on the cycle is of the form $U+\{x\} \subset V$.
+      Let $T$ be any set on the cycle (other than $S$); then we have
+      $S+x \subset T$ and $T-x \subset S$ for some $x$, and thus
+      $T \subset S+x$, which implies $T=S+x$.
+      Third, if $a=0$, the case is trivial.
+      Finally, if $a<0$, we note that we may traverse the cycle
+      twice to get a relation of the form
+      $a^2 \times S + \{(a+1)b,\ldots,(a+1)c\} \subset S$.
+      (XXX: need to analyze this case more fully.)
+*/
+
+static void unifycycle(set_t *lastset, eqn_t *lastedge);
+static void handlecycle(set_t *lastset, eqn_t *lastedge) {
+        set_t *s, *prev, *t=lastedge->rhs.s;
+        eqn_t *e;
+        affine_t cycleaf = affineidentity;
+        affine_t cycle2af = affineidentity;
+        range_t newr;
+        int changed;
+
+        assert(lastset && lastedge && lastedge->rhs.s);
+        fprintf(stderr, "Debug: handling cycle: %s", lastedge->rhs.s->name);
+        /* Backtrace the cycle to calculate the affine function for the
+           whole cycle (primarily for debugging, since the `cycle2af'
+           computation below is more efficient). */
+        for (s=lastedge->rhs.s,prev=lastset,e=lastedge;
+             prev;
+             s=prev,prev=s->dfs_backptr_s,e=s->dfs_backptr_e) {
+                /* The edge from `prev' -> `s' by way of `e' is in the cycle. */
+                affine_t edgeaf;
+                assert(s && prev && e && e->rhs.s == s);
+                assert(e->rhs.coeff == 1 && e->op == SUBSET);
+                fprintf(stderr, " <- %s", prev->name);
+                edgeaf = edgelbl(prev, e);
+                cycleaf = affinecomp(cycleaf, edgeaf);
+                if (prev == lastedge->rhs.s)
+                        break;
+        }
+        assert(prev && prev == lastedge->rhs.s && prev == t);
+        fprintf(stderr, ".\n");
+        cycle2af = affinecomp(
+                affinedecomp(lastset->runningaf, lastedge->rhs.s->runningaf),
+                edgelbl(lastset, lastedge)
+        );
+        fprintf(stderr, "Debug handlecycle(): cycleaf=%s,", affinestr(cycleaf));
+        fprintf(stderr, " cycle2af=%s.\n", affinestr(cycle2af));
+        assert(cycleaf.a == cycle2af.a && cycleaf.b.lo == cycle2af.b.lo
+                && cycleaf.b.hi == cycle2af.b.hi);
+        if (cycleaf.a < infzero)
+                fatal("CycleAF = %s: Negative coeff's not implemented yet.", affinestr(cycleaf));
+        if (cycleaf.a == infzero)
+                fatal("CycleAF = %s: Zero coeff shouldn't happen.", affinestr(cycleaf));
+        newr = affineapp(cycleaf, t->r);
+        /* Now use the fixed point theorem... */
+        if (newr.lo < t->r.lo)
+                newr.lo = NEGINF;
+        if (newr.hi > t->r.hi)
+                newr.hi = INF;
+        changed = rangeinset(newr, t);
+        if (cycleaf.a == inf(1L) && cycleaf.b.lo == inf(0L)
+            && cycleaf.b.hi == inf(0L)) {
+                assert(!changed);
+                unifycycle(lastset, lastedge);
+        }
+}
+
+static void unify(set_t *s, range_t c, set_t *t);
+static void unifycycle(set_t *lastset, eqn_t *lastedge) {
+        set_t *s, *prev;
+        set_t *t=lastedge->rhs.s;
+        eqn_t *e;
+        termlist_t *tl = NULL; // abuse termlists as a `(set_t * intinf) list'
+        term_t *tt;
+        intinf quum = infzero; /* Cumulative sum of `c' around the cycle. */
+
+        fprintf(stderr, "Debug unifycycle(): walking the cycle...\n");
+        /* Backtrace the cycle, unifying each element of the cycle. */
+        for (s=lastedge->rhs.s,prev=lastset,e=lastedge;
+             prev && prev != t;
+             s=prev,prev=s->dfs_backptr_s,e=s->dfs_backptr_e) {
+                /* The edge from `prev' -> `s' by way of `e' is in the cycle,
+                   so unify `prev' and `t', effectively removing `prev'. */
+                affine_t edgeaf;
+                tt = mymalloc(sizeof(term_t));
+                assert(s && prev && e && e->rhs.s == s);
+                assert(e->rhs.coeff == 1 && e->op == SUBSET);
+                fprintf(stderr, " <- %s", prev->name);
+                edgeaf = edgelbl(prev, e);
+                assert(edgeaf.a == inf(1L) && edgeaf.b.lo == edgeaf.b.hi);
+                quum = infsub(quum, edgeaf.b.lo);
+                tt->coeff = quum;
+                tt->s = prev;
+                tl = insterm(tl, tt);
+        }
+        fprintf(stderr, ".\n");
+        assert(prev && prev == lastedge->rhs.s && prev == t);
+        assert(tl);
+        assert(quum == inf(0L));
+        fprintf(stderr, "Debug unifycycle(): unifying...\n");
+        for (; tl; tl=delterm(tl,tl->t)) {
+                range_t r;
+                assert(tl->t && tl->t->s);
+                r.lo = r.hi = tl->t->coeff;
+                unify(t, r, tl->t->s);
+        }
+        fprintf(stderr, "Debug unifycycle(): done.\n");
+}
+
+
+
+
+
+static void dfs_relevant(set_t *s) {
+        eqnlist_t *e;
+        termlist_t *t;
+        assert(s && s->name);
+        // fprintf(stderr, "Debug dfs: visit `%s'\n", s->name);
+        s->flags |= RELEVANT;
+        for (e=s->affectedby; e; e=e->next)
+                for (t=e->e->lhs; t; t=t->next)
+                        if (!(t->t->s->flags & RELEVANT))
+                                dfs_relevant(t->t->s);
+}
+
+/* Remove stuff in the system not relevant to the QUERIED sets.
+   (For each equation `S + T + ... subset U', if U is relevant
+   we say that S,T,...  are also relevant.  QUERIED sets are
+   trivially relevant.  Thus, a depth-first search can recover
+   all the relevant sets.) */
+static void removeirrelevant(void) {
+        set_t *s, *prev, *next;
+        fprintf(stderr, "Debug: -- removeirrelevant() --\n");
+        for (s=allsets; s; s=s->nextset)
+                s->flags &= ~RELEVANT;
+        for (s=allsets; s; s=s->nextset)
+                if (s->flags & QUERIED && !(s->flags & RELEVANT))
+                        dfs_relevant(s);
+        s = allsets; prev = NULL;
+        while (s) {
+                next = s->nextset;
+                if (!(s->flags & RELEVANT)) {
+                        eqnlist_t *e, *next2;
+                        fprintf(stderr, "Debug: `%s' irrelevant, deleting.\n",
+                                s->name);
+                        /* Delete s from the list of all sets. */
+                        if (s == allsets) {
+                                allsets = next;
+                        } else {
+                                assert(prev && prev->nextset);
+                                prev->nextset = next;
+                        }
+
+                        /* Delete all equations mentioning s. */
+                        for (e=s->affectedby; e; e=next2) {
+                                next2 = e->next;
+                                killeqn(e->e);
+                        }
+                        for (e=s->affects; e; e=next2) {
+                                next2 = e->next;
+                                killeqn(e->e);
+                        }
+                        /* XXX: Should free s->affects, s->affectedby lists. */
+                        assert(!s->affects && !s->affectedby);
+
+                        /* Free s. */
+                        /*  XXX: no: other stuff (e.g. aftermath()) uses this
+                        free(s->name);
+                        free(s);
+                        */
+                } else {
+                        prev = s;
+                }
+                s = next;
+        }
+        if (!allsets)
+                fprintf(stderr, "Debug: no more sets left!\n");
+}
+
+
+/* Process an identity of the form `s + c = t',
+   where s,t are sets and c is a constant term.
+   Algorithm: find all references to `t' and replace them with `s+c';
+   then remember the relationship between `s' and `t' with a new equation.
+   (Can't handle stuff like `s + t = u', because what if `u' appears
+   on the RHS of another equations??)  */
+static void unify(set_t *s, range_t c, set_t *t) {
+        eqnlist_t *el, *nextel;
+        eqn_t tmpe;
+        term_t *trm;
+
+        assert(s && t && !rangeempty(c));
+        fprintf(stderr, "Debug: unify(%s + %s = %s)\n",
+                s->name, rangestr(c), t->name);
+
+        /* Find all equations with `t' on the LHS, and substitute for `t'. */
+        for (el=t->affects; el; el=nextel) {
+                termlist_t *tl, *nexttl;
+                assert(el->e);
+                nextel = el->next;
+                assert(el->e->op == SUBSET || el->e->op == EQUALS);
+                for (tl=el->e->lhs; tl; tl=nexttl) {
+                        term_t *trm;
+                        assert(tl->t && tl->t->s);
+                        nexttl = tl->next;
+                        if (tl->t->s != t)
+                                continue;
+                        trm = mymalloc(sizeof(term_t));
+                        trm->coeff = tl->t->coeff;
+                        trm->s = s;
+                        el->e->lhs = delterm(el->e->lhs, tl->t);
+                        t->affects = deleqn(t->affects, el->e);
+                        el->e->lhs = insterm(el->e->lhs, trm);
+                        s->affects = inseqn(s->affects, el->e);
+                        el->e->c = rangeadd(el->e->c, rangemul(trm->coeff, c));
+                        if (isdup(el->e)) {
+                                /* We made el->e a duplicate.  Delete it. */
+                                killeqn(el->e);
+                        }
+                           
+                        break;
+                }
+                assert(tl);
+        }
+        /* Should have eliminated all equations with `t' on LHS. */
+        assert(!t->affects);
+
+        /* Find all equations with `t' on the RHS, and substitute. */
+        // fprintf(stderr, "Debug: unify() doing RHS...\n");
+        for (el=t->affectedby; el; el=nextel) {
+                assert(el && el->e && el->e->rhs.s == t);
+                nextel = el->next;
+                assert(el->e->op == SUBSET || el->e->op == EQUALS);
+                if (el->e->op == EQUALS && el->e->lhs && !el->e->lhs->next
+                    && el->e->lhs->t->s == s) {
+                        /* We're about to create an equation of the
+                           form `s + c = s'.  Don't do it!  */
+                        assert(el->e->lhs->t->coeff == 1);
+                        assert(el->e->rhs.coeff == 1);
+                        assert(el->e->rhs.s == t);
+                        assert(el->e->lhs->t->s && el->e->rhs.s);
+                        assert(el->e->c.lo == c.lo && el->e->c.hi == c.hi);
+                        fprintf(stderr, "Debug: removing %s\n", debug_dumpeqn(el->e));
+                        killeqn(el->e);
+                        continue;
+                }
+                el->e->rhs.s = s;
+                assert(el->e->rhs.coeff == 1);
+                el->e->c = rangesub(el->e->c, c);
+                t->affectedby = deleqn(t->affectedby, el->e);
+                s->affectedby = inseqn(s->affectedby, el->e);
+                if (isdup(el->e)) {
+                        /* We made el->e a duplicate.  Delete it. */
+                        killeqn(el->e);
+                        continue;
+                }
+        }
+        /* Should have eliminated all equations with `t' on RHS. */
+        assert(!t->affectedby);
+
+        /* Flow from `t' to `s'. */
+        (void)rangeinset(rangesub(t->r,c), s);
+
+        /* Add a new equation `s + c subset t'.
+           (Note that we do _not_ add `s + c = t'.
+            This is safe, since now `t' only appears in one equation,
+            namely `s + c = t', so `t' won't change again except
+            due to `s''s effect, and we've already flowed from
+            `t' to `s' once so the `t' -> `s' dependence is
+            already accounted for.) */
+        tmpe.c = c;
+        trm = mymalloc(sizeof(term_t));
+        trm->s = s; trm->coeff = 1;
+        tmpe.lhs = insterm(NULL, trm);
+        tmpe.rhs.s = t; tmpe.rhs.coeff = 1;
+        tmpe.op = SUBSET;
+        tmpe.eflags = 0;
+        if (addeqn_unlessdup(&tmpe))
+                s->flags |= SURVIVES;
+        assert(t->affectedby);
+}
+
+
+
+#define SETTBLSIZ 50021
+static set_t *settbl[SETTBLSIZ];
+
+
+static unsigned int hash(unsigned char *name, unsigned int salt) {
+        unsigned int hash = (salt*salt) % 15000017;
+        while (*name)
+                hash = (((hash<<8) + (*name++)) ^ salt) % 15000017;
+        return hash;
+}
+
+
+static set_t *newset(char *name) {
+        set_t *s = mymalloc(sizeof(set_t));
+
+        if (!isalpha(*name))
+                fatal("Variable-name `%s' didn't start with a letter.", name);
+        else if (strchr(name, ' '))
+                fatal("Variable-name `%s' contained a space.", name);
+
+        s->r.lo = INF;
+        s->r.hi = NEGINF;
+        s->hardbound.lo = NEGINF;
+        s->hardbound.hi = INF;
+        s->flags = 0;
+        s->name = strdup(name);
+
+        /* Insert s in the list of all sets. */
+        s->nextset = allsets;
+        allsets = s;
+
+        /* Fill in s->affects, s->affectedby later. */
+        s->affects = s->affectedby = NULL;
+        return s;
+}
+
+static set_t *getset(char *name) {
+        set_t *p;
+        int i, h;
+        for (i=0; i<100; i++) {
+                h = hash(name, i) % SETTBLSIZ;
+                p = settbl[h];
+                if (p && p->name && strcmp(p->name, name) == 0)
+                        return p;
+                if (!p) {
+                        p = newset(name);
+                        settbl[h] = p;
+                        return p;
+                }
+        }
+        fatal("Hash table too full (name=`%s').", name);
+}
+
+/* Reads a term of the form `var' or `5*var' (but not `5'!). */
+static void readterm(term_t *t, char *str) {
+        char *p = strchr(str, '*'), *q;
+        t->coeff = 1;
+        if (p) {
+                *p++ = '\0';
+                t->coeff = inf(strtol(str, &q, 10));
+                if (q != p)
+                        fatal("Couldn't parse coefficient of `%s*%s'.", str, p);
+                str = p;
+        }
+        t->s = getset(str);
+}
+
+/* Reads the left-hand-side of an equation. */
+static void readleft(char *str, eqn_t *e) {
+        char *p, *q;
+        intinf n;
+        assert(str && e && !e->lhs && !e->c.lo && !e->c.hi);
+        while (str) {
+                /* Separate out the current term, and remember where it ends. */
+                p = strstr(str, " + ");
+                if (p) {
+                        *p = '\0'; p = p + strlen(" + ");
+                }
+
+                /* Parse the term. */
+                n = inf(strtol(str, &q, 10));
+                if (*q == '\0') {
+                        e->c.lo = infadd(e->c.lo, n);
+                        e->c.hi = infadd(e->c.hi, n);
+                } else if (strcmp(q, "top") == 0) {
+                        e->c.lo = NEGINF;
+                        e->c.hi = INF;
+                } else {
+                        term_t *t = mymalloc(sizeof(term_t));
+                        t->coeff = 1;
+                        if (*q == '*') {
+                                t->coeff = n; q++;
+                        } else if (q != str)
+                                fatal("Trouble parsing term `%s'.", str);
+                        t->s = getset(q);
+                        e->lhs = insterm(e->lhs, t);
+                }
+
+                /* Advance to the next term. */
+                str = p;
+        }
+}
+
+static void readquery(char *line) {
+        set_t *s = getset(line);
+        assert(s);
+        s->flags |= QUERIED;
+}
+
+static void readeqn(char *line) {
+        char *p = NULL;
+        eqn_t *e = NULL;
+        if (strstr(line, "query ") == line) {
+                readquery(line + strlen("query "));
+                return;
+        } else if ((p = strstr(line, " subset ")) != NULL) {
+                e = neweqn();
+                e->op = SUBSET;
+                *p = '\0';
+                p += strlen(" subset ");
+        } else if ((p = strstr(line, " = ")) != NULL) {
+                intinf n;
+                char *q;
+                *p = '\0';
+                p += strlen(" = ");
+                n = inf(strtol(p, &q, 10));
+                if (*q == '\0') {
+                        set_t *s = getset(line);
+                        s->r.lo = s->r.hi = n;
+                        s->hardbound.lo = s->hardbound.hi = n;
+                        return;
+                } else if (q != p && *q != '*')
+                        fatal("Trouble parsing `%s = %s'.", line, p);
+                e = neweqn();
+                e->op = EQUALS;
+        } else if ((p = strstr(line, " >= ")) != NULL) {
+                intinf lo;
+                term_t t;
+                char *q;
+                *p = '\0';
+                p += strlen(" >= ");
+                lo = inf(strtol(p, &q, 10));
+                if (*q != '\0')
+                        fatal("Couldn't parse RHS of `%s >= %s'; "
+                              "not an integer constant.", line, p);
+                readterm(&t, line);
+                if (t.coeff != 1 || !(t.s))
+                        fatal("Couldn't parse LHS of `%s >= %s'; "
+                              "not a set variable.", line, p);
+                if (lo > t.s->hardbound.lo)
+                        t.s->hardbound.lo = lo;
+                return;
+        } else
+                fatal("Trouble parsing eqn `%s'.", line);
+
+        readleft(line, e);
+        readterm(&(e->rhs), p);
+
+        if (e->rhs.coeff != 1)
+                fatal("Coeff != 1 in `%s subset %s'.", line, p);
+}
+
+/* Given a system of equations (set constraints),
+   eliminate all the EQUALS constraints, by unifying
+   set variables if possible, or else by doing substitutions. */
+static void do_unifies(void) {
+        int i;
+        fprintf(stderr, "Debug: -- do_unifies() --\n");
+        for (i=0; i<neqns; i++) {
+                eqn_t *e = &eqns[i];
+                if (e->op != EQUALS || e->eflags & DELETED)
+                        continue;
+                assert(e && e->lhs && e->lhs->t && e->lhs->t->s && e->rhs.s);
+                assert(e->rhs.coeff == 1 && e->lhs->t->coeff == 1);
+                assert(!e->lhs->next);
+                unify(e->lhs->t->s, e->c, e->rhs.s);
+        }
+}
+
+/* Initialize the s->affects, s->affectedby lists. */
+static void seteffects(void) {
+        termlist_t *p;
+        int i;
+        fprintf(stderr, "Debug: -- seteffects() --\n");
+        for (i=0; i<neqns; i++) {
+                assert(eqns[i].rhs.s && !(eqns[i].eflags & DELETED));
+                eqns[i].rhs.s->affectedby =
+                    inseqn(eqns[i].rhs.s->affectedby, &eqns[i]);
+
+                for (p=eqns[i].lhs; p; p=p->next) {
+                        assert(p->t && p->t->s);
+                        p->t->s->affects = inseqn(p->t->s->affects, &eqns[i]);
+                }
+        }
+}
+
+/* Process equations which would otherwise have been overlooked. */
+static void orphans(void) {
+        set_t *s;
+        int i;
+
+        fprintf(stderr, "Debug: -- orphans() --\n");
+        for (s=allsets; s; s=s->nextset)
+                if (s->affectedby == NULL && !(s->flags & FINALIZED))
+                        finalize(s);
+        for (i=0; i<neqns; i++) {
+                if (!eqns[i].lhs && !(eqns[i].eflags & DELETED)) {
+                        /* This equation doesn't appear in any affectedby
+                           list, so if we don't do it now, it'll never get
+                           considered. */
+                        /* XXX: is it ok that eqns[i].rhs might have been
+                           already marked FINALIZED? */
+                        eqn_t *e = &eqns[i];
+                        assert(e && e->rhs.s);
+                        (void)rangeinset(e->c, e->rhs.s);
+                        (void)prune(e);
+                }
+        }
+}
+
+/* Get ready to start flowing by initializing the workqueue to contain
+   all the FINALIZED sets. */
+static void touch_finalized(void) {
+        set_t *s;
+        fprintf(stderr, "Debug: -- touch_finalized() --\n");
+        for (s=allsets; s; s=s->nextset)
+                if (s->flags & FINALIZED) {
+                        /* Simplify (and maybe prune?) other eqns. */
+                        s->flags |= SURVIVES;
+                }
+}
+
+/* Find equations `LHS + c subset RHS' where c is an empty range:
+   this seems highly unnatural! */
+static void findemptyc(void) {
+        int i;
+        fprintf(stderr, "Debug: -- findemptyc() --\n");
+        for (i=0; i<neqns; i++) {
+                if (rangeempty(eqns[i].c)) {
+                        fprintf(stderr, "Debug: empty constant term?: %s\n",
+                                debug_dumpeqn(&eqns[i]));
+                }
+        }
+}
+
+static void readsystem(void) {
+        char line[1024], *p;
+        while (fgets(line, sizeof(line), stdin)) {
+                p = strchr(line, '\n');
+                if (p)
+                        *p = '\0';
+                if (*line == '\0')
+                        continue;
+                readeqn(line);
+        }
+
+        /* Order is very important here. */
+        seteffects();
+        removeirrelevant();
+        findemptyc();
+        do_unifies();
+        orphans();
+        touch_finalized();
+}
+
+/* Check whether the current solution respects the constraints. */
+static int isasolution(void) {
+        int i;
+        set_t *s;
+        for (s=allsets; s; s=s->nextset) {
+                if (!rangeempty(s->r)
+                         && (s->hardbound.lo > s->r.lo
+                             || s->r.lo > s->r.hi
+                             || s->r.hi > s->hardbound.hi) )
+                        return 0;
+        }
+        for (i=0; i<neqns; i++) {
+                eqn_t *e = &eqns[i];
+                termlist_t *p;
+                range_t lhs = e->c;
+                range_t rhs;
+                if (e->eflags & DELETED)
+                        continue;
+                assert(e->rhs.s);
+                rhs = e->rhs.s->r;
+                for (p=e->lhs; p; p=p->next)
+                        lhs = rangeadd(lhs, rangemul(p->t->coeff, p->t->s->r));
+                /*
+                fprintf(stderr, "Debug aftermath(): lhs=%s, rhs=%s\n",
+                        strdup(rangestr(lhs)), strdup(rangestr(rhs)));
+                */
+                if (e->op == EQUALS) {
+                        if (lhs.lo != rhs.lo || lhs.hi != rhs.hi)
+                                return 0;
+                } else if (e->op == SUBSET) {
+                        if (!rangeempty(lhs)
+                                       && (rhs.lo > lhs.lo || rhs.hi < lhs.hi))
+                                return 0;
+                } else
+                        fatal("isasolution() punting on e->op=%d.", e->op);
+        }
+        return 1;
+}
+
+static void aftermath(void) {
+        set_t *s;
+
+        if (!isasolution())
+                fatal("Putative solution didn't check out.");
+        printf("Feasible.\n");
+        for (s=allsets; s; s=s->nextset) {
+                if (s->flags & QUERIED)
+                        printf("%s = %s\n",  s->name, rangestr(s->r));
+        }
+}
+
+static void run(void) {
+        while (findcycles())
+                ;
+}
+
+static void again(void) {
+        set_t *s;
+        fprintf(stderr, "Debug: again(), touching");
+        for (s=allsets; s; s=s->nextset)
+                if (!(s->flags & FINALIZED)) {
+                        fprintf(stderr, " `%s'", s->name);
+                        s->flags |= SURVIVES;
+                }
+        fprintf(stderr, ".\n");
+}
+
+int main(int argc, char **argv) {
+        /* For infmul() */
+        if (INF*INF > MAXLONG)
+                fatal("Decrease INF.");
+        else if (NEGINF*NEGINF < MINLONG)
+                fatal("Increase NEGINF.");
+
+        readsystem();
+        run();
+#if 0
+        fprintf(stderr, "--- Debug: is%s a solution, before again(). ---\n",
+                (isasolution() ? "" : " NOT"));
+        again(); run(); /* just to double-check; shouldn't be necessary */
+#endif
+        aftermath();
+        return 0;
+}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d80 11
+d216 3
+a218 1
+   MARKED:    a generic ``marker'' for any of many graph searches.
+d220 2
+a221 2
+typedef enum {ALIVE=1, SURVIVES=2,
+              FINALIZED=4, QUERIED=8, RELEVANT=16, MARKED=32} setflags_t;
+a251 1
+        int component;
+d339 6
+a344 2
+        if (list->t == t)
+                return list->next;
+d752 1
+a752 1
+                        s->flags = (f|ALIVE) & ~(SURVIVES|MARKED);
+d755 1
+a755 1
+                        s->flags = f & ~(ALIVE|SURVIVES|MARKED);
+a759 1
+                s->component = -1;
+a766 1
+                        s->component = i++;
+d808 1
+a808 1
+        assert(s && s->name && !(s->flags & MARKED));
+d810 1
+a810 1
+        s->flags |= MARKED;
+d827 2
+a828 2
+                        if (rhs->component == s->component)
+                                handlecycle(s, ep->e);
+a834 1
+                        rhs->component = s->component;
+d838 1
+d904 1
+d911 1
+d931 1
+a931 1
+        assert(prev);
+d946 1
+d951 1
+a951 1
+        (void)rangeinset(newr, t);
+d953 4
+a956 2
+            && cycleaf.b.hi == inf(0L))
+                fatal("CycleAF = %s: Unification not implemented yet.", affinestr(cycleaf));
+d960 40
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d899 3
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d498 1
+a498 1
+        fprintf(stderr, "Debug: pruning %s.\n", debug_dumpeqn(e));
+d1071 1
+a1071 1
+                        assert(el->e->c.lo == c.lo && el->e->c.hi && c.hi);
+a1294 1
+        set_t *s;
+a1307 3
+        for (s=allsets; s; s=s->nextset)
+                if (s->affectedby == NULL && !(s->flags & FINALIZED))
+                        finalize(s);
+d1312 1
+d1316 3
+d1370 1
+d1374 1
+a1375 1
+        do_unifies();
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d1063 13
+d1077 2
+a1078 1
+                el->e->c = rangesub(el->e->c, rangemul(el->e->rhs.coeff, c));
+a1085 17
+                if (el->e->op == EQUALS && el->e->lhs && !el->e->lhs->next
+                    && el->e->lhs->t->s == el->e->rhs.s) {
+                        /* We created an equation of the form `u + c = u'.
+                           Oops.  Better eliminate it... */
+                        assert(el->e->lhs->t->coeff == 1);
+                        assert(el->e->rhs.coeff == 1);
+                        assert(el->e->lhs->t->s && el->e->rhs.s);
+                        fprintf(stderr, "Debug: removing %s\n", debug_dumpeqn(el->e));
+                        if (!rangeempty(el->e->c) &&
+                          (el->e->c.hi != inf(0L) || el->e->c.lo != inf(0L))) {
+                                range_t tr = {NEGINF, INF};
+                                fprintf(stderr, "Debug:  %s -> top\n", el->e->rhs.s->name);
+                                (void)rangeinset(tr, el->e->rhs.s);
+                        }
+                        killeqn(el->e);
+                        continue;
+                }
+d1109 1
+d1310 2
+a1311 2
+                if (s->affectedby == NULL)
+                        s->flags |= FINALIZED;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@a753 2
+                } else if (!(s->flags & (FINALIZED|MARKED))) {
+                        finalize(s);
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@a34 6
+/* For infmul() */
+#if INF*INF > MAXLONG
+#error "Decrease INF"
+#elsif NEGINF*NEGINF < NEGINF
+#error "Increase NEGINF"
+#endif
+d46 1
+a46 1
+static const intinf infzero = inf(0L);
+d57 2
+a58 2
+/* Returns x/+Infinity, i.e. +1 if x=+Infinity, -1 if x=-Infinity, else 0. */
+static int inf_aleph0sign(intinf x) {
+d60 4
+d65 1
+a65 1
+        else if (x <= NEGINF)
+d73 3
+a75 3
+        switch(inf_aleph0sign(x)+inf_aleph0sign(y)) {
+                case  2: return INF;
+                case -2: return NEGINF;
+d83 5
+a87 5
+        switch(inf_aleph0sign(x)*inf_aleph0sign(y)) {
+                case  1: return INF;
+                case -1: return NEGINF;
+                case  0: fatal("impossible infmul() <1>.");
+                default: fatal("impossible infmul() <2>.");
+d116 1
+a116 1
+static const range_t zerorange = {(intinf)0L, (intinf)0L};
+d172 1
+a172 1
+static const affine_t affineidentity = {inf(1L), zerorange};
+d175 2
+a176 4
+static range_t affineapp(affine_t f, intinf x) {
+        intinf ax = infmul(f.a, x);
+        range_t axax = {ax,ax};
+        return rangeadd(axax, f.b);
+d195 2
+a196 2
+        sprintf(buf, "$x \mapsto %s x", infstr(af.a));
+        sprintf(buf, "%s + %s$", rangestr(af.b));
+d215 1
+a215 1
+        range_t hardbound;
+d226 3
+a228 1
+        /* For the DFS predecessor tree:
+d233 3
+a235 2
+
+        /* For the DFS; see findcycles(). */
+d237 3
+d276 1
+a276 1
+        sprintf(buf, "%s%s %s %s %s", buf, rangestr(e->c),
+d278 1
+a278 1
+                e->rhs.s->name, (e->eflags & DELETED) ? "[deleted]" : "");
+a400 78
+/* The workqueue contains a list of set variables which need to be
+   worked upon.  Operations: touch(), popq().
+   Actually, there are two workqueues:
+   `priorityq': highest priority, contains nodes with in-degree 0
+         (and thus processing these nodes cannot get you into a cycle)
+   `laterq':    lower priority, contains nodes with in-degree > 0
+         (and thus you may be chasing your tail)
+   */
+
+/* A single task. */
+typedef struct work_s {
+        set_t *s;
+        struct work_s *next;
+} work_t;
+typedef struct {
+        work_t *head;
+        work_t *tail; /* only valid if head != NULL */
+        int marker; /* ENQUEUED_FORPRIORITY or ENQUEUED_FORLATER */
+} workqueue_t;
+workqueue_t priorityq = {NULL,NULL,ENQUEUED_FORPRIORITY};
+workqueue_t laterq = {NULL,NULL,ENQUEUED_FORLATER};
+
+/* Get a set from the head of the work queue.
+   (Item must have been added using touch().)
+   If anything is available from priorityq, use it, otherwise use laterq. */
+static set_t *popq(void) {
+        workqueue_t *q = &priorityq;
+        work_t *w;
+        set_t *s;
+        if (!q->head) {
+                q = &laterq;
+                if (!q->head)
+                        return NULL;
+        }
+        assert(q->tail);
+        if (q->head == q->tail) {
+                assert(q->head->next == NULL);
+                q->tail = NULL;
+        }
+        w = q->head;
+        q->head = q->head->next;
+        assert(w && w->s && (w->s->flags & q->marker));
+        w->s->flags &= ~ q->marker;
+            /* ^-- safe, since touch() only allows any set to enter once */
+        s = w->s;
+        free(w);
+        return s;
+}
+/* Register a set as potentially-in-need-of-an-update, so that it
+   will get appended to the end of the work queue (if it's not already
+   in there).  Some time later popq() will return this set. */
+static void touch(set_t *s) {
+        workqueue_t *q;
+        work_t *w;
+        if (!s)
+                return;
+        q =  (s->affectedby) ? &laterq : &priorityq;
+        /*
+        fprintf(stderr, "Debug: touch `%s' (%s queue)%s.\n", s->name,
+                (q == &laterq) ? "later" : "priority",
+                (s->flags & q->marker)?" (already in queue)":"");
+        */
+        if (s->flags & q->marker)
+                return; /* already in the queue */
+        s->flags |= q->marker;
+
+        w = mymalloc(sizeof(work_t));
+        w->s = s;
+        w->next = NULL;
+        if (!q->head) {
+                q->head = q->tail = w;
+        } else {
+                assert(q->tail);
+                q->tail->next = w;
+                q->tail = w;
+        }
+}
+
+a406 14
+/* For run().
+   Counts # of times we've done an op that might not get us closer
+   to the final solution.
+   (If `iters' gets too large, we stop and search for cycles, in
+    case we were just chasing our tail endlessly.) */
+static int iters = 0;
+static void finalize(set_t *s) {
+        s->flags |= FINALIZED;
+        iters = 0; /* Made demonstrable progress toward final solution. */
+
+        /* Simplify (and maybe prune?) other eqns. */
+        touch(s);
+}
+
+d440 3
+a442 2
+   Also touch `s' if it changes. */
+static void rangeinset(range_t r, set_t *s) {
+d444 1
+a444 1
+        fprintf(stderr, "Debug:  force `%s in %s'.\n", rangestr(r), s->name);
+d447 1
+d449 2
+a450 2
+                fprintf(stderr, "Debug:   now `%s' includes %s.\n",
+                        s->name, rangestr(s->r));
+d452 2
+a453 1
+        checkhardbounds(s);
+d485 2
+a486 65
+/* One of the sets mentioned on the left-hand-side of eqn e might have
+   just changed, so let's update the right-hand-side of e. */
+static void flow(eqn_t *e) {
+        termlist_t *p;
+        term_t *cycle = NULL;
+        range_t r;
+        assert(e && e->rhs.s && e->rhs.coeff == 1);
+        assert(!(e->rhs.s->flags & FINALIZED));
+
+        r = e->c;
+        for (p=e->lhs; p; p=p->next) {
+                assert(p->t && p->t->s);
+                if (p->t->s == e->rhs.s) {
+                        cycle = p->t;
+                        continue;
+                }
+                r = rangeadd(r, rangemul(p->t->coeff, p->t->s->r));
+        }
+
+        if (cycle) {
+                /* There was a cyclical dependency in just this single equation
+                   (i.e. `S + T + ... subset S').  Eliminate it.  */
+
+                range_t toadd = rangemul(cycle->coeff, cycle->s->r);
+                      /* ^^^ save this val, in case `cycle' is freed below. */
+                range_t tmprange;
+
+                fprintf(stderr, "Debug: processing cyclical dependency.\n");
+                if (cycle->coeff != 1)
+                        fatal("cycle: lhs = %d*%s + %s + ..., rhs = %s.",
+                          cycle->coeff, cycle->s->name, rangestr(e->c),
+                          e->rhs.s->name);
+
+                /* `S + 5 subset S' implies S is of the form
+                   {n,n+1,n+2,...} for some n.  Similarly
+                   `S - 5 subset S' yields {n,n-1,...}. */
+                assert(cycle->coeff == 1);
+                tmprange.lo = INF; tmprange.hi = NEGINF;
+                if (r.hi > 0)
+                        tmprange.hi = INF;
+                if (r.lo < 0)
+                        tmprange.lo = NEGINF;
+                if (rangeempty(r))
+                        fprintf(stderr, "Debug: empty, ignored.\n");
+                rangeinset(tmprange, e->rhs.s);
+
+                assert(e->lhs && e->lhs->t && e->lhs->t->s);
+                if (e->lhs->next == NULL) {
+                        set_t *s = e->lhs->t->s;
+                        /* `e' is of the form `S + 5 subset S'
+                           (_not_ `S + T + ... subset S')
+                           so we can delete this equation!
+                           It suffices to turn the equation into
+                           `emptyset subset S'; then prune will
+                           delete it for us later. */
+                        assert(s == e->rhs.s && cycle == e->lhs->t);
+                        fprintf(stderr, "Debug: deleting `%s'.\n",
+                                debug_dumpeqn(e));
+                        s->affects = deleqn(s->affects, e);
+                        free(e->lhs->t);
+                        e->lhs = NULL;
+                        e->c.lo = INF; e->c.hi = NEGINF;
+                }
+                r = rangeadd(r, toadd);
+        }
+a487 2
+        rangeinset(r, e->rhs.s);
+}
+d498 2
+d502 3
+a504 2
+           and it should already have been processed in flow(), so 
+           all we have to do is delete it from the relevant s->affectedby. */
+d506 2
+a507 2
+        rhs->affectedby = deleqn(rhs->affectedby, e);
+        /* XXX: we should free e->lhs, etc. */
+d510 1
+a510 1
+           eqn to affect e->rhs.s; if so, e->rhs.s has never be
+d512 1
+a512 1
+        if (rhs->affectedby == NULL) {
+d515 9
+a523 3
+                /* XXX: No more references to eqn `e' should remain at this
+                   point, so to prevent memory leaks we should free stuff in
+                   e, maybe. */
+d525 1
+d527 14
+a540 2
+        killeqn(e); /* Delete it. (XXX: Ok?) */
+        return 1;
+d543 1
+d632 1
+a632 1
+                        touch(ep->e->lhs->t->s);
+d645 3
+a647 1
+   to the graph. */
+a672 11
+static void doeqn(eqn_t *e) {
+        fprintf(stderr, "Debug: doeqn() %s\n", debug_dumpeqn(e));
+        assert(e);
+        assert(!(e->eflags & DELETED));
+        assert(e->op == SUBSET);
+        simplify(e, 1);
+        flow(e);
+        if (!prune(e))
+                transit(e);
+}
+
+d724 3
+d728 4
+a731 3
+static void dfsvisit(set_t *s);
+static void findcycles(void) {
+        set_t *s, *t, *next;
+d737 1
+a739 1
+                        finalize(s);
+d743 2
+a744 1
+                s->runningaf.a = inf(1L); s->runningaf.b = zerorange;
+d749 15
+a763 3
+        for (s=allsets; s; s=s->nextset)
+                if ((s->flags & (MARKED|ALIVE)) == ALIVE)
+                        dfsvisit(s);
+d773 3
+a775 2
+        af.b = ep->e->c;
+        for (tp=ep->e->lhs; tp; tp=tp->next) {
+d786 2
+d793 1
+a793 1
+static void dfsvisit(set_t *s) {
+d797 1
+a797 1
+        fprintf(stderr, "Debug dfs(): visit `%s'\n", s->name);
+d803 10
+a812 2
+                assert(ep->e && ep->e->rhs.s && rhs);
+                simplify(ep->e, 1);
+d814 3
+a816 1
+                        handlecycle(s, ep->e);
+d818 2
+a819 7
+                }
+                af = edgelbl(s, ep->e);
+                prune(ep->e); /* May NULL out ep->e->rhs.s, or delete ep->e. */
+                if (rangeinrange(affineapp(af, s->r), &(rhs->r))) {
+                        /* We modified the RHS of this edge, so it will be
+                           "live" in the next iteration.  Also, we visit it. */
+                        rhs->flags |= SURVIVES;
+d823 2
+a824 1
+                        dfsvisit(rhs);
+a825 1
+                /* XXX: check: should we visit even if not modified? */
+d896 1
+a896 1
+        affine_t cycleaf2 = affineidentity;
+d899 2
+a900 1
+        fprintf(stderr, "Debug: handling cycle:");
+d902 1
+a902 1
+             prev && prev != lastedge->rhs.s;
+a904 1
+                termlist_t *tlp;
+d908 1
+a908 1
+                fprintf(stderr, " %s", s->name);
+d911 2
+d914 2
+d920 4
+a923 2
+        fprintf(stderr, ", af=%s.\n", affinestr(cycle2af));
+        assert(cycleaf == cycle2af);
+d933 3
+a935 2
+        rangeinset(newr, t);
+        if (cycleaf.a == inf(1L) && cycleaf.b == zerorange)
+a944 48
+static void run(void) {
+        set_t *s;
+        eqnlist_t *l, *p;
+
+        fprintf(stderr, "Debug: ------ run() starting -------\n");
+        /* Drain the work queue. */
+        iters = 0;
+        while (1) {
+                s = popq();
+                if (!s) {
+                        fprintf(stderr, "Debug: Nothing on work queues.\n");
+                        findcycles(); iters=0;
+                        s = popq();
+                        if (!s)
+                                return;
+                }
+
+                fprintf(stderr, "Debug run(): examining `%s'...\n", s->name);
+                if (!s->affects)
+                        continue;
+
+                /* s->affects could change during our simplify-flow-prune
+                   iteration, so save a local copy. */
+                l = dupeqn(s->affects);
+                assert(s->affects && l);
+
+                /* Now do a simplify-flow-prune iteration using our local
+                   copy.  (Do the simplify-flow's first, because prune might
+                   free() some equations.) */
+                for (p=l; p; p=p->next) {
+                        doeqn(p->e);
+                }
+
+                /* Free the local copy of s->affects. */
+                while (l) {
+                        eqnlist_t *next = l->next;
+                        free(l);
+                        l = next;
+                }
+
+                if (++iters >= 8) {
+                        fprintf(stderr, "Debug: iter %d, time for cycles\n",
+                                iters);
+                        findcycles(); iters=0;
+                }
+        }
+}
+
+d964 1
+a964 1
+        fprintf(stderr, "Debug: removeirrelevant() running...\n");
+d1086 1
+a1086 1
+                                rangeinset(tr, el->e->rhs.s);
+d1096 1
+a1096 1
+        rangeinset(rangesub(t->r,c), s);
+d1113 1
+a1113 1
+                touch(s);
+d1288 1
+a1288 1
+                if (e->op != EQUALS)
+d1304 1
+a1304 1
+                assert(eqns[i].rhs.s);
+d1330 4
+a1333 2
+                        assert(eqns[i].rhs.s);
+                        doeqn(&eqns[i]);
+d1346 1
+a1346 1
+                        touch(s);
+d1433 5
+d1444 1
+a1444 1
+                        touch(s);
+d1450 6
+@

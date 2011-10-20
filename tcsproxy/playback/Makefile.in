@@ -1,0 +1,62 @@
+CC = @CC@
+INCLUDEPATH = @INCLUDEPATH@
+INCLUDE = $(patsubst %,-I%,$(INCLUDEPATH)) -I./include -I../client_lib/include
+CFLAGS = @CFLAGS@ @CPPFLAGS@ $(INCLUDE) -DDEBUGGING
+LIBS = @LIBS@ -lm @LIBTHREAD@
+
+VPATH := src
+
+all: bp_engine wing_engine
+
+others: tracestats sep_clients showtrace count_parallel tags \
+	cachestuff new_bp_engine hip_engine anon_clients gen_log	
+
+cachestuff: FORCE
+	cd src/cachesim; $(MAKE)
+
+new_bp_engine: new_bp_engine.o bp_timer.o utils.o http_task.o logparse.o \
+	simclient.o playback_sched.o
+	$(CC) -o $@ $^ $(LIBS)
+
+wing_engine: wingmain.o bp_timer.o utils.o http_task.o logparse.o
+	$(CC) -o $@ $^ $(LIBS)
+
+bp_engine: main.o bp_timer.o utils.o http_task.o logparse.o
+	$(CC) -o $@ $^ $(LIBS)
+
+hip_engine: hip_main.o http_task.o utils.o logparse.o
+	$(CC) -o $@ $^ $(LIBS)
+
+showtrace: showtrace.o logparse.o utils.o
+	$(CC) -o $@ $^ $(LIBS)
+
+tracestats: tracestats.o logparse.o utils.o
+	$(CC) -o $@ $^ $(LIBS)
+
+gen_log: gen_log.o logparse.o utils.o
+	$(CC) -o $@ $^ $(LIBS)
+
+sep_clients: sep_clients.o logparse.o utils.o
+	$(CC) -o $@ $^ $(LIBS)
+
+anon_clients: anon_clients.o logparse.o utils.o md5.o
+	$(CC) -o $@ $^ $(LIBS)
+
+count_parallel: count_parallel.o logparse.o utils.o
+	$(CC) -o $@ $^ $(LIBS) -lm
+
+utils.o: ../client_lib/src/utils.c
+	$(CC) $(CFLAGS) -o $@ -c $^
+
+%.o: src/%.c include/%.h
+	$(CC) $(CFLAGS) -o $@ -c $<
+
+tags:
+	etags src/*.[ch] $(foreach dir,$(INCLUDE),$(wildcard $(dir)/*.h))
+
+clean:
+	-/bin/rm -f *.o *~ src/*~ bp_engine showtrace tracestats \
+	sep_clients count_parallel wing_engine TAGS core
+	-cd src/cachesim; $(MAKE) clean
+
+FORCE:

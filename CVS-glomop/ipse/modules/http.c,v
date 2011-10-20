@@ -1,0 +1,792 @@
+head	1.4;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.06.19.00.28.36;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.18.01.07.15;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.17.01.19.34;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Made some changes - ipse now seems to work with my new parser.
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <time.h>
+#include <locale.h>
+#include <unistd.h>
+#include "module.h"
+#include "stream.h"
+#include "tcpui.h"
+
+#include "utils.h"
+
+#define CRCHAR 0x0D
+#define LFCHAR 0x0A
+
+static char udp_buf[2000];
+
+/* Functions that main.c will call */
+static void *http_init(int handid, char *arg);
+void *http_open(struct ui_dyp_data_ *ui_state, stream_t *stream);
+void  http_write(struct ui_dyp_data_ *ui_state, stream_t *stream);
+void  http_close(struct ui_dyp_data_ *ui_state, stream_t *stream);
+
+/* There is no case insensitive strstr, so I've implemented one the
+   dumb way. */
+char *http_strcasestr(char *string, char *substr);
+
+/* Grab a time from an HTTP header */
+void get_time(time_t *tv, char *timestr);
+
+/* These two variables are used by IPSE's main() */
+int nops = 1;
+module_ops oplist[] = { { http_init, tcp_handle, tcp_clean } };
+
+/* This structure is used in http_init to set the dynaparse options
+   to a non-NULL value */
+dynaparse_ops http_dynaparse_funcs = 
+    { http_open, http_write, http_close };
+
+
+/* For sending UDP packets with the client headers */
+struct sockaddr_in dest_addr;
+int                dest_fd;
+
+/* Initialize the HTTP module.  Not hard. */
+static void *http_init(int handid, char *arg)
+{
+  state_t *state;
+  struct sockaddr_in local;
+
+  state = tcp_init(handid, TCPINIT);
+  if (state == INIT_FAIL)
+    return INIT_FAIL;
+
+  state->dp_ops = &http_dynaparse_funcs;
+
+  make_inetaddr("dawn10.cs.berkeley.edu", "3123", &dest_addr);
+  dest_fd = socket(AF_INET, SOCK_DGRAM, protonumber("udp"));
+  make_inetaddr((char *) 0, (char *) 0, &local);
+  bind(dest_fd, (struct sockaddr *) &local, sizeof(local));
+  connect(dest_fd, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
+
+  return state;
+}
+
+typedef enum 
+  { NEW, 
+    GETTING_CLIENT_DATA,
+    GETTING_SERVER_DATA } httpstate;
+
+typedef struct {
+  unsigned char client_no_cache;
+  unsigned char client_keep_alive;
+  unsigned char client_cache_control;
+  unsigned char client_if_modified_since;
+  time_t        client_if_modified_date;
+  unsigned char client_unless;
+} clientheaders;
+
+#define MAX_MT 40
+typedef struct {
+  unsigned char server_no_cache;
+  unsigned char server_cache_control;
+  unsigned char server_expires;
+  time_t        server_expires_date;
+  unsigned char server_last_modified;
+  time_t        server_last_modified_date;
+  char          server_mime_type[MAX_MT];
+} serverheaders;
+
+typedef struct {
+  httpstate      connection_state;
+  char          *client_request;
+  int            client_request_length;
+  unsigned int   response_header, response_startseq;
+  struct timeval request_time, response_time;
+  unsigned short c_found_header, s_got_header, dumped_data;
+  clientheaders  ch;
+  serverheaders  sh;
+} http_parse_data;
+
+/* Brave new HTTP parsing functions */
+void extract_client_data(ui_dynaparse_data *state, http_parse_data *data);
+int  extract_server_data(ui_dynaparse_data *state, http_parse_data *data);
+void print_cs_state(ui_dynaparse_data *state, http_parse_data *data,
+		    stream_t *stream);
+void clear_cs_data(ui_dynaparse_data *state, http_parse_data *data);
+void null_server_state(ui_dynaparse_data *state);
+
+void *http_open(struct ui_dyp_data_ *ui_state, stream_t *stream)
+{
+  http_parse_data *data = 
+    (http_parse_data *) calloc(1, sizeof(http_parse_data));
+
+  if (data == NULL) {
+    /* out of memory */
+    exit(1);
+  }
+
+  data->connection_state = NEW;
+  gettimeofday(&(data->request_time), NULL);
+  return (void *) data;
+}
+
+void http_close(struct ui_dyp_data_ *state, stream_t *stream)
+{
+  http_parse_data *data;
+
+  if (!state)
+    return;
+
+  data = (http_parse_data *) state->dpdata;
+
+  if (!data) {
+    return;
+  }
+
+  switch(data->connection_state) {
+  case NEW:
+    break;
+  case GETTING_CLIENT_DATA:
+    /* We won't print out stuff for which client data isn't finished
+       being sent */
+    break;
+  case GETTING_SERVER_DATA:
+/*    fprintf(stderr, "doing GETTING_SERVER_DATA\n"); */
+    if (data->s_got_header == 0)
+      extract_server_data(state, data);
+    print_cs_state(state, data, stream);
+    clear_cs_data(state, data);
+    break;
+  }
+
+  if (state->data[STREAM_DIR_HTOL]) {
+    free(state->data[STREAM_DIR_HTOL]);
+    state->data[STREAM_DIR_HTOL] = NULL;
+    state->len[STREAM_DIR_HTOL] = 0;
+  }
+  if (state->data[STREAM_DIR_LTOH]) {
+    free(state->data[STREAM_DIR_LTOH]);
+    state->data[STREAM_DIR_LTOH] = NULL;
+    state->len[STREAM_DIR_LTOH] = 0;
+  }
+
+  /* Free up the dynaparse data */
+  if (state->dpdata) {
+    if (data->client_request)
+      free(data->client_request);
+    data->client_request = NULL;
+    if (state->dpdata)
+      free(state->dpdata);
+    state->dpdata = NULL;
+  }
+}
+
+void http_write(struct ui_dyp_data_ *state, stream_t *stream)
+{
+  http_parse_data *data = (http_parse_data *) state->dpdata;
+
+
+  /* Which way did the data come through? */
+  if (state->netlen > 0) {
+
+    /* from low to high - client to server */
+    switch(data->connection_state) {
+
+    case NEW:
+      gettimeofday(&(data->request_time), NULL);
+    case GETTING_CLIENT_DATA:
+      /* We're in the process of buffering client data.  Do absolutely
+	 nothing until it has all flown through. */
+      data->response_startseq = stream->nextseq[STREAM_DIR_HTOL];
+      data->dumped_data = 0;
+      break;
+    case GETTING_SERVER_DATA:
+      /* We're done with the server data.  Collect server info,
+	 print/clean state ... */
+      if (extract_server_data(state, data)) {
+	data->s_got_header = 1;
+	null_server_state(state);
+      }
+      print_cs_state(state, data, stream);
+      clear_cs_data(state, data);
+
+      /* ... and continue on collecting client data. */
+      data->connection_state = GETTING_CLIENT_DATA;
+      gettimeofday(&(data->request_time), NULL);
+      data->response_startseq = stream->nextseq[STREAM_DIR_HTOL];
+      data->dumped_data = 0;
+      break;
+    default:
+      break;
+    }
+  } else if (state->netlen < 0) {
+    /* from high to low - server to client */
+
+    switch(data->connection_state) {
+    case NEW:
+    case GETTING_CLIENT_DATA:
+      /* We're done with the client data.  Collect client info and
+	 clean up client state, then go on collecting server state */
+      gettimeofday(&(data->response_time), NULL);
+      extract_client_data(state, data);
+      data->connection_state = GETTING_SERVER_DATA;
+      if (extract_server_data(state, data)) {
+	data->s_got_header = 1;
+	null_server_state(state);
+      }
+      break;
+    case GETTING_SERVER_DATA:
+      /* We're in the process of buffering server data.  Do absolutely
+	 nothing but throw it away (if we've parsed the header out),
+	 until it has all flown through. */
+      if (data->s_got_header == 1)
+	null_server_state(state);
+      break;
+    default:
+      break;
+    }
+  }
+
+  /* Now check for a FIN-type deal */
+  if (stream->closed[STREAM_DIR_HTOL] || stream->closed[STREAM_DIR_LTOH]) {
+    switch (data->connection_state) {
+    case GETTING_CLIENT_DATA:
+      extract_client_data(state, data);
+      break;
+    case GETTING_SERVER_DATA:
+      if (data->s_got_header == 0)
+	extract_server_data(state, data);
+      break;
+    default:
+      break;
+    }
+    print_cs_state(state, data, stream);
+    clear_cs_data(state, data);
+  }
+}
+
+void null_client_data(http_parse_data *data)
+{
+  if (data->client_request) {
+    data->client_request = NULL;
+    data->client_request_length = 0;
+  }
+  data->c_found_header = 0;
+  bzero(&(data->ch), sizeof(clientheaders));
+}
+
+void extract_client_data(ui_dynaparse_data *state, http_parse_data *data)
+{
+  unsigned char *tmp, *startline, *firstline = NULL, *substr;
+  int            datalen, linelength, i;
+
+  tmp = state->data[STREAM_DIR_LTOH];
+  if (!tmp) {
+    null_client_data(data);
+    return;
+  }
+
+  /* Here's the spot where we have complete client headers */
+  sprintf(udp_buf, "%s ", stream_ntoa(state->addr[STREAM_DIR_HTOL]));
+  strncat(udp_buf, state->data[STREAM_DIR_LTOH], 1950);
+  udp_buf[1999] = '\0';
+
+  /******************THIS IS WHERE WE SEND UDP*********************/
+  /* send(dest_fd, udp_buf, strlen(udp_buf), 0); */
+
+  /* fprintf(stderr, "%s", state->data[STREAM_DIR_LTOH]); */
+
+  /* Find the first line of data */
+  datalen = state->len[STREAM_DIR_LTOH];
+  for (i=0; i<datalen; i++, tmp++) {
+    if ((*tmp == CRCHAR) || (*tmp == LFCHAR)) {
+      firstline = tmp;
+      break;
+    }
+  }
+  if (firstline ==  NULL) {
+    null_client_data(data);
+    return;
+  }
+
+  /* Grab the client's request line */
+  *firstline = '\0';
+  data->client_request = state->data[STREAM_DIR_LTOH];
+  data->client_request_length = i;
+  state->data[STREAM_DIR_LTOH] = NULL;  state->len[STREAM_DIR_LTOH] = 0;
+  
+  /* See if the request line ended with HTTP/1.x.  If not, don't bother
+     parsing the header in the server response. */
+  tmp = data->client_request + (unsigned long) (i-8);
+  if ((i>=8) && (strncmp(tmp, "HTTP/1.", 7) == 0))
+    data->c_found_header = 1;
+
+  /* Now stroll through the data looking for various client headers */
+  tmp = data->client_request + data->client_request_length + 1;
+  while ( ( (void *) tmp - (void *) (data->client_request)) < datalen ) {
+
+    /* Zoom to the start of the next line.  Won't overflow because entire
+       buffer guaranteed to be NULL terminated */
+
+    while ( (*tmp == CRCHAR) || (*tmp == LFCHAR) ) {
+      tmp++;
+    }
+    startline = tmp;
+
+    /* OK - find end of next line */
+    while ( (((void *) tmp - (void *) (data->client_request)) < datalen) &&
+	    (*tmp != CRCHAR) && (*tmp != LFCHAR) ) {
+      tmp++;
+    }
+
+    *tmp = '\0';
+    tmp++;
+
+    /* Great - we have the next line.  How long is it? */
+    linelength = tmp - startline;
+    if (linelength > 0) {
+      if (http_strcasestr(startline, "Connection: Keep-Alive"))
+	data->ch.client_keep_alive = 1;
+      else if (http_strcasestr(startline, "Pragma: no-cache"))
+	data->ch.client_no_cache = 1;
+      else if (http_strcasestr(startline, "Cache-Control"))
+	data->ch.client_cache_control = 1;
+      else if ((substr = http_strcasestr(startline, "If-Modified-Since"))) {
+	data->ch.client_if_modified_since = 1;
+	substr += 17;
+	get_time(&(data->ch.client_if_modified_date), substr);
+      } else if (http_strcasestr(startline, "Unless"))
+	data->ch.client_unless = 1;
+    }
+  } 
+}
+
+void null_server_data(http_parse_data *data)
+{
+  data->response_header = 0;
+  data->s_got_header = 0;
+  bzero(&(data->response_time), sizeof(struct timeval));
+  bzero(&(data->sh), sizeof(serverheaders));
+}
+
+void null_server_state(ui_dynaparse_data *state)
+{
+  if (state->data[STREAM_DIR_HTOL]) {
+    free(state->data[STREAM_DIR_HTOL]);
+    state->len[STREAM_DIR_HTOL] = 0;
+    state->data[STREAM_DIR_HTOL] = NULL;
+  }
+}
+
+int extract_server_data(ui_dynaparse_data *state, http_parse_data *data)
+{
+  unsigned char *tmp, *tmp2, *header_end = NULL, *substr, *startline,
+    *tmp3;
+  int datalen, linelength, headerlen;
+  int endtok_len = 0;
+
+  if ( (!data || !state) ) {
+    null_server_data(data);
+    return 0;
+  }
+  if (data->s_got_header == 1) {
+    return 1;
+  }
+  if (!data->c_found_header) {
+    null_server_data(data);
+    data->s_got_header = 1;
+    return 1;
+  }
+  if (!(state->data[STREAM_DIR_HTOL])) {
+    return 0;
+  }
+
+  tmp = state->data[STREAM_DIR_HTOL];
+  datalen = state->len[STREAM_DIR_HTOL];
+  data->sh.server_mime_type[0] = '\0';
+
+  /* Find the end of the server response headers */
+  if (! (header_end = strstr(tmp, "\r\n\r\n"))) {
+    if (! (header_end = strstr(tmp, "\r\r"))) {
+      if (! (header_end = strstr(tmp, "\n\n"))) {
+	return 0;
+      } else {
+	endtok_len = 2;
+      } 
+    } else {
+      endtok_len = 2;
+    }
+  } else
+    endtok_len = 4;
+
+  tmp2 = header_end;
+  while ( (*header_end == CRCHAR) ||
+	  (*header_end == LFCHAR) ) {
+    header_end++;
+  }
+  *(tmp2+1) = '\0';
+
+  /* OK - Now header_end points to the first character after the server
+     response headers, and tmp points to the start of the headers.  The
+     headers have also been NULL-termed. */
+  headerlen = data->response_header = (tmp2 - tmp);
+  data->response_header += endtok_len;
+  tmp3 = tmp;
+  while ( ( (void *) tmp3 - (void *) tmp) < headerlen ) {
+    /* Zoom to the start of the next line.  Won't overflow because entire
+       buffer guaranteed to be NULL terminated. */
+
+    while ((*tmp3 == CRCHAR) || (*tmp3 == LFCHAR)) {
+      tmp3++;
+    }
+
+    startline = tmp3;
+
+    /* Ok - find end of next line */
+    while ( (((void *) tmp3 - (void *) tmp) < headerlen) &&
+	    (*tmp3 != CRCHAR) && (*tmp3 != LFCHAR)) {
+      tmp3++;
+    }
+
+    /* Great - we have the next line.  How long is it? */
+    linelength = tmp3 - startline;
+    *tmp3 = '\0';
+    tmp3++;
+
+    if (linelength > 0) {
+      if ((substr = http_strcasestr(startline, "content-type"))) {
+	substr += 12;
+	while ((*substr == ':') || (*substr == ' ') || (*substr == '\t'))
+	  substr++;
+	strncpy(data->sh.server_mime_type, substr, MAX_MT);
+	data->sh.server_mime_type[MAX_MT-1] = '\0';
+      }
+      if (http_strcasestr(startline, "Pragma: no-cache"))
+	data->sh.server_no_cache = 1;
+      else if (http_strcasestr(startline, "Cache-Control"))
+	data->sh.server_cache_control = 1;
+      else if ((substr = http_strcasestr(startline, "Expires"))) {
+	data->sh.server_expires = 1;
+	substr += 7;
+	get_time(&(data->sh.server_expires_date), substr);
+      } else if ((substr = http_strcasestr(startline, "Last-Modified"))) {
+	data->sh.server_last_modified = 1;
+	substr += 13;
+	get_time(&(data->sh.server_last_modified_date), substr);
+      }
+    }
+  }
+  return 1;
+}
+void print_cs_state(ui_dynaparse_data *state, http_parse_data *data,
+		    stream_t *stream)
+{
+  int ilen;
+  unsigned rlen;
+  struct timeval now;
+  unsigned char clnt_pragmas = 0, srvr_pragmas = 0;
+  unsigned short ustmp;
+  unsigned long ultmp;
+  long          ltmp;
+
+  /* Do some sanity checks that this is valid data */
+  if (data->dumped_data != 0)
+    return;
+  if (data->request_time.tv_sec == 0)
+    return;
+
+  data->dumped_data = 1;
+
+  gettimeofday(&now,  NULL);
+
+  if (data->ch.client_no_cache)
+    clnt_pragmas |= 1;
+  if (data->ch.client_keep_alive)
+    clnt_pragmas |= 2;
+  if (data->ch.client_cache_control)
+    clnt_pragmas |= 4;
+  if (data->ch.client_if_modified_since)
+    clnt_pragmas |= 8;
+  if (data->ch.client_unless)
+    clnt_pragmas |= 16;
+
+  if (data->sh.server_no_cache)
+    srvr_pragmas |= 1;
+  if (data->sh.server_cache_control)
+    srvr_pragmas |= 2;
+  if (data->sh.server_expires)
+    srvr_pragmas |= 4;
+  if (data->sh.server_last_modified)
+    srvr_pragmas |= 8;
+
+  ltmp = htonl((data->request_time).tv_sec);
+  write(1, &ltmp, sizeof(long));
+  ltmp = htonl((data->request_time).tv_usec);
+  write(1, &ltmp, sizeof(long));
+  
+  ultmp = htonl(state->addr[STREAM_DIR_LTOH]);
+  write(1, &ultmp, sizeof(unsigned long));
+  ustmp = htons(state->port[STREAM_DIR_LTOH]);
+  write(1, &ustmp, sizeof(unsigned short));
+  ultmp = htonl(state->addr[STREAM_DIR_HTOL]);
+  write(1, &ultmp, sizeof(unsigned long));
+  ustmp = htons(state->port[STREAM_DIR_HTOL]);
+  write(1, &ustmp, sizeof(unsigned short));
+
+  ilen = data->client_request_length;
+  if (ilen == 0) {
+    ultmp = htonl(3);
+    write(1, &ultmp, sizeof(unsigned long));   /* URL LENGTH */
+    write(1, "\"-\"", 3);           /* URL "-" */
+  } else {
+    ilen += 2;                      /* start and end quote */
+    ultmp = htonl(ilen);
+    write(1, &ultmp, sizeof(unsigned long));
+    write(1, "\"", 1);
+    write(1, data->client_request, ilen-2);
+    write(1, "\"", 1);
+  }
+
+  ilen = strlen(data->sh.server_mime_type);
+  if (ilen == 0) {
+    ultmp = htonl(3);
+    write(1, &ultmp, sizeof(unsigned long));   /* MT LENGTH */
+    write(1, "\"-\"", 3);           /* MT "-" */
+  } else {
+    ilen += 2;
+    ultmp = htonl((unsigned long) ilen);
+    write(1, &ultmp, sizeof(unsigned long));
+    write(1, "\"", 1);
+    write(1, data->sh.server_mime_type, ilen-2);
+    write(1, "\"", 1);
+  }
+
+  ltmp = htonl((data->response_time).tv_sec);
+  write(1, &ltmp, sizeof(long));
+  ltmp = htonl((data->response_time).tv_usec);
+  write(1, &ltmp, sizeof(long));
+
+  ultmp = (unsigned long) htonl((long int) (data->response_header));
+  write(1, &ultmp, sizeof(unsigned long));
+  rlen = stream->nextseq[STREAM_DIR_HTOL] - data->response_startseq -
+    data->response_header;
+  ultmp = htonl(rlen);
+  write(1, &ultmp, sizeof(unsigned long));
+
+  /* Write out time that connection is closed */
+  ltmp = htonl((long int) now.tv_sec);
+  write(1, &ltmp, sizeof(long));
+  ltmp = htonl((long int) now.tv_usec);
+  write(1, &ltmp, sizeof(long));
+  
+  /* Write out pragmas */
+  write(1, &clnt_pragmas, sizeof(unsigned char));
+  ltmp = htonl((long int) (data->ch.client_if_modified_date));
+  write(1, &ltmp, sizeof(long));
+  write(1, &srvr_pragmas, sizeof(unsigned char));
+  ltmp = htonl((long int) (data->sh.server_expires_date));
+  write(1, &ltmp, sizeof(long));
+  ltmp = htonl((long int) (data->sh.server_last_modified_date));
+  write(1, &ltmp, sizeof(long));
+}
+
+void clear_cs_data(ui_dynaparse_data *state, http_parse_data *data)
+{
+  unsigned char dump_save;
+  if (data) {
+    if (data->client_request) {
+      free(data->client_request);
+      data->client_request = NULL;
+    }
+    dump_save = data->dumped_data;
+    bzero(data, sizeof(http_parse_data));
+    data->dumped_data = dump_save;
+  }
+  if (state) {
+    null_server_state(state);
+    /* Don't clean LTOH, as we're collecting it. */
+  }
+}
+
+void get_time(time_t *tv, char *timestr)
+{
+  struct tm tm;
+
+  while ((*timestr == ' ') || (*timestr == ':') || (*timestr == '\t')) {
+    timestr++;
+  }
+
+  bzero(&tm, sizeof(struct tm));
+  tm.tm_year = 0;
+  if (!strptime(timestr, "%a, %d-%h-%y %H:%M:%S", &tm)) {
+    if (!strptime(timestr, "%a, %d %h %Y %H:%M:%S", &tm)) {
+      if (!strptime(timestr, "%a %h %d %H:%M:%S %Y", &tm)) {
+	bzero(&tm, sizeof(struct tm));
+      }
+    }
+  }
+  *tv = mktime(&tm);
+}
+
+char *http_strcasestr(char *string, char *substr)
+{
+  int str_len, substr_len, cmplen, i;
+  char *ptr;
+
+  str_len = strlen(string);
+  substr_len = strlen(substr);
+  cmplen = str_len - substr_len + 1;
+
+  for (ptr = string, i=0; i<cmplen; i++, ptr++) {
+    if (strncasecmp(ptr, substr, substr_len) == 0)
+      return ptr;
+  }
+  return NULL;
+}
+@
+
+
+1.3
+log
+@Made many changes..
+@
+text
+@d562 2
+a563 1
+  ultmp = htonl((data->response_header));
+a564 1
+
+d571 1
+a571 1
+  ltmp = htonl(now.tv_sec);
+d573 1
+a573 1
+  ltmp = htonl(now.tv_usec);
+d578 1
+a578 1
+  ltmp = htonl(data->ch.client_if_modified_date);
+d581 1
+a581 1
+  ltmp = htonl(data->sh.server_expires_date);
+d583 1
+a583 1
+  ltmp = htonl(data->sh.server_last_modified_date);
+@
+
+
+1.2
+log
+@wee little tweak - changed case - shouldn't matter
+@
+text
+@d52 1
+a52 1
+  
+d121 1
+d182 1
+d185 1
+d218 1
+d482 3
+d516 13
+a528 6
+  write(1, &((data->request_time).tv_sec), sizeof(long));
+  write(1, &((data->request_time).tv_usec), sizeof(long));
+  write(1, &(state->addr[STREAM_DIR_LTOH]), sizeof(unsigned long));
+  write(1, &(state->port[STREAM_DIR_LTOH]), sizeof(unsigned short));
+  write(1, &(state->addr[STREAM_DIR_HTOL]), sizeof(unsigned long));
+  write(1, &(state->port[STREAM_DIR_HTOL]), sizeof(unsigned short));
+d532 2
+a533 2
+    ilen = 3;
+    write(1, &ilen, sizeof(int));   /* URL LENGTH */
+d537 2
+a538 1
+    write(1, &ilen, sizeof(int));
+d546 2
+a547 2
+    ilen = 3;
+    write(1, &ilen, sizeof(int));   /* MT LENGTH */
+d551 2
+a552 1
+    write(1, &ilen, sizeof(int));
+d558 6
+a563 3
+  write(1, &((data->response_time).tv_sec), sizeof(long));
+  write(1, &((data->response_time).tv_usec), sizeof(long));
+  write(1, &(data->response_header), sizeof(unsigned));
+d567 2
+a568 1
+  write(1, &rlen, sizeof(unsigned));
+d571 4
+a574 2
+  write(1, &(now.tv_sec), sizeof(long));
+  write(1, &(now.tv_usec), sizeof(long));
+d578 2
+a579 1
+  write(1, &(data->ch.client_if_modified_date), sizeof(long));
+d581 4
+a584 2
+  write(1, &(data->sh.server_expires_date), sizeof(long));
+  write(1, &(data->sh.server_last_modified_date), sizeof(long));
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d284 3
+a286 1
+  send(dest_fd, udp_buf, strlen(udp_buf), 0);
+d447 1
+a447 1
+      if ((substr = http_strcasestr(startline, "Content-type"))) {
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

@@ -1,0 +1,331 @@
+head	1.3;
+access;
+symbols
+	executor:1.1.1.1
+	executor:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	97.12.09.06.26.04;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.08.11.35.11;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Everything seems to work!  (sorta)
+@
+text
+@/***
+***
+*** File:    pid_cookie_table.c
+*** Authors: Steve Gribble and Randi Thomas
+*** Purpose: Implementation of the COOKIE->PID mapping table
+***
+***/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <pthread.h>
+
+#include "config_cs294.h"
+#include "pid_cookie_table.h"
+
+#define GDBM_BLOCKSIZE_GUESS 4096  /* Can we get the real value somewhere?? */
+gdbm_error gdbm_errno;
+pthread_mutex_t gdbm_mutex;
+
+GDBM_FILE dbf = NULL;
+
+int initialize_db(char *dbname, recovery_function f)
+{
+  int mutex_rv;
+  datum g_key, next_g_key, g_value;
+
+  /* Initialize the database mutex */
+  if ((mutex_rv = pthread_mutex_init(&gdbm_mutex, NULL)) != 0) {
+    strerror(mutex_rv);
+    return PCT_TABLE_INIT_FAILED;
+  }
+
+  /* Open up the database file, creating it if necessary. */
+  dbf = gdbm_open(dbname, GDBM_BLOCKSIZE_GUESS, GDBM_WRCREAT, 
+		  S_IRUSR | S_IWUSR, NULL);
+  if (dbf == NULL)
+    return PCT_TABLE_INIT_FAILED;
+
+  /* Scan through the database doing pid recovery calls. */
+  g_key = gdbm_firstkey(dbf);
+  while (g_key.dptr != NULL) {
+    g_value = gdbm_fetch(dbf, g_key);
+    if (g_value.dptr != NULL) {
+      pid_t p;
+
+      /* We have a bona-fide entry.  Call the recovery_function.  If the
+	 recovery function complains that it doesn't know about the PID, we
+         should delete it from the table and start this whole process again.
+       */
+      p = *((pid_t *) g_value.dptr);   /* Nasty architecture-dependent cast. */
+      if (p != -1) {
+	int rv;
+	rv = f(p);
+	if (rv == RECOV_UNKNOWN_PID) {
+	  /* Delete this entry and start scan again */
+	  gdbm_delete(dbf, g_key);
+	  free(g_key.dptr);
+	  g_key = gdbm_firstkey(dbf);
+	  continue;
+	}
+      }
+    }
+
+    /* Get the next key, and free the previous key */
+    next_g_key = gdbm_nextkey(dbf, g_key);
+    free(g_key.dptr);
+    g_key = next_g_key;
+  }
+  return PCT_OK;
+}
+
+/* XXXXXXXXXXXXXXXXXXXXXX THIS IS WHERE WE LEFT OFF *********/
+int get_firstkey(cookie *c)
+{
+  datum nextkey;
+  int mrv, func_retval = PCT_OK;
+
+  if ((mrv = pthread_mutex_lock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_GETKEY_FAILED;
+  }  
+  nextkey = gdbm_firstkey(dbf);
+  if (nextkey.dptr == NULL) {
+    func_retval = PCT_GETKEY_FAILED;
+    goto FIRSTKEY_EXIT;
+  }
+  if (nextkey.dsize != NUM_COOKIE_ELS*sizeof(char)) {
+    DEBUG_LOG("bogus key recovered - bad size\n", NULL, NULL,
+	      NULL, NULL);
+    func_retval = PCT_GETKEY_FAILED;
+    goto FIRSTKEY_EXIT;
+  }
+  memcpy(c, nextkey.dptr, NUM_COOKIE_ELS*sizeof(char));
+  free(nextkey.dptr);
+
+FIRSTKEY_EXIT:
+  if ((mrv = pthread_mutex_unlock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_GETKEY_FAILED;
+  }
+
+  return func_retval;
+}
+int get_nextkey(cookie prev_c, cookie *c)
+{
+  datum prev_key, nextkey;
+  int mrv, func_retval = PCT_OK;
+
+  prev_key.dsize = NUM_COOKIE_ELS*sizeof(char);
+  prev_key.dptr = &(prev_c[0]);
+
+  if ((mrv = pthread_mutex_lock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_GETKEY_FAILED;
+  }  
+  nextkey = gdbm_nextkey(dbf, prev_key);
+  if (nextkey.dptr == NULL) {
+    func_retval = PCT_GETKEY_FAILED;
+    goto NEXTKEY_EXIT;
+  }
+  if (nextkey.dsize != NUM_COOKIE_ELS*sizeof(char)) {
+    DEBUG_LOG("bogus key recovered - bad size\n", NULL, NULL,
+	      NULL, NULL);
+    func_retval = PCT_GETKEY_FAILED;
+    goto NEXTKEY_EXIT;
+  }
+  memcpy(c, nextkey.dptr, NUM_COOKIE_ELS*sizeof(char));
+  free(nextkey.dptr);
+
+NEXTKEY_EXIT:
+  if ((mrv = pthread_mutex_unlock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_GETKEY_FAILED;
+  }
+
+  return func_retval;
+}
+
+int close_db(void)
+{
+  gdbm_close(dbf);
+  dbf = NULL;
+  pthread_mutex_destroy(&gdbm_mutex);
+  return PCT_OK;
+}
+
+int write_pair_to_db(cookie c, pid_t p)
+{
+  int mrv, grv, func_retval = PCT_OK;
+  datum gkey, gval;
+
+  if ((mrv = pthread_mutex_lock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_WRITE_FAILED;
+  }  
+
+  gkey.dptr = &c[0];
+  gkey.dsize = NUM_COOKIE_ELS * sizeof(char);
+  gval.dptr = (char *) &p;
+  gval.dsize = sizeof(pid_t);
+  grv = gdbm_store(dbf, gkey, gval, GDBM_REPLACE);
+  if (grv != 0) {
+    func_retval = PCT_WRITE_FAILED;
+    goto PCT_WRITE_EXIT;
+  }
+  
+PCT_WRITE_EXIT:
+
+  if ((mrv = pthread_mutex_unlock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_WRITE_FAILED;
+  }
+
+  return func_retval;
+}
+
+int read_pair_from_db(cookie c, pid_t *p)
+{
+  int mrv, func_retval = PCT_OK;
+  datum gkey, gval;
+
+  if ((mrv = pthread_mutex_lock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_READ_FAILED;
+  }  
+
+  /* Get ready to read the value from the database */
+  gkey.dptr = (char *) &c[0];
+  gkey.dsize = NUM_COOKIE_ELS*sizeof(char);
+  gval = gdbm_fetch(dbf, gkey);
+  if (gval.dptr == NULL) {
+    func_retval = PCT_READ_NOSUCHCOOKIE;
+    goto PCT_READ_EXIT;
+  }
+
+  /* Copy over the pid */
+  if (gval.dsize != sizeof(pid_t)) {
+    fprintf(stderr, 
+	    "Alert! Bogus data read in read_pair_from_db.\n");
+    func_retval = PCT_READ_FAILED;
+    free(gval.dptr);
+    goto PCT_READ_EXIT;
+  }
+  memcpy((void *) p, gval.dptr, sizeof(pid_t));
+  free(gval.dptr);
+  
+PCT_READ_EXIT:
+  if ((mrv = pthread_mutex_unlock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_READ_FAILED;
+  }
+
+  return func_retval;
+}
+
+int remove_pair_from_db(cookie c)
+{
+  int mrv, func_retval = PCT_OK, ret;
+  datum gkey;
+
+  if ((mrv = pthread_mutex_lock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_DELETE_FAILED;
+  }  
+
+  /* Get ready to read the value from the database */
+  gkey.dptr = (char *) &c[0];
+  gkey.dsize = NUM_COOKIE_ELS*sizeof(char);
+  ret = gdbm_delete(dbf, gkey);
+  if (ret == -1) {
+    func_retval = PCT_DELETE_FAILED;
+    goto PCT_DELETE_EXIT;
+  }
+
+PCT_DELETE_EXIT:
+  if ((mrv = pthread_mutex_unlock(&gdbm_mutex)) != 0) {
+    strerror(mrv);
+    return PCT_DELETE_FAILED;
+  }
+
+  return func_retval;
+}
+@
+
+
+1.2
+log
+@ungodly amount of changes
+@
+text
+@d17 1
+d91 8
+d108 1
+a108 1
+int get_nextkey(cookie *c)
+d110 5
+d116 25
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d75 29
+d139 1
+a139 1
+  return PCT_OK;
+d157 1
+a157 1
+    func_retval = PCT_READ_FAILED;
+d178 1
+a178 1
+  return PCT_OK;
+d181 4
+d186 22
+@
+
+
+1.1.1.1
+log
+@First cut at executor -we've implemented the persistent cookie/pid
+table.
+@
+text
+@@

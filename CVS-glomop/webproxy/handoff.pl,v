@@ -1,0 +1,113 @@
+head	1.2;
+access;
+symbols
+	release:1.2
+	geoworks:1.2
+	pregeo:1.2
+	geoworks-0701:1.2
+	geoworks-062696:1.2
+	dev:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.03.09.23.36.10;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.12.08.00.29.28;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@latest version: uses perl HTML parser from net (with some additions and
+bug fixes by me); SafeSurf (NetCondom) removes Java/JavaScript tags; no
+longer has problems accidentally nesting <A>'s for refinement tags;
+understands new format handoff messages; pathnames for external
+distillers now in .cf file, not in code; minor changes to registration
+page; "About Pythia" link (to reg page) now appears on every page served
+by Pythia; random other buglets fixed.
+@
+text
+@#
+#  This file supports the vertical handoff protocol in advice.h.  A copy of
+#  advice.h needs to be here, along with a modified h2ph.
+#
+
+package handoff;
+
+# read advice.h but skip any of its nested includes.
+
+sub main::do_handoff {
+    my $packet = shift;
+    my $if;
+    my($cli, $opcode, $numbody, $if) =
+        unpack('NCCA*', $packet);
+    
+    if ($numbody != 1 || $opcode != 0x81) {
+        &main::log("*** Don't know how to handle numbody=$numbody" .
+                   sprintf("opcode=0x%x", $opcode));
+        return undef;
+    }
+
+    # reallyfrom tells the ip address of the client for which handoff is
+    # occurring.  
+
+    $ipaddr = join('.', ($cli >> 24) & 0xff, (($cli >> 16) & 0xff),
+                   (($cli >> 8) & 0xff), ($cli & 0xff));
+
+    # remove trailing interface number from hostname if there
+    $if =~ s/\d+$//;
+
+    # if this IP addr has a prefs entry, replace it with the prefs entry for
+    # (IP addr) concat (interface name).  if no such entry exists, create it by
+    # copying the default.
+
+    &main::copy_prefs($ipaddr, "$ipaddr.$if");
+
+    # and we should be done....
+    return ($ipaddr,$if);
+}
+
+    
+1;
+@
+
+
+1.1
+log
+@added handoff code for udp socket - a hack for now.
+@
+text
+@a9 4
+$advice_h =  `./h2ph < ./advice.h`;
+$advice_h =~ s/require\s+'(\S+)'//g;
+eval $advice_h;
+
+d13 2
+a14 1
+    my($opcode, $numbody, $blah) = unpack('CCA*', $packet);
+d16 1
+a16 1
+    if ($numbody != 2 || $opcode != 0x82) {
+d22 2
+a23 6
+    # first arg is an ASCII string (hostname).  Then we have 4 chars of garbage
+    # (padding), then 4 chars of IP addr.
+
+    my ($opcode, $numbody, $garbage, @@ipaddr) =
+        unpack("CCa4C4A8", $packet);
+    $if = pop @@ipaddr;
+d25 2
+a26 2
+    # construct printable repr. of IP addr
+    my $ipaddr= join('.', @@ipaddr);
+@

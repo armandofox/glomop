@@ -1,0 +1,183 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.02.23.30.25;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From czerwin@@batman.CS.Berkeley.EDU  Fri Oct  2 13:44:00 1998
+Return-Path: czerwin@@batman.CS.Berkeley.EDU
+Received: from batman.CS.Berkeley.EDU (batman.CS.Berkeley.EDU [128.32.37.133]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA10902 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 13:44:00 -0700
+Received: from batman.CS.Berkeley.EDU (localhost [127.0.0.1])
+	by batman.CS.Berkeley.EDU (8.9.1/8.9.1) with ESMTP id NAA08768
+	for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 13:40:56 -0700
+Message-Id: <199810022040.NAA08768@@batman.CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: Assignment #1
+Date: Fri, 02 Oct 1998 13:40:56 -0700
+From: "Steven E. Czerwinski" <czerwin@@CS.Berkeley.EDU>
+Status: RO
+
+
+
+                                                        Steven Czerwinski
+                                                        CS261 Computer Security
+                                                        Assignment #1
+                                                        October 2, 1998
+
+
+Question 1:  First Principles
+
+a.  The ftpd/gnutar interaction
+
+The problem is that ftpd violates the Economy of Mechanism and Least
+Privilege-- it didn't keep the design simple, so there was an
+unforseen interaction with the tar feature and the child program runs
+with all privileges of the parent.  I would fix it by using Least
+Privilege (and complete mediation) -- basically, we should create a
+psuedo sandbox for all the "helper" functions like tar to run.  They
+only need to access files that the ftp user can access; they do not
+need such privileges as executing new commands...  So, we create a
+fine grained security model, and only grant child processes subsets of
+the privileges we want them to have.
+
+b.  Sendmail
+
+The problem is Economy of Mechanism and Imcomplete Mediation --
+address expansion wasn't made simple enough, and there were too many
+places check it so the mediation was a problem.  To fix it, I'll again
+use Least Privilige and complete mediation.  We should run the address
+expansion routines in there own sandbox... they only need to have read
+access to the files and access to informational system calls like
+gettimeofday.  They shouldn't be able to write files nor execute other
+commands.
+
+c.  Complete mediation in Java 
+
+The problem is that Java does not use economy of mechanism, and
+therefore has incomplete mediation -- the security mechanism is spread
+throughout the Java code, thus making it difficult to make sure Java
+checks each access.  The way to fix this is to use economy of
+mechanism.. we have to keep the security mechanism small and simple so
+it can be verified easily.  To do this, we write a simple, low level
+interface that implements the security.. maybe using a simple
+capability implementation.
+
+
+d.  Tractorbeaming in wu-ftpd
+
+The main problem is that wu-ftpd does not use seteuid is not a fine enough
+mechanism for dealing out Least Privileges.  Just because wu-ftpd needs to
+do one small thing, it has to become root privilege, and if something happens
+that allows for it to retain that, then the user can do anything.
+
+The solution for this is to use Least Privileges, Separation of
+Privilege/ Complete Mediation, and Economy of Design.  We should only
+give wu-ftpd the absolute minimum privilege it needs so if it retains
+it, the user can't get access to all files (Least Privileges).  Also,
+we should do Separation of Privilege and Complete Mediation by not simply
+relying on the uid to be at the correct setting.  We should have multiple 
+checks so that everytime a command is run, we verify that uid corresponds to
+what the user logged in as.  And as always, keep this simple
+
+
+Question 2: Covert Java
+
+Well, one way to transfer information from the applet is to send the
+information back to the applet's machine, since that network connection is
+allowed.  Then, the machine can forward the information to wherever it wants,
+but this is too trival, and it really isn't a covert channel (since you know
+that might be a leak area), so I'll ignore that.
+
+Instead, here are some real covert channels: 
+  o The rate at which data is transfer to the applet home machine can
+    encode information..  fast access can be a 1, while slow is a 0, and then
+    just string a bunch of accesses together to create message
+    (assumes colluder eavesdrop on communication between
+    applet home machine and client running applet)
+  o The delay between replying to a message sent by the applet home machine.
+    (same assume as before).
+  o Network load on user's machine... (I'm not sure about this).  If the
+    applet hammers on network, then system will slower to respond to incoming
+    messages..  The colluder can send pings to machine to determine load..
+    (might work).  assumes colluder knows which user is running it.
+  o Applets can request documents for the web browser to display. I'm not
+    sure if the documents are restricted to just the applet's host machine,
+    but either way, which documents are requested can give colluder info.
+    (Assumes eavesdropping colluder again).
+
+
+Question 3:  Breaking Telnet
+
+a.  If there is no encryption used, we can insert our own commands into
+    the session by simply modifying the packets as they go across.  Or,
+    if we don't have modification ability, we can hijack the session through
+    sin attacks at any point after authenication.
+
+b.  If it's using DES ECB mode, then the encrypted packets will be the same
+    for the same plaintext.  If we have a telnet connection, letters will
+    often be sent over by themselves (since the user typing is slow), so
+    we can do a frequency analysis to figure out what encripted text 
+    corresponds to what plain text, and then construct and insert our own
+    message using this table.  A similar thing can be done on non-telnet
+    sessions..  frequency analysis of common plaintext and so on.
+
+c.  DES CBC gets around the last attack by chaining the encryption in with
+    the result from previous messages.  So now the only way I can think to
+    break it is hijack the session immediately after authenication.  There is
+    a small gap between when it is authenicated, and when encryption begins.
+    Also, maybe you can eavesdrop on what the secret key is for the DES
+    (I'm not sure how this negotiated).  Of coures, user will know when this
+    hijack happens.
+
+d.  How to fix all of these attacks?  First, the entire session should be
+    encrypted from the start, probably using some public keys on each end
+    point that they know before hand, which can be used to negiotate a 
+    secret key.  Then, authenication occurs.  Also, we want to use chaining
+    encryption, but for safety sake, maybe we should pad in nonces when 
+    sending small messages.. that way we mix up the plaintext.  Both sides
+    will know to ignore the nonces.
+
+Question 4:  A Stronger DNS
+
+a.  Well, it really depends on how the key checking mechanism is implemented.
+    Obviously, with unauthenicated negative responses, a hacker can mount
+    a Denial of Service attack, claiming that a certain machine doesn't 
+    exist.  More complicated, what happens when a hacker makes it appear
+    as if .berkeley.edu doesn't exist.  How do we authenicate the entries
+    of cs.berkeley.edu since .berkeley.edu signed it's key?  We almost have
+    to just assume cs.berkeley.edu is correct in this case, since otherwise
+    hackers could bring down the entire system by a DoS attack (i.e., if
+    they do a DoS on .edu or even root.  So, if implementations just assume
+    correctness when they can't check for sure, then hackers can advertise
+    a false record for .cs.berkeley.edu and then do a DoS on .berkeley.edu,
+    and hence break the system.  Their DNS packets just have to beat the real
+    servers.
+
+b.  How do authenicate negative responses.  Well, we have to assume that
+    the system already has an efficient scheme for caching keys often used,
+    such as .edu and .berkeley.edu.  So, when tracing up a DNS entry, the
+    server that detects the requested computer does not exist, sends the
+    message signed with its own key, and includes in the message, what
+    server it was.  So, if hacker doesn't exist in .berkeley.edu, then
+    .berkeley.edu will send a negative response for hacker.berkeley.edu
+    signed with .berkeley.edu's key, and includes that the .berkeley.edu
+    DNS sent the message.  Since we are using the same keys we use to verify
+    a correct response, this will be efficient, since nothing new is added.
+
+@

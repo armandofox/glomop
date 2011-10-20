@@ -1,0 +1,273 @@
+head	1.5;
+access;
+symbols
+	stable:1.3
+	current:1.3
+	release:1.3;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	96.08.23.19.58.21;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.15.02.42.47;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.14.22.45.24;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.14.21.11.44;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.13.10.13.21;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@##
+## This application is the sample image browser application to test-drive
+## GloMop.
+##
+
+source control_panel.tcl
+source connect_module.tcl
+source qos_module.tcl
+
+# Create the control panel for connecting to the proxy
+GM_CreateControlPanel .imcp
+
+# Create the user interface elements for specifying documents
+set f [frame .ui]
+set f11 [frame .ui.mb]
+set docloc [CommandEntry $f.docloc DocLocator 35 -textvar imdocloc]
+set f2 [frame .ui.buts]
+set getbut [button $f2.get -text "get" -command \
+	{getdl $imdocloc}]
+set clrbut [button $f2.clr -text "clear" -command \
+	{set imdocloc ""}]
+
+# menu of sample images
+set mb [menubutton $f11.mb -text "sample images" -menu $f11.mb.menu \
+	-bg LightBlue2 -relief ridge]
+set m [menu $mb.menu]
+
+set sample_ar {
+    "Steve Gribble" 
+    "http://www.cs.berkeley.edu/~gribble/imagedir/steve_crossarm.gif"
+    "Armando Fox"
+    "http://www.cs.berkeley.edu/~fox/img/fox.gif"
+    "Eric Brewer"
+    "http://www.cs.berkeley.edu/~brewer/Brewer.gif"
+    "Randy Katz"
+    "http://www.cs.berkeley.edu/~randy/randy.gif"
+    "Bill Clinton"
+    "http://www.whitehouse.gov/WH/Accomplishments/images/pod.gif"
+    "Arizona falls"
+    "file:/usr/sww/share/images/gif/ariz_falls2.gif"
+    "Tulumne"
+    "file:/usr/sww/share/images/gif/tuolumne.gif"
+}
+
+for {set x 0} {$x < [llength $sample_ar]} { } {
+    set y [expr $x + 1]
+    $m add command -label [lindex $sample_ar $x] \
+	    -command " set imdocloc [lindex $sample_ar $y] "
+    set x [expr $y + 1]
+}
+
+pack $f
+pack $f11 -fill x
+pack $mb -side left -fill none
+pack $f.docloc -side top
+pack $f2
+pack $getbut $clrbut -side left -fill x
+
+proc getdl { docloc } {
+    global .imcp.constate
+
+    set arname .imcp.constate
+    set conval [set ${arname}(connected)]
+
+    if {$conval == 0} {
+	puts "We're not connected to a proxy."
+    } else {
+	gm_getdoc [set ${arname}(connectid)] $docloc callback 1 100
+    }
+}
+
+proc callback { connId docId chunkId } {
+    global .imcp.constate
+    set cbarname "arr_${connId}_${docId}"
+    global $cbarname
+
+    if [info exists ${cbarname}(0)] {
+	# decrement the "chunks yet to receive" variable
+	set ${cbarname}(0) [expr [set ${cbarname}(0)] - 1]
+	if {[set ${cbarname}(0)] == 0} {
+	    # all done decrementing - now display that puppy
+	    unset ${cbarname}
+
+	    displaydoc $connId $docId
+	}
+    } else {
+	# set the "chunks to receive" variable - position 3 in tocstr
+	set tocstr [gm_getimagetoc $connId $docId 0]
+	set ${cbarname}(0) [lindex $tocstr 2]
+    }
+}
+
+proc displaydoc { connId docId } {
+    set tocstr [gm_getimagetoc $connId $docId 0]
+    set numx [lindex $tocstr 0]
+    set numy [lindex $tocstr 1]
+    set top ".image_${connId}_${docId}"
+    global $top
+
+    toplevel $top
+    wm title $top "image ${connId} ${docId}"
+    
+    for {set i 1} {$i <= $numy} {incr i 1} {
+	frame $top.$i
+	for {set j 1} {$j <= $numx} {incr j 1} {
+	    set imind [expr (($j-1)*$numx) + $i]
+	    set imname [gm_getimagechunk $connId $docId $imind]
+	    set butname $top.$i.$j
+	    set refname [gm_getchunkrefdl $connId $docId $imind]
+	    puts "refname is $refname"
+	    button $butname -image $imname -bd -1 -highlightthickness 0 \
+		    -relief flat -command "refinedoc $connId $refname"
+	    pack $butname -side left
+	}
+	pack $top.$i -side top
+    }
+
+    frame $top.bar1 -bg black -height 3
+    pack $top.bar1 -side top -fill x
+    frame $top.info
+    label $top.info.il -text "ConnId $connId, docId $docId"
+    button $top.info.cb -text "close" -command \
+	    "destroydoc $top $connId $docId" -relief raised \
+	    -bd 2
+    pack $top.info.il -side top -fill x
+    pack $top.info.cb -side top
+    pack $top.info -side top
+    frame $top.bar2 -bg black -height 3
+    pack $top.bar2 -side top -fill x
+
+    return $top
+}
+
+proc destroydoc { top connId docId } {
+    puts "in destroydoc"
+    global .imcp.constate
+
+    set arname .imcp.constate
+    puts "arname is $arname"
+    set conval [set ${arname}(connected)]
+
+    if {$conval == 0} {
+	puts "We're not connected to a proxy."
+    } else {
+	puts "gm_closedoc $connId $docId"
+	uplevel #0 "gm_closedoc $connId $docId"
+    }
+
+    destroy $top
+}
+
+
+proc refinedoc { connId refineDL } {
+    puts "in refinedoc"
+    global .imcp.constate
+
+    set arname .imcp.constate
+    puts "arname is $arname"
+    set conval [set ${arname}(connected)]
+
+    if {$conval == 0} {
+	puts "We're not connected to a proxy."
+    } else {
+	uplevel #0 "gm_getdoc $connId $refineDL callback 1 100"
+    }
+}
+@
+
+
+1.4
+log
+@Added "sample images" pull-down menu and the "clear" button.
+@
+text
+@d6 4
+@
+
+
+1.3
+log
+@Stripped out some debugging messages
+@
+text
+@d11 1
+d13 2
+a14 1
+set getbut [button $f.get -text "Get" -command \
+d16 32
+d49 2
+d52 2
+a53 1
+pack $getbut -side top
+d160 1
+a160 1
+	puts "gm_getdoc $connId $refineDL callback 1 100"
+@
+
+
+1.2
+log
+@Whoohoo!  Created image browser application, added unauthenticated
+connection, TOC parsing.
+@
+text
+@a43 1
+	    puts "done"
+a49 1
+    puts "really done"
+d125 1
+a125 1
+}@
+
+
+1.1
+log
+@A preliminary image browser app!
+@
+text
+@d70 5
+a74 2
+	    button $butname -image $imname -borderwidth 0 -relief flat
+	    pack $butname -side left -padx 0 -pady 0 -ipadx 0 -ipady 0
+d76 1
+a76 1
+	pack $top.$i -side top -padx 0 -pady 0 -ipadx 0 -ipady 
+d78 14
+d95 33
+@

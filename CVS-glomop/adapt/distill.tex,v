@@ -1,0 +1,2744 @@
+head	1.20;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.20
+date	98.05.19.18.19.43;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	98.05.15.00.48.52;	author gribble;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	98.05.15.00.44.53;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	98.05.15.00.41.19;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	98.05.08.22.22.31;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	98.05.08.17.47.48;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	98.03.02.01.49.12;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	98.02.28.22.29.54;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	98.02.28.04.46.44;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.02.28.02.22.18;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.02.27.21.07.26;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.02.27.21.02.45;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.02.27.09.51.59;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.02.26.18.06.53;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.02.19.23.33.45;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.02.19.00.31.18;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.02.18.22.29.49;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.02.18.20.25.38;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.02.18.03.05.14;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.02.12.02.15.24;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.02.12.02.15.24;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.20
+log
+@fixed typos
+@
+text
+@% currently contains contents of ASPLOS paper, less the intro section
+% and some other stuff
+
+\section{Adaptation via Datatype Specific Distillation}
+\label{distill}
+
+We propose three design principles that we believe are 
+fundamental for addressing client variation most effectively.  
+
+\begin{enumerate} 
+
+\item {\bf Adapt to client variation via datatype-specific lossy compression.}
+
+Datatype-specific lossy compression mechanisms can achieve much better
+compression than ``generic'' compressors, because they can make
+intelligent decisions 
+about what information to throw away based on the semantic type of the
+data.  For example, lossy compression of an image
+requires discarding color information, high-frequency components, or
+pixel resolution.  Lossy compression of video can additionally include
+frame rate reduction.  Less obviously, lossy compression of formatted
+text requires discarding some formatting information but preserving the
+actual prose.  In all cases, the goal is to preserve information that
+has the highest semantic value.  We refer to this process generically as
+{\em distillation}. 
+A distilled object allows the user to decide whether it is worth asking
+for a {\em refinement}:
+for instance, zooming in on a section of a graphic or video frame, or rendering
+a particular page containing PostScript text and figures without having to
+render the preceding pages.
+
+\item {\bf Perform adaptation on the fly.}  To reap the maximum benefit
+from distillation and refinement, a distilled 
+representation must target specific attributes of the client.
+% Fortunately, it is often computationally
+% feasible on today's hardware to  compute a desired representation of a
+% typed object on demand rather than relying on a set of precomputed
+% representations.  
+% Our (non-intuitive)
+% observation, resulting from extensive implementation and measurement
+The measurements reported
+in section \ref{distperf} show that for typical images and rich-text,
+distillation time is small
+in practice, and end-to-end latency is reduced because of the much
+smaller number of bytes transmitted over low-bandwidth links.
+{\em On-demand distillation} provides an easy path for
+incorporating support for new clients, and also allows distillation
+aggressiveness to track (e.g.) significant changes in network bandwidth,
+as might occur in vertical handoffs between different wireless networks
+\cite{vhandoff}. 
+We have successfully implemented useful
+distillation ``workers''
+that serve clients spanning an order of magnitude in each area of
+variation, and we have generalized our approach into a common framework,
+which we discuss in section \ref{scaling}.
+
+\item {\bf Move complexity away from both clients and servers.}
+Application partitioning arguments have long been used to keep clients
+simple \cite{wit}.  However,  adaptation through
+a shared infrastructural proxy enables incremental deployment
+and legacy client support, as we argued in section \ref{approach}.
+% through  
+% transparent interposition.
+% , and avoid   inserting
+% adaptation machinery at each server, thereby improving economy of scale.
+Therefore, on-demand distillation
+and refinement should be done at an intermediate proxy that has access to
+substantial computing resources and is well-connected to the rest of the
+Internet.
+
+\end{enumerate}
+
+Table \ref{dist_axes} lists the ``axes'' of
+compression corresponding to three important datatypes: formatted text,
+images, and video streams.  
+% Of course there are limits to how severe a
+% degradation of quality is possible before the source object becomes
+% unrecognizable, but 
+We have found that order-of-magnitude size reductions
+are often possible without destroying
+the semantic content of an object (e.g. without rendering an image
+unrecognizable to the user).
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c||c|c|} \hline
+
+{\bf Semantic} & {\bf Specific} & {\bf Distillation}  \\
+{\bf Type}     & {\bf encodings}    & {\bf axes} \\ \hline
+
+Image		& GIF, JPEG,        & Resolution, \\
+                & PPM,              & color depth, \\
+                & Postscript        & color palette \\ \hline
+
+Text	& Plain, HTML,    & Richness (heavily\\
+
+        & Postscript,     & formatted vs.\\ 
+        & PDF             & simple markup \\
+        &                 & vs. plaintext) \\ \hline
+
+Video & NV, H.261, & Resolution, frame \\
+      & VQ, MPEG   & rate, color depth, \\
+      &            & progression limit \\
+      &            & (for progressive \\
+      &            & encodings) \\ \hline
+\end{tabular}
+\caption{{\bf Three important types and the distillation axes corresponding
+to each.}  }\label{dist_axes}
+\end{table}
+
+\subsection{Performance of Distillation and Refinement On Demand}
+\label{distperf}
+
+% We now describe and evaluate three datatype-specific
+% distillers, for images, text, and network video streams.  
+We now describe and evaluate datatype-specific
+distillers for images and rich-text.\footnote{A distiller for real-time
+network video streams is described separately, in \cite{vidgateway}.}
+The goal of this
+section is to support our claim that in the majority of cases, {\em
+end-to-end
+latency is reduced by distillation,} that is,
+the time to produce a useful distilled object on today's workstation
+hardware  is small enough to
+be more than compensated by the savings in transmission time for the
+distilled object relative to the original.
+
+\subsubsection{Images}
+
+We have implemented an image distiller called {\em gifmunch}, which
+implements distillation and refinement for GIF \cite{gifstd} images, and
+consists largely of source code from the NetPBM Toolkit
+\cite{PBM}.  
+% {\em Gifmunch} makes simple predictions about the size of its output by
+% measuring the achieved bits per pixel compression of the original image
+% relative to a ``raw'' bitmap.
+Figure \ref{dist_example} shows the result of
+running gifmunch on a large color GIF image of the Berkeley Computer
+Science Division's home building, Soda Hall.  The image of Figure
+\ref{dist_example}a measures $320\times 200$ pixels---about 1/8 the
+total area of the original $880\times 610$---and uses 16 grays, making it
+suitable for display on a typical handheld device.
+
+\begin{figure*}[tbh]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 564 200]{./figures/soda_small_gray.epsi}
+}
+\end{center}
+\caption{Distillation example}\label{dist_example}
+\end{figure*}
+
+
+%\begin{table}[htbp]
+%\centering
+%\begin{tabular}{|c|c||c|c|c|c|c|c|} \hline
+
+%\multicolumn{2}{|c||} {\bf } &
+%\multicolumn{2}{|c|} {\bf Reduce} &
+%\multicolumn{2}{|c|} {\bf Reduce,} &
+%\multicolumn{2}{|c|} {\bf Reduce,} \\
+%\multicolumn{2}{|c||} {\bf Original} &
+%\multicolumn{2}{|c|} {\bf to}  &
+%\multicolumn{2}{|c|} {\bf map to} &
+%\multicolumn{2}{|c|} {\bf map,} \\
+%\multicolumn{2}{|c||} {\bf GIF} &
+%\multicolumn{2}{|c|} {\bf $<$ 8KB} &
+%\multicolumn{2}{|c|} {\bf 16 grays} &
+%\multicolumn{2}{|c|} {\bf convert} \\
+%\multicolumn{2}{|c||} {\bf } &
+%\multicolumn{2}{|c|} {\bf } &
+%\multicolumn{2}{|c|} {\bf } &
+%\multicolumn{2}{|c|} {\bf to PICT} \\ \hline
+
+%size & col- & size & time & size & time & size & time \\
+%KB & ors  & (\%) & (s) & (\%) & (s) & (\%) & (s) \\ \hline \hline
+
+%48 & 87 & 15.0 & 3.3 & 7.7 & 2.2 & 27.3 & 2.7 \\ \hline
+%153 & 254 & 5.0 & 6.8 & 1.9 & 3.3 & 5.8 & 3.7 \\ \hline
+%329 & 215 & 1.8 & 6.2 & 1.0 & 5.2 & 2.1 & 5.7 \\ \hline
+%492 & 249 & 1.5 & 8.3 & <1 & 6.3 & 1.4 & 6.8 \\ \hline
+
+%\end{tabular}
+%\caption{{\bf Distillation latency} (seconds of wall clock time) and new
+%sizes as a percent of the original, for three sets of distillation
+%parameters and four images.  Each column is independent, i.e.  the last
+%column gives the results for performing all three operations.  There is an
+%implicit requantization back to the original color palette in the first
+%conversion, accounting for its higher times.}\label{pict_lat}
+%\end{table}
+
+Due to the degradation of quality, the writing on the building is
+unreadable, but the user can request a refinement of the subregion
+containing the writing, which can then be viewed at full resolution.  
+
+%Table \ref{pict_lat} shows the latencies of distilling a number of GIF
+%images with three different sets of distillation parameters, and the
+%resulting size reductions.  The measurements were taken on a lightly loaded
+%SPARCstation 20/71 running Solaris 2.4.  The three sets of distillation
+%parameters were chosen as representative values for addressing the three
+%categories of variation: size reduction to under 8K bytes, color quantizing
+%to 16 grays, and format conversion to Macintosh PICT.
+
+%The table data reveals three effects of interest:
+
+%\begin{itemize}
+
+%\item More aggressive color quantization actually takes less time 
+%than less aggressive quantization.  In the first column, the 
+%number of colors in the distilled representation was chosen 
+%to match the number of colors in the original, e.g., 87 for 
+%the first test image.  Note that this usually requires the 
+%distiller to perform color quantization, since scaling down 
+%may introduce a large number of new colors.  In the second 
+%column, the number of colors in the distilled representation 
+%was fixed at 8, chosen from a fixed gray palette.  For all four 
+%images, the time required to scale and quantize 
+%aggressively was less than the time required to scale and 
+%quantize less aggressively.
+
+%\item Format conversion may cause image representation to 
+%increase in size, in this case because of PICT's inefficient 
+%encoding of bitmaps compared to GIF.  This shows how 
+%choice of representation impacts bandwidth requirements: 
+%if the distiller is informed that the client requires PICT, it 
+%must ``budget'' fewer pixels for the distilled representation.
+
+%\item The additional work of transcoding to PICT adds virtually 
+%no latency to the overall distillation process (compare 
+%columns 2 and 3).  Adding this step makes sense, e.g., for a 
+%PDA client such as the Newton, on which PICT is 
+%supported by the native GUI but GIF-to-PICT conversion is 
+%computationally expensive.
+
+%\end{itemize}
+
+\begin{figure}[tbh]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 263 196]{./figures/images.eps}
+}
+\end{center}
+\caption{End-to-end latency for images with and without distillation.  Each
+group of bars represents one image with 5 levels of distillation;  the top
+bar represents no distillation at all.  The y-axis number is the distilled
+size in kilobytes (so the top bar gives the original size).  Note that two
+of the undistilled images are off the scale;  the Soda Hall image is off by
+an order of magnitude.}\label{dist_figures}
+\end{figure}
+
+Image distillation can be used to address all three areas of client
+variation:
+
+\begin{itemize}
+
+\item {\bf Network variation}: The graphs in figure \ref{dist_figures}
+depict end-to-end client latency for retrieving the original and each of
+four distilled versions of a selection of GIF images: the top set of bars
+is for a cartoon found on a popular Web page, the middle set corresponds to
+a large photographic image, and the bottom to a computer rendered image.
+The images were fetched using a 14.4Kb/s modem with standard compression
+(V.42bis and MNP-5) through the UC Berkeley PPP gateway, via a process that
+runs each image through gifmunch.
+\footnote{The network and distillation latencies reflect significant
+overhead due to the naive implementation of {\em gifmunch} and the latency
+and slow-start effects of the PPP gateway, respectively.  In section
+\ref{scaling} we discuss how to overcome some of these problems, but it is
+worth noting that end-to-end latency is still substantially reduced even in
+this naive prototype implementation.}  Each bar is segmented to show the
+distillation latency and transmission latency separately.  Clearly, even
+though distillation adds latency at the proxy, it can result in greatly
+reduced end-to-end latency.  This shows that on the fly distillation is not
+prohibitively expensive.
+
+\item {\bf Hardware variation}: A ``map to 16 grays'' operation would be
+appropriate for PDA-class clients with shallow grayscale displays.  We can
+identify this operation as an effective lossy compression technique
+precisely because we know we are operating on an image, regardless of the
+particular encoding, and the compression achieved is significantly better
+than the 2-4 times compression typically achieved by ``generic'' lossless
+compression 
+(design principle \#1).
+
+\item {\bf Software variation}:  Handheld devices such as the 3Com
+PalmPilot frequently have built-in support for proprietary image
+encodings only.  The ability to convert to this format saves code space
+and decoding latency on the client (design principle \#3).
+
+\end{itemize}
+
+\subsubsection{Rich-Text}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c||c|c|c|} \hline
+{\bf Feature} & {\bf HTML} & {\bf Rich} & {\bf Post-} \\
+              &            & {\bf Text} & {\bf Script} \\ \hline
+Different fonts & Y & Y & Y \\ \hline
+Bold and Italics & Y & Y & Y \\ \hline
+Preserves Font Size & head- & Y & Y \\
+ & ings & & \\ \hline
+Preserves Paragraphs & Y & Y & Y \\ \hline
+Preserves Layout & N & Y & Y \\ \hline
+Handles Equations & N & some & Y \\ \hline
+Preserves Tables & Y & Y & Y \\ \hline
+Preserves Graphs & N & N & Y \\ \hline
+\end{tabular}
+\caption{Features for postscript distillation}\label{post_feat}
+\end{table}
+
+\begin{figure}[tbh]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 213 244]{./figures/post_distill.eps}
+}
+\end{center}
+\caption{Screen snapshots of our rich-text (top) versus ghostview
+(bottom).  The rich-text is easier to read because it uses screen
+fonts.}\label{post_distill}
+\end{figure}
+
+
+We have also implemented a rich-text distiller that performs lossy compression
+of PostScript-encoded text using uses a third party
+postscript-to-text converter \cite{PSTT}.  
+The distiller replaces PostScript formatting
+information with HTML markup tags or with a custom rich-text format that
+preserves the position information of the words.  PostScript is an
+excellent target for a distiller because of its complexity and verbosity:
+both transmission over the network and rendering on the client  
+are resource intensive.  Table
+\ref{post_feat} compares the features available in each format.  Figure
+\ref{post_distill} shows the advantage of rich-text over PostScript for
+screen viewing.  As with image distillation, PostScript distillation yields
+advantages in all three categories of client variation:
+
+\begin{itemize}
+
+\item {\bf Network variation}: Again, distillation reduces the
+required bandwidth and thus the end-to-end latency.  We achieved an average
+size reduction of a factor of 5 when going from compressed PostScript to
+gzipped HTML.  Second, the pages of a PostScript document are pipelined
+through the distiller, so that the second page is distilled while the user
+views the first page.  In practice, users only experience the latency of
+the first page, so the difference in perceived latency is about a factor of 8
+for a 28.8K modem.  Distillation typically took about 5 seconds for the
+first page and about 2 seconds for subsequent pages.
+
+\item {\bf Hardware variation:} Distillation reduces decoding time by
+delivering data in an easy-to-parse format, and results in better looking
+documents on clients with lower quality displays.
+
+\item {\bf Software variation:} PostScript distillation allows clients that
+do not directly support PostScript, such as handhelds, to view these
+documents in HTML or our rich-text format.  The rich-text viewer could be
+an external viewer similar to {\em ghostscript}, an applet for a
+Java-capable browser, or a browser plug-in rendering module.
+
+\end{itemize}
+
+Overall, rich-text distillation reduces end-to-end latency, results in more
+readable presentation, and adds new abilities to low-end clients, such as
+PostScript viewing.  The latency for the appearance of the first page was
+reduced on an average by a factor of 8 using the proxy and 
+PostScript distiller.  Both
+HTML and our rich-text format are significantly easier to read on screen
+than rendered PostScript, although they sacrifice some layout and graphics
+accuracy compared to the original PostScript.
+
+% \subsubsection{Real-time Video Streams} 
+
+% In addition to spatial distillation such as resolution scaling,
+% requantization, color 
+% decimation, or recoding in a more efficient format, 
+% distillation of real-time traffic can exploit
+% the temporal dimension, by limiting the frame
+% rate to meet a target bit rate.  Temporal dependencies also impose tight
+% timing constraints on the distillation process, which affects the
+% architecture of the distiller.
+
+% \begin{figure}[tbh]
+% \epsfxsize 0.95\hsize
+% \begin{center}
+% \makebox{
+% \epsfbox[0 0 240 126]{./figures/vgw_arch.eps}
+% }
+% \end{center}
+% \caption{The design of the video distiller.  Any of several supported
+% inputs formats can be converted into any supported output format.  As an
+% example, the figure shows a JPEG/H.261 configuration.  
+% }\label{vgw_arch}
+% \end{figure}
+
+% The video stream distiller used in our architecture is the video gateway,
+% {\em vgw} \cite{vidgateway}.  Figure \ref{vgw_arch} presents a high level
+% schematic of the design of the video distiller
+% {\em vgw}; a complete description of the architecture is beyond the
+% scope of this article, but see 
+% \cite{vidgateway}.  
+% %At the core of the gateway we have a distiller
+% %that can transcode between arbitrary input and output formats.  The gateway
+% %controls the output rate of the resulting stream by applying any of the
+% %above mentioned techniques.  
+% Although {\em vgw}\/'s distillation techniques are
+% different from those of the image and rich text distillers, they clearly
+% address the three areas of client variation:
+
+% \begin{itemize}
+
+% \item {\bf Network variation}: By throttling the frame rate and altering
+% encoding parameters such as quantization factors, we can meet
+% any target bit rate.  Also, since {\em vgw} appears to clients as a
+% video source, it can tunnel video to clients that do not support IP
+% multicast. 
+
+% \item {\bf Hardware variation}: Since {\em vgw} can decode the incoming video
+% stream to pixel domain, its output encoding can be tailored to meet client
+% screen limitations.  For example, {\em vgw} can provide halftoned output to a
+% device with an 8-bit grayscale display, trading off compression performance
+% for rendering complexity.  {\em Vgw} can also accommodate devices with high
+% bandwidth but limited CPU rendering speed by throttling the frame rate.
+
+% \item {\bf Software variation}: {\em Vgw} converts among NV, MJPEG,
+% H.261, and an 
+% error-tolerant form of VQ used by the Berkeley InfoPad \cite{infopad},
+% allowing the InfoPad to 
+% participate in MBONE broadcasts even though it supports neither NV nor
+% IP multicast.
+
+% \end{itemize}
+
+% We can also dynamically control the trade-off among frame rate, color
+% depth and resolution.  For example, when the content is relatively static,
+% such as overhead slides, we can reduce the frame rate and increase the
+% resolution.  As with images and rich-text, these techniques exploit
+% datatype-specific knowledge to maximize the semantic content of the stream
+% for each client, and enable video delivery to clients for which it would
+% otherwise be impossible.
+
+\subsection{Summary}
+
+High client variability is an area of increasing concern that existing
+servers do not handle well.  We have proposed three design principles we
+believe are fundamental to addressing variation:
+
+\begin{itemize}
+
+\item Datatype-specific distillation and refinement achieve better 
+compression than does lossless compression, while 
+retaining useful semantic content and allowing network 
+resources to be managed at the application level.
+
+\item When the proxy-to-client bandwidth is
+substantially smaller than the proxy-to-server bandwidth (as is the
+case, e.g., in wireless networks or with consumer wireline modems), 
+on-demand distillation and refinement reduce end-to-end 
+latency perceived by the client (sometimes by almost an order of
+magnitude), are more flexible than 
+reliance on precomputed static representations, and 
+give low-end clients new abilities such as 
+% video access or
+PostScript viewing.
+
+\item Performing distillation and refinement in the network 
+infrastructure rather than at the endpoints separates 
+technical as well as economic concerns of clients and 
+servers.
+
+\end{itemize}
+
+@
+
+
+1.19
+log
+@Final changes
+@
+text
+@d282 1
+a282 1
+than the $2\times-4\times$ typically achieved by ``generic'' lossless
+d326 4
+a329 3
+We have also implemented a rich-text distiller (that uses a third party
+postscript-to-text converter \cite{PSTT}), which performs lossy compression
+of PostScript-encoded text.  The distiller replaces PostScript formatting
+d333 2
+a334 1
+both rendering and transmission are resource intensive.  Table
+d344 1
+a344 1
+size reduction of $5\times$ when going from compressed PostScript to
+d348 1
+a348 1
+the first page, so the difference in perceived latency is about $8\times$
+d367 2
+a368 1
+reduced an average of $8\times$ using the proxy and PostScript distiller.  Both
+@
+
+
+1.18
+log
+@*** empty log message ***
+@
+text
+@d133 5
+a137 4
+\cite{PBM}.  {\em Gifmunch} makes simple predictions about the size of
+its output 
+by measuring the achieved bits per pixel compression of the original image
+relative to a ``raw'' bitmap.  Figure \ref{dist_example} shows the result of
+d141 2
+a142 4
+total area of 
+the original $880\times 610$---and uses 16 grays, making it suitable for
+display on 
+a typical handheld device.
+a237 3
+Image distillation can be used to address all three areas of client
+variation:
+
+d242 1
+a242 1
+\epsfbox[0 0 215 196]{./figures/images.eps}
+d253 3
+d267 5
+a271 8
+overhead due to the naive {\em fork()\/}-based
+implementation of {\em gifmunch} and the
+latency and slow-start effects of the PPP gateway, respectively.
+In section \ref{scaling} we discuss
+how to overcome some of these problems, but it is worth noting that 
+end-to-end latency is
+still substantially reduced even in this naive prototype implementation.}
+Each bar is segmented to show the
+d274 2
+a275 1
+reduced end-to-end latency.  This supports design principle \#2.
+d289 1
+a289 1
+and latency on the client (design principle \#3).
+d326 11
+a336 10
+We have also implemented a rich-text distiller \cite{PSTT}, which performs
+lossy compression of PostScript-encoded text.  The distiller replaces
+PostScript formatting information with HTML markup tags or with a custom
+rich-text format that preserves the position information of the
+words.  PostScript is an excellent target for a distiller because of its
+complexity and verbosity: both rendering and transmission are 
+resource intensive.  Table \ref{post_feat} compares the features available
+in each format.  Figure \ref{post_distill} shows the advantage of rich-text
+over PostScript for screen viewing.  As with image distillation, PostScript
+distillation yields advantages in all three categories of client variation:
+d341 8
+a348 9
+required bandwidth and thus the end-to-end latency.
+We achieved an average size reduction of $5\times$ when going from
+compressed PostScript to compressed HTML.  Second, the pages of a PostScript
+document are pipelined through the distiller, so that the second page is
+distilled while the user views the first page.  In practice, users only
+experience the latency of the first page, so the difference in perceived
+latency is about $8\times$ for a 28.8K modem.  Distillation typically
+took about 5 
+seconds for the first page and about 2 seconds for subsequent pages.
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@d59 5
+a63 5
+simple \cite{wit}.  However, by performing adaptation at  a
+shared infrastructural proxy, we can also realize incremental deployment
+and legacy client support
+through  
+transparent interposition.
+d75 8
+a82 4
+images, and video streams.  Of course there are limits to how severe a
+degradation of quality is possible before the source object becomes
+unrecognizable, but we have found that order-of-magnitude size reductions
+are often possible without significantly compromising semantic usefulness.
+@
+
+
+1.16
+log
+@reviewer B changes
+@
+text
+@d35 17
+a51 10
+Fortunately, it is often computationally
+feasible on today's hardware to  compute a desired representation of a
+typed object on demand rather than relying on a set of precomputed
+representations.  
+Our (non-intuitive)
+observation, resulting from extensive implementation and measurement
+described in section \ref{distperf}, is that distillation time is small
+in practice and
+more than compensated by the resulting reduction in transmission time over
+low-bandwidth links.  We have successfully implemented useful
+d59 1
+a59 1
+simple (as in \cite{wit}).  However, by performing adaptation at  a
+d61 1
+d63 3
+a65 2
+transparent interposition, and avoid   inserting
+adaptation machinery at each server, thereby improving economy of scale.
+@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@d75 2
+a76 2
+{\bf Semantic} & {\bf Specific} & {\bf Distillation axes}  \\
+{\bf Type}     & {\bf encodings}    & {\bf or quality levels} \\ \hline
+d82 1
+a82 1
+Text	& Plain, HTML,    & Heavy formatting,\\
+d84 3
+a86 2
+        & Postscript,     & simple markup, \\ 
+        & PDF             & plain text \\ \hline
+d94 2
+a95 2
+\caption{\bf Three important types and the distillation axes corresponding
+to each}\label{dist_axes}
+d256 1
+a256 1
+implementation of {\ef gifmunch} and the
+d276 1
+a276 1
+\item {\bf Software variation}:  Handheld devices such as the USR
+d287 1
+a287 1
+\begin{tabular}{|c||p{0.75in}|c|c|} \hline
+d289 1
+a289 1
+              &            & {\bf Text} & {\bf Script} \\ \\ \hline
+d297 1
+a297 1
+Preserves Tables & N & Y & Y \\ \hline
+d345 3
+a347 3
+do not directly support PostScript, such as handhelds or Network Computers, to
+view these documents in HTML or our rich-text format.  The rich-text viewer
+could be an external viewer similar to {\em ghostscript}, a module for a
+@
+
+
+1.14
+log
+@first draft sent to Richard LaMaire
+@
+text
+@d103 1
+a103 1
+distillers for images and rich text.\footnote{A distiller for real-time
+d252 10
+a261 1
+runs each image through gifmunch.  Each bar is segmented to show the
+d433 1
+a433 1
+believe to be fundamental to addressing variation:
+d442 4
+a445 1
+\item On-demand distillation and refinement reduce end-to-end 
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 2
+\section{Datatype Specific Distillation: Addressing Network and Client 
+Variation}
+d26 5
+a30 4
+The user can always explicitly ask for
+a higher-quality representation {\em (refinement)} later if she decides
+that the data is 
+valuable enough to be worth the additional latency.
+a63 2
+\subsection{Datatype-Specific Distillation and Refinement}
+
+a96 8
+The primary purpose of a distilled object is to allow the user to evaluate
+the value of downloading the original, or some part of the original; for
+instance, zooming in on a section of a graphic or video frame, or rendering
+a particular page containing PostScript text and figures without having to
+render the preceding pages.  We define refinement as the process of fetching
+some part (possibly all) of a source object at increased quality, possibly
+the original representation.
+
+d100 6
+a105 2
+In this section we describe and evaluate three datatype-specific
+distillers: images, text, and network video streams.  The goal of this
+d350 1
+a350 60
+\subsubsection{Real-time Video Streams} 
+
+In addition to spatial distillation such as resolution scaling,
+requantization, color 
+decimation, or recoding in a more efficient format, 
+distillation of real-time traffic allows the distiller to perform
+distillation in the temporal dimension, such as limiting the frame
+rate to meet a target bit rate.  Temporal dependencies also impose tight
+timing constraints on the distillation process, which affects the
+architecture of the distiller; a discussion of the architecture of our
+video distiller {\em vgw} is beyond the scope of this article, but see
+\cite{vidgateway}. 
+
+\begin{figure}[tbh]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 240 126]{./figures/vgw_arch.eps}
+}
+\end{center}
+\caption{The design of the video distiller.  Any of several supported
+inputs formats can be converted into any supported output format.  As an
+example, the figure shows a JPEG/H.261 configuration.  
+}\label{vgw_arch}
+\end{figure}
+
+The video stream distiller used in our architecture is the video gateway,
+{\em vgw} \cite{vidgateway}.  Figure \ref{vgw_arch} presents a high level
+schematic of its design.  
+%At the core of the gateway we have a distiller
+%that can transcode between arbitrary input and output formats.  The gateway
+%controls the output rate of the resulting stream by applying any of the
+%above mentioned techniques.  
+Although {\em vgw}\/'s distillation techniques are
+different from those of the image and rich text distillers, they clearly
+address the three areas of client variation:
+
+\begin{itemize}
+
+\item {\bf Network variation}: By throttling the frame rate and altering
+encoding parameters such as quantization factors, we can meet
+any target bit rate.  Also, since {\em vgw} appears to clients as a
+video source, it can tunnel video to clients that do not support IP
+multicast. 
+
+\item {\bf Hardware variation}: Since {\em vgw} can decode the incoming video
+stream to pixel domain, its output encoding can be tailored to meet client
+screen limitations.  For example, {\em vgw} can provide halftoned output to a
+device with an 8-bit grayscale display, trading off compression performance
+for rendering complexity.  {\em Vgw} can also accommodate devices with high
+bandwidth but limited CPU rendering speed by throttling the frame rate.
+
+\item {\bf Software variation}: {\em Vgw} converts among NV, MJPEG,
+H.261, and an 
+error-tolerant form of VQ used by the Berkeley InfoPad \cite{infopad},
+allowing the InfoPad to 
+participate in MBONE broadcasts even though it supports neither NV nor
+IP multicast.
+
+\end{itemize}
+d352 67
+a418 7
+We can also dynamically control the trade-off among frame rate, color
+depth and resolution.  For example, when the content is relatively static,
+such as overhead slides, we can reduce the frame rate and increase the
+resolution.  As with images and rich-text, these techniques exploit
+datatype-specific knowledge to maximize the semantic content of the stream
+for each client, and enable video delivery to clients for which it would
+otherwise be impossible.
+d437 2
+a438 1
+give low-end clients new abilities such as video access or
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d11 1
+a11 1
+\begin{itemize} 
+d15 4
+a18 4
+Lossy compression mechanisms, which 
+we introduce as distillation and refinement, can achieve much better
+compression than ``generic'' compressors.  Their intelligent decisions
+about what information to throw away are based on the semantic type of the
+d25 5
+a29 2
+has the highest semantic value.  The user can always explicitly ask for
+a higher-quality representation {\em (refinement)} later if she decides that the data is
+d32 2
+a33 1
+\item {\bf Perform adaptation on the fly.}  To reap the maximum benefit from distillation and refinement, a distilled
+d35 1
+a35 1
+Fortunately, it is computationally
+d44 2
+a45 1
+low-bandwidth links.  We have successfully implemented useful distillers
+d53 2
+a54 1
+shared infrastructural proxy, we can also realize incremental deployment through 
+d56 1
+a56 1
+adaptation machinery at each server, achieving a better economy of scale.
+d62 1
+a62 1
+\end{itemize}
+d64 1
+a64 1
+\subsubsection{Datatype-Specific Distillation}
+d66 1
+a66 3
+We define distillation as highly lossy, datatype-specific compression that
+preserves most of the semantic content of a data object while adhering to a
+particular set of constraints.  Table \ref{dist_axes} lists the ``axes'' of
+a98 16
+
+%An object's semantic type and its encoding are logically independent, e.g.,
+%PostScript can be used to encode either formatted text or a picture.
+%Although the abstract technique for distilling a particular object is a
+%function of the object's high-level semantic type, the implementation of
+%the distillation technique requires intimate knowledge of the encoding.  In
+%practice, constraints may be imposed by specific encodings that admit
+%efficient implementation of specific operations; for example, in the JPEG
+%\cite{jpeg} image encoding, scaling the image by a power of 2 is
+%exceptionally inexpensive.  Nonetheless, in general the distillation
+%technique depends on the data type and not the encoding.  Distillation can
+%be thought of as optimizing the object content with respect to
+%representation constraints.
+
+\subsubsection{Datatype-Specific Refinement}
+
+d107 2
+a108 3
+\subsection{Distillation and Refinement On Demand}
+
+\subsection{Distillation Performance}\label{distperf}
+d112 6
+a117 5
+section is to support our claim that in the majority of cases, end-to-end
+latency is reduced by distillation.  We do this by demonstrating that
+distillation performance on today's desktop workstations is sufficiently
+fast that the time to produce a useful distilled object is small enough to
+be more than made up for by the savings in transmission time for the
+d122 1
+a122 1
+We have implemented an image distiller called {\it gifmunch}, which
+d125 2
+a126 1
+\cite{PBM}.  gifmunch makes simple predictions about the size of its output
+d131 5
+a135 3
+\ref{dist_example}a measures 320x200 pixels - about 1/8 the total area of
+the original 880x610 - and uses 16 grays, making it suitable for display on
+a low-end notebook computer.
+d268 2
+a269 1
+than the 2x-4x typically achieved by ``generic'' lossless compression
+d272 4
+a275 4
+\item {\bf Software variation}: Even though PICT offers less efficient
+bitmap encoding than GIF and is not supported by most servers, conversion
+to PICT is useful for clients such as the Newton, where PICT is the only
+graphic format that can be rendered efficiently (design principle \#3).
+d283 1
+a283 1
+\begin{tabular}{|c||c|c|c|} \hline
+d317 1
+a317 1
+complexity and verbosity: both rendering and transmission are potentially
+d325 3
+a327 3
+\item {\bf Network variation}: First, distillation greatly reduces the
+required bandwidth and thus the end-to-end latency, as shown in
+Table 6.  We achieved an average size reduction of 5x when going from
+d332 2
+a333 1
+latency is about 8x for a 28.8K modem.  Distillation typically took about 5
+d336 1
+a336 1
+\item {\bf Hardware variation}: Distillation reduces decoding time by
+d340 2
+a341 2
+\item {\bf Software variation}: PostScript distillation allows clients that
+do not directly support PostScript, such as Macintoshes or PDA devices, to
+d343 1
+a343 1
+could be an external viewer similar to ghostscript, a module for a
+d351 1
+a351 1
+reduced an average of 8x using the proxy and PostScript distiller.  Both
+d358 6
+a363 6
+Distillation of real-time traffic introduces an additional degree of
+freedom with respect to non-real-time traffic types, namely, the temporal
+dimension.  This affects the distillation process of real-time traffic in
+two ways.  First, it allows the distiller to perform distillation in this
+dimension (commonly called temporal decimation), such as limiting the frame
+rate to meet a target bit rate.  Second, temporal dependencies impose tight
+d365 3
+a367 15
+architecture of the distiller.
+
+In the spatial domain, we can still perform operations similar to those
+used in the image distiller: resolution scaling, requantization, color
+decimation, or recoding in a format that is more compressible or better
+matches the characteristics of the end client.  
+
+%As with all distillation operations, a central challenge in the
+%distillation process is to optimize the perceptual quality of the resulting
+%stream as a function of the possible distillation operations and external
+%timing constraints.  The video distiller follows the model of pushing
+%complexity away from the client and trading bandwidth for quality.  The
+%additional challenge introduced in the real-time case is that temporal
+%efficiency (the analogue of reducing end-to-end latency for non-real-time
+%distillers) is not an optimization, but a requirement.
+a378 6
+%The intermediate
+%stage performs a transformation on the output of the decoder when
+%necessary, to match the conventions of the decoder and encoder and hands it
+%to the appropriate encoder.  In addition to any bandwidth reduction
+%inherent in format conversion, the output can be rate-controlled by
+%decoupling the generation of output frames from the arrival of input frames.
+d383 1
+a383 1
+vgw \cite{vidgateway}.  Figure \ref{vgw_arch} presents a high level
+d389 1
+a389 1
+Although vgw's distillation techniques are
+d395 5
+a399 3
+\item {\bf Network variation}: By throttling the frame rate, we can meet
+any target bit rate.  We can also affect the output bit rate by altering
+encoding parameters such as quantization factors.
+d401 1
+a401 1
+\item {\bf Hardware variation}: Since vgw can decode the incoming video
+d403 1
+a403 1
+screen limitations.  For example, vgw can provide halftoned output to a
+d405 1
+a405 1
+for rendering complexity.  Vgw can also accommodate devices with high
+d408 6
+a413 8
+\item {\bf Software variation}: Vgw converts among NV, MJPEG, H.261, and an
+error-tolerant form of VQ used by the Berkeley InfoPad \cite{infopad}, and
+it appears to clients as a video source.  This enables the InfoPad to
+participate in MBONE broadcasts, even though it employs a proprietary video
+format, and it does not support IP multicast.  
+%Thus several aspects of
+%software variation are addressed without modifying or even notifying the
+%server.
+d434 2
+a435 2
+compression than does lossless compression while 
+retaining useful semantic content, and allow network 
+d439 5
+a443 2
+latency perceived by the client and are more flexible than 
+reliance on precomputed static representations.
+a451 6
+Our preliminary results, based on both significant implementation and
+measurement, confirm the efficacy of our approach.  In particular, on-demand
+distillation leads to better performance, often including an order of
+magnitude latency reduction, better looking output (targeted to the
+particular client screen), and new abilities such as video access or
+PostScript viewing for low-end devices.
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d8 1
+a8 38
+In this section we propose three design principles that we believe are
+fundamental to enabling meaningful access to Internet content for a wide
+range of clients spanning all these areas of variation.  The principal
+underlying idea of the architecture is that on-demand distillation
+(datatype-specific lossy compression) both increases quality of service for
+the client and reduces end-to-end latency perceived by the client.  By
+performing on-demand distillation in the network infrastructure rather than
+at clients or servers, we achieve a separation of concerns that confers
+both technical and economic benefits; by making it datatype-specific, we
+enable intelligent management of a scarce resource (a slow network link) at
+the application level.
+
+\subsection{Client Variation}
+
+Clients vary along three important dimensions: network, hardware, and
+software.  {\bf Network variations} include the bandwidth, latency, and
+error behavior of the network.  Much work has been done to optimize
+network-level protocols for wireless and similar media \cite{tcp_imp}.  In
+contrast, we focus on reducing bandwidth requirements at the application
+level.  Table \ref{net_var_tab} shows typical variations in bandwidth seen
+today.  {\bf Hardware variations} include screen size and resolution, color
+or grayscale bit depth, memory, and CPU power.  As Table \ref{phys_var_tab}
+illustrates, physical variation across current clients spans an order of
+magnitude.  {\bf Software variations} include the application-level data
+encodings that a client can handle (e.g., JPEG, PostScript, nonstandard
+HTML extensions), and also protocol extensions such as IP multicast support
+\cite{DEER12}.
+
+Although we expect clients to improve over time, there will always be older
+systems still in use that represent relatively obsolete clients, and the
+high end will advance roughly in parallel with the low end, effectively
+maintaining a gap between the two.  There will always be a large difference
+between the very best laptop and the very best smart phone.
+
+
+\subsection{Design Principles for Adapting to Variation}
+
+We have identified three design principles that we believe are 
+d13 3
+a15 1
+\item Datatype-specific lossy compression mechanisms, which 
+d19 14
+a32 5
+data.  They are therefore more effective adaptation mechanisms than are
+typeless compressors.
+
+\item It is computationally feasible on today's hardware to per
+form ``on the fly'' adaptation by computing a desired representation of a
+d34 10
+a43 3
+representations.  Although there is some latency associated with generating
+the representation, the end-to-end latency from the server to the client
+can be reduced due to the smaller size of the distilled representation.
+d45 7
+a51 2
+\item There are technical and economic reasons to push complex
+ity away from both clients and servers; therefore, on-demand distillation
+a57 23
+\subsection{High-Level Semantic Types Allow Datatype-Specific 
+Operations}
+
+As we describe in section \ref{distperf}, we have found that
+datatype-specific lossy compression is an effective adaptation mechanism
+that can achieved by providing well-defined operations over semantically
+typed data.  For example, lossy compression of an image requires discarding
+color information, high-frequency components, or pixel resolution.  Lossy
+compression of video can additionally include frame rate reduction.  Less
+obviously, lossy compression of formatted text requires discarding some
+formatting information but preserving the actual prose.  In all cases, the
+goal is to preserve information that has the highest semantic value.  The
+user can always explicitly ask for a higher-quality representation later if
+she decides that the data is valuable enough to be worth the additional
+latency.
+
+%Knowledge about datatypes also allows us to reorder traffic to minimize
+%perceived latency.  If the user is retrieving a technical paper,
+%prioritizing text content ahead of image content will usually result in the
+%early delivery of the information with the highest semantic value.  We can
+%only do this if we can first decompose an object into smaller pieces of
+%different semantic types.  
+
+a119 15
+
+To reap the maximum benefit from distillation and refinement, a distilled
+representation must target specific attributes of the client.  It is likely
+that very few clients will impose exactly the same constraints on
+distillation, especially if the user can decide how much to constrain each
+distillation axis.  To provide the best possible service to all clients, we
+should compute each desired representation on demand, rather than
+attempting to pre-compute a set of representations.  Our (non-intuitive)
+observation, resulting from extensive implementation and measurement
+described in section \ref{distperf}, is that distillation time is small and
+more than made up for by the resulting reduction in transmission time over
+low-bandwidth links.  We have successfully implemented useful distillers
+that serve clients spanning an order of magnitude in each area of
+variation, and we have generalized our approach into a common framework,
+which we discuss in section \ref{scaling}.
+@
+
+
+1.10
+log
+@even more hacking.
+@
+text
+@a35 29
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c||c|c|c|} \hline
+
+{\bf Platform} & {\bf SPEC92/} & {\bf Screen} & {\bf Bits/} \\
+               & {\bf Memory}    & {\bf Size} & {\bf pixel} \\ \hline
+High-end PC    & 200/48M      & 1280x1024         & 24 \\ \hline
+Midrange PC    & 160/8M          & 1024x768          & 16 \\ \hline
+Laptop & 110/16M        & 800x600           & 8 \\ \hline
+Typical PDA     & low/2M         & 320x200           & 2 \\ \hline
+\end{tabular}
+\caption{\bf Physical variation among clients}\label{phys_var_tab}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c||c|c|} \hline
+
+{\bf Network}  & {\bf Bandwidth} & {\bf Round-Trip} \\
+               & {\bf (bits/s)} & {\bf Time} \\ \hline
+Local Ethernet & 10-100 M  & 0.5 - 2.0 ms \\ \hline
+ISDN & 128 K & 10-20 ms \\ \hline
+Wireline Modem & 14.4 - 28.8 K & 350 ms \\ \hline
+Cellular/CDPD & 9.6 - 19.2 K & 0.1 - 0.5 s \\ \hline
+\end{tabular}
+\caption{\bf Typical Network Variation}\label{net_var_tab}
+\end{table}
+
+
+@
+
+
+1.9
+log
+@more chopping.
+@
+text
+@d344 8
+a351 9
+is for a cartoon found on a popular Web page, and the bottom two sets
+correspond to the images in the last and first rows of table
+\ref{pict_lat}.  The images were fetched using a 14.4Kb/s modem with
+standard compression (V.42bis and MNP-5) through the UC Berkeley PPP
+gateway, via a process that runs each image through gifmunch.  Each bar is
+segmented to show the distillation latency and transmission latency
+separately.  Clearly, even though distillation adds latency at the proxy, it
+can result in greatly reduced end-to-end latency.  This supports design
+principle \#2.
+d353 7
+a359 7
+\item {\bf Hardware variation}: The ``map to 16 grays'' operation in table
+\ref{pict_lat} is appropriate for PDA-class clients with shallow grayscale
+displays.  We can identify this operation as an effective lossy compression
+technique precisely because we know we are operating on an image,
+regardless of the particular encoding, and the compression achieved is
+significantly better than the 2x-4x typically achieved by ``generic''
+lossless compression (design principle \#1).
+@
+
+
+1.8
+log
+@Aaagh.
+@
+text
+@d56 1
+a56 1
+Local Ethernet & 10 M  & 0.5 - 2.0 ms \\ \hline
+d80 4
+a83 5
+we introduce as distillation and refinement, can achieve 
+much better compression than ``generic'' compressors.  
+Their intelligent decisions about what information to throw 
+away are based on the semantic type of the data.  They are 
+therefore more effective adaptation mechanisms than are 
+d87 5
+a91 7
+form ``on the fly'' adaptation by computing a desired 
+representation of a typed object on demand rather than rely
+ing on a set of precomputed representations.  Although there 
+is some latency associated with generating the representa
+tion, the end-to-end latency from the server to the client can 
+be reduced due to the smaller size of the distilled 
+representation.
+d94 4
+a97 4
+ity away from both clients and servers; therefore, on-
+demand distillation and refinement should be done at an 
+intermediate proxy that has access to substantial computing 
+resources and is well-connected to the rest of the Internet.
+d117 6
+a122 6
+Knowledge about datatypes also allows us to reorder traffic to minimize
+perceived latency.  If the user is retrieving a technical paper,
+prioritizing text content ahead of image content will usually result in the
+early delivery of the information with the highest semantic value.  We can
+only do this if we can first decompose an object into smaller pieces of
+different semantic types.  
+d162 12
+a173 12
+An object's semantic type and its encoding are logically independent, e.g.,
+PostScript can be used to encode either formatted text or a picture.
+Although the abstract technique for distilling a particular object is a
+function of the object's high-level semantic type, the implementation of
+the distillation technique requires intimate knowledge of the encoding.  In
+practice, constraints may be imposed by specific encodings that admit
+efficient implementation of specific operations; for example, in the JPEG
+\cite{jpeg} image encoding, scaling the image by a power of 2 is
+exceptionally inexpensive.  Nonetheless, in general the distillation
+technique depends on the data type and not the encoding.  Distillation can
+be thought of as optimizing the object content with respect to
+representation constraints.
+d238 37
+a274 37
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c|c||c|c|c|c|c|c|} \hline
+
+\multicolumn{2}{|c||} {\bf } &
+\multicolumn{2}{|c|} {\bf Reduce} &
+\multicolumn{2}{|c|} {\bf Reduce,} &
+\multicolumn{2}{|c|} {\bf Reduce,} \\
+\multicolumn{2}{|c||} {\bf Original} &
+\multicolumn{2}{|c|} {\bf to}  &
+\multicolumn{2}{|c|} {\bf map to} &
+\multicolumn{2}{|c|} {\bf map,} \\
+\multicolumn{2}{|c||} {\bf GIF} &
+\multicolumn{2}{|c|} {\bf $<$ 8KB} &
+\multicolumn{2}{|c|} {\bf 16 grays} &
+\multicolumn{2}{|c|} {\bf convert} \\
+\multicolumn{2}{|c||} {\bf } &
+\multicolumn{2}{|c|} {\bf } &
+\multicolumn{2}{|c|} {\bf } &
+\multicolumn{2}{|c|} {\bf to PICT} \\ \hline
+
+size & col- & size & time & size & time & size & time \\
+KB & ors  & (\%) & (s) & (\%) & (s) & (\%) & (s) \\ \hline \hline
+
+48 & 87 & 15.0 & 3.3 & 7.7 & 2.2 & 27.3 & 2.7 \\ \hline
+153 & 254 & 5.0 & 6.8 & 1.9 & 3.3 & 5.8 & 3.7 \\ \hline
+329 & 215 & 1.8 & 6.2 & 1.0 & 5.2 & 2.1 & 5.7 \\ \hline
+492 & 249 & 1.5 & 8.3 & <1 & 6.3 & 1.4 & 6.8 \\ \hline
+
+\end{tabular}
+\caption{{\bf Distillation latency} (seconds of wall clock time) and new
+sizes as a percent of the original, for three sets of distillation
+parameters and four images.  Each column is independent, i.e.  the last
+column gives the results for performing all three operations.  There is an
+implicit requantization back to the original color palette in the first
+conversion, accounting for its higher times.}\label{pict_lat}
+\end{table}
+d278 1
+a278 10
+containing the writing, which can then be viewed at full resolution.  Table
+\ref{pict_lat} shows the latencies of distilling a number of GIF images
+with three different sets of distillation parameters, and the resulting
+size reductions.  The measurements were taken on a lightly loaded
+SPARCstation 20/71 running Solaris 2.4.  The three sets of distillation
+parameters were chosen as representative values for addressing the three
+categories of variation: size reduction to under 8K bytes, color quantizing
+to 16 grays, and format conversion to Macintosh PICT.
+
+The table data reveals three effects of interest:
+d280 38
+a317 1
+\begin{itemize}
+d319 1
+a319 28
+\item More aggressive color quantization actually takes less time 
+than less aggressive quantization.  In the first column, the 
+number of colors in the distilled representation was chosen 
+to match the number of colors in the original, e.g., 87 for 
+the first test image.  Note that this usually requires the 
+distiller to perform color quantization, since scaling down 
+may introduce a large number of new colors.  In the second 
+column, the number of colors in the distilled representation 
+was fixed at 8, chosen from a fixed gray palette.  For all four 
+images, the time required to scale and quantize 
+aggressively was less than the time required to scale and 
+quantize less aggressively.
+
+\item Format conversion may cause image representation to 
+increase in size, in this case because of PICT's inefficient 
+encoding of bitmaps compared to GIF.  This shows how 
+choice of representation impacts bandwidth requirements: 
+if the distiller is informed that the client requires PICT, it 
+must ``budget'' fewer pixels for the distilled representation.
+
+\item The additional work of transcoding to PICT adds virtually 
+no latency to the overall distillation process (compare 
+columns 2 and 3).  Adding this step makes sense, e.g., for a 
+PDA client such as the Newton, on which PICT is 
+supported by the native GUI but GIF-to-PICT conversion is 
+computationally expensive.
+
+\end{itemize}
+d378 1
+a378 1
+Preserves Font Size & Head- & Y & Y \\
+d461 8
+a468 8
+As with all distillation operations, a central challenge in the
+distillation process is to optimize the perceptual quality of the resulting
+stream as a function of the possible distillation operations and external
+timing constraints.  The video distiller follows the model of pushing
+complexity away from the client and trading bandwidth for quality.  The
+additional challenge introduced in the real-time case is that temporal
+efficiency (the analogue of reducing end-to-end latency for non-real-time
+distillers) is not an optimization, but a requirement.
+d479 7
+a485 6
+example, the figure shows a JPEG/H.261 configuration.  The intermediate
+stage performs a transformation on the output of the decoder when
+necessary, to match the conventions of the decoder and encoder and hands it
+to the appropriate encoder.  In addition to any bandwidth reduction
+inherent in format conversion, the output can be rate-controlled by
+decoupling the generation of output frames from the arrival of input frames.
+d491 6
+a496 4
+schematic of its design.  At the core of the gateway we have a distiller
+that can transcode between arbitrary input and output formats.  The gateway
+controls the output rate of the resulting stream by applying any of the
+above mentioned techniques.  Although vgw's distillation techniques are
+d517 4
+a520 3
+format, and it does not support IP multicast.  Thus several aspects of
+software variation are addressed without modifying or even notifying the
+server.
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d131 1
+a131 1
+particular set of constraints.  Table \ref{dist_axes} lists the "axes" of
+d166 7
+a172 7
+PostScript can be used to encode either formatted text or a
+picture.  Although the abstract technique for distilling a particular object
+is a function of the object's high-level semantic type, the implementation
+of the distillation technique requires intimate knowledge of the
+encoding.  In practice, constraints may be imposed by specific encodings
+that admit efficient implementation of specific operations; for example, in
+the JPEG \cite{jpeg} image encoding, scaling the image by a power of 2 is
+d174 3
+a176 3
+technique depends on the data type and not the encoding.Distillation can be
+thought of as optimizing the object content with respect to representation
+constraints.
+a187 6
+As with distillation, the refinement technique is a function of the
+semantic type, and the implementation of the technique requires intimate
+knowledge of the encoding.  For example, ``zooming in'' is a useful
+operation for all images regardless of encoding, but encoding-specific
+tools are necessary to extract and magnify the desired zoom region.
+
+d203 1
+a203 31
+which we discuss in section \ref{scal_serv}.
+
+\subsection{Existing Approaches to Dealing with Variation}
+
+Today's Internet servers deal poorly with client variation: 
+
+\begin{itemize}
+
+\item Some servers ignore client variation, but this can prevent or
+dissuade lower end clients from accessing the servers' content.
+
+\item Other servers use only the most basic data types and minimal graphics
+to reduce bandwidth and client rendering requirements; sophisticated
+clients lose their advantages when accessing these.
+
+\item Some servers provide multiple formats for downloading a document
+(e.g., abstract-only, text-only, full PostScript), or multiple versions of
+a Web page (text-only, moderate graphics, graphics-intensive).  This
+requires additional administration at the server and leaves out a wide
+middle ground of representations.
+
+\item Progressive encodings and the Netscape IMG LOWSRC extension provide
+ways of retrieving some content at lower quality first, and incrementally
+refining the quality later.  These encodings typically assume that all parts
+of the encoded document are equally important, so they cannot reorder
+traffic to present the highest-value content first.  In addition, it is
+often impossible for clients to prevent subsequent refinements from being
+delivered after the initial request, so in effect the bandwidth for the
+entire object has already been committed.
+
+\end{itemize}
+d312 1
+a312 1
+must "budget" fewer pixels for the distilled representation.
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d451 1
+a451 1
+\begin {itemize}
+@
+
+
+1.5
+log
+@A gazillion more changes to distill.tex, mostly figures tables and references added.
+@
+text
+@d6 1
+d13 1
+a13 1
+the client and reduces end-to-end latency perceived by the client. By
+d23 2
+a24 2
+software. {\bf Network variations} include the bandwidth, latency, and
+error behavior of the network. Much work has been done to optimize
+d27 1
+a27 1
+level. Table \ref{net_var_tab} shows typical variations in bandwidth seen
+d68 1
+a68 1
+maintaining a gap between the two. There will always be a large difference
+d75 1
+a75 1
+fundamental for addressing client variation most effectively. 
+d81 1
+a81 1
+much better compression than ``generic'' compressors. 
+d83 1
+a83 1
+away are based on the semantic type of the data. They are 
+d90 1
+a90 1
+ing on a set of precomputed representations. Although there 
+d110 3
+a112 3
+typed data. For example, lossy compression of an image requires discarding
+color information, high-frequency components, or pixel resolution. Lossy
+compression of video can additionally include frame rate reduction. Less
+d114 2
+a115 2
+formatting information but preserving the actual prose. In all cases, the
+goal is to preserve information that has the highest semantic value. The
+d121 1
+a121 1
+perceived latency. If the user is retrieving a technical paper,
+d123 1
+a123 1
+early delivery of the information with the highest semantic value. We can
+d125 1
+a125 1
+different semantic types. 
+d131 1
+a131 1
+particular set of constraints. Table \ref{dist_axes} lists the "axes" of
+d133 1
+a133 1
+images, and video streams. Of course there are limits to how severe a
+d167 1
+a167 1
+picture. Although the abstract technique for distilling a particular object
+d170 1
+a170 1
+encoding. In practice, constraints may be imposed by specific encodings
+d173 1
+a173 1
+exceptionally inexpensive. Nonetheless, in general the distillation
+d184 1
+a184 1
+render the preceding pages. We define refinement as the process of fetching
+d190 1
+a190 1
+knowledge of the encoding. For example, ``zooming in'' is a useful
+d202 1
+a202 1
+attempting to pre-compute a set of representations. Our (non-intuitive)
+d206 1
+a206 1
+low-bandwidth links. We have successfully implemented useful distillers
+d226 1
+a226 1
+a Web page (text-only, moderate graphics, graphics-intensive). This
+d232 1
+a232 1
+refining the quality later. These encodings typically assume that all parts
+d234 1
+a234 1
+traffic to present the highest-value content first. In addition, it is
+d246 1
+a246 1
+latency is reduced by distillation. We do this by demonstrating that
+d257 1
+a257 1
+\cite{PBM}. gifmunch makes simple predictions about the size of its output
+d259 1
+a259 1
+relative to a ``raw'' bitmap. Figure \ref{dist_example} shows the result of
+d261 1
+a261 1
+Science Division's home building, Soda Hall. The image of Figure
+d309 1
+a309 1
+parameters and four images.  Each column is independent, i.e. the last
+d317 1
+a317 1
+containing the writing, which can then be viewed at full resolution. Table
+d320 2
+a321 2
+size reductions. The measurements were taken on a lightly loaded
+SPARCstation 20/71 running Solaris 2.4. The three sets of distillation
+d331 1
+a331 1
+than less aggressive quantization. In the first column, the 
+d334 1
+a334 1
+the first test image. Note that this usually requires the 
+d336 1
+a336 1
+may introduce a large number of new colors. In the second 
+d338 1
+a338 1
+was fixed at 8, chosen from a fixed gray palette. For all four 
+d345 1
+a345 1
+encoding of bitmaps compared to GIF. This shows how 
+d352 1
+a352 1
+columns 2 and 3). Adding this step makes sense, e.g., for a 
+d384 1
+a384 1
+\ref{pict_lat}. The images were fetched using a 14.4Kb/s modem with
+d386 1
+a386 1
+gateway, via a process that runs each image through gifmunch. Each bar is
+d388 2
+a389 2
+separately. Clearly, even though distillation adds latency at the proxy, it
+can result in greatly reduced end-to-end latency. This supports design
+d394 1
+a394 1
+displays. We can identify this operation as an effective lossy compression
+d441 1
+a441 1
+lossy compression of PostScript-encoded text. The distiller replaces
+d444 1
+a444 1
+words. PostScript is an excellent target for a distiller because of its
+d446 3
+a448 3
+resource intensive. Table \ref{post_feat} compares the features available
+in each format. Figure \ref{post_distill} shows the advantage of rich-text
+over PostScript for screen viewing. As with image distillation, PostScript
+d455 2
+a456 2
+Table 6. We achieved an average size reduction of 5x when going from
+compressed PostScript to compressed HTML. Second, the pages of a PostScript
+d458 1
+a458 1
+distilled while the user views the first page. In practice, users only
+d469 1
+a469 1
+view these documents in HTML or our rich-text format. The rich-text viewer
+d477 2
+a478 2
+PostScript viewing. The latency for the appearance of the first page was
+reduced an average of 8x using the proxy and PostScript distiller. Both
+d487 2
+a488 2
+dimension. This affects the distillation process of real-time traffic in
+two ways. First, it allows the distiller to perform distillation in this
+d490 1
+a490 1
+rate to meet a target bit rate. Second, temporal dependencies impose tight
+d502 2
+a503 2
+timing constraints. The video distiller follows the model of pushing
+complexity away from the client and trading bandwidth for quality. The
+d527 1
+a527 1
+vgw \cite{vidgateway}. Figure \ref{vgw_arch} presents a high level
+d529 1
+a529 1
+that can transcode between arbitrary input and output formats. The gateway
+d531 1
+a531 1
+above mentioned techniques. Although vgw's distillation techniques are
+d538 1
+a538 1
+any target bit rate. We can also affect the output bit rate by altering
+d543 1
+a543 1
+screen limitations. For example, vgw can provide halftoned output to a
+d545 1
+a545 1
+for rendering complexity. Vgw can also accommodate devices with high
+d550 1
+a550 1
+it appears to clients as a video source. This enables the InfoPad to
+d552 1
+a552 1
+format, and it does not support IP multicast. Thus several aspects of
+d559 1
+a559 1
+depth and resolution. For example, when the content is relatively static,
+d561 1
+a561 1
+resolution. As with images and rich-text, these techniques exploit
+d569 1
+a569 1
+servers do not handle well. We have proposed three design principles we
+d591 1
+a591 1
+measurement, confirm the efficacy of our approach. In particular, on-demand
+@
+
+
+1.4
+log
+@argh.
+@
+text
+@d258 6
+a263 6
+relative to a ``raw'' bitmap. Figure **2** shows the result of running
+gifmunch on a large color GIF image of the Berkeley Computer Science
+Division's home building, Soda Hall. The image of Figure **2a** measures
+320x200 pixels - about 1/8 the total area of the original 880x610 - and
+uses 16 grays, making it suitable for display on a low-end notebook
+computer.
+d265 2
+a266 2
+\begin{figure}[tbh]
+\epsfxsize 0.80\hsize
+d269 1
+a269 1
+\epsfbox[160 296 450 497]{./figures/soda_small_gray.epsi}
+d272 2
+a273 2
+\caption{{\bf The Home IP Tracing Environment}}\label{home_ip_trace}
+\end{figure}
+a274 1
+\subsection{IPSE}
+d276 37
+d317 7
+a323 7
+**4** shows the latencies of distilling a number of GIF images with three
+different sets of distillation parameters, and the resulting size
+reductions. The measurements were taken on a lightly loaded SPARCstation
+20/71 running Solaris 2.4. The three sets of distillation parameters were
+chosen as representative values for addressing the three categories of
+variation: size reduction to under 8K bytes, color quantizing to 16 grays,
+and format conversion to Macintosh PICT. 
+d361 15
+d378 12
+a389 11
+\item {\bf Network variation}: The graphs in Figure **3** depict end-to-end
+client latency for retrieving the original and each of four distilled
+versions of a selection of GIF images: the top set of bars is for a cartoon
+found on a popular Web page, and the bottom two sets correspond to the
+images in the last and first rows of Table **4**. The images were fetched
+using a 14.4Kb/s modem with standard compression (V.42bis and MNP-5)
+through the UC Berkeley PPP gateway, via a process that runs each image
+through gifmunch. Each bar is segmented to show the distillation latency
+and transmission latency separately. Clearly, even though distillation adds
+latency at the proxy, it can result in gron**. Figure **6** presents a high level schematic of its design. 
+At the core of the gateway we have a distiller that can transcode between
+arbitrary input and output formats. The gateway controls the output rate of
+the resulting stream by applying any of the above mentioned
+techniques. Section **4.5** gives some implementation details; for a
+complete description, the reader is referred to **[2]**. Figure **7**
+illustrates the relationship between the output frame rate and output
+quality, as measured by the peak signal-to-noise ration (PSNR) of the
+resulting frames. The figure plots several sizes of images at a given
+bit-rate, showing a four way trade-off between quality, frame-rate, spatial
+decimation, and bit-rate.Although vgw's distillation techniques are
+d548 2
+a549 2
+error-tolerant form of VQ used by the Berkeley InfoPad **[8]**, and it
+appears to clients as a video source. This enables the InfoPad to
+@
+
+
+1.3
+log
+@Threw in a temporary style so that we can get a ballpark on lengths.
+@
+text
+@d24 1
+a24 1
+network-level protocols for wireless and similar media **[5]**.  In
+d26 37
+a62 7
+level. Table **2** shows typical variations in bandwidth seen today.  {\bf
+Hardware variations} include screen size and resolution, color or grayscale
+bit depth, memory, and CPU power.  As Table **1** illustrates, physical
+variation across current clients spans an order of magnitude.  {\bf
+Software variations} include the application-level data encodings that a
+client can handle (e.g., JPEG, PostScript, nonstandard HTML extensions),
+and also protocol extensions such as IP multicast support **[12]**.
+d106 5
+a110 5
+As we describe in Section **3**, we have found that datatype-specific lossy
+compression is an effective adaptation mechanism that can achieved by
+providing well-defined operations over semantically typed data. For
+example, lossy compression of an image requires discarding color
+information, high-frequency components, or pixel resolution. Lossy
+d130 33
+a162 6
+particular set of constraints. Table **3** lists the "axes" of compression
+corresponding to three important datatypes: formatted text, images, and
+video streams. Of course there are limits to how severe a degradation of
+quality is possible before the source object becomes unrecognizable, but we
+have found that order-of-magnitude size reductions are often possible
+without significantly compromising semantic usefulness.
+d171 1
+a171 1
+the JPEG **[20]** image encoding, scaling the image by a power of 2 is
+d203 2
+a204 2
+**described in Section 3**, is that distillation time is small and more
+than made up for by the resulting reduction in transmission time over
+d207 2
+a208 2
+variation, and we have generalized our approach into a common
+framework, which we discuss in **Section 4.2**.
+d240 1
+a240 1
+\subsection{Distillation Performance}
+d253 24
+a276 11
+We have implemented an image distiller called {\it gifmunch}, 
+which implements distillation and refinement for GIF **[18]** images, and
+consists largely of source code from the NetPBM Toolkit **[33]**. As
+described in **Section 4.4**, gifmunch makes simple predictions about the
+size of its output by measuring the achieved bits per pixel compression of
+the original image relative to a ``raw'' bitmap. Figure **2** shows the
+result of running gifmunch on a large color GIF image of the Berkeley
+Computer Science Division's home building, Soda Hall. The image of Figure
+**2a** measures 320x200 pixels - about 1/8 the total area of the original
+880x610 - and uses 16 grays, making it suitable for display on a low-end
+notebook computer. 
+@
+
+
+1.2
+log
+@First pass over distill.tex - extracted out useful subsections, started
+reformatting.  No images or tables or references yet.
+@
+text
+@a18 10
+%In the remainder of this section we outline our design principles 
+%and the adaptation mechanisms derived from them. Section 2 
+%describes an architecture that instantiates these mechanisms in the 
+%network infrastructure, away from clients or servers. Section 3 pre
+%sents quantitative evidence that our approach improves end-to-end 
+%latency for a large number of cases. Section 4 describes the current 
+%implementation status of our architecture and what we have learned 
+%from it so far. Section 5 describes related work in various areas, and 
+%we present our conclusions in Section 6.
+
+d21 1
+a21 1
+Clients vary along three important dimensions: network, hard ware, and
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 49
+a52 51
+In this paper we propose three design principles that we believe 
+are fundamental to enabling meaningful access to Internet content 
+for a wide range of clients spanning all these areas of variation. We 
+describe experiments using prototype software as well as a uniform 
+system architecture embodying these principles. The principal 
+underlying idea of the architecture is that on-demand distillation 
+(datatype-specific lossy compression) both increases quality of ser
+vice for the client and reduces end-to-end latency perceived by the 
+client. By performing on-demand distillation in the network infra
+structure rather than at clients or servers, we achieve a separation of 
+concerns that confers both technical and economic benefits; by 
+making it datatype-specific, we enable intelligent management of a 
+scarce resource-a slow network link-at the application level.
+In the remainder of this section we outline our design principles 
+and the adaptation mechanisms derived from them. Section 2 
+describes an architecture that instantiates these mechanisms in the 
+network infrastructure, away from clients or servers. Section 3 pre
+sents quantitative evidence that our approach improves end-to-end 
+latency for a large number of cases. Section 4 describes the current 
+implementation status of our architecture and what we have learned 
+from it so far. Section 5 describes related work in various areas, and 
+we present our conclusions in Section 6.
+Client Variation
+Clients vary along three important dimensions: network, hard
+ware, and software.
+Network Variations include the bandwidth, latency, and error 
+behavior of the network. Much work has been done to 
+optimize network-level protocols for wireless and similar 
+media [5]. In contrast, we focus on reducing bandwidth 
+requirements at the application level. Table 2 shows typical 
+variations in bandwidth seen today.
+Hardware Variations include screen size and resolution, 
+color or grayscale bit depth, memory, and CPU power. For 
+example, according to proponents of the Network 
+Computer, "NC's will ride the trailing edge of the price/
+performance curve, where they can reap the benefits of 
+plunging prices" [19], which implies that their hardware 
+capabilities will be more modest than those of a typical 
+desktop PC. As Table 1 illustrates, physical variation across 
+current clients spans an order of magnitude.
+Software Variations include the application-level data 
+encodings that a client can handle (e.g., JPEG, PostScript, 
+nonstandard HTML extensions), and also protocol 
+extensions such as IP multicast support [12].
+Although we expect clients to improve over time, there will 
+always be older systems still in use that represent relatively obso
+lete clients, and the high end will advance roughly in parallel with 
+the low end, effectively maintaining a gap between the two. There 
+will always be a large difference between the very best laptop and 
+the very best smart phone.
+Design Principles for Adapting to Variation
+d55 4
+a58 1
+Datatype-specific lossy compression mechanisms, which 
+d60 1
+a60 1
+much better compression than "generic" compressors. 
+d65 3
+a67 2
+It is computationally feasible on today's hardware to per
+form "on the fly" adaptation by computing a desired 
+d74 2
+a75 1
+There are technical and economic reasons to push complex
+d80 17
+a96 14
+High-Level Semantic Types Allow Datatype-Specific 
+Operations
+As we describe in Section 3, we have found that datatype-spe
+cific lossy compression is an effective adaptation mechanism that 
+can achieved by providing well-defined operations over semanti
+cally typed data. For example, lossy compression of an image 
+requires discarding color information, high-frequency components, 
+or pixel resolution. Lossy compression of video can additionally 
+include frame rate reduction. Less obviously, lossy compression of 
+formatted text requires discarding some formatting information but 
+preserving the actual prose. In all cases, the goal is to preserve 
+information that has the highest semantic value. The user can 
+always explicitly ask for a higher-quality representation later if she 
+decides that the data is valuable enough to be worth the additional 
+d98 136
+a233 253
+Knowledge about datatypes also allows us to reorder traffic to 
+minimize perceived latency. If the user is retrieving a technical 
+paper, prioritizing text content ahead of image content will usually 
+result in the early delivery of the information with the highest 
+semantic value. We can only do this if we can first decompose an 
+object into smaller pieces of different semantic types. 
+Datatype-Specific Distillation
+We define distillation as highly lossy, datatype-specific com
+pression that preserves most of the semantic content of a data object 
+while adhering to a particular set of constraints. Table 3 lists the 
+"axes" of compression corresponding to three important datatypes: 
+formatted text, images, and video streams. Of course there are lim
+its to how severe a degradation of quality is possible before the 
+source object becomes unrecognizable, but we have found that 
+order-of-magnitude size reductions are often possible without sig
+nificantly compromising semantic usefulness.
+An object's semantic type and its encoding are logically inde
+pendent, e.g., PostScript can be used to encode either formatted text 
+or a picture. Although the abstract technique for distilling a particu
+lar object is a function of the object's high-level semantic type, the 
+implementation of the distillation technique requires intimate 
+knowledge of the encoding. In practice, constraints may be imposed 
+by specific encodings that admit efficient implementation of spe
+cific operations; for example, in the JPEG [20] image encoding, 
+scaling the image by a power of 2 is exceptionally inexpensive. 
+Nonetheless, in general the distillation technique depends on the 
+data type and not the encoding.
+Distillation can be thought of as optimizing the object content 
+with respect to representation constraints.
+Datatype-Specific Refinement
+The primary purpose of a distilled object is to allow the user to 
+evaluate the value of downloading the original, or some part of the 
+original; for instance, zooming in on a section of a graphic or video 
+frame, or rendering a particular page containing PostScript text and 
+figures without having to render the preceding pages. We define 
+refinement as the process of fetching some part (possibly all) of a 
+source object at increased quality, possibly the original representa
+tion.
+As with distillation, the refinement technique is a function of 
+the semantic type, and the implementation of the technique requires 
+intimate knowledge of the encoding. For example, "zooming in" is 
+a useful operation for all images regardless of encoding, but encod
+ing-specific tools are necessary to extract and magnify the desired 
+zoom region.
+Distillation and Refinement On Demand
+To reap the maximum benefit from distillation and refinement, 
+a distilled representation must target specific attributes of the client. 
+It is likely that very few clients will impose exactly the same con
+straints on distillation, especially if the user can decide how much 
+to constrain each distillation axis.
+To provide the best possible service to all clients, we should 
+compute each desired representation on demand, rather than 
+attempting to pre-compute a set of representations. Our (non-intui
+tive) observation, resulting from simulations and implementation of 
+prototypes as described in Section 3, is that distillation time is small 
+and more than made up for by the resulting reduction in transmis
+sion time over low-bandwidth links. We have successfully imple
+mented useful prototypes that serve clients spanning an order of 
+magnitude in each area of variation, and we believe our approaches 
+can be generalized into a common framework, which we discuss in 
+Section 4.2.
+Pushing Complexity Into the Infrastructure
+There is growing sentiment that the next wave of successful 
+Internet client devices will be inexpensive and simple [19]. On the 
+other hand, the amount of variation even among existing clients has 
+led to substantial complexity in servers. Fortunately, we can push 
+the complexity away from both clients and servers by relocating it 
+into the network infrastructure. Services such as distillation and 
+refinement should be provided by a proxy, a source of bountiful 
+cycles that is well connected to the rest of the Internet. For example, 
+an Internet Service Provider connection point or wireless basesta
+tion. This arrangement confers technical as well as economic 
+advantages:
+Servers concentrate on serving high quality content, rather 
+than having to maintain multiple versions.
+Servers do not pay the costs required to do on-demand 
+distillation.
+Legacy servers remain unchanged.
+Simple and inexpensive clients can rely on the proxy to 
+optimize content from servers designed for higher-end 
+clients.
+Rather than communicating with many servers per session, 
+the client communicates with a single logical entity, the 
+proxy. This allows fine control over both endpoints of the 
+slow network connecting the client to the proxy. In effect, it 
+allows the client to manage bandwidth at the application 
+level, just as databases manage memory at the application 
+level [23].
+Distillation and refinement can be offered as a value-added 
+service by a service provider. The result is an economic 
+model favorable to service providers, clients, and servers.
+Existing Approaches to Dealing with Variation
+Today's Internet servers deal poorly with client variation:
+Some servers ignore client variation, but this can prevent or 
+dissuade lower end clients from accessing the servers' 
+content.
+Other servers use only the most basic data types and 
+minimal graphics to reduce bandwidth and client rendering 
+requirements; sophisticated clients lose their advantages 
+when accessing these.
+Some servers provide multiple formats for downloading a 
+document (e.g., abstract-only, text-only, full PostScript), or 
+multiple versions of a Web page (text-only, moderate 
+graphics, graphics-intensive). This requires additional 
+administration at the server and leaves out a wide middle 
+ground of representations.
+Progressive encodings and the Netscape IMG LOWSRC 
+extension provide ways of retrieving some content at lower 
+quality first, and incrementally refining the quality later. 
+These encodings typically assume that all parts of the 
+encoded document are equally important, so they cannot 
+reorder traffic to present the highest-value content first. In 
+addition, it is often impossible for clients to prevent 
+subsequent refinements from being delivered after the 
+initial request, so in effect the bandwidth for the entire 
+object has already been committed.
+A Proxy Architecture for On-Demand Distillation
+To bring our design observations to bear on today's Internet, we 
+propose the proxy architecture in Figure 1. The components are the 
+proxy, one or more datatype-specific distillers, an optional network 
+connection monitor, and the application support library.
+Proxy Control Point
+A client communicates exclusively with the proxy, a controller 
+process located logically between the client and the server. In a het
+erogeneous network environment, the proxy should be placed near 
+the boundary between strong and weak connectivity, e.g., at the 
+basestation of a wireless mobile network. The proxy's role is to 
+retrieve content from Internet servers on the client's behalf, deter
+mine the high-level types of the various components (e.g., images, 
+text runs), and determine which distillation engines must be 
+employed. When the proxy calls a distiller, it passes information 
+such as the hardware characteristics of the client, acceptable encod
+ings, and available network bandwidth. We envision that communi
+cation between the client and proxy will use a lightweight transport 
+optimized for slow links, but we offer some support for legacy pro
+tocols as well, as we describe in Section 2.4.
+Datatype-Specific Distillers
+The datatype-specific distillers are long-lived processes that are 
+controlled by proxies and perform distillation and refinement on 
+behalf of one or more clients. Typically, a distiller will be operating 
+on a single data object at a time, using the constraint information 
+supplied by the proxy. For example, if the client has an 8-bit gray
+scale display, the target bandwidth is 9600 bps, and delivery is 
+desired in 4 seconds, the image distiller must predict how much res
+olution loss is necessary to achieve a final representation size of 
+37.5Kbits. The distiller must account for the reduction achieved by 
+converting from indexed color to 8-bit grayscale as well as the effi
+ciency of that target encoding. In Section 4.4 we describe our first 
+efforts at building distillers that can do this.
+Network Connection Monitor
+There are three methods of determining the characteristics of 
+the client's network connection:
+User advice. Via an appropriate user interface, the user 
+notifies the proxy of her expected bandwidth.
+Network profile. The Daedalus project [25,24] is exploring 
+vertical handoff (VHO): the seamless migration of a client 
+among heterogeneous wireless networks. VHO allows the 
+client to always switch to the best-available network, which 
+often results in an order-of-magnitude bandwidth change. If 
+the proxy is informed of the VHO, it can activate a new cli
+ent profile corresponding to the average characteristics of 
+the new network.
+Automatic. A separate process tracks the values of effec
+tive bandwidth, roundtrip latency, and probability of packet 
+error, and posts events when some value leaves a "window" 
+of interest.
+Clearly, method (3) is the most difficult to implement but has 
+the potential to provide the most responsive behavior to the user, 
+provided the information delivered in the events can be put to good 
+use. Specific API's for delivery of such events are described in 
+[4,36].
+Because distilled object representations are generated on 
+demand in our architecture, and because the distillers are assumed 
+to be able to optimize to a particular size of the output, our distilla
+tion-based proxy architecture can dynamically react to changing 
+network conditions. For example, a control panel might allow the 
+user to specify a maximum allowable end-to-end latency for deliv
+ery of a particular image. The proxy can ask the image distiller to 
+construct a representation that can be delivered within the desired 
+time bound, given the current effective bandwidth estimate.
+Since the adaptation mechanism is cleanly separated from the 
+detection of network changes, our architecture can exploit an auto
+mated network connection monitor as an optimization, but will still 
+deliver improved service without it.
+Client-side Architecture
+Rather than dealing directly with transport and data format 
+issues, we would like the client application to deal with datatypes at 
+the application level, in whatever encodings it finds convenient, and 
+to be able to specify distillation and refinement preferences in an 
+abstract way. One way to do this is via an application support 
+library that provides an API with suitable abstractions for manipu
+lating data and interacting with the proxy. The application support 
+library is centered around the process of retrieving distilled docu
+ments, and includes abstractions for asynchronous document deliv
+ery, specifying which data encodings are acceptable to the client, 
+and affecting the proxy's distillation decisions by specifying 
+weighted constraints on the distillation axes. 
+Because of the library's rich API, the task of implementing cli
+ent applications that support our refinement and distillation mecha
+nisms is greatly simplified. Since all communication with the proxy 
+is handled by the support library, applications automatically reap 
+the benefits of an efficient, tokenized transport protocol. We 
+describe a Tcl/Tk [31] implementation of the library in Section 4.3.
+Unfortunately, legacy applications must be modified if they are 
+to take advantage of our support library. Our architecture does sup
+port unmodified legacy applications with the help of an client-side 
+agent. As shown in Figure 1, the client-side agent is a process that 
+runs locally on the client device. It communicates with the remote 
+proxy using the application support library (and therefore benefits 
+from the library's high-level abstractions and optimized transport 
+protocol), but communicates with local applications using whatever 
+protocols and data formats the applications require, such as HTTP. 
+From the perspective of legacy applications, the client-side agent is 
+functionally equivalent to the remote proxy, but in reality acts as a 
+"protocol filter", efficiently communicating with the remote proxy 
+on behalf of the application. There are limits to the flexibility of this 
+approach; for example, it is awkward to provide a user interface for 
+refinement in most existing Web browsers. Nonetheless, the client-
+side agent mechanism allows legacy applications to reap many of 
+the benefits of our proxy architecture.
+Distillation Performance
+In this section we describe and evaluate three prototype distill
+ers: images, text, and network video streams. The goal of this sec
+tion is to support our claim that in the majority of cases, end-to-end 
+latency is reduced by distillation. We do this by demonstrating that 
+distillation performance on today's desktop workstations is suffi
+ciently fast that the time to produce a useful distilled object is small 
+enough to be more than made up for by the savings in transmission 
+time for the distilled object relative to the original.
+Images
+We have implemented an image distiller called gifmunch, 
+which implements distillation and refinement for GIF [18] images, 
+and consists largely of source code from the NetPBM Toolkit [33]. 
+As described in Section 4.4, gifmunch makes simple predictions 
+about the size of its output by measuring the achieved bits per pixel 
+compression of the original image relative to a "raw" bitmap. Fig
+ure 2 shows the result of running gifmunch on a large color GIF 
+image of the Berkeley Computer Science Division's home building, 
+Soda Hall. The image of Figure 2a measures 320x200 pixels-
+about 1/8 the total area of the original 880x610-and uses 16 grays, 
+making it suitable for display on a low-end notebook computer. 
+Due to the degradation of quality, the writing on the building is 
+unreadable, but the user can request a refinement of the subregion 
+containing the writing, which can then be viewed at full resolution.
+Table 4 shows the latencies of distilling a number of GIF 
+images with three different sets of distillation parameters, and the 
+resulting size reductions. The measurements were taken on a lightly 
+loaded SPARCstation 20/71 running Solaris 2.4. The three sets of 
+distillation parameters were chosen as representative values for 
+addressing the three categories of variation: size reduction to under 
+8K bytes, color quantizing to 16 grays, and format conversion to 
+Macintosh PICT. The table data reveals three effects of interest:
+More aggressive color quantization actually takes less time 
+d245 2
+a246 1
+Format conversion may cause image representation to 
+d252 2
+a253 1
+The additional work of transcoding to PICT adds virtually 
+d259 4
+a262 1
+Image distillation can be used to address all three areas of client 
+d264 156
+a419 449
+Network variation: The graphs in Figure 3 depict end-to-end 
+client latency for retrieving the original and each of four 
+distilled versions of a selection of GIF images: the top set 
+of bars is for a cartoon found on a popular Web page, and 
+the bottom two sets correspond to the images in the last and 
+first rows of Table 4. The images were fetched using a 
+14.4Kb/s modem with standard compression (V.42bis and 
+MNP-5) through the UC Berkeley PPP gateway, via a 
+process that runs each image through gifmunch. Each bar is 
+segmented to show the distillation latency and transmission 
+latency separately. Clearly, even though distillation adds 
+latency at the proxy, it can result in greatly reduced end-to-
+end latency. This supports design principle #2.
+Hardware variation: The "map to 16 grays" operation in 
+Table 4 is appropriate for PDA-class clients with shallow 
+grayscale displays. We can identify this operation as an 
+effective lossy compression technique precisely because we 
+know we are operating on an image, regardless of the 
+particular encoding, and the compression achieved is 
+significantly better than the 2x-4x typically achieved by 
+"generic" lossless compression (design principle #1).
+Software variation: Even though PICT offers less efficient 
+bitmap encoding than GIF and is not supported by most 
+servers, conversion to PICT is useful for clients such as the 
+Newton, where PICT is the only graphic format that can be 
+rendered efficiently (design principle #3).
+Rich-Text
+We have also implemented a rich-text distiller [27], which per
+forms lossy compression of PostScript-encoded text. The distiller 
+replaces PostScript formatting information with HTML markup 
+tags or with a custom rich-text format that preserves the position 
+information of the words. PostScript is an excellent target for a dis
+tiller because of its complexity and verbosity: both rendering and 
+transmission are potentially resource intensive. Table 5 compares 
+the features available in each format. Figure 4 shows the advantage 
+of rich-text over PostScript for screen viewing. 
+As with image distillation, PostScript distillation yields advan
+tages in all three categories of client variation:
+Network Variation: First, distillation greatly reduces the 
+required bandwidth and thus the end-to-end latency, as 
+shown in Table 6. We achieved an average size reduction of 
+5x when going from compressed PostScript to compressed 
+HTML. Second, the pages of a PostScript document are 
+pipelined through the distiller, so that the second page is 
+distilled while the user views the first page. In practice, 
+users only experience the latency of the first page, so the 
+difference in perceived latency is about 8x for a 28.8K 
+modem, as shown in Figure 5. Distillation typically took 
+about 5 seconds for the first page and about 2 seconds for 
+subsequent pages.
+Hardware Variation: Distillation reduces decoding time by 
+delivering data in an easy-to-parse format, and results in 
+better looking documents on clients with lower quality 
+displays.
+Software Variation: PostScript distillation allows clients that 
+do not directly support PostScript, such as Macintoshes or 
+PDA devices, to view these documents in HTML or our 
+rich-text format. The rich-text viewer could be an external 
+viewer similar to ghostscript, a module for a Java-capable 
+browser, or a browser plug-in rendering module.
+The PostScript distiller will support two kinds of refinement. 
+First, users can request a particular page at higher quality. Second, 
+if the users are in rich-text mode (which preserves layout), they can 
+refine a region by marking it with a rectangle. This is particularly 
+useful for viewing figures and equations; the rich-text format tends 
+to have blank regions where the figures go, so it is easy to know 
+what to refine.
+Overall, rich-text distillation reduces end-to-end latency, results 
+in more readable presentation, and adds new abilities to low-end 
+clients, such as PostScript viewing. The latency for the appearance 
+of the first page was reduced an average of 8x using the proxy and 
+PostScript distiller. Both HTML and our rich-text format are signif
+icantly easier to read on screen than rendered PostScript, although 
+they sacrifice some layout and graphics accuracy compared to the 
+original PostScript.
+Real-time Video Streams
+Distillation of real-time traffic introduces an additional degree 
+of freedom with respect to non-real-time traffic types, namely, the 
+temporal dimension. This affects the distillation process of real-
+time traffic in two ways. First, it allows the distiller to perform dis
+tillation in this dimension (commonly called temporal decimation), 
+such as limiting the frame rate to meet a target bit rate. Second, 
+temporal dependencies impose tight timing constraints on the distil
+lation process, which affects the architecture of the distiller.
+In the spatial domain, we can still perform operations similar to 
+those used in the image distiller: resolution scaling, requantization, 
+color decimation, or recoding in a format that is more compressible 
+or better matches the characteristics of the end client.
+As with all distillation operations, a central challenge in the dis
+tillation process is to optimize the perceptual quality of the result
+ing stream as a function of the possible distillation operations and 
+external timing constraints. The video distiller follows the model of 
+pushing complexity away from the client and trading bandwidth for 
+quality. The additional challenge introduced in the real-time case is 
+that temporal efficiency (the analogue of reducing end-to-end 
+latency for non-real-time distillers) is not an optimization, but a 
+requirement.
+The video stream distiller used in our architecture is the video 
+gateway, vgw. Figure 6 presents a high level schematic of its design. 
+At the core of the gateway we have a distiller that can transcode 
+between arbitrary input and output formats. The gateway controls 
+the output rate of the resulting stream by applying any of the above 
+mentioned techniques. Section 4.5 gives some implementation 
+details; for a complete description, the reader is referred to [2]. Fig
+ure 7 illustrates the relationship between the output frame rate and 
+output quality, as measured by the peak signal-to-noise ration 
+(PSNR) of the resulting frames. The figure plots several sizes of 
+images at a given bit-rate, showing a four way trade-off between 
+quality, frame-rate, spatial decimation, and bit-rate.
+Although vgw's distillation techniques are different from those 
+of the image and rich text distillers, they clearly address the three 
+areas of client variation:
+Network Variation: By throttling the frame rate, we can meet 
+any target bit rate. We can also affect the output bit rate by 
+altering encoding parameters such as quantization factors.
+Hardware Variation: Since vgw can decode the incoming 
+video stream to pixel domain, its output encoding can be 
+tailored to meet client screen limitations. For example, vgw 
+can provide halftoned output to a device with an 8-bit 
+grayscale display, trading off compression performance for 
+rendering complexity. Vgw can also accommodate devices 
+with high bandwidth but limited CPU rendering speed by 
+throttling the frame rate.
+Software Variation: Vgw converts among NV, MJPEG, 
+H.261, and an error-tolerant form of VQ used by the 
+Berkeley InfoPad [8], and it appears to clients as a video 
+source. This enables the InfoPad to participate in MBONE 
+broadcasts, even though it employs a proprietary video 
+format, and it does not support IP multicast. Thus several 
+aspects of software variation are addressed without 
+modifying or even notifying the server.
+We are also adding refinement capabilities to vgw. In particular, 
+clients will be able to zoom into a part of a stream and view that 
+subset at higher quality. We can also dynamically control the trade-
+off among frame rate, color depth and resolution. For example, 
+when the content is relatively static, such as overhead slides, we can 
+reduce the frame rate and increase the resolution. As with images 
+and rich-text, these techniques exploit datatype-specific knowledge 
+to maximize the semantic content of the stream for each client, and 
+enable video delivery to clients for which it would otherwise be 
+impossible.
+Scalability Concerns
+The previous sections have demonstrated that modern worksta
+tions are sufficiently fast that distillation time is often small com
+pared to time saved in transmission of a distilled object. In our 
+architecture, multiple distillation operations can be serviced in par
+allel by a single pool of computing resources [3] on behalf of a 
+potentially large set of clients.
+To explore how well our architecture scales to large numbers of 
+clients, we simulated the load placed on a WWW proxy by a 
+parameterizable number of users. For the purposes of this simula
+tion, our web proxy was modeled as a single 80-MHz HP PA-RISC 
+workstation that serviced all image distillation requests but was oth
+erwise unloaded. The simulator used performance characteristics of 
+our image distiller (as measured on the same workstation) to model 
+the distillation latency perceived by the user as a function of the 
+image size and the number of simultaneous image distillations cur
+rently in progress on the same machine. Input to the simulator came 
+from the UC Berkeley Computer Science Division's HTTPd logs.
+Image distillation is a CPU-bound task, since the process of 
+image reduction and requantization requires a distiller to "touch" 
+all of the pixels in an image many times. We observed that the 
+latency of distillation was a linearly increasing function of the num
+ber of simultaneous operations, with a slope approximately propor
+tional to the size of the original GIF (in bytes). Because N distillers 
+shared the workstation's CPU equally, each distillation operation 
+took N times as long to complete.
+Recent work [32,11] strongly suggests that access to WWW 
+documents is bursty. For example, an access to a new page causes a 
+flurry of distillation operations. Since a user tends to digest the doc
+ument for a period of time before moving on, there are variable-
+length periods of inactivity between distillations performed on 
+behalf of that user. Burstiness results in good utilization of our com
+pute resources, as the bursts of activity from multiple users tend to 
+not overlap, as long as the compute server is not overloaded. Figure 
+8a shows an example of bursty distillation activity generated by a 
+single user from our HTTPd logs; black represents many distilla
+tions occurring concurrently and white represents inactivity.
+Adding more users to a proxy increases the "blackness" of the 
+figure. If two distillation bursts collide, each will take twice as long 
+to complete; this greatly increases the probability of further coinci
+dent bursts if more users are added. As the number of users 
+increases, the black regions in the figure tend to smear out and 
+merge (Figure 8b and c), until finally the entire figure is uniform 
+black (Figure 8d). At this point, the proxy becomes overloaded, and 
+distillation requests arrive faster than they can be serviced.
+Figure 9 shows the simulated average latency of image distilla
+tion perceived by a user as a function of the number of users sup
+ported by a single workstation, on a logarithmic scale. At 
+approximately 20 users, requests arrive faster than they are ser
+viced, and beyond this point, distillation latency is unbounded for 
+the single workstation. Nonetheless, this result suggests that even 
+using today's desktop hardware, document access patterns (at least 
+for the Web) allow multiple users to be served by one compute 
+server in a proxy installation. We have begun investigating how to 
+balance a distillation workload across multiple distillation "servers" 
+in a network of workstations.
+Implementation and Experience To Date
+In this section we describe our experiences to date in imple
+menting various pieces of our architecture, what lessons we have 
+already learned along the way, and what we see as areas of continu
+ing work.
+Pythia HTTP Proxy
+We began with a distillation World Wide Web proxy, which we 
+reported on in [14]. It demonstrated the feasibility of our design 
+principles, and is useful despite the fact that much of the code is 
+naive. Pythia is minimally scalable in that it can exploit a small 
+additional number of workstations to share the distillation work
+load.
+GloMop: A Modular Proxy
+We have partially implemented a modular proxy server called 
+GloMop, which implements the API alluded to in Section 2.4. 
+GloMop's document abstraction is a partially ordered collection of 
+chunks, each of which consists entirely of a single datatype and 
+encoding. For example, a Web page is a document typically consist
+ing of one or more text/html and image/* chunks. The modular 
+proxy can convert each semantic type (only text and images so far) 
+to a common intermediate representation (a subset of HTML for 
+text, and PPM [33] for images), distill the intermediate representa
+tion, and convert it to a different target representation for the client 
+if desired.
+Distillation of images adheres to user-specified constraints to 
+the extent they are supported by our image muncher (Section 4.4). 
+GloMop is modular in that the document-centric framework makes 
+it easy to add new transcoding modules and new "client profiles" 
+describing specific hardware properties (e.g., screen size, aspect 
+ratio, color palette) of client devices. 
+GloMop is also designed to be scalable to large numbers of 
+users by exploiting the observations that we reported in Section 3.4. 
+The actual work of distillation can be off-loaded to other nodes in a 
+network of workstations [3]. We are actively investigating how to 
+do load balancing for such a system. GloMop also provides authen
+tication and secure channels using Charon, a lightweight indirect 
+authentication protocol based on Kerberos IV. In [15] we show that 
+Charon requires little trust to be surrendered to the proxy and is 
+amenable to implementation even on very small PDA-class devices.
+Client-side Implementation
+We have implemented a client-side application support library 
+in C, on top of which is layered language-specific "glue" to the pro
+gramming environment of your choice (currently Tcl/Tk, via a shell 
+called gmwish). We are using gmwish as a research testbed for 
+exploring the effectiveness of our API, and for testing the imple
+mentation and performance of our core C library and modular 
+proxy. To this end, we have implemented an image browser applica
+tion that can retrieve and refine WWW images. We chose this appli
+cation because it was easy to implement using Tk, and because it 
+exercises the entire proxy API. The major functions provided by the 
+API include requesting document delivery, providing asynchronous 
+notification of document arrival, specifying which data encodings 
+are acceptable to the client, and indirectly controlling distillation by 
+specifying weighted constraints on the distillation axes.
+It is difficult to design an effective user interface for controlling 
+many semantically orthogonal distillation axes. In our image 
+browser, the user can specify a desired exact value for any one of 
+the download time, resolution of the image, and color depth of the 
+image, and specify the relative importance of the remaining two. 
+However, the conversion of these constraints to distillation parame
+ters at the proxy is not as complete as it should be, and we expect 
+this characterization to lead to significant future work.
+Perhaps unsurprisingly, we observed that asynchronous data 
+delivery is the largest source of complexity in the library and in 
+applications that use it. For extremely impoverished clients, the 
+implementation overhead of this complexity is likely to outweigh 
+the benefits of asynchronous delivery notification. We are designing 
+a lightweight version of the application support library that has the 
+smallest useful subset of the full functionality for small clients.
+Image Distiller
+The image distiller we use is constructed largely from source 
+code in NetPBM [33]. Currently the distiller picks a color palette 
+based on the known capabilities of the client (which identifies itself 
+when it first connects to the proxy and establishes a session), and 
+optimizes for a particular target size in bytes of the distilled repre
+sentation by predicting compression. Prediction is done by observ
+ing the expansion when converting the original image to the PPM 
+intermediate form, and multiplying this by an encoding-specific 
+"expansion ratio" based on the effective bits per pixel achieved in 
+past runs using the same target encoding. The distiller is typically 
+able to meet this output constraint within a margin of about 10-
+15%.
+There are several motivations for choosing output representa
+tion size as the optimization target, including targeting a particular 
+latency bound based on known network bandwidth or observing a 
+maximum buffer size in the client (the latter is particularly impor
+tant for PDA's). In practice, however, the user might want to opti
+mize for a different constraint, e.g., sacrificing color to achieve 
+better resolution while maintaining a roughly constant representa
+tion size. We recognize that in general, mapping a set of weighted 
+constraints to a set of input parameters for a distiller is a nontrivial 
+optimization problem. Our goal is to provide a general self-training 
+mechanism, whereby a statistical model of the distillation process 
+could be used to predict achieved compression or latency of per
+forming the distillation, given a particular input document and set 
+of distillation parameters. We do not currently have such a general 
+mechanism, but it is a major subject of continuing work. We are 
+exploring both automated statistical modeling [7] and neural net
+works as tools for tackling this problem.
+vgw Video Stream Distiller
+As initially described in Section 3.3, the basic vgw model 
+involves transcoding from some set of supported input formats to a 
+(possibly different) set of output formats. Each input format is han
+dled by a module that decodes the incoming bit stream into an inter
+mediate representation, which is transformed and delivered to an 
+encoder that produces a new bit stream in a potentially new format. 
+Vgw joins two separate stateless real-time protocol (RTP) sessions 
+and properly transforms the RTP data and control streams.
+Requiring every transcoder configuration to decompress all the 
+way to the pixel domain, and then re-encode the stream from 
+scratch, would impose a large performance penalty. Instead, multi
+ple intermediate formats are allowed. The choice of intermediate 
+format is a function of the encoder/decoder pair, determined by the 
+lowest complexity decoder/encoder data path. In this way, encoder/
+decoder pairs can optimize their interaction by choosing an appro
+priate intermediate format. For example, DCT-based coding 
+schemes like JPEG [20] and H.261 [35] can be more efficiently 
+transcoded using DCT coefficients, which avoids the slow conver
+sion to the pixel domain.
+The intermediate format also allows us to perform transforma
+tions on the canonical image data, such as temporal and spatial dec
+imation and frame geometry conversion (e.g., to handle different 
+resolutions) and color decimation conversion (to handle different 
+chrominance plane downsampling schemes).
+Vgw has been in service in "production mode" at CERN, as 
+their transatlantic MBONE gateway. It is also in use by the Berke
+ley InfoPad [8], transcoding MBONE video to InfoPad VQ format, 
+thus allowing the MBONE video broadcasts to be viewed on the 
+InfoPad.
+Other Applications
+The proxy architecture may be appealing for service providers 
+that would like to enable their subscribers to use low-cost clients. It 
+has been said that "-the ultimate fate of Network Computers may 
+depend on the adoption rate of technologies such as... ATM and 
+cable data modems" [19]. A "proxied" NC architecture mitigates 
+this limitation, however, since the existing telephone and wireless 
+infrastructure can be used to provide much better service via a 
+proxy than could be obtained from the "raw" network.
+Because the proxy architecture is designed to address the limi
+tations of an extremely wide range of clients, it is a good candidate 
+for a system to deliver Internet content via cable TV converter 
+boxes, even if those clients enjoy connectivity at cable-modem 
+speeds. The appeal of Internet-from-your-TV will be significant if 
+the client computer can be integrated into the cable converter box, 
+which cable subscribers do not need to purchase. This design 
+requirement leads to severe hardware and software constraints, 
+which our proxy architecture is uniquely positioned to address. We 
+are working with Wink Communications, Inc. [38] to build and 
+deploy such a system, allowing users of properly equipped cable 
+converter boxes to access Internet content using their TV and 
+remote control.
+Related Work
+None of the techniques discussed in this paper is fundamentally 
+new on its own. We view our contribution as the generalization of 
+existing techniques into a uniform architecture, in which distillation 
+on demand is used is used to adapt to ever-increasing client vari
+ability along three distinct axes, all in a medium still undergoing 
+explosive growth. In this section we discuss work in the three areas 
+our architecture spans: content transcoding, adapting to poor net
+works, and shifting application complexity away from small clients.
+Transcoding Proxies
+The idea of placing an intermediary between a client and a 
+server is not new. The original HTTP specification [6] explicitly 
+provides a proxy mechanism. Though it was originally intended for 
+users behind security firewalls, it has been put to a number of novel 
+uses, including Kanji format transcoding [34], Kanji-to-GIF con
+version [39], and rendering equations from markup [40]. The Dis
+tributed Clients Project [13] is also exploiting application-level 
+stream transducers [9] as one of several mechanisms for facilitating 
+Web browsing with intermittent connectivity.
+Shielding Clients From Effects of Slow Networks
+On-the-fly compression, especially for protocol metadata at the 
+network level, has long been used to mitigate the effects of slow 
+networks [21,16]. Various network- and transport-level optimiza
+tions have also been used to address the wireless case [5], which 
+has propagation and error characteristics quite different from those 
+of most wired networks.
+The Odyssey system [29], on the other hand, supports a form of 
+end-to-end bandwidth management by providing a fixed number of 
+representations of data objects on a server, and specifying an API 
+by which clients track their "environment" (including, e.g., network 
+characteristics) and negotiate for a representation that is appropriate 
+for their current connectivity. The approach as described requires 
+substantial changes (content, filesystem organization, control logic, 
+and kernel modifications) to the server, and does not accommodate 
+clients whose configurations suggest a data representation some
+where in between those available at the server. Nonetheless, a distil
+lation proxy could negotiate with an Odyssey server for a 
+representation that would minimize the additional work the proxy 
+would need to do on behalf of its client.
+Hybrid Network- and Application-Level Approaches
+We know of at least two projects that combine network-level 
+optimizations with at least some application-level content filtering. 
+MOWGLI [26] provides both a proxy and a client-side agent, which 
+cooperate to manage the wireless link using an efficient datagram 
+protocol, hide disconnection from higher network layers, and 
+tokenize application level protocols and data formats such as HTTP 
+and HTML to reduce bandwidth requirements. However, 
+MOWGLI's protocol-level lossless compression stands in contrast 
+to our document model's semantic lossy compression, and 
+MOWGLI cannot dynamically adapt its behavior to changing net
+work conditions.
+Bruce Zenel's "dual proxy" architecture [41] also features sepa
+rate low-level and high-level filters, which can be demand-loaded 
+by applications. The low-level filters operate at the socket API level 
+and require modifications to the mobile device's network stack. The 
+high-level filters can use application-specific semantics to filter data 
+before it is sent to a client, but the filter is part of the application 
+rather than a middleware component, which complicates its reuse 
+by other applications and makes it awkward to support legacy 
+applications.
+Partitioning of Application Complexity
+Rover [22] provides a rich distributed-object system that gives a 
+uniform view of objects at the OS level, and a queued RPC system 
+that provides the substrate for invoking on objects. Together these 
+abstractions allow disconnection and object migration (including 
+code) to be handled largely implicitly by the OS. For example, sim
+ple GUI code can be migrated to the mobile, where it will use 
+queued RPC to communicate with the rest of the application run
+ning on a server. Rover's goals and functionality are complemen
+tary to our own, and nothing precludes the composition of queued 
+RPC and RDO's with the functionality of our proxy architecture.
+Wit [36] partitions mobile applications between a client run
+ning threaded Tcl on an HP palmtop, and a workstation-based 
+proxy process. However, Wit 1 did not emphasize bandwidth man
+agement (though nothing in the Wit architecture precludes its use 
+on a per-application basis), nor did it specify a uniform architecture 
+for application partitioning. Wit version 2 [37] adds a uniform 
+architecture in which client data is treated as a graph of objects con
+structed by the proxy, where graph edges connect "related" data 
+objects (e.g., sequential or threaded messages in a mail queue). 
+Bandwidth management can be achieved by explicitly pruning the 
+graph, e.g., lazily fetching subsequent messages in a mail thread, 
+rather than prefetching them in the initial communication with the 
+proxy. 
+Cooperative Caching and Prefetching
+Cooperative caching relays [17,28,1,10] and prefetching can 
+reduce the latency seen by the client and server-to-cache bandwidth 
+requirements, but do not address cache-to-client bandwidth (e.g., 
+the client is connected to the caching relay via a slow link) or client 
+hardware/software variation. We believe that distributed coopera
+tive caching will ultimately be necessary for managing the explo
+sive growth of the Internet, but not for reducing overall latency and 
+bandwidth to the client. The proxy does, however, provides a natu
+ral location for cooperative caching of distilled and undistilled data, 
+exploiting locality among a group of institutional users connected 
+to the same proxy.
+Conclusions
+High client variability is an area of increasing concern that 
+existing servers do not handle well. We have proposed three design 
+principles we believe to be fundamental to addressing variation:
+Datatype-specific distillation and refinement achieve better 
+d423 2
+a424 1
+On-demand distillation and refinement reduce end-to-end 
+d427 2
+a428 1
+Performing distillation and refinement in the network 
+d432 9
+a440 20
+We have also described a proxy architecture based on these 
+design principles that has the ability to adapt dynamically to chang
+ing network conditions. Our architecture provides a generalized 
+framework for simultaneously addressing three independent cate
+gories of client variation by applying well-understood techniques in 
+a novel way. 
+Our preliminary results, based on both implemented prototypes 
+and trace-driven simulations, confirm the efficacy of our approach. 
+In particular, on-demand distillation leads to better performance, 
+often including an order of magnitude latency reduction, better 
+looking output (targeted to the particular client screen), and new 
+abilities such as video access or PostScript viewing for low-end 
+devices.
+As new and varied Internet clients become available in volume, 
+we expect that value-added proxy services based on this architec
+ture will play an increasingly important role in the network infra
+structure.
+Acknowledgments
+This paper was tremendously improved by the suggestions 
+from our anonymous reviewers and the guidance of Larry Peterson. 
+@
+
+
+1.1.1.1
+log
+@Client and Network Adaptation paper for IEEE Pers Comms special issue,
+to be submitted 2/98
+@
+text
+@@
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       

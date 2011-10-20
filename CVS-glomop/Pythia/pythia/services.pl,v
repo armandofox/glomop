@@ -1,0 +1,389 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	V1_1_2:1.1.1.1
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.05.23.02.15;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.02.05.23.02.15;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#  Services manager for Pythia
+#  $Id: services.pl,v 1.6 1996/09/09 23:04:25 fox Exp $
+
+=head1 NAME
+
+services.pl - manage and communicate with external distillers
+
+=head1 SYNOPSIS
+
+This page describes how to add support for distillation of a new datatype.
+Information about the refinement interface is coming soon.
+
+=head1 DESCRIPTION
+
+To add support for distillation of a new datatype, you need two things:
+
+=over 3
+
+=item 
+
+A I<distillation decision> function
+
+=item 
+
+A distillation I<server> or I<pipeline>
+
+=back
+
+The distillation decision function examines the original HTTP headers,
+the user preferences, the client characteristics, 
+and possibly the original data and decides how much distillation (if
+any) is needed.  It returns the arguments that should be passed to the
+distillation server or distillation pipeline.
+
+A distillation pipeline is just an external shell pipeline.  A
+distillation server is an optimized daemon compiled using the I<pythsvc>
+interface; see the README there for details on how to build a
+distillation server using this interface.  The I<pythsvc> interface can
+be wrapped around an existing shell program to make its invocation
+somewhat more efficient.
+
+=head1 STEPS IN ADDING SUPPORT FOR A DATATYPE
+
+=head2 Distillation Decision Function
+
+Create a Perl file that will contain your distillation decision
+function.  The base name of the file and the name of the file's package
+should be the same, and it should contain an exported function called
+decide_distill. 
+
+For example, if you're adding support for a type called "mytype", you
+might create a file named F<mytype.pl> with the following contents:
+
+ package mytype;
+
+ # Distillation support for "mytype".
+ 
+ sub decide_distill {
+    my(%http_headers) = %{shift @@_};
+    my(%user_prefs) = %{shift @@_};
+    my(%client_device) = %{shift @@_};
+    my($orig_data) = ${shift @@_};
+    my($distiller_path) = ${shift @@_};
+    my($other_args) = ${shift @@_};
+
+    # decide distillation needed and generate parameters
+
+    if ($distillation_is_needed) {
+       $params = join(" ", $distiller_path, $chosen_args, $other_args);
+    } else {
+       $params = undef;
+    }
+    return $params;
+ }
+
+As you can see, the function returns either a list of arguments to pass
+to the distiller, or undef if distillation isn't needed.  For pipeline
+distillers, the first arg should be the actual program for the shell to
+run; distillation servers don't need this.
+
+The keys for the I<user_prefs> array are as described in L<prefs>;
+they are defined in the configuration file (usually F<pythia.cf>).  The
+keys for the I<client_device> array are as described in L<client>; they
+are defined in the client characteristics file (usually F<pythia.clients>).
+
+=head2 Distillation Pipeline or Server
+
+=head2 Config File Entry
+
+=head2 Escape Sequences
+
+The following escapes can appear either in the pathname or params in the
+config file entry or in the command line returned from the distillation
+decision function.  They will be expanded before distillation is done.
+
+ %a - the host architecture of the distiller, as returned by
+        'uname'. Useful if the distiller binaries are named for each
+        host architecture, e.g. foobar.SunOS, foobar.HP-UX, etc.
+ %u - the original URL of this object
+ %o - output file name from the distiller
+ %i - input file name to the distiller
+ %b - the value of the "bin" configuration parameter (see pythia.cf);
+        useful if you need to include multiple shell programs in the
+        returned pipeline/command
+
+=cut
+
+use strict 'vars';
+package distiller;
+
+%distiller::DistillersByName = ();
+%distiller::PackageFor = ();
+
+#use integer;
+
+sub is_server { shift->{"is_server"} }
+sub host { shift->{"host"} }
+sub port { shift->{"port"} }
+sub path { shift->{"path"} }
+sub args { shift->{"args"} }
+sub pkg { shift->{"pkg"} }
+sub name { shift->{"name"} }
+
+# distiller object constructor
+#  ARGS:
+#     Distiller mime type (eg "image/gif")
+#     Package name that contains decision fn
+#     is a pythsvc style server (0 or 1)
+#     if a server:
+#         host
+#         port
+#     otherwise:
+#         path
+#         opaque args
+
+sub new {
+    my $class = shift;
+    my $name = shift;
+    my $pkg = shift;
+    my $is_server = shift;
+    my ($host,$port,$path);
+    my $opaque_args;
+    
+    if ($is_server) {
+        $host = shift;
+        $port = shift;
+    } else {
+        $path = shift;
+        $opaque_args = shift;                # may be null.
+    }
+
+    my $self = bless {
+        'is_server' => $is_server,
+        'path' => $path,
+        'host' => $host,
+        'port' => $port,
+        'args' => $opaque_args,
+        'pkg' => $pkg,
+        'name' => $name
+    };
+
+    push(@@{$distiller::DistillersByName{$name}}, $self);
+    return $self;
+}
+    
+sub startdefault {
+    my ($proxyhost, $proxyport, $arch) = @@_;
+    # uses global @@Config array.
+    my $bin = '';
+    my @@svcs = grep(/^(auto|server|pipeline|bin)/i, @@main::Config);
+    my $svc;
+    my ($type,$perl,$path,$name,$args);
+    my @@cmd;
+    my $port = $main::g{sport} || 9100;
+
+    &main::debug('services', "Pythia at $proxyhost:$proxyport on $arch");
+    foreach $svc (@@svcs) {
+        if ($svc =~ /^bin\s+(\S+)\s*$/) {
+            $bin = $1;
+            next;
+        }
+        $svc =~ /^(\S+)\s*(\S+)\s+(\S+)\s+(\S+)\s*(.*)/;
+        ($type,$name,$perl,$path,$args) = ($1,$2,$3,$4,$5);
+        &main::debug('services', "Sourcing ${perl}.pl");
+        require "${perl}.pl";
+        # if this is a distill server (as opposed to an external distiller),
+        # start an instance of the server.
+        if ($type =~ /server/i) {
+            $distiller::PackageFor{$name} = $perl;
+            if ($type =~ /auto/) {
+                @@cmd = ("$bin/$path.$arch", $port, $proxyhost, $proxyport);
+                &main::debug('services',
+                             "Starting server for $name at $proxyhost:$port");
+                unless (fork()) {
+                    unless (fork()) {
+                        # this is the grandchild
+                        delete $SIG{'INT'};
+                        delete $SIG{'HUP'};
+                        exec @@cmd;
+                        $" = $, = " ";                  #" 
+                        die "$$: '@@cmd': $!";
+                    }
+                    exit 0;
+                }
+                wait;
+                $port++;
+            }
+        } elsif ($type =~ /pipeline/) {
+            # it's an external pipeline.  Record the names of the args from the
+            # config file, to pass (untouched) to the decision function.
+            new distiller $name,$perl,0,$path,$args;
+            &main::debug('services', "Path '$path' (args '$args') for $name");
+        } else {
+            die "Bad line in config file: `$svc'";
+        }
+    }
+}
+
+#  get_distiller: return handle to an available distiller for a particular mime
+#  type.  If more than one is available, return the first one, and cycle the
+#  list. 
+
+sub get_distiller {
+    my $name = shift;
+
+    my @@dist = @@{$distiller::DistillersByName{$name}};
+    if (scalar @@dist) {                     # got one
+        my $result = $dist[0];
+        # rotate the distillers
+        my $first = shift @@{$distiller::DistillersByName{$name}};
+        push( @@{$distiller::DistillersByName{$name}}, $first);
+        return $result;
+    } else {
+        # you lose
+        return undef;
+    }
+}
+
+#
+# listall: list all distillers in a form suitable for printing.
+#
+
+sub listall {
+    my $key;
+    my $data = '';
+    
+    foreach $key (keys(%distiller::DistillersByName)) {
+        $data .= $key->{"name"} . ": ";
+        if ($key->{"is_server"}) {
+            $data .= join(':', $key->{"host"}, $key->{"port"});
+        } else {
+            $data .= "local";
+        }
+        $data .= "\n";
+    }
+    return $data;
+}
+#
+#  'birth' and 'death' are called when a new distiller is launched or killed
+#  (both cause the distiller to send a message to the proxy).  
+#
+
+sub birth {
+    my ($host,$port,$svc) = @@_;
+
+    # canonicalize hostname and port num of the new distiller that just
+    # contacted us. 
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    my $loc = "$host:$port";
+
+    # ignore duplicate birth messages
+    
+    if (grep(/$loc/, @@{$distiller::DistillersByName{$svc}})) {
+        &main::log("*** services: $svc at $loc already exists, ",
+                   "not adding it");
+        return;
+    }
+
+    # add a new distiller object to the list
+    my $pkg = $distiller::PackageFor{$svc};
+    unless (defined $pkg) {
+        &main::log("*** services: no package known to handle '$svc', " .
+                   "not adding it");
+        return;
+    }
+
+    new distiller $svc,$pkg,1,$host,$port;
+    &main::debug('services', "Added $svc at $loc");
+}
+
+sub death {
+    my ($host, $port, $svc) = @@_;
+    my ($whichlist,$index);
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    $port = 0+$port;
+
+    # try to find which distiller is there.
+
+    undef $whichlist;
+  DISTILLERS:
+    foreach $svc (keys %distiller::DistillersByName) {
+        my $svclist = $distiller::DistillersByName{$svc};
+        $index = 0;
+        my $dist;
+        foreach $dist (@@{$svclist}) {
+            if ($dist->is_server
+                && ($dist->host eq $host)
+                && ($dist->port eq $port)) {
+                $whichlist = $svclist;
+                last DISTILLERS;
+            }
+            $index++;
+        }
+    }
+    unless (defined $whichlist) {
+        &main::log("*** no service $svc at $host:$port");
+        return;
+    } else {
+        splice(@@{$distiller::DistillersByName{$svc}}, $index, 1);
+        &main::debug('services',"Removed $svc at $host:$port");
+    }
+}
+
+sub killall {
+    my ($key,$val,$dist,$sock);
+    while (($key,$val) = each (%distiller::DistillersByName)) {
+        foreach $dist ( @@ {$val} ) {
+            if ($dist->is_server) {
+                my $name = $dist->name;
+                my $host = $dist->host;
+                my $port = $dist->port;
+                &main::debug('services', "Killing $name\@@$host:$port");
+                unless ($sock = connectsock gm_sock $host,$port) {
+                    &main::log("*** Contacting $host:$port to kill $name: " .
+                               &gm_sock::lasterror());
+                }
+                $sock->writesock("k k");
+                $sock->killsock();
+            }
+        }
+    }
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@New, distribution version of Pythia with a real directory structure and
+real documentation
+@
+text
+@@

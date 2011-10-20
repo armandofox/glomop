@@ -1,0 +1,470 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@% @;
+
+
+1.8
+date	98.06.03.00.57.29;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.03.19.19.21.25;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.03.18.22.33.29;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.03.15.00.59.14;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.03.14.08.56.51;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.03.12.19.27.02;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.03.12.01.29.28;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.03.11.00.36.20;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@Much changes
+@
+text
+@%
+%  TACC cluster server description
+%
+
+\subsection{Cluster-Based TACC Server Architecture}
+
+Our cluster-based TACC server is motivated by the observation that
+clusters of workstations interconnected by a fast system-area network
+(such as switched 100-Mb/s Ethernet or Myrinet \cite{MYRI_95}) are in
+many ways a good match for large-scale network services.  Using
+commodity PC's as the unit of scaling allows the service to ride the
+leading edge of the cost/performance curve (cost effectiveness and
+incremental growth).  The inherent redundancy of clusters can be used
+to mask transient failures (high availability).  Finally,
+``embarrassingly parallel'' network service workloads map well onto
+networks of commodity workstations.  Since the development of cluster
+software and administration of a running cluster remain complex, we
+have isolated much of the machinery needed to support high
+availability and incremental growth into a lower layer of our cluster
+software.  The upper layer supports the TACC programming model API's
+alluded to in section \ref{proxy}, so that new TACC services can use
+our cluster server as an off-the-shelf solution to scalability,
+availability, and several other problems.  We describe our system
+architecture at a high level; a detailed discussion of the
+architecture and the performance of our cluster can be found in
+\cite{sosp16}.
+
+\begin{figure}[tbh]
+\epsfxsize 0.70\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 340 303]{./figures/arch.eps}
+}
+\end{center}
+\caption{{\bf Components of a cluster-based TACC server}
+include front 
+ends (FE), TACC workers (W) and caches (\$),
+% $ to make emacs happy!!
+a user profile database, a graphical monitor/administration interface,
+and a fault-tolerant load
+manager whose functionality logically extends into the manager stubs
+(MS) and worker stubs (WS).}\label{arch_sns}
+\end{figure}
+
+The software-component block diagram of a scalable TACC server is shown
+in figure 
+\ref{arch_sns}.  
+{\em Front ends} receive client requests from the outside world and
+``shepherd'' them through the system,
+by fetching Internet content via the {\em caches},  matching the request
+with the appropriate user profile from the {\em 
+customization database},  and queueing the request for service by one or more
+{\em TACC workers} that will process the data according to the user
+preferences.   Front ends maximize system throughput by maintaining state for
+many simultaneous outstanding requests, and can be replicated for both
+scalability and availability.
+The {\em Load Balancing/Fault Tolerance manager} is responsible for
+internal reactive load balancing, autostarting and reaping workers, and
+detecting and recovering from various system failures, including crashed
+components and network partitions, via multicast heartbeat and
+process-peer fault 
+tolerance.  In addition to machines dedicated to running the service,
+the manager can exploit an {\em overflow pool} of general-use machines,
+which are harnessed and released as needed.
+The entire system is administered through a 
+{\em Graphical Monitor}, which supports asynchronous
+error notification via email or pager, temporary disabling of system
+components for hot upgrades, and visualization of the system's behavior
+using Tcl/Tk \cite{tcltk}.  
+
+Our cluster software has been hosting TranSend
+\cite{transend} and Wingman on
+the Berkeley NOW (Network of Workstations \cite{Ande95b}) since April
+1997.  The dedicated pool consists of four SPARCstation-10's and the
+overflow pool consists of up to 100 SPARC Ultra-1 Enterprise servers.
+Under typical load, about five Ultra-1's are serving TranSend and
+Wingman users.  The cluster has been running TranSend since April 1997,
+and Wingman since November 1997, with very little
+downtime.\footnote{During February 1998, we experienced frequent
+sporadic downtime, which was ultimately traced to a configuration change
+on the cluster that caused remote execution to sometimes break.}
+
+TBD how many hits/second are TranSend and Wingman getting, and what does
+this translate into in terms of subscribers?
+
+
+
+\subsection{Proxy-Based Applications}
+
+Here we give a few examples of some of the proxy-based applications we
+have built and deployed using the TACC model, to demonstrate the model's
+flexibility for constructing applications out of existing building
+blocks, as well as our cluster-based platform's viability for deploying
+these applications to large groups of real users who expect continuous
+availability. 
+
+\textbf{TranSend} \cite{transend} is a Web acceleration proxy that
+performs on-the-fly, datatype-specific compression, in particular on GIF
+and JPEG images.  TranSend allows each user to customize the
+``aggressiveness level'' of lossy compression as well as various other
+options, and results in a $3-7\times$ speedup for browsing over a slow
+link such as a 28.8K modem.  TranSend was deployed for public use on a
+UC Berkeley cluster in April 1997 and has been running since then with
+virtually no unscheduled downtime, serving a user community of about
+10,000.  TranSend's ideas have recently been instantiated commercially
+as Intel QuickWeb, although there is no connection between QuickWeb and
+TranSend.
+
+\textbf{Top Gun Mediaboard} (TGMB) is an electronic shared whiteboard
+application for the PalmPilot.  This is a derivation of the the desktop
+{\em mediaboard} application, which uses SRM (Scalable Reliable
+Multicast) as the underlying communication protocol.  A reliable
+multicast proxy (RMX) TACC worker participates in the SRM session on
+behalf of the PDA clients.  TGMB's workers performs four types of client
+adaptation: tunneling multicast over unicast (since the PalmPilot
+doesn't support multicast), conversion of {\em mediaboard} commands into
+draw-ops on a ``pseudo-canvas'' that the client maintains (using a
+binary markup that is an extension of the Top Gun Wingman markup
+described later), conversion of GIF and JPEG background images into
+simple PalmPilot bitmaps, and intelligent forwarding of data from the
+mediaboard session to the client (for example, eliminating redundant
+draw-ops and forwarding only the data associated with the screen
+currently being viewed on the client).  Top Gun Mediaboard is in
+prealpha use at UC Berkeley, and performs satisfactorily even over slow
+links such as the Metricom Ricochet wireless packet radio modem
+\cite{ricochet}.
+
+\textbf{Charon}\footnote{The
+Charon module 
+has not yet been encapsulated as a TACC worker.}
+illustrates a similar use of adaptation by proxy, for
+performing indirect authentication.  In particular, Charon mediates
+between thin clients and a Kerberos \cite{kerberos} infrastructure.
+Charon is necessary because, as we describe in \cite{charon}, the
+computing resources required for a direct port of Kerberos to thin
+clients are forbidding.  Charon relieves the client of a significant
+amount of Kerberos protocol processing, while limiting the amount of
+trust that must be placed in the proxy.  Our Charon prototype client for
+the Sony MagicLink \cite{sony_magic_link}, a then-popular PDA, had a
+client footprint of only 45KB, including stack and heap usage.  
+
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d29 1
+a29 1
+\epsfxsize 0.95\hsize
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d109 1
+a109 1
+\textbf{TopGun Mediaboard} (TGMB) is an electronic shared whiteboard
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d1 26
+a26 87
+\section{Client-Proxy-Server Middleware Model}
+\label{proxy}
+
+% Client-proxy-server model [AF] - 1 pg
+%         Middleware Philosophy: client/network variation
+%         Examples of past middleware (TranSend, etc)
+%         Building middleware apps with TACC (very brief)
+%         Why a Web browser as a middleware app? (``horizontal'' vs
+%            ``vertical'') 
+%         Rough arch. of Wingman as a C-P-S app (general description only,
+%            no details at this point; eg ``proxy transforms pages to
+%            simple binary markup and serves them in simple ALF protocol'')
+
+We argue for a {\em proxy-based approach} for middleware applications,
+in which proxy agents placed between clients and servers perform
+aggressive computation and storage on behalf of clients.  Properly
+applied, this approach allows us to transparently
+leverage the installed infrastructure:
+Data and format transformation on an application-level
+proxy both reduces the bandwidth
+demands on the infrastructure through lossy compression
+\cite{pythia,sosp16}, and allows legacy and other nonstandard (including
+thin) clients to interoperate with existing servers.
+
+% TBD refs to motivate transparent proxy-based approach
+
+Furthermore, by performing client adaptation at a shared infrastructural
+proxy, we avoid inserting adaptation machinery at each origin server.
+Application partitioning arguments have long been used to keep clients
+simple (as in \cite{wit}); we simply split the application between
+client and {\em proxy}, rather than between client and server.
+
+\subsection{TACC: A Programming Model for Proxy Applications}
+
+Our programming model for proxy-based applications is called TACC
+\cite{casefortacc}: 
+{\em transformation} (distillation \cite{asplos},
+filtering, format conversion, etc.),
+{\em aggregation} (collecting and collating data from various sources,
+either offline or on-the-fly), {\em caching} (both original and transformed
+content), and {\em customization}  (persistent store of user profiles,
+allowing the service to tailor its output to each
+user's needs or device characteristics).
+Each  {\em TACC
+worker} specializes in a particular task, for example,
+scaling/dithering of images in a particular format, conversion between
+specific data formats, extracting ``landmark'' information from specific
+Web pages, 
+etc.  Complete applications are built by {\em composing} workers;
+roughly speaking, one worker can {\em chain} to another (similar to
+processes in a Unix pipeline), or a worker can {\em call} another as a
+subroutine or coroutine.  This model of composition results in a very
+general programming model that subsumes transformation proxies
+\cite{transend}, proxy filters \cite{proxyfilter}, customized
+information aggregators, and search engines.  The TACC programming
+environment provides the inter-worker and intra-worker API's,
+composition rule API's, and glue that allows workers to be authored in a
+variety of languages (currently C/C++, Perl 5, Java, and Tcl).
+
+A {\em TACC server} is a platform that instantiates TACC workers
+and the dispatch rules for routing
+network data traffic to and from them, and provides support for the
+inter-worker calling and chaining API's.  In particular, our prototype
+implementation of a scalable, 
+commodity-PC cluster-based TACC server, described in section \ref{impl},
+hides the machinery that provides incremental scalability, load
+balancing, and high availability to TACC applications.  This makes TACC
+applications easy to write even though they will be deployed to large
+user communities for $24\times 7$ operation.
+
+\subsection{Wingman as a TACC Application}
+
+The USR PalmPilot's austere graphics library supports a single native
+bitmap format, and text objects are not automatically word-wrapped and
+must consist entirely of text in a single visual style (bold, etc.).
+Our philosophy of client competence
+therefore suggests that HTML parsing and tag-to-font
+mapping, page layout with client-specific font metrics, and image
+scaling with conversion to native bitmap format all be left to the TACC
+proxy.  These three tasks correspond to three TACC workers that
+implement the ``back end'' of Top Gun Wingman.  We have developed a
+simple tokenized markup that allows a complete page, including all
+inline images, to be sent as a single object.  As we describe in section
+\ref{impl}, our communication protocol exploits application-level
+framing \cite{alf} to simplify client logic and make the application as
+network-independent as possible.
+
+d31 3
+a33 3
+% \makebox{
+% \epsfbox[0 0 340 303]{./figures/wingman_app.eps}
+% }
+d35 8
+a42 7
+\caption{\textbf{Wingman's TACC workers}
+include the parser/executive, image conversion, and page layout, which
+is actually implemented as a library called by the executive.  The TACC
+model and API's allow parallelism to be exploited in various ways; for
+example, all inline images are prefetched in parallel with HTML parsing,
+and whenever possible multiple images are converted in parallel by
+calling multiple workers.}
+d45 43
+a140 1
+
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d16 3
+a18 2
+aggressive computation and storage on behalf of clients.  Our main
+argument for this approach is leveraging the installed infrastructure:
+d25 1
+a25 1
+TBD refs to motivate transparent proxy-based approach
+a32 9
+Especially in the commercial world, most examples of middleware-based
+split applications are vertical (specialized) applications.  We chose to
+implement a Web browser---a horizontal application---because it has wide
+appeal, allows immediate access to an enormous installed content base,
+and (like a desktop Web browser) serves as a prototype for the ``most
+generic'' client-proxy-server application: text and graphics rendering
+and UI interaction take place on the client, with formatting and
+interaction handling pushed back to the proxy.
+
+d37 2
+a38 1
+{\em transformation} (distillation, filtering, format conversion, etc.),
+d40 1
+a40 1
+as search engines do), {\em caching} (both original and transformed
+d74 14
+a87 11
+bitmap format, and a text object is not automatically word-wrapped 
+and cannot have different styles applied to different character groups.
+Our philosophy of asking the client
+to do only what it is good at therefore
+suggests that HTML parsing and tag-to-font mapping, page layout
+with client-specific font metrics, and image scaling with conversion to
+native bitmap format all be left to the TACC proxy.  These three tasks
+correspond to three TACC workers that implement the ``back end'' of
+Top Gun Wingman.  We have developed a simple tokenized markup that
+allows a complete page, including all inline images, to be sent as a
+single object.
+a103 16
+
+
+Following the long-standing recommendations of \cite{alf}, 
+complete, ready-to-render pages are delivered as application data units
+(ADU's).  This simplifies the client logic considerably: when the
+network layer delivers a network event, it means that an entire,
+self-describing ADU is waiting in a buffer ready to be rendered.
+Contrast this with traditional HTTP: in that protocol, a network event
+merely indicates that some number of bytes has arrived, but framing is
+left entirely to the application.  Furthermore, in HTTP, inline images
+are generally fetched using independent transactions (perhaps in
+parallel), requiring a nontrivial amount of connection management
+overhead on the client.  Application-level framing eliminates these
+concerns, makes the client simpler, and enables a ``push-friendly''
+model of asynchrony.  We return to these ideas in section
+\ref{lessons}.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d22 3
+a24 2
+thin) clients to interoperate with existing servers.  (TBD other refs
+for this)
+d32 9
+d48 2
+a49 2
+content), and {\em customization}  (maintenance of a per-user
+preferences database that allows workers to tailor their output to the
+d80 29
+a108 18
+The USR PalmPilot's austere programming environment provides support for
+standard UI widgets (buttons, popups, etc.), drawing text in one of four
+fonts (roman, bold, large, glyph), and 
+displaying bitmapped images at up to 2 bits per pixel (section
+\ref{impl} describes why we needed to circumvent the built-in graphics
+calls to support this).  It specifically does {\em not} support ``text
+boxes'' that wrap text automatically, nor does it support ``styled
+text'' objects (in which different characters in the text can have
+different visual attributes).  Our philosophy of asking
+the client to do only what it is good at suggests that it is left to the
+TACC proxy to perform HTML parsing and layout as will as image scaling.
+Roughly speaking, then, there are three TACC workers that implement the
+``back end'' of Top Gun Wingman: HTML parsing and layout (using
+device-specific font metrics), image scaling and conversion to the
+PalmPilot's native image format, and conversion of the intermediate-form
+page layout to the tokenized markup representation used by the client
+software.  The tokenized markup allows for a complete page, including
+all inline images, to be sent as a single object.
+d116 1
+a116 1
+merely indicates that some number of bytes have arrived, but framing is
+d138 1
+a138 1
+options, and results in a $3--7\times$ speedup for browsing over a slow
+d141 4
+a144 2
+essentially no unscheduled downtime, serving a user community of about
+10,000.  TBD verify this number.
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+\section{Client-Proxy-Server Model}
+d31 1
+a31 1
+\subsection{Proxy-Based Applications}
+d33 34
+a66 1
+\subsection{The TACC Programming Model}
+d69 86
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 37
+@

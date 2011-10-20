@@ -1,0 +1,280 @@
+head	1.4;
+access;
+symbols
+	current:1.3;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	96.09.23.07.06.40;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.08.23.19.35.54;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.07.26.20.30.50;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.07.07.00.05.46;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Added serial.pl to configure serial port - still needs work.  Changed
+return string of AUTH_OK msg to make it distinct from all other msgs. New
+rule: msgs must have initial strings that are unique in first 2 letters
+(case insensitive).  Minor changes to msgdefs.pl and the lang_*.pl to allow
+passing of constant arg strings for code generation.  Added a "newt" client.
+@
+text
+@# $Id: client.pl,v 1.3 1996/08/23 19:35:54 gribble Exp $
+#
+#  client.pl - the client device abstraction
+#
+
+=head1 NAME
+
+client - GloMop client device abstraction
+
+=head1 SYNOPSIS
+
+ require "util.pl";
+ require "client.pl";
+ 
+ # constructor
+
+ $cli = new client $client_type;
+
+=head1 DESCRIPTION
+
+Implements the abstraction corresponding to the physical properties of a
+client device.  The constructor creates a new client object by looking up the
+description of the client type.  If the description is not known, the
+constructor returns undef.
+
+The client object is one of the fields of the L<auth(3)> object associated with
+a proxy instance.
+
+The L<auth(3)> package automatically determines a client's type when a client
+is accepted using the GloMop connection protocol.
+
+=cut
+
+##
+
+package client;
+
+=head1 INSTANCE VARIABLES
+
+All instance variables are read-only.
+
+The "inherits" field of a client indicates that if an instance
+variable (client property) is
+requested that is not defined for this client, the value from the
+"inherits" client will be used instead.  Inheritance is transitive;
+if a "generic" client is defined, all clients implicitly inherit from
+it if they do not explicitly inherit from anything else.
+
+=over 3
+
+=item $cli->bpp
+
+Bits per pixel supported on the client's display.
+
+=item $cli->screenx
+
+=item $cli->screeny
+
+Pixel dimensions across and down.
+
+=item $cli->aspect
+
+Aspect ratio; the width of a pixel divided by its height.  An aspect ratio
+greater than 1 is short and fat, less than 1 is tall and thin.
+
+=item $cli->name
+
+Symbolic name of the client.    
+
+=item $cli->palette
+
+If value is 'gray', the client supports only grayscale with the indicated bits
+per pixel.  If the value is 'color', the client supports arbitrary color
+with the indicated bits per pixel.  If the value is an array, it is the
+standard colormap the client prefers; each array entry has the form
+rrggbb where r,g,b are hexadecimal digits.  If the value is undefined,
+nothing is known about the client's palette.
+
+=item $cli->image
+
+=item $cli->text
+
+Returns a list of the MIME subtypes the client understands for
+each of the types.  For example, $cli->text might be ("plain","html"),
+indicating that the client understands types "text/plain" and "text/html".
+
+=cut
+
+#
+#  Set up hash of known clients; it maps client symbolic names to
+#  hashes of their properties.  The appropriate hash is blessed into a
+# client object at connect time.
+#
+
+sub read_clients {
+    open(CLI, &util::configfile("gmproxy.clients"))
+        or die "client: cannot open gmproxy.clients ($!), exiting\n";
+    print STDERR "Reading clients: ";
+    local($/) = "\nclient";
+    my $clientname;
+    while (<CLI>) {
+        next if /^#/;
+        next if /^\s-*$/;
+        if ( s/^\s*(\S+)\s+\{/\{/ ) {
+            # remove trailing "newline"
+            $clientname = $1;
+            s!$/$!! ;      
+            $client::Clients{$clientname} = eval $_;
+            $client::Clients{$clientname}->{"shortname"} = $clientname;
+            print STDERR "$clientname ";
+            next;
+        }
+        die "Bad entry in gmproxy.clients: `$_' (exiting)\n";
+    }
+    print STDERR "\n";
+}
+
+sub new {
+    my $class = shift;
+    my $cli_type = shift;
+    my %self;
+    
+    $cli_type = 'generic'
+        unless (defined $Clients{$cli_type}
+                && ref($Clients{$cli_type}) eq 'HASH');
+    if (defined $Clients{$cli_type}) {
+        %self = % {$Clients{$cli_type}};
+        return bless (\%self);
+    } else {
+        &util::log("client",
+                   "No client $cli_type and no generic to fall back on");
+        return undef;
+    }
+}
+
+sub shortname { shift->{"shortname"} }
+
+sub _prop {
+    my($self,$prop) = @@_;
+    my $result;
+    if (defined $self->{$prop}) {
+	return $self->{$prop};
+    }
+    # not defined: search the "inherits" list
+    my $inherits = $self->{"inherits"};
+    if (defined $inherits
+	&& defined($result = $client::Clients{$inherits}->{$prop})) {
+	return $result;
+    }
+    return ($client::Generic->{$prop}
+            || die "client: No such property as $prop");
+}
+
+sub init {
+    for (qw(bpp screenx screeny aspect name palette)) {
+        eval "sub $_ { shift->_prop('$_') }";
+    }
+    $client::Generic = new client "generic";
+}
+
+=back
+
+=cut
+
+&client::read_clients;        
+&client::init;
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+1;
+@
+
+
+1.3
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@d1 1
+a1 1
+# $Id: client.pl,v 1.3 96/08/22 15:46:53 glomop Exp $
+d42 7
+d140 11
+a150 1
+    return ($self->{$prop} || $client::Generic->{$prop}
+@
+
+
+1.2
+log
+@segmgr renamed to chunk.  lots of changes including new html parser,
+rudimentary layout manager, beginnings of interface to ptm, modularized
+front-end vs back-end distiller components (but interfaces aren't really
+stabilized yet).
+@
+text
+@d1 1
+a37 2
+&util::instvars(qw(client bpp screenx screeny aspect name));
+
+d72 8
+d89 1
+a89 1
+    open(CLI, "./gmproxy.clients")
+d102 1
+d116 4
+a119 2
+    if (defined $Clients{$cli_type}
+        && ref($Clients{$cli_type}) eq 'HASH') {
+d121 1
+a121 1
+        return bless \%self;
+d123 2
+d129 15
+d149 12
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d39 36
+d116 4
+@

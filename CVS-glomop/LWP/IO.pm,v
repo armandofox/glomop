@@ -1,0 +1,134 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 v4-999:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.06.28.01.01.07;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.06.28.01.01.07;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@package LWP::IO;
+
+# $Id: IO.pm,v 1.7 1996/04/09 15:44:26 aas Exp $
+
+require LWP::Debug;
+use AutoLoader;
+@@ISA=qw(AutoLoader);
+
+sub read;
+sub write;
+
+1;
+__END__
+
+=head1 NAME
+
+LWP::IO - Low level I/O capability
+
+=head1 DESCRIPTION
+
+=head2 LWP::IO::read($fd, $data, $size, $offset, $timeout)
+
+=head2 LWP::IO::write($fd, $data, $timeout)
+
+These routines provide low level I/O with timeout capability for the
+LWP library.  These routines will only be installed if they are not
+already defined.  This fact can be used by programs that need to
+override these functions.  Just provide replacement functions before
+you require LWP. See also L<LWP::TkIO>.
+
+=cut
+
+sub read
+{
+    my $fd      = shift;
+    # data is now $_[0]
+    my $size    = $_[1];
+    my $offset  = $_[2] || 0;
+    my $timeout = $_[3];
+
+    my $rin = '';
+    vec($rin, fileno($fd), 1) = 1;
+    my $err;
+    my $nfound = select($rin, undef, $err = $rin, $timeout);
+    if ($nfound == 0) {
+	die "Timeout";
+    } elsif ($nfound < 0) {
+	die "Select failed: $!";
+    } elsif ($err =~ /[^\0]/) {
+	die "Exception while reading on socket handle";
+    } else {
+	my $n = sysread($fd, $_[0], $size, $offset);
+	# Since so much data might pass here we cheat about debugging
+	if ($LWP::Debug::current_level{'conns'}) {
+	    LWP::Debug::debug("Read $n bytes");
+	    LWP::Debug::conns($_[0]) if $n;
+	}
+	return $n;
+    }
+}
+
+
+sub write
+{
+    my $fd = shift;
+    my $timeout = $_[1];  # we don't want to copy data in $_[0]
+
+    my $len = length $_[0];
+    my $offset = 0;
+    while ($offset < $len) {
+	my $win = '';
+	vec($win, fileno($fd), 1) = 1;
+	my $err;
+	my $nfound = select(undef, $win, $err = $win, $timeout);
+	if ($nfound == 0) {
+	    die "Timeout";
+	} elsif ($nfound < 0) {
+	    die "Select failed: $!";
+	} elsif ($err =~ /[^\0]/) {
+	    die "Exception while writing on socket handle";
+	} else {
+	    my $n = syswrite($fd, $_[0], $len-$offset, $offset);
+	    return $bytes_written unless defined $n;
+
+	    if ($LWP::Debug::current_level{'conns'}) {
+		LWP::Debug::conns("Write $n bytes: '" .
+				  substr($_[0], $offset, $n) .
+				  "'");
+	    }
+	    $offset += $n;
+	}
+    }
+    $offset;
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@Original LWP v4.999 from CPAN
+@
+text
+@@

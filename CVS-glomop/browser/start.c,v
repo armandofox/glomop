@@ -1,0 +1,378 @@
+head	1.12;
+access;
+symbols
+	v15b:1.12
+	v10b3:1.11
+	v10b2:1.10
+	v10b1:1.10;
+locks; strict;
+comment	@ * @;
+
+
+1.12
+date	97.11.11.21.24.41;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.10.27.16.12.52;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.12.21.46.12;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.08.20.31.56;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.08.00.24.33;	author lcddave;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.02.22.45.11;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.08.28.01.16.31;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.08.26.00.32.51;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.09.00.10.24;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.08.00.10.32;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.04.23.03.03;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.33;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@out of memory handled gracefully.  Fallback proxies added
+@
+text
+@#include <Pilot.h>
+#include "2bit.h"
+#include "start.h"
+#include "trans.h"
+#include "globals.h"
+#include "prefs.h"
+#include "notify.h"
+
+/* Set up the display */
+void displayInit() {
+  RectangleType dispBounds;
+  
+  /* Set up the 1-bit window */
+  dispBounds.topLeft.x = 0; 
+  dispBounds.topLeft.y = 0;
+  dispBounds.extent.x = 160;
+  dispBounds.extent.y = 160;
+  disp = WinCreateWindow(&dispBounds, noFrame, 0, 1, &dispError);
+  WinInitializeWindow(disp);
+  WinSetDrawWindow(disp);
+
+  /* Go 2-bit */
+#ifndef NOTWOBIT
+  enable_2bit();
+#endif
+}  
+
+/* Get preferences, open (or create) app database */
+Word StartApplication(void)
+{
+  Word err;
+
+  SetGlobals();
+
+  historyDB = DmOpenDatabaseByTypeCreator('Hist', APPTYPE, dmModeReadWrite);  
+  if (historyDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanHistory", APPTYPE, 'Hist', 0);
+    ErrFatalDisplayIf(err, "Error creating history database");
+    historyDB = DmOpenDatabaseByTypeCreator('Hist', APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!historyDB, "Error opening history database");
+  }
+
+  cacheDB = DmOpenDatabaseByTypeCreator('Cash', APPTYPE, dmModeReadWrite);  
+  if (cacheDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanCache", APPTYPE, 'Cash', 0);
+    ErrFatalDisplayIf(err, "Error creating cache database");
+    cacheDB = DmOpenDatabaseByTypeCreator('Cash', APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!cacheDB, "Error opening cache database");
+  }
+
+  cacheInfoDB = DmOpenDatabaseByTypeCreator('cInf', APPTYPE, dmModeReadWrite);
+  if (cacheInfoDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanCacheInfo", APPTYPE, 'cInf', 0);
+    ErrFatalDisplayIf(err, "Error creating cache info database");
+    cacheInfoDB = DmOpenDatabaseByTypeCreator('cInf', 
+					      APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!cacheInfoDB, "Error opening cache info database");
+  }
+
+  offlineDB = DmOpenDatabaseByTypeCreator('Offl', APPTYPE, dmModeReadWrite);  
+  if (offlineDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanOfflineCache", APPTYPE, 'Offl', 0);
+    ErrFatalDisplayIf(err, "Error creating offline cache database");
+    offlineDB = DmOpenDatabaseByTypeCreator('Offl', APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!offlineDB, "Error opening offline cache database");
+  }
+
+  offlineInfoDB = DmOpenDatabaseByTypeCreator('oInf', APPTYPE, 
+					      dmModeReadWrite);
+  if (offlineInfoDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanOfflineCacheInfo", APPTYPE, 'oInf', 0);
+    ErrFatalDisplayIf(err, "Error creating offline cache info database");
+    offlineInfoDB = DmOpenDatabaseByTypeCreator('oInf', 
+						APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!offlineInfoDB, 
+		      "Error opening offline cache info database");
+  }
+
+
+  hotlistDB = DmOpenDatabaseByTypeCreator('Hotl', APPTYPE, dmModeReadWrite);  
+  if (hotlistDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanHotList", APPTYPE, 'Hotl', 0);
+    ErrFatalDisplayIf(err, "Error creating hot list database");
+    hotlistDB = DmOpenDatabaseByTypeCreator('Hotl', APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!hotlistDB, "Error opening hot list database");
+  }
+  
+  storageDB = DmOpenDatabaseByTypeCreator('STOR', APPTYPE, dmModeReadWrite);  
+  if (storageDB == NULL) {
+    err = DmCreateDatabase(0, "WingmanTransStorage", APPTYPE, 'STOR', 0);
+    ErrFatalDisplayIf(err, "Error creating storage database");
+    storageDB = DmOpenDatabaseByTypeCreator('STOR', APPTYPE, dmModeReadWrite);
+    ErrFatalDisplayIf(!storageDB, "Error opening storage database");
+  } else {
+    /* storage database exists!  clean it out */
+    ULong numRecs;
+    LocalID lid;
+    UInt cardno;
+    ULong i;
+
+    DmOpenDatabaseInfo(storageDB, &lid, NULL, NULL, &cardno, NULL);
+    DmDatabaseSize(cardno, lid, &numRecs, NULL, NULL);
+    
+    for (i = 0; i < numRecs; i++) {
+      DmRemoveRecord(storageDB, 0);
+    }
+  }
+
+  ReadPrefs();
+
+  /* start display */
+  displayInit();
+
+  StatusInit();
+
+  FrmGotoForm(SplashForm);
+  return 0;
+}
+@
+
+
+1.11
+log
+@o Fixed 2bit issues with offscreen windows
+o added progress bar (a la Postman)
+@
+text
+@a115 7
+  /*  
+      conID = OpenConnection(proxyServer, proxyPort, storageDB);
+      if (conID == -1) {
+      ErrNonFatalDisplayIf(1, "Network failed. Offline mode.");
+      }
+  */
+
+@
+
+
+1.10
+log
+@o UI fixed up: scroll bar at bottom.  It goes all black when the page is
+  requested, and disappears when the page has arrived completely.  The
+  view area is now 150 pixels high.
+o Various bugfixes
+@
+text
+@d114 2
+@
+
+
+1.9
+log
+@About menu
+@
+text
+@a20 1
+  WinGetWindowExtent(&winXextent, &winYextent);
+@
+
+
+1.8
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@a32 4
+#if 0
+  UInt welcomeURLLength = StrLen(WELCOME_URL) + 1;
+  Chunk urlOut;
+#endif
+@
+
+
+1.7
+log
+@Changed #ifdef TWOBIT to #ifndef NOTWOBIT
+@
+text
+@d33 1
+d36 2
+a37 1
+  
+d126 1
+a126 1
+  FrmGotoForm(MainForm);
+@
+
+
+1.6
+log
+@OFFLINE MODE WORKS
+@
+text
+@d24 1
+a24 1
+#ifdef TWOBIT
+@
+
+
+1.5
+log
+@fixes link screen refresh bug.
+@
+text
+@a33 2
+  VoidHand hWelcomeURL = MemHandleNew((ULong) welcomeURLLength);
+  char *outWelcomeURL = MemHandleLock(hWelcomeURL);
+d117 7
+a123 26
+  /* start network */
+  err = StartTrans();
+  if (err) {
+    ErrFatalDisplayIf(err, "Error opening transport layer");
+  }
+  
+  conID = OpenConnection(proxyServer, proxyPort, storageDB);
+  if (conID == -1) {
+    (void) FrmAlert(AlertOffline);
+    /* ErrNonFatalDisplayIf(1, "Network failed. Offline mode."); */
+  }
+  else {
+    RegisterNotify(conID);
+    /* set the chunk data structures */
+    /* don't use SendURL cause we don't want it cached */
+    StrCopy (outWelcomeURL, WELCOME_URL);
+    urlOut.conID = conID;
+    urlOut.metaSize = 0;
+    urlOut.dataSize = (DataSize) welcomeURLLength;
+    urlOut.dataHand = hWelcomeURL;
+    /* open welcome page */
+    SendChunk(&urlOut);
+    /* cleanup */
+    MemHandleUnlock(hWelcomeURL);
+    MemHandleFree(hWelcomeURL);	
+  }
+@
+
+
+1.4
+log
+@bug fixes and offline cache
+@
+text
+@d127 2
+a128 1
+    ErrNonFatalDisplayIf(1, "Network failed. Offline mode.");
+@
+
+
+1.3
+log
+@Fixed click memory bug. Implemented a possible catch to down server
+bug that destorys the pilot.
+@
+text
+@d65 20
+@
+
+
+1.2
+log
+@dl status bar added
+@
+text
+@d106 18
+a123 14
+  RegisterNotify(conID);
+
+  /* set the chunk data structures */
+  /* don't use SendURL cause we don't want it cached */
+  StrCopy (outWelcomeURL, WELCOME_URL);
+  urlOut.conID = conID;
+  urlOut.metaSize = 0;
+  urlOut.dataSize = (DataSize) welcomeURLLength;
+  urlOut.dataHand = hWelcomeURL;
+  /* open welcome page */
+  SendChunk(&urlOut);
+  /* cleanup */
+  MemHandleUnlock(hWelcomeURL);
+  MemHandleFree(hWelcomeURL);	
+a124 1
+
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d7 1
+a7 1
+
+d106 1
+@

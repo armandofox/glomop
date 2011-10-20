@@ -1,0 +1,432 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.00;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From czerwin@@batman.CS.Berkeley.EDU  Fri Nov 20 14:04:27 1998
+Return-Path: czerwin@@batman.CS.Berkeley.EDU
+Received: from batman.CS.Berkeley.EDU (batman.cs.Berkeley.EDU [128.32.33.57]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id OAA17513 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 14:04:26 -0800
+Received: from batman.CS.Berkeley.EDU (localhost [127.0.0.1])
+	by batman.CS.Berkeley.EDU (8.9.1/8.9.1) with ESMTP id OAA01345
+	for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 14:04:41 -0800
+Message-Id: <199811202204.OAA01345@@batman.CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: Homework #3
+Date: Fri, 20 Nov 1998 14:04:41 -0800
+From: "Steven E. Czerwinski" <czerwin@@CS.Berkeley.EDU>
+Status: RO
+
+
+
+                                                        Steven Czerwinski
+                                                        CS267 Computer Security
+                                                        Problem Set #3
+
+
+Question 1:  The safety of a piece of code
+
+Okay, I'm going to list the violations of "good coding" pratices in order
+of less importance in terms of security.  The first few are examples of
+bad coding, but I don't see how they can be exploited as security holes.
+
+ o Not checking the return values (error results) of system calls:
+   This happens a lot in the code, such as lines 34,35,36 where it attempts
+   to set the effective UID.  Also, it happens a lot in the file handling,
+   such as 98,99 where it opens the real file and the temp file to copy
+   them.  Eventhough this is bad, I don't see how these problems can be 
+   exploited.
+ o Forgetting to undo state on error conditions:  In the looksok procedure,
+   if there is a "!" in the file, then the routine will return at line
+   139, forgetting to close the file.  I don't see how this can be exploited,
+   but you should remember to unwind state when an error happens.
+ o Lock problems:  If there are any problems, the program's default 
+   behaviour is to exit.. but this means that you could exit when you still
+   have the lock.. (i.e., do a grablock() in main, and then have s
+   secure_open_as fail during a debug statement, causing the program to exit
+   will holding the lock.  Again, I don't see how this is really a problem,
+   (besides DoS).
+ o Race condition to avoid looksok:  Ok, this is the first real security
+   exploitable problem.  There is a way to avoid running your edit file
+   through the looksok procedure, thus you are able to put whatever you
+   want in the file, regardless of what they are trying to prevent.  Basically,
+   the program uses the SIGCHLD signal to know when the file is done
+   being edit by the user.  However, this does not guarantee that is so.
+   The user could send this signal to the process, but still keep vi open.
+   Then, right after the original process runs "looksok", the user can save
+   his real changes.  If he saves it between the "looksok" check, and the
+   "rename" command, he can insert whatever text he wants in the file.  
+   Basically, you should tie the looksok function with what actually gets
+   written to the file.  The looksok should check it and buffer it in memory.
+   Then, if it passes, it should write out the buffer.  You have to save
+   exactly what you checked.
+ o Tractoring with signal handler:  Another subtle exploit is to use the
+   signal handler to set the effective uid to be root at in opportune times.
+   For instance, during a debug print, the program temporarily raises its
+   effective uid to the user, edits a file, and sets the uid to be 0
+   again.  However, the CHLD signal handler does a debug print to.  And, at 
+   the end of the debug code, the effective uid is the root.  So, what happen 
+   if we had a CHLD signal handled when the program was executing between 
+   lines 36 and 38?  Well, the process would have effective uid of 0, when it 
+   was assumed that the effective uid was the users.  This can be exploited to
+   write to a file normally the user couldn't.  However, it be complex to use 
+   it right, and you have to beat a lot of race conditions.
+ o Buffer overflow:  There is a buffer overflow vunerability, thus allowing
+   arbitrary user code to run as root.  The problem is that the debug 
+   routine allocates a buffer on the stack (line 56), and uses sprintf
+   to write into that buffer, which doesn't check bounds.  Most of the strings
+   are fixed by the program, but there is one that can be arbitrarily set by
+   the user: the program name.  The debug routine prints out the program name
+   as gotten from argv[0] to the debug buffer.  However, argv[0] does not
+   have to correspond to the program name, and can be set to anything, 
+   including binary code.  (You can write a wrapper program using execl that
+   passes in a bogus argv[0] .. I've tried and it works, I can crash the
+   given program when sending in a long program name... you can pass in
+   a string much longer then 1024, which is the buffer size, and therefore
+   overload it.)   Thus, it is a buffer overflow that is easily exploited,
+   as long as you can figure out what string of binary code to pass in.
+ o Race condition on tmp file:  Here's a approach that you can use to
+   edit any root file you wish to.  You just have to beat a race condition
+   and know what tmp file the program is going to edit.  Here's what happens:
+   The program creates a tmp file with a "random" name in /tmp, and copies
+   the original file there, and then opens the tmp file with root permission,
+   with vi.  However, what happens if before it copies that file to the
+   tmp filename, you create a file with your own access?  You have to 
+   guess what the tmp filename will be, and beat the race condition between
+   the tmpnam call and when it opens it up, but if you do, then the code
+   will simply use your file.  Since it is owned by you, you can delete
+   it after the copy operation is done.  You could replace it with a symlink
+   to /etc/passwd.  If you do this before the program calls vi, then you
+   can have it open up a vi session with root permissions, allowing you to
+   edit /etc/passwd (or another appropriate root access file).  This depends
+   on beating two race conditions, and guessing the temp file name, but it
+   can be done.
+ o Using vi:  Ok, a major flaw is running a vi process with a setuid of 0. 
+   Basically, the vi session has root access.  So, using the features of vi,
+   you can open up another file with root access, or even run shell commands.
+   Thus, you can edit the /etc/passwd file easier than having to beat the
+   race conditions in the last attack.  Plus, you can run whatever root
+   commands you want.  We really should be using a very simple editing 
+   program that we created especially for this purpose.
+ o There are some other attacks (like subsituting another program for vi
+   if you have access to /usr/bin), but they are lamer than the above ones.
+
+Question 2:  Active Networks
+
+For each implementation, I list all the issues I can think of (with an
+"o" in front of it), and the immediately list how I would handle it 
+(with an "-" in front of it).  I should also mention that these
+issues are cummulative for each of the implementations of mobile code.
+If it was a problem in a previous version, then it will be a problem
+in the next version that extends it.
+
+Implentation #1:  K.I.S.S.
+
+o Packets can bounce back and forth between routers.  By choosing to go 
+  out on the same interface it came in on, the packets could live to long.
+  Also, the packet could just randomly go through the network, not trying to
+  get to its destination.  This could cause congestion.
+- To solve this, I would put a TTL field on the packet, and after so many
+  hops, drop the packet.
+o If there is a man-in-the-middle who can modify your packet, he can 
+  append mobile code to it that sends it along a different path.  Of course,
+  if he already has write ability to your packet, I can't see what this
+  really gains him.  I guess he could make it a place on the network where
+  his more powerful computer resides, so that he can record or unencrypt the
+  message.
+- To solve that, you should have a MAC or some sort of signature scheme that
+  proves the mobile code appended to the packet was created by you.  Of course,
+  this is a little tough to do, and requires strong crypto, and all the 
+  routers along the way must be know who you "are" and what constitutes
+  mobile code you have written.
+
+Implementation #2:  Downloading the code
+
+o Since the router is now keeping state for each flow, it is possible
+  to overrun the routers memory by openning a lot of connections with
+  mobile code.
+- To solve this, set limits on how much each flow can download as mobile
+  code.  If the memory is used up, start refusing to route additional flows
+  with mobile code.  This is kind of bad since the limit on code size has
+  to be arbitrary, and also there will be a DoS attack with any limit if
+  enough flows team up together to pass the router's limit.
+o Anyone can now become a man-in-the-middle by routing your traffic to
+  him:  It used to be that the attacker had to be on your route in order
+  to attack you, but with this he can change your route to include him.
+  He does this by guessing what your flow id is (the dest/source ip and 
+  port tuple), and by directing his packets to some routers on your path.
+  His packets can impersonate your packets, and set some mobile code for
+  your flow.  That mobile code can route your packets through him.
+  Therefore, he has now become a man in the middle.
+- To solve this, use some sort of MAC with the mobile code and your packets.
+  You don't even have to use strong crypto.  You could just have a shared
+  secret between your mobile code and your packets.  If the mobile code does
+  not have the same secret as the packets, then the mobile code does not run.
+  Of course, this non-strong-crypto approach breaks if the attacker can
+  read/write your packets, but if he is not a man-in-the-middle, he can't do
+  this, so we have prevented the upgrading of a generic attacker to a 
+  man in the middle.
+
+Implementation #3:  Looping for fun
+
+o Geez, what's wrong with this people?  By removing the looping restrictions,
+  the code can loop indefinitely.  Thus, your router can be flooded with
+  code that consumes its CPU cycles.
+- The fix:  Set a maximum amount of time the mobile code can execute.  If
+  it passes this limit, kill the code.  Of course, the time limit will be
+  an arbitrary number, so some legimate mobile code will probably need more
+  than the limit allows.  Also, malicious packets can degrade the system
+  by just consuming enough cycles to fall under the limit..  
+o This added functionality also gives malicious code more flexibilty to
+  do things.. but there's no way around that.  If you provide legimate users
+  more flexibility, then the bad users get it too.
+
+Implementation #4:  Writeable packets
+
+o Well, we probably don't want the mobile code to edit protocol fields.
+  For example, a novice user could now specify mobile code that edits
+  his packets so that the source ip address is altered to someone else's.
+  Of course, a more expert user could do this anyway, but this does make
+  it easier to do.
+- Limit what areas of the packet the user can edit.  Of course, this requires
+  for the routers to recognize what protocol they represent (TCP/IP for 
+  instance), and for the packet to encode this information in a manner that's
+  the same for all well-known protocols (but IP pretty much does this 
+  anyway.)  This isn't a great solution though.
+o This could be used to get around firewalls:  If the firewall disallows
+  packets with destination port of 23 (for telnet), then a user could
+  just send the packet through the firewall with a high destination port.
+  Once the packet was on the other side, the mobile code could set the 
+  port to 23, thus getting around whatever rules the firewalls have.
+- Well, maybe mobile code should not get through firewalls.  Also, we
+  can limit what areas the packet can be modified (just as in the last point.)
+o Packet sizes can now change, so mobile code is able to allocate memory.
+  This can be bad.  Malicious code can request too much memory.
+- To solve this, again place a hard limit on how much memory mobile code
+  can request.  We could set the limit based on the incoming packet size
+  (i.e., no more than 4 times the original packet size.)  Again, hard limits
+  are hard to set, and can be abused.
+o If a man-in-the-middle just had read access to the net, we have just
+  given him write access.  A malicious person can now download code that
+  can modify your packets as they go by.
+- To solve this, again we have to use strong crypto to prevent someone else's
+  code running on our packets.
+o We better be sure that we have the writes set up so that they only write
+  to the packets associated with the flow.  Someone else's code better not
+  be able to violate the protection domain and modify my code.
+- To solve this, keep the memory model very simple, and easy to verify.
+
+
+Implementation #5:  Stateful mobile code
+
+o Again, we have to worry about how much memory/state the mobile code uses.
+  If they can use an arbritrary amount of state, then the routers will become
+  too congested.
+- To solve this, again, we have to set a hard limit.  What limit do we use?
+  Also, malicious code can always get allocate just a little under the limit
+  to degrade performance.
+o Much more complex mobile code can be created now.  We might be pushing
+  the limits of the system now.  It might be hard to verify that the 
+  byte codes are secure, and that our execution environment is safe.  Also,
+  malicious coders now have even more tools to use against us.
+- Try to keep the system simple.. the run time environment must be verified
+  carefully.
+
+Implementation #6:  Packets generating packets
+
+o The obvious problem is that we can have an exponential growth in the 
+  number of packets we are routing.  If we set up our mobile code so that
+  for every packet we receive, we send out two, the number of packets will
+  explode and clog the system.
+- To solve this, we have to have limits again.  But, the limits might
+  have to be cooperatively enforced across the entire flow.  For instance,
+  even if we limit that a packet can only create 1 additional packet, each
+  router will allow a new packet for each additional one, so we again get
+  a geometric growth in packet number.  Maybe we should place a limit on 
+  the number of packets a packet can ever result in:  if a router runs
+  the mobile code, and the packet creates a new one, then the number it
+  can create now is decremented by one, and the new packet has it's number
+  it can create set to 0.  This allows us to have only a linear growth in
+  the number of packets.  But, this is complex, and requires fields on
+  the packet that the user cannot edit.
+o Another problem: how does this fit into higher level protocols.  For
+  instance, TCP/IP has a sequence number to identify what order packets
+  go.  If the router is inserting new packets, what sequence number do they
+  get?  This really isn't a security issues, but is more of a correctness
+  problem.
+- To solve this, we'll have to extend the higher level protocols, so that
+  packets can be inserted.
+o Also, where do these new packets go?  If we are created packets from
+  scratch, then the mobile code might be able to fill in its headers, thus
+  setting a new source address, or putting in other fake header info.
+- Again, to solve this, the routers must have knowledge of the higher
+  level protocols.  Maybe we should limit the new packets headers to
+  be the same as the original.  But then, sequence numbers will get screwed
+  up.  So, some header fields should be copied over, while others should be
+  modified.
+
+Implementation #7:  All bets are off
+
+o Java is extremely heavy weight.  This affects a lot of things, like 
+  performance.  The routers can now really degrade because more CPU time
+  is spent in the overhead of all the extra-Java junk.
+- To prevent this, we really have to implement a fast JVM.  Also, we have to
+  carefully watch how much CPU time each piece of code uses.
+o There are too many features of Java.  What does file access mean in a 
+  router?  How abou the network support inherit in Java .. should 
+  mobile be able to generate new connections?  What about allocating new
+  objects?  New threads?
+- To solve these problems, we have to be sure to strip out all unneccessary,
+  and blatantly inappropriate features of Java.  No thread creation, no
+  communication library, no information about the system, no file access.
+  Of course, Java is kind of built to do this (limiting of features through
+  sandboxing), but we have to be sure we build the right sandobx.
+o The complexity of the code makes it harder to verify for correctness and
+  security.  
+- We just have to be careful when addressing this problem.  We have to keep
+  the code simple, the security model clear, and verify the heck out of it.
+o Also, if all the mobile code is running in the same JVM, we have to guard
+  against code from interfering with each other.
+o Ok, there's probably a ton more of worries with using Java, but I won't
+  go too into depth..
+
+
+
+Question 3:  Shoving mobile code down the firewall's throat 
+
+Just as a little background, I am looking at the case when we use 
+application specific proxies as part of the firewall.  If we use just
+traditional firewalls (only examining one packet at a time with no state),
+then mobile code would be hard to detect.  Also, I am assuming most of the
+mobile code we are concerned with is Java, and it comes over http connections.
+
+Part 1:  Blocking the code
+
+In some sense, no, it not not be acceptable to block all mobile code.  The
+end user would probably be losing too much functionality.  More and more
+websites are using mobile code to better use user's CPU computation power,
+and to more easily distribute programs.  Also, there are many projects working
+on systems that embed mobile code within the infrastructure, so mobile code
+will become even more useful.  Of course, a really paranoid sys admin could
+turn off mobile code, but again, a lot of functionality is lost.
+
+How would we turn off the mobile code?  Well, this is a difficult
+problem, and probably is not feasible to do.  In terms of HTML, you
+could look for the code tags that are specified in HTML, but you would
+have to keep up on the new tags.  (Such as tags for Javascript and all
+that.)  You could then filter out the tags as they come by.  In terms
+of Java, you could monitor the http connections (through proxies), and
+filter out any transfers of .java or .class files.  Though, just
+because the files are being transfered doesn't mean they are going to
+be executed on the end machine.  Also, who's to say Java classes have
+to end in .class.  What if you could name the classes differently, and
+still get them to execute?  Well, then you would have to look at the
+content of the stream as it comes over, and know when it is byte code
+that should be nixed.
+
+Also, you have to keep up with changing standards.  For instance, you
+would have had to change your rule set to handle .jar files.  Also, what
+if there are new tags that can invoke applets?  You would have to stay on
+top of the changing standards.
+
+What about connections that hide their content?  SSL connections come to mind.
+Your firewall would have to have SSL proxies to enable the firewall to 
+examine the contents of what is coming over.
+
+Finally, we are just talking about Java here, which is probably the easiest
+mobile code to detect, since its standards are widely known.  What about
+all other forms like safe Tck/l, or some form of mobile perl?  You would have
+to know about all forms of mobile code to prevent them.  This would be too
+hard to do.
+
+Part 2:  Blocking some if it
+
+Ok, here are some different levels of blocking:
+
+o Guarding against specific sites:  If you only trust a certain list
+  of sites, then you could set up your firewall to only run mobile code
+  coming from them.  So, you would have to recognize when mobile code
+  is coming in, and when it comes from a valid sight, and then allow it to
+  pass.
+  
+  Problems with this:  you have to know about all forms of mobile code to
+  block them, you have to be sure that the code is indeed coming from
+  the site you think it is (no IP spoofing allowed), you have to be sure
+  other users cannot place code on the trusted site.
+
+o Blocking specific classes/code:  (Ok, this is not the best way to handle 
+  security.. by default we allow mobile code, but just nix know bad 
+  classes).  For this, we have to be able to parse out the class name or
+  program name as it flies by on the proxy.  We then have to have a current
+  list of malicious code, and stop it from being transfered across the
+  proxy.  Of course, class and code file names are easy to change, so 
+  this is easy to get around.
+
+o Blocking certain languages:  Well, what if you trust Java, but not
+  other mobile languages.  Then, you could set up your firewall just 
+  to allow Java, but not allow perl or Tcl.  
+ 
+  Problems:  You have to know what languages are out there to prevent
+  them.  It would be nice if all mobile code conformed to some standard,
+  marking them as mobile code, but we can't realistically expect this.
+
+o Blocking bad bytecode sequences:  If you really wanted to get fancy,
+  you could examine the bytecodes or program source as it comes over, 
+  and stop the transfer of any file that looks like it contains malicious
+  code.  Of course, this is really really hard to do.  The performance
+  and speed is one problem, but also knowing about the bad sequences is
+  a difficult problem.
+
+Part 3:  Who's to blame?
+
+Well, for most of the problems I thought up, the firewall is to blame 
+because it is inherently the wrong tool to use to block mobile code.
+For example, we have no idea what things the end host will execute as
+mobile code.  We have to rely on understanding the HTML protocol in order
+to guess what it will execute.  Once our proxy knows what will be run,
+it can then determine if the code should be allowed or not.  In a sense,
+we are trying to replicate the end host's state at the proxy, and that is
+hard to do.  We have to do this almost perfectly in order to prevent mobile
+code. 
+
+Another problem with the firewall is we have to constantly update our
+rule set, and make sure it is current with all forms of mobile code.  This
+is similar to the problem of replicating the end hosts' state, but this
+is more just a problem of maintenance.  We have to constantly update the
+rules to stay current.
+
+Another problem with the firewall is performance.  In order to parse all
+incoming traffic (and we do a lot of examination of all incoming streams),
+the firewall must be extremely fast.
+
+With of this said, we really should not use firewalls to block the mobile
+code... Well, not completely at least.  It should be the end host's problem
+to make sure it executes the code in a safe environment, and to not run
+bad code and languages.  It is impossible for the firewall to really know
+what the configuration of the end host is, so it is ridiculous to have it
+guess what will be run and what won't be run.  The end host is the only 
+place where this information is kept, so it must be at the end host that
+we solve this problem.  Of course, this means configuring all end hosts 
+correctly, and preventing users from changing this configuration.  (i.e.,
+turn off Java on your Netscape.)  Of course, there are ways around this, but
+this is a hard problem to solve.
+
+
+
+@

@@ -1,0 +1,568 @@
+head	1.7;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.7
+date	96.12.04.03.49.25;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.03.20.22.49;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.03.09.39.03;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.03.07.51.16;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.03.03.40.17;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.03.03.16.19;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.02.05.37.54;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@#
+#  create and manipulate DO's
+#
+
+#
+#  typegraph global to this file
+#
+
+$Dolf::TGConfig = new tgconfig "typegraph.cf";
+$Dolf::TG = $Dolf::TGConfig->ret_tg();
+$Dolf::UA = new LWP::UserAgent;
+
+#
+#  dolf globals
+#
+
+sub read_config {
+    open(CF, "dolf.cf")
+        or die "Opening dolf.cf: $!";
+    while (<CF>) {
+        chomp;
+        next if /^#/;
+        next if /^\s-*$/;
+        eval "\$Dolf::$1 = \"$2\"" if /^\s*(\S+)\s+(.*)/;
+    }
+    close CF;
+}
+
+sub create_new_do {
+    my $url = shift;
+    my $mimetype = shift;
+    my $enc = shift;                        # 'z', 'Z', or ''
+    my $do = new DO $url,$mimetype;
+    my @@types = $Dolf::TG->typegraph_reachables($mimetype);
+    # add the "identity fixation"
+    $do->add_fixation($do->origType, $enc);
+    for (@@types) {
+        &debug('tg', "Adding fixation: $_");
+        $do->add_fixation($_, $enc);
+    }
+    return $do;
+}
+
+#
+#  rest of file is in "DO" pkg
+#
+
+package DO;
+
+use LWP::MediaTypes;
+use URI::Escape;
+
+open(HTML, "do_template.html")
+    or die "Cannot open do_template.html: $!";
+$Html = '';
+$Html .= $_ while <HTML>;
+close HTML;
+
+&util::instvars('DO', qw(origUrl:r origType cacheName:r fixList:r genTime:r));
+
+sub new {
+    my($class,$origurl,$type,$cachename) = @@_;
+    $type = &LWP::MediaTypes::guess_media_type((new URI::URL $origurl)->epath)
+        unless $type;
+    return bless  {
+        "handle" => '',
+        "origUrl" => $origurl,
+        "origType" => $type,
+        "cacheName" => ($cachename || $Dolf::DefaultCache),
+        "fixList" => {},
+        "genTime" => scalar localtime,
+    };
+}
+
+sub dump {
+    my $self = shift;
+
+    my($k,$v);
+    while (($k,$v) = each %$self) {
+        print "\t$k:\t\t$v\n";
+    }
+    print "Derived properties:\n";
+    print "DO URL: " . $self->make_do_url();
+    local($,) = ",";
+    print "Fixations: ", %{$self->{"fixList"}};
+}
+
+sub add_fixation {
+    my($self, $target, $enc) = @@_;
+    my($type,$path);
+    if ($target =~ /^(\S+)\s+(.*)/) {
+        ($type,$path) = ($1,"$enc$2");
+    } elsif ($target =~ /^(\S+)$/) {
+        ($type,$path) = ($1, $enc);
+    } else {
+        &util::log("** TG error: malformed path `$target'");
+        die;
+    }
+    $self->{"fixList"}->{$type} = $path;
+    1;
+}
+
+sub make_fixation_from_path {
+    my ($path, $origurl) = @@_;
+    my $data;
+
+    # tricky tricky: query the cache repository to get the original object.
+    # This will deadlock if neverfork is set, so in that case, don't do it.
+
+    if ($main::gb{neverfork} || ($Dolf::DefaultCache eq '')) {
+        $Dolf::UA->no_proxy();
+        &util::debug("dolf", "Retrieving $origurl from server");
+    } else {
+        $Dolf::UA->proxy('http', "http://" . $Dolf::DefaultCache);
+        &util::debug("dolf", "Retrieving $origurl via $Dolf::DefaultCache");
+    }
+    my $resp;
+    $resp = $Dolf::UA->request(new HTTP::Request "GET",$origurl);
+    unless ($resp->is_success) {
+        &util::debug('dolf', "Error: " . $resp->code);
+        return ($resp);
+    }
+    $data = $resp->content;
+    # identity fixation?
+    return ($data)
+        if $path eq '';
+
+    $path = join(' ',split(//, $path));
+    my $type = ($Dolf::TGConfig->token_arcs(substr($path,-1,1)))[1];
+    &util::debug("dolf", "Creating fixation via $path to $type");
+    $data = $Dolf::TGConfig->do_conversions($data, $path);
+    return ($data);
+}
+    
+sub make_html {
+    my $self = shift;
+    my $html = $Html;
+    
+    foreach $var (keys %$self) {
+        $html =~ s/\@@$var\@@/$self->{$var}/meg;
+    }
+
+    # now the fixations.  successively replace each instance of %fix% and
+    # %fixurl% with a fixation MIME type and fixation URL respectively.  Note
+    # that the "distiller path" info is captured in the URL but not explicitly
+    # presented as part of the DO rendering.
+
+    my($fix,$fixpath,$row);
+    $row = '<tr><td>%fix%</td><td><a href="%fixurl%">%fixurl%</a></td></tr>';
+    my $newrow;
+    my $new_html = '';
+    while (($fix,$fixpath) = each %{$self->{"fixList"}}) {
+        $fixurl = &DO::make_fixation_url($self->origUrl,$fix,$fixpath);
+        ($newrow = $row) =~ s/\%fix\%/$fix/m;
+        $newrow =~ s/\%fixurl\%/$fixurl/mg;
+        $new_html .= "$newrow\n";
+    }
+    $html =~ s/\@@newrows\@@/$new_html/;
+    $html =~ s/\@@([^\@@]+)\@@/${$1}/eg;
+    return $html;
+}
+
+#
+#  Given the MIME type and distiller path for a fixation, and the original URL,
+#  create a URL for the fixation. The URL must encode at a minimum the original
+#  URL and the (symbolic) distiller path for creating the fixation.
+#
+
+sub make_fixation_url {
+    my ($origurl,$fix,$fixpath) = @@_;
+    $fixpath =~ s/\s+//g;
+    return &url_compose($Dolf::DefaultScheme,
+                        $Dolf::Version,
+                        $Dolf::DolfFixationType,
+                        $origurl, $fix, $fixpath);
+}
+
+#
+#  return an URL that refers to this DO.  It must have the property that if the
+#  DO is not in the cache, the URL itself contains enough information to
+#  unambiguously re-create it.
+#
+
+sub make_do_url {
+    &make_do_url_from_url($_[0]->origUrl, $_[0]->origType, '',
+                          $_[0]->cacheName);
+}
+
+sub make_do_url_from_url {
+    my $url = shift;
+    my $mimetype = shift;
+    my $encoding = shift;
+    my $cache = shift || $Dolf::DefaultCache;
+    my $meth = $Dolf::DefaultScheme || "http";
+    # BUG::should embed handle info here
+    $encoding =
+        ($encoding eq 'x-gzip' ? 'z' : $encoding eq 'x-compress'? 'Z': '');
+    my $url = &url_compose($Dolf::DefaultScheme,
+                           $Dolf::Version,
+                           $Dolf::DolfUrlType,
+                           $url, $mimetype, $encoding, $cache);
+    return ($url);
+}
+
+#
+#  predicates for determining what kind of URL we have.  They take a string or
+#  URI::URL object
+#
+
+sub is_dolf_do_url {
+    my $url = shift;
+    $url = $url->as_string if (ref($url) =~ /URI::URL/);
+    my ($scheme,$vers,$thing,$origurl,$mime,$enc,$cache) = &url_decompose($url);
+    return (($vers eq $Dolf::Version)
+            && ($thing eq $Dolf::DolfUrlType)
+            ? (uri_unescape($origurl), $mime, $enc)
+            : ());
+}
+
+sub is_dolf_fixation_url {
+    my $url = shift;
+    $url = $url->as_string if (ref($url) =~ /URI::URL/);
+    my ($scheme,$vers,$thing,$origurl,$mimetype,$fixpath)
+        = &url_decompose($url);
+    return (($vers eq $Dolf::Version)
+            && ($thing eq $Dolf::DolfFixationType)
+            ? ($mimetype, $fixpath, uri_unescape($origurl))
+            : ());
+}
+
+#
+#  something is a "candidate URL" if it's not otherwise a DOLF URL,  its
+#  guessed MIME type is a node in the typegraph, and the user prefs indicate
+#  that "transparent redirection" is enabled.
+#
+
+sub is_dolf_candidate_url {
+    my $url = shift;
+    my $prefs = shift;
+
+    $url = new URI::URL $url unless (ref($url) =~ /URI::URL/);
+
+    return undef if (&is_dolf_do_url($url) || &is_dolf_fixation_url($url));
+
+    # always redirect if forced.
+
+    return $url if ($url =~ s!$Dolf::DolfForceRedirect$!!);
+
+    # BUG::use util::MimeTypeOfFile, which may do a better job if $guess_type
+    # fails
+    
+    my $guess_type = &LWP::MediaTypes::guess_media_type($url->epath);
+    return undef if (!defined($guess_type)
+                     || $guess_type eq 'application/octet-stream');
+    return undef unless &user_prefs_allow($prefs,$guess_type);
+
+    # is this a typegraph node?
+    return undef unless $Dolf::TGConfig->is_source_type($guess_type);
+
+    return $url;
+}
+
+sub user_prefs_allow {
+    my(%prefs) = %{shift @@_};
+    my $type = shift @@_;
+
+    # if user prefs not set for auto redirect...
+    return undef unless $prefs{a} eq 't';
+    # do user prefs exclude this MIME type from auto redirect?
+
+    if (($prefs{'h'} eq 'on'  &&  $type eq 'text/html')
+        || ($prefs{'p'} eq 'on'  &&  $type eq 'text/plain')
+        || ($prefs{'g'} eq 'on'  &&  $type =~ m!image/p?gif!)
+        || ($prefs{'j'} eq 'on'  &&  $type =~ m!image/p?jpeg!)) {
+        &util::debug('dolf', "Type $type excluded from autoDOLF");
+        return undef;
+    }
+    return 1;
+}
+    
+#
+#  generalized function for composing N strings into a URL.  Works by escaping
+#  "special" characters in all strings.
+#
+
+sub url_compose {
+    my ($scheme,@@strings) = @@_;
+
+    my $url = $scheme . "://";
+    my @@pieces = ();
+    for (@@strings) {
+        push(@@pieces, uri_escape($_, ':\/~'));
+    }
+    return $url . join('/', @@pieces);
+}
+
+sub url_decompose {
+    my $url = shift;
+    my($scheme);
+
+    if ($url !~ m!(\S+)://(.*)! ) {
+        &dolf_signal("Error in parsing URL `$url'");
+    }
+    ($scheme,$url) = ($1,$2);
+    my @@pieces = split(/\//, $url);
+    my @@result = ($scheme);
+    for (@@pieces) {
+        push(@@result, uri_unescape($_));
+    }
+    return @@result;
+}
+
+1;
+
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d31 4
+a34 2
+    my $do = new DO $url;
+    my @@types = $Dolf::TG->typegraph_reachables($do->origType);
+d36 1
+a36 1
+    #$do->add_fixation($do->origType);
+d38 2
+a39 2
+        &debug('tg', "Adding fixation: $_\n");
+        $do->add_fixation($_);
+d62 3
+a64 2
+    my($class,$origurl,$cachename) = @@_;
+    my $type = &LWP::MediaTypes::guess_media_type((new URI::URL $origurl)->epath);
+d89 1
+a89 1
+    my($self, $target) = @@_;
+d92 1
+a92 1
+        ($type,$path) = ($1,$2);
+d94 1
+a94 1
+        ($type,$path) = ($1, '');
+d106 1
+d124 2
+a125 2
+    # special case of "identity" fixation
+    return ($data, $resp->header("Content-type"))
+d127 1
+d132 1
+a132 1
+    return ($data,$type);
+d175 1
+a175 1
+                        $fixpath, $origurl);
+d184 5
+a188 1
+sub make_do_url { &make_do_url_from_url($_[0]->origUrl, $_[0]->cacheName) }
+d191 2
+d196 2
+d201 1
+a201 1
+                           $url, $cache);
+d213 1
+a213 1
+    my ($scheme,$vers,$thing,$origurl,$cache) = &url_decompose($url);
+d216 2
+a217 2
+            ? uri_unescape($origurl)
+            : undef);
+d223 2
+a224 1
+    my ($scheme,$vers,$thing,$fixpath,$origurl) = &url_decompose($url);
+d227 1
+a227 1
+            ? ($fixpath, uri_unescape($origurl))
+d247 1
+a247 1
+    return 1 if ($url->as_string =~ m!$Dolf::DolfForceRedirect$!);
+d260 1
+a260 1
+    return 1;
+d271 8
+a278 7
+    &util::debug('dolf', "Type $type excluded from autoDOLF"),
+    return undef if
+        (($prefs{'h'} eq 'on'  &&  $type eq 'text/html')
+         || ($prefs{'p'} eq 'on'  &&  $type eq 'text/plain')
+         || ($prefs{'g'} eq 'on'  &&  $type =~ m!image/p?gif!)
+         || ($prefs{'j'} eq 'on'  &&  $type =~ m!image/p?jpeg!));
+    
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d225 2
+d231 4
+d239 3
+a241 1
+    return undef if $guess_type eq 'application/octet-stream';
+a245 1
+    # BUG::check user prefs?
+d249 17
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d5 41
+a86 1
+
+d90 2
+d100 30
+d234 4
+a237 1
+    # BUG::check for typegraph node?
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d20 1
+a20 1
+    my $type = &LWP::MediaTypes::guess_media_type(new URI::URL $origurl);
+d48 6
+a53 2
+    ($type,$path) = ($1,$2)
+        if ($target =~ /^(\S+)\s+(.*)/);
+a59 1
+    my $randomstuff = shift;
+a61 1
+    $self->{"randomstuff"} = $randomstuff if $randomstuff;
+d72 1
+a72 1
+    $row = '<tr><td>%fix%</td><td>%fixurl%</td></tr>';
+d76 1
+a76 1
+        $fixurl = &DO::make_fixation_url($self->{"origUrl"},$fix,$fixpath);
+d78 1
+a78 1
+        $newrow =~ s/\%fixurl\%/$fixurl/m;
+d82 1
+d117 48
+a164 1
+    return $url;
+d185 1
+a185 1
+    my($scheme,$url);
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d27 1
+a27 1
+        "genTime" => time,
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d6 2
+d9 1
+d16 2
+d20 1
+d22 1
+d24 1
+d31 13
+d69 4
+a72 1
+    my($fix,$fixpath);
+d75 3
+a77 2
+        $html =~ s/%fix%/$fix/m;
+        $html =~ s/%fixurl%/$fixurl/m;
+d79 1
+a79 1
+
+d91 1
+d93 3
+a95 1
+                        $fix, $fixpath, $origurl);
+d104 5
+a108 4
+sub make_do_url {
+    my $self = shift;
+    my $meth = "http";
+    
+d113 1
+a113 3
+                           $self->{"origUrl"},
+                           $self->{"cacheName"});
+
+d128 1
+a128 1
+        push(@@pieces, uri_escape($_, ":/"));
+@

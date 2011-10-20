@@ -1,0 +1,184 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.05.03.52.17;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From jmacd@@paris.CS.Berkeley.EDU  Sun Oct  4 00:43:17 1998
+Return-Path: jmacd@@paris.CS.Berkeley.EDU
+Received: from hofmann.CS.Berkeley.EDU (root@@hofmann.CS.Berkeley.EDU [128.32.35.123]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id AAA12474 for <daw@@joseph.CS.Berkeley.EDU>; Sun, 4 Oct 1998 00:43:16 -0700
+Received: from paris.CS.Berkeley.EDU (paris.CS.Berkeley.EDU [128.32.34.47]) by hofmann.CS.Berkeley.EDU (8.9.1a/8.6.6.Beta11) with ESMTP id AAA15045 for <daw@@CS.Berkeley.EDU>; Sun, 4 Oct 1998 00:40:14 -0700 (PDT)
+Received: (from jmacd@@localhost) by paris.CS.Berkeley.EDU (8.8.3/8.8.2) id AAA29108; Sun, 4 Oct 1998 00:40:12 -0700 (PDT)
+Message-ID: <19981004004011.33011@@paris.CS.Berkeley.EDU>
+Date: Sun, 4 Oct 1998 00:40:11 -0700
+From: Josh MacDonald <jmacd@@paris.CS.Berkeley.EDU>
+To: daw@@CS.Berkeley.EDU
+Subject: cs261 homework
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+Status: RO
+
+This may be the weakest excuse you've ever heard, but I forgot to send
+this on Friday.
+
+
+Josh MacDonald
+cs261
+
+> Question 1
+>
+> Below are listed some security holes, which we described in the third
+> lecture to illustrate how they violated prudent design principles for
+> secure systems. Your task is to fix them from first principles. Don't
+> merely propose a narrow patch which just happens to fix this
+> particular problem; suggest a broad design pattern which would fix all
+> related holes of this class, so that we can have some assurance that
+> similar vulnerabilities won't pop in the future. Which, if any, of the
+> principles did you use?
+>
+>    1.The ftpd/gnutar interaction.
+>    2.Imperfect bookkeeping in sendmail leading to holes in alias
+> expansion and program execution.
+>    3.Complete mediation in Java.
+>    4.Tractorbeaming wu-ftpd.
+
+1.1. The principle of least priviledge: the subprocess in charge of
+tarring a directory does not require any network access, therefore it
+should not be allowed to.  This priviledge must be propagated to all
+descendents, since tar probably opens connections with rsh.
+
+1.2. Starting from first principles will not lead to anything
+resembling sendmail, so I'm not sure if the question makes enough
+sense.  Programs should only need to be executed as the recipient of a
+message if they have it configured to do so.  So, first principle says
+sendmail shouldn't have these features.
+
+1.3. The first principle here is the small interface and
+capabilities.  The security rules should not be implemented in such a
+way as to require code auditing.
+
+1.4. First principle is least state.  The FTP protocol should not
+require multiple connections, because it leads to races or at least
+need to write extra protocol and code to handle something that is a
+silly idea to begin with.
+
+> Question 2
+>
+> Consider a malicious Java applet which somehow manages to get access
+> to confidential information. List some covert channels it could use to
+> leak that information to a colluder at large somewhere in the network.
+>
+> If you're not familiar with the intimate details of the Java security
+> model and exactly what operations Java applets are allowed to do,
+> that's ok.  Instead, you can sketch some potential covert channels
+> which you would investigate further. In this case, you should
+> brainstorm for channels which it would seem plausible might be
+> available to even an untrusted applet with very limited
+> privileges. (Basically, the model is that Java applets are supposed to
+> be confined to a limited "sandbox" which prevents them from doing
+> anything dangerous; for instance, access to the filesystem is
+> disallowed; and access to the network is generally prohibited, except
+> that the applet is allowed to connect back to the host where it came
+> from.)
+
+2.
+
+- Connection attempts to the host machine.  The timing, frequency, and
+port number of the packet destined for the host machine can be used to
+export data.
+
+- If a connection can be established to any service willing to listen
+to arbitrary data (such as sendmail), covert data can be sent (as mail,
+perhaps to a bogus user at the originating host).  Someone sniffing
+the network sees this data goes out -- it doesn't matter what happens
+at the receiver.
+
+> Question 3
+>
+> Imagine a system which does strong authentication at the start of a
+> TCP session. (It might be a telnet connection, say, in which case
+> inserting the text "echo + + > ~/.rhosts" into the TCP data stream
+> allows for a successful break of the system.)
+>
+>    1.If no other cryptography is used, how do you break this?
+>    2.Suppose now that the session (after authentication) is encrypted
+> in Triple-DES ECB mode. How do you break this?
+>    3.What if Triple-DES CBC mode is used instead of Triple-DES ECB
+> mode -- how do you break that?
+>    4.What is the right way to fix these weaknesses?
+>
+> (Hint: if you're trying to figure out how to attack Triple-DES, you're
+> going in the wrong direction. Triple-DES was just an example of a
+> block cipher which is imagined to be secure; you could replace it by
+> any other block cipher without changing the intent of the question.)
+
+3.1. Hijack the connection, using either of the methods we discussed
+in class.
+
+3.2. The first thing to look for is how the session keys are
+generated.  ECB is not very secure because the beginnings and endings
+of transfers commonly have repeated structure, allowing redundency in
+the text to be exploited by the cryptanalyst.
+
+3.3. TCP hijacking will still go unnoticed, even though the connection
+is encrypted.  The key may still be guessable.  This allows
+data/protocol corruption.
+
+3.4. Sign packets.
+
+> Question 4
+>
+> Consider the following proposal for fixing the weaknesses in DNS:
+>
+>      A DNS record contains not just a hostname and address but also
+>      that host's public key. Each DNS record is signed with the
+>      relevant authority's public key (so cs.berkeley.edu's record is
+>      signed by berkeley.edu, berkeley.edu's record is signed by edu,
+>      and edu's record is signed by the root key). The public key for
+>      the root ("dot") is assumed to be known to all DNS clients.
+>
+> This way, when you do a query and get back a DNS record, it will be
+> (recursively) self-authenticating.
+>
+> Suppose that negative responses (of the form "there is no entry for
+> the domain www.berkeley.edu") are not signed or authenticated in any
+> way.
+>
+>    1.Can you see any weaknesses that might result from the lack of
+> authentication for negative responses?
+
+Aside from DoS attacks, clients may be tempted to fall back to
+insecure lookup methods when a negative response is seen.
+
+>    2.Suppose you wanted to change this, so that negative responses are
+> authenticated. Furthermore, you are worried about performance, so it
+> is a design criterion that these authenticated negative responses
+> should be cacheable. How can this be implemented?
+
+In order to cache a response, the highest level name which does
+resolve must sign a response saying that the next requested name level
+(authoritatively) does not exist in its subdomain.
+
+There must be a way to time the negative response out, and there must
+be a way to prevent replay attacks.  You have to trust your DNS
+server, basically, and negotiate a secure replay-proof transfer of the
+response.
+
+@

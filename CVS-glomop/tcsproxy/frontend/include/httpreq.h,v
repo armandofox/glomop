@@ -1,0 +1,631 @@
+head	1.22;
+access;
+symbols
+	Yatin-final:1.22
+	Yatin:1.22.0.2
+	pre-yatin-merge:1.22
+	transend-beta2:1.21
+	frontend-ng:1.21
+	transend-beta-latest:1.21
+	Aggregators:1.21
+	NoAggregators:1.21
+	iang:1.20.0.2
+	transend-beta:1.19.0.2
+	SOSP:1.16
+	merged_preintegrate:1.7
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.22
+date	97.08.30.21.34.01;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.05.11.11.23.27;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.28.19.03.44;	author fox;	state Exp;
+branches
+	1.20.2.1;
+next	1.19;
+
+1.19
+date	97.04.17.21.39.49;	author gribble;	state Exp;
+branches
+	1.19.2.1;
+next	1.18;
+
+1.18
+date	97.04.09.01.31.11;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.04.08.02.44.36;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.06.09.44.51;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.03.05.00.30.54;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.27.03.10.48;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.24.20.25.03;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.15.00.51.28;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.15.00.14.42;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.07.22.47.48;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.04.05.37.20;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.24.01.23.37;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.12.02.16.48;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.11.05.25.45;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.11.01.12.14;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.09.04.53.48;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.09.02.38.11;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.01.50.40;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.07.49.46;	author fox;	state Exp;
+branches;
+next	;
+
+1.19.2.1
+date	97.05.09.01.01.49;	author fox;	state Exp;
+branches;
+next	;
+
+1.20.2.1
+date	97.05.06.23.49.28;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.22
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@#ifndef _HTTPREQ_H
+#define _HTTPREQ_H
+
+#define FE_HISTORY_SIZE  60    /* number of minutes of frontend load history */
+
+#define PERF_HTTP_MAX_HEADERS   30     /* max # headers from client */
+#define PERF_HTTP_TOTAL_HEADERLEN  8192
+#define PERF_HTTP_HEADERLEN     50   /* avg length of HTTP header */
+#define PERF_HTTP_REQ_TIMEOUT    30   /* timeout in seconds for receiving HTTP
+                                 req and headers */
+#define PERF_HTTP_RETRY_DISTILL  3  /*  How many times to try
+                                        distillation, in case it fails ; can be 
+                                        overridden by FRONT_RETRY_DISTILL arg */
+#define PERF_FRONT_MTU         1024 /* Default threshold for complete bypass */
+#define PERF_REQUEST_TTL        10 /* max # "pipe stages" for single request */
+
+#define HTTP_RESPONSE_BODY_MAX  1024
+#define MIME_TYPE_MAX 80
+
+#include "clib.h"
+#include "userpref.h"
+#include "utils.h"
+#include <sys/types.h>
+
+/*
+ *  HTTP error conditions we return directly to client
+ */
+
+typedef enum {
+  HTTP_NO_ERR = 0,
+  HTTP_ERR_MALFORMED_REQUEST,
+  HTTP_ERR_CACHE,
+  HTTP_ERR_DISTILLER,
+  HTTP_ERR_UNIMPLEMENTED_FEATURE,
+  HTTP_ERR_BAD_TOKEN,
+  HTTP_ERR_POST_NO_CONTENTLENGTH,
+  HTTP_ERR_POST_READ_FAILED,
+  HTTP_ERR_POST_FAILED,
+#ifdef FORBID
+  HTTP_ERR_ACCESS_DENIED,
+#endif /* FORBID */
+  HTTP_ERR_PUSH_FAILED,
+  HTTP_ERR_UNSPECIFIED
+} HTTP_Status;
+
+/*
+ *  The following list must match the order of the enum HTTP_Status in
+ *  httpreq.h. 
+ */
+
+const static struct {
+  const char *message;
+  const char *longmessage;
+} http_returns[HTTP_ERR_UNSPECIFIED+1] = {
+  { "000 No error",
+    "Should never get this status (%s)" },
+  { "500 Malformed request or URL",
+    "Request malformed: {%s}" },
+  { "500 Cache error",
+    "Cache error: %s" },
+  { "500 Distiller/PTM error",
+    "PTM error message: %s" },
+  { "500 Unimplemented proxy feature",
+    "Feature not yet implemented: %s" },
+  { "500 Bad token",
+    "Bad token in request: `%s'" },
+  { "500 POST failed",
+    "POST failed: couldn't parse Content-length" },
+  { "500 POST failed",
+    "POST failed: number of data bytes doesn't match content-length" },
+  { "500 POST failed",
+    "POST failed: client_lib failure" },
+#ifdef FORBID
+  { "500 Forbidden by proxy",
+    "Site `%s' is restricted to local users" },
+#endif /* FORBID */
+  { "500 Push failed",
+    "Push into cache failed for URL `%s'" },
+  { "500 Miscellaneous",
+    "Unspecified internal proxy error on {%s}" },
+};
+
+typedef enum {
+  HTTP_VERSION_09_OR_EARLIER, HTTP_VERSION_10_OR_LATER, HTTP_VERSION_UNKNOWN
+} HTTP_Version;
+
+typedef char HeaderData[PERF_HTTP_TOTAL_HEADERLEN];
+
+struct http_headers {
+  const char *url;              /* pointer into HeaderData */
+  const char *header;
+  UINT32 len;                   /* total length of HeaderData field */
+  HeaderData header_data;
+  HTTP_Version version;
+  const char *method;
+};
+
+/*
+ *  Functions in httpsupport.c for dealing with client connection
+ */
+
+#define READ_ALL_HEADERS  ((int)(-1))
+
+int readline_or_timeout(int sock, char *buf, size_t *buflen, int nbytes);
+void send_content(const char *content, int len, const char *mimetype, int sock);
+userkey userkey_from_sock_ipaddr(int sock);
+void http_error_return(int sock, HTTP_Version version, HTTP_Status
+                       status, char *subst);
+HTTP_Status do_post(struct http_headers *hp, ArgumentList *args, int sock,
+                    task_t *task, clib_data *dat_p);
+
+/*
+ *  Functions in httpsupport.c for manipulating http headers
+ */
+int insert_header(char *hdrs, const char *str,
+                      const char *value, int replace_p);
+int delete_header(char *hdrs, const char *str);
+const char *get_header_value(const char *str, const char *which, int *len,
+                                    char **hdr, int *totallen);
+
+/*
+ *  Functions in dispatch.c
+ */
+
+void proxy_dispatch(struct http_headers *hp, ArgumentList *args, 
+                    struct loginfo *lo, task_t *tsk);
+
+/*
+ *  Functions in httpreq.c
+ */
+
+gm_Bool       httpreq_init(int port, int boost_prio);
+
+#endif /* ifndef _HTTPREQ_H */
+@
+
+
+1.21
+log
+@changes for dataflow stuff, chaining stuff, aggregators
+@
+text
+@a108 1
+void bypass(char *hp, int len, int sock);
+@
+
+
+1.20
+log
+@distiller chaining is alive sort of
+@
+text
+@d39 4
+d60 1
+a60 1
+    "Cache error: %d" },
+d73 6
+a89 1
+  int nheaders;
+@
+
+
+1.20.2.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@d56 1
+a56 1
+    "Cache error: %s" },
+d81 1
+a81 1
+  char *url;                    /* pointer into HeaderData */
+a86 4
+  int secret;
+  char *tazhost;
+  UINT32 tazhostlen;
+  const char *taztrail;
+d97 1
+a97 1
+userkey userkey_from_sock_ipaddr_and_headers(int sock, struct http_headers *hp);
+a116 1
+#ifdef FRONTEND_LOGGING
+a118 4
+#else
+void proxy_dispatch(struct http_headers *hp, ArgumentList *args, 
+                    task_t *tsk);
+#endif
+@
+
+
+1.19
+log
+@Made headers structure even bigger.
+@
+text
+@d15 1
+@
+
+
+1.19.2.1
+log
+@fixed minor buglets in interaction of htmlmunger and java gui
+@
+text
+@d55 1
+a55 1
+    "Cache error: %s" },
+@
+
+
+1.18
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d7 1
+a7 1
+#define PERF_HTTP_TOTAL_HEADERLEN  4096
+@
+
+
+1.17
+log
+@POST works, though logic is ugly and should be moved mostly into proxy_dispatch
+@
+text
+@d116 2
+a117 2
+void proxy_dispatch(struct http_headers *hp, ArgumentList *args, int sock,
+                    task_t *tsk);
+@
+
+
+1.16
+log
+@added accept() priority boost stuff
+@
+text
+@d19 1
+d29 2
+a30 1
+  HTTP_ERR_MALFORMED_REQUEST = 1,
+d35 3
+d50 1
+a50 1
+  { "000 Should never happen",
+d62 6
+d89 1
+a89 1
+ *  Functions in httpsupport.c
+d92 3
+a94 1
+int readline_or_timeout(int sock, char *buf, size_t *buflen);
+d100 11
+@
+
+
+1.15
+log
+@Added "loadavg" instrumentation in thr_mon.c, though it doesn't really
+work yet.  Broke out instrumentation into separate funcs for
+readability.  minor bug fix (malloc -> alloca) in httpgo.c.  moved
+monitor debugging macros from proxy.h into debug.h.  frontend now
+bypasses original if size is below default threshold, or if distiller
+cannot be launched.
+@
+text
+@d99 1
+a99 1
+gm_Bool       httpreq_init(int port);
+@
+
+
+1.14
+log
+@added frontend reqs/sec meter, retries for distConnectionBroken
+@
+text
+@d14 1
+@
+
+
+1.13
+log
+@restructured httpgo.c, added a new arg for MTU to frontend ARGS.h
+@
+text
+@d11 3
+d51 1
+a51 1
+    "PTM error code: %d" },
+@
+
+
+1.12
+log
+@now pass correct client headers to cache library
+@
+text
+@d70 1
+@
+
+
+1.11
+log
+@prefs.html has been moved from frontend/src/ to frontend/.  User prefs
+form can now be obtained by visiting the URL "http://ChangePrefs".
+doesn't matter if "No Proxy For" is set or not.  Mechanism works by
+reading prefs.html file, so you can just change the file and reload and
+you'll get the new form.  Added "changepref.h" and "changepref.c" to
+contain the code that deals with receiving prefs change submissions and
+serving the prefs change form.  Modified Makefile to include the new
+files in the frontend make target.  Added function "send_content" (send
+generic content using HTTP) to support this stuff, in httpsupport.c.
+@
+text
+@d66 1
+a66 1
+  const char *header[PERF_HTTP_MAX_HEADERS];
+@
+
+
+1.10
+log
+@User prefs skeleton working
+@
+text
+@d77 1
+@
+
+
+1.9
+log
+@thread state logging added to frontend
+@
+text
+@d6 2
+a7 1
+#define PERF_HTTP_MAX_HEADERS   20     /* max # headers from client */
+d24 6
+a29 4
+  HTTP_MALFORMED = 1,
+  HTTP_CACHE_ERR,
+  HTTP_DISTILLER_ERR,
+  HTTP_OTHER
+d40 1
+a40 1
+} http_returns[HTTP_OTHER+1] = {
+d43 1
+a43 1
+  { "501 Malformed request or URL",
+d45 1
+a45 1
+  { "501 Cache error",
+d47 1
+a47 1
+  { "501 Distiller/PTM error",
+d49 5
+a53 1
+  { "501 Miscellaneous",
+d58 1
+a58 1
+  HTTP_09_OR_EARLIER, HTTP_10_OR_LATER, HTTP_UNKNOWN
+d61 1
+a61 1
+typedef char HeaderData[PERF_HTTP_HEADERLEN * PERF_HTTP_MAX_HEADERS];
+d93 1
+a93 1
+pthread_t       httpreq_init(int port);
+@
+
+
+1.8
+log
+@Fixed up configure.in
+@
+text
+@d79 2
+a80 1
+void proxy_dispatch(struct http_headers *hp, ArgumentList *args, int sock);
+@
+
+
+1.7
+log
+@End to end path works via dispatch.c, some error reporting still broken and some things still hardcoded that shouldn't be
+@
+text
+@d8 1
+a8 1
+#define PERF_HTTP_REQ_TIMEOUT    4   /* timeout in seconds for receiving HTTP
+@
+
+
+1.6
+log
+@all the stubs work; now adding the dispatching functionality in newly
+added dispatch.c
+@
+text
+@d12 1
+d24 2
+d29 21
+d73 1
+a73 1
+void bypass(struct http_headers *hp, int sock);
+d79 1
+a79 1
+void proxy_dispatch(struct http_headers *hp, ArgumentList *args);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d52 6
+@
+
+
+1.4
+log
+@http header parsing distinguishes http version and method. minor fixes to config files.
+@
+text
+@d14 1
+d34 3
+a36 2
+  UINT32 len;
+  char *header[PERF_HTTP_MAX_HEADERS];
+d49 1
+@
+
+
+1.3
+log
+@http parsing is breathing
+@
+text
+@d11 2
+d16 22
+d45 2
+a52 9
+
+typedef char HeaderData[PERF_HTTP_HEADERLEN * PERF_HTTP_MAX_HEADERS];
+
+struct http_headers {
+  int nheaders;
+  UINT32 len;
+  char *header[PERF_HTTP_MAX_HEADERS];
+  HeaderData header_data;
+};
+@
+
+
+1.2
+log
+@configure script now generates include path automatically
+@
+text
+@d6 8
+a13 2
+#include <thr_cntl.h>
+#include <userpref.h>
+d19 1
+d27 9
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d6 15
+@

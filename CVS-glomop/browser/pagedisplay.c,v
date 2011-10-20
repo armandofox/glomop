@@ -1,0 +1,1748 @@
+head	1.31;
+access;
+symbols
+	v15b:1.31
+	v10b3:1.29
+	v10b2:1.23
+	v10b1:1.21;
+locks; strict;
+comment	@ * @;
+
+
+1.31
+date	97.11.09.21.43.28;	author iang;	state Exp;
+branches;
+next	1.30;
+
+1.30
+date	97.11.05.22.02.05;	author iang;	state Exp;
+branches;
+next	1.29;
+
+1.29
+date	97.10.29.00.13.58;	author iang;	state Exp;
+branches;
+next	1.28;
+
+1.28
+date	97.10.28.05.18.42;	author iang;	state Exp;
+branches;
+next	1.27;
+
+1.27
+date	97.10.26.19.41.01;	author iang;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	97.10.25.19.50.28;	author iang;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.10.24.01.57.25;	author lcddave;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.10.23.20.55.58;	author lcddave;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.10.21.16.25.02;	author iang;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.10.21.06.11.58;	author lcddave;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.09.25.03.28.47;	author iang;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.09.25.00.47.04;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.09.23.23.28.34;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.09.22.23.38.25;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.09.19.22.22.58;	author aspolito;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.09.17.00.34.47;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.15.23.56.56;	author aspolito;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.15.23.40.52;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.14.23.41.12;	author lcddave;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.13.00.36.50;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.12.21.46.11;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.02.22.45.10;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.08.29.23.25.04;	author lcddave;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.08.26.00.32.49;	author lcddave;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.08.22.00.46.51;	author lcddave;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.08.16.20.17.05;	author lcddave;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.08.08.00.10.31;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.06.23.02.35;	author lcddave;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.06.22.25.22;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.05.00.32.10;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.29;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.31
+log
+@Recover from CVS repository crash.  Changes include:
+o Editing of entries in hotlist and storage
+o Server-side imagemaps
+o Recognition of ImageViewer .pdb files
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "pagedisplay.h"
+#include "2bit.h"
+#include "notify.h"
+
+
+
+/* The size of the main drawable part of the screen */
+static const SWord winXextent = MAIN_DISPLAY_WIDTH,
+    winYextent = MAIN_DISPLAY_HEIGHT;
+
+static SWord INTWinProxyString(VoidHand hText, int xScrollOffset,
+    int yScrollOffset, RectanglePtr r1, RectanglePtr r2, int mode);
+static SWord INTWinProxyStringPiece(SWord *startPoint, int xScrollOffset,
+    int yScrollOffset, RectanglePtr r1, RectanglePtr r2, int mode);
+static int INTPieceClicked(SWord *startPoint, SWord xClick, SWord yClick, 
+    int xScrollOffset, int yScrollOffset, SWord *xcoordp, SWord *ycoordp);
+
+/****************************************************************************
+ *
+ * * Proxy String Format
+ *
+ * A proxy string is a string resource which has text information encoded
+ * in the proxy string format which is defined as follows:
+ *
+ *   string - an entire string resource, contains zero or more pieces,
+ *            followed by an end token of 0xFFFF (16 bits)
+ *   piece  - a subpart of the string resource, contains zero or more frags,
+ *            followed by an end token of 0x0000 (16 bits)
+ *            each piece is associated with attribute and position data
+ *   frag   - a subpart of a piece, composed of a 16-bit length followed by
+ *            8-bit chars
+ *            (the number of which should be equal to the length, except when
+ *             the length is odd in which one blank char is added to maintain
+ *             16-bit word-alignment for purposes of addressing)
+ *
+ * (admittedly, this nomenclature sucks)
+ *
+ * graphically speaking:
+ *
+ * string:
+ * +--------+--------+
+ * | pieces | 0xFFFF |
+ * | x byte | 2 byte |
+ * +--------+--------+
+ *
+ * piece:
+ * +--------+--------+--------+--------+--------+--------+--------+--------+
+ * | Back*  | For*   | Xpos   | Ypos   | Xextnt | Yextnt | Attrib | data   |
+ * | 2 byte | 2 byte | 2 byte | 2 byte | 2 byte | 2 byte | 2 byte | x byte |
+ * +--------+--------+--------+--------+--------+--------+--------+--------+
+ * (lines have no data, Xextnt and Yextnt are the x and y lengths of the line)
+ *
+ * data:
+ * (when it is a line of text)
+ * +--------+--------+         
+ * | frag(s | 0x0000 | 
+ * | x byte | 2 byte |  
+ * +--------+--------+
+ *
+ * (or when the 5th bit is on, meaning a bitmap)
+ * +--------+
+ * | bitmap |
+ * | x byte |
+ * +--------+
+ *
+ * (or when it is a link) 
+ * +--------+--------+--------+--------+
+ * | length | link   | frag(s | 0x0000 |
+ * | 2 byte | x byte | x byte | 2 byte |
+ * +--------+--------+--------+--------+
+ *
+ * (link must be a NULL terminated string, the NULL is included in the length)
+ * (length/link pair may be repeated for use as an LINK_ALT)
+ *
+ * frag:
+ * (when it is not a link
+ * +--------+--------+
+ * | length | char(s |
+ * | 2 byte | x byte |
+ * +--------+--------+
+ * 
+ * (as a general rule, Y position are constructed increasing order)
+ *
+ * ==> where x is always a multiple of 2 bytes to maintain 16-bit alignment <==
+ *
+ * attribute masks: (see #defines below for actual values)
+ *   BOLD       0x1
+ *   ITALIC     0x2
+ *   UNDERLINE  0x4
+ *   SIZE       0x18
+ *   IMAGE      0x20  (IMAGE|BOLD means 2-bit greyscale)
+ *   LINK       0x40
+ *   LINE       0x80  
+ *
+ *
+ * minimal example:
+ * byte#  field
+ *  0     BackPtr (SWord), an offset to the previous BackPtr
+ *  2     ForPtr  (SWord), an offset to the next ForPtr
+ *  4     Xpos    (SWord), starting X coord on drawing surface (see note)
+ *  6     Ypos    (SWord), starting Y coord on drawing surface (see note)
+ *  8     Attrib  (SWord), text attributes, see below
+ * 10     Length  (SWord), length of line string
+ * 12-XX  Text, must be word (16-bit) aligned
+ *          text of odd length is padded with an blank char
+ * XX+1   Piece End Token (0x0000)
+ * XX+3   String End Token (0xFFFF)
+ *
+ * Note: Xpos and Ypos are relative to an page absolute coordinate, which is
+ *       independent of the screen on the pilot
+ *
+ ***************************************************************************/ 
+
+/***************************************************************************
+ *
+ * Proxy HTML "Page" Resource Layout (currently unused) 
+ * 
+ * Resources are in a database of type 'PRpg' (Proxy Page)
+ *                             creator 'TGwm' (Top Gun Wing Man)
+ *
+ * 
+ * ID Number Allocation
+ *
+ * String Segment is ID 1999 only
+ * Bitmap segment 2000 thru 2999 (currently unimplemented)
+ * (more segments to be defined as needed)
+ *
+ * The browser will do layout by scanning thru each of the segments
+ * consecutively. On first lookup miss, it will assume it has finished
+ * reading all the segments
+ *
+ ***************************************************************************/
+
+/****************************************************************************
+ *
+ * Text Drawing / Erasing Functions
+ *
+ ****************************************************************************/
+
+SWord WinDrawProxyString(VoidHand hText, int xScrollOffset, int yScrollOffset)
+{
+  RectangleType r;
+  r.topLeft.x = 0;
+  r.topLeft.y = 0;
+  r.extent.x = winXextent;
+  r.extent.y = winYextent;
+  return INTWinProxyString(hText, xScrollOffset, yScrollOffset, &r, NULL, 0);
+}
+
+SWord WinDrawProxyStringGnomon(VoidHand hText, int xScrollOffset,
+    int yScrollOffset, RectanglePtr r1, RectanglePtr r2)
+{
+  return INTWinProxyString(hText, xScrollOffset, yScrollOffset, r1, r2, 0);
+}
+
+SWord WinEraseProxyString(VoidHand hText, int xScrollOffset, int yScrollOffset)
+{
+  /* this function is probably unnecessary since WinEraseWindow does a
+   * more complete job, but it here in case you wanted to do anything cool
+   */
+  RectangleType r;
+  r.topLeft.x = 0;
+  r.topLeft.y = 0;
+  r.extent.x = winXextent;
+  r.extent.y = winYextent;
+  return INTWinProxyString(hText, xScrollOffset, yScrollOffset, &r, NULL, 1);
+}
+
+/* Erase the main part of the screen */
+void EraseMainWindow(void)
+{
+    RectangleType r;
+    r.topLeft.x = 0;
+    r.topLeft.y = 0;
+    r.extent.x = winXextent;
+    r.extent.y = winYextent;
+    WinEraseRectangle(&r, 0);
+}
+
+/****************************************************************************
+ *
+ * Internal functions for Win???ProxyString
+ *
+ * as a rule, you shouldn't call them
+ * 
+ ****************************************************************************/
+
+static SWord INTWinProxyString(VoidHand hText, int xScrollOffset,
+    int yScrollOffset, RectanglePtr r1, RectanglePtr r2, int mode)
+{
+  SWord *proxyString = MemHandleLock(hText);
+  /* int byteSize = MemPtrSize(proxyString); fault tolerance test */
+  int nextParseOffset = 0, retVal;
+  RectangleType oldclip, newclip;
+
+  /* Set a clipping region */
+  WinGetClip(&oldclip);
+  newclip.topLeft.x = 0;
+  newclip.topLeft.y = 0;
+  newclip.extent.x = winXextent;
+  newclip.extent.y = winYextent;
+  WinSetClip(&newclip);
+
+  if (r1 == NULL && r2 == NULL) r1 = &newclip;
+
+  while (proxyString[nextParseOffset] != 0xFFFF) {
+    retVal = INTWinProxyStringPiece(&proxyString[nextParseOffset],
+				    xScrollOffset, yScrollOffset,
+				    r1, r2, mode);
+    if (retVal == -1) { 
+      break; 
+    } else {
+      nextParseOffset += retVal;
+    }
+  }
+  WinSetUnderlineMode(noUnderline);
+  MemHandleUnlock(hText);
+  WinSetClip(&oldclip);
+  return 0;
+}
+
+static SWord INTWinProxyStringPiece(SWord *startPoint, int xScrollOffset,
+    int yScrollOffset, RectanglePtr r1, RectanglePtr r2, int mode)
+{
+  /* function also deals with frags internally */
+  int currParseLoc = 0;
+  int currFragLen = 0; /* used to determine num of chars left in current frag */
+  int internalOffset = 0;
+  int retVal;
+  SWord forwardOffset = 0, backOffset = 0;
+  SWord startXPos = 0, startYPos = 0;
+  SWord Xextent = 0, Yextent = 0;
+  Word attributes = 0;
+  /* internal preprocessing of window attributes */
+
+  /* read metadata and then move it to the next read pos */
+  backOffset = startPoint[0];
+  forwardOffset = startPoint[1];
+  startXPos = startPoint[2];
+  startYPos = startPoint[3];
+  Xextent = startPoint[4];
+  Yextent = startPoint[5];
+  attributes = (Word) startPoint[6];
+  currParseLoc = 7;
+
+  if ((r1 &&
+    startXPos-xScrollOffset <= r1->topLeft.x + r1->extent.x &&
+    startXPos-xScrollOffset+Xextent > r1->topLeft.x &&
+    startYPos-yScrollOffset <= r1->topLeft.y + r1->extent.y &&
+    startYPos-yScrollOffset+Yextent > r1->topLeft.y) ||
+      (r2 &&
+    startXPos-xScrollOffset <= r2->topLeft.x + r2->extent.x &&
+    startXPos-xScrollOffset+Xextent > r2->topLeft.x &&
+    startYPos-yScrollOffset <= r2->topLeft.y + r2->extent.y &&
+    startYPos-yScrollOffset+Yextent > r2->topLeft.y)) {
+      /* reduce the amount of redrawing */
+  
+    if (attributes == LINE) {
+      WinDrawLine(startXPos - xScrollOffset,
+                  startYPos - yScrollOffset + internalOffset, 
+		  startXPos - xScrollOffset + Xextent - 1,
+		  startYPos - yScrollOffset + internalOffset + Yextent - 1);
+    }
+    if ((attributes & IMAGE) && (attributes & IMAGE_HAS_SERV_SIZE)) {
+	/* Skip over the "real" x and y size */
+	currParseLoc += 2;
+    }
+    if (attributes & LINK) {
+      currFragLen = startPoint[currParseLoc++];
+      /* use like this to get a link:
+	 char aLink = (char*) &startPoint[currParseLoc]; */    
+      /* increment past the link */
+      if ((currFragLen % 2) == 0) {
+	currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+      } else {
+	currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+      }
+      WinSetUnderlineMode(grayUnderline);
+    }
+    if (attributes & LINK_ALT) {
+      currFragLen = startPoint[currParseLoc++];
+      /* use like this to get a link:
+	 char aLink = (char*) &startPoint[currParseLoc]; */    
+      /* increment past the link */
+      if ((currFragLen % 2) == 0) {
+	currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+      } else {
+	currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+      }
+    }
+  
+    if (attributes & IMAGE) {
+      BitmapPtr image;
+      image = (BitmapPtr) &startPoint[currParseLoc];
+      if (attributes & IMAGE_2BIT) {
+#ifndef NOTWOBIT
+	WinDraw2Bitmap(image, startXPos - xScrollOffset,
+				startYPos - yScrollOffset);
+#else
+	WinDrawBitmap(image, startXPos - xScrollOffset,
+				startYPos - yScrollOffset);
+#endif
+      } else {
+	WinDrawBitmap(image, startXPos - xScrollOffset,
+				startYPos - yScrollOffset);
+      }
+    } else {
+      /* processing of display attributes except underline*/
+      if (attributes & BOLD) {
+	FntSetFont(boldFont);
+      }
+      if (attributes & ITALIC) {
+	/* Currently unsupported */
+      }
+      if (attributes & FONT_MASK) {
+	if ((attributes & FONT_MASK) == FONT_STD) {
+	  FntSetFont(stdFont);
+	} else if ((attributes & FONT_MASK) == FONT_BIG1) {
+	  FntSetFont(largeFont);
+	} else if ((attributes & FONT_MASK) == FONT_BIG2) {
+	  /* Currently unsupported */
+	} else if ((attributes & FONT_MASK) == FONT_BIG3) {
+	  /* currently unsupported */
+	}
+      }
+      /* this attribute is independent of the others on the pilot */
+      if ((attributes & UNDERLINE) && !(attributes & LINK)) {
+	WinSetUnderlineMode(solidUnderline);
+      }
+    
+      while(1) {
+	/* this part would by INTWinProxyStringFrag, but it's rolled in */
+	currFragLen = startPoint[currParseLoc++];
+      
+      /* is there any more to draw and is there still room on screen? */
+	if (currFragLen == 0 ||
+	    (startYPos - yScrollOffset) > winYextent) {
+	  break;
+	}
+	else {
+	  /* yes, so its a proxy string frag */      
+	  /* if attempts to draw optimized +100
+	     is so that alignment works off 100 */
+	  if (startYPos - yScrollOffset + internalOffset + 100> 0) {
+	    if (mode) {
+	      /* erase mode */
+	      WinEraseChars((char*) &startPoint[currParseLoc],
+			    (Word) currFragLen, 
+			    startXPos - xScrollOffset,
+			    startYPos - yScrollOffset + internalOffset);
+	    } else {
+	      /* draw mode */
+	      WinDrawChars((char*) &startPoint[currParseLoc],
+			   (Word) currFragLen, 
+			   startXPos - xScrollOffset,
+			   startYPos - yScrollOffset + internalOffset);
+	    }
+	  }
+	  /* how much do we increment the pointer */
+	  if ((currFragLen % 2) == 0) {
+	    currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+	  } else {
+	    currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+	  }
+	
+	  /* start next line */
+	  internalOffset += FntLineHeight();
+	}
+      }
+      /* clean up */
+      FntSetFont(stdFont);
+      WinSetUnderlineMode(noUnderline);
+    }
+  }
+  lastLayoutYExtent = startYPos - yScrollOffset + Yextent;
+  /* are we at the bottom of the screen? */
+  WinSetUnderlineMode(noUnderline);
+  if (startYPos - yScrollOffset > winYextent ) {
+    retVal = -1; /* yes, so stop drawing */    
+  } else {
+    retVal = (forwardOffset / 2); /* no, so give me the next piece */
+  }
+  return retVal;
+}
+
+/* PieceClicked returns a pointer to the piece that recieved a click event 
+ * search in linear from top, thus region conflicts are resolved by what's first
+ * returns -1 if there is no region */
+
+int PieceClicked(VoidHand hText, SWord xClick, SWord yClick, int xScrollOffset,
+    int yScrollOffset, SWord *xcoordp, SWord *ycoordp)
+{
+  SWord *proxyString;
+  int nextParseOffset = 0, iterResult;
+  int retVal;
+
+  if (xClick > winXextent || yClick > winYextent) return -1;
+
+  proxyString = MemHandleLock(hText);
+  if (proxyString[nextParseOffset] == 0xFFFF) {
+    retVal = -1;
+  } else {
+   while (1) {
+    /* scan the piece */
+    iterResult = INTPieceClicked(&proxyString[nextParseOffset],
+				 xClick, yClick, xScrollOffset,
+				 yScrollOffset, xcoordp, ycoordp);
+    if (iterResult == -1) {
+      /* if we've found the piece */
+      retVal = nextParseOffset;
+      break;
+    }
+    else {
+      /* look at the next piece */
+      nextParseOffset += iterResult;
+    }
+
+    if (iterResult == -2 ||
+	proxyString[nextParseOffset] == 0xFFFF) {
+      /* but first make sure there is another piece */
+      retVal = -1;
+      break; 
+    }
+   }
+  }
+  MemHandleUnlock(hText);
+  return retVal;
+}
+
+static int INTPieceClicked(SWord *startPoint, SWord xClick, SWord yClick,
+    int xScrollOffset, int yScrollOffset, SWord *xcoordp, SWord *ycoordp)
+{
+  /* note to self, since forward pointers between 0 and -6 should be meaningless,
+     they are using in the return value as result codes; these ARE NOT offsets */
+
+  /* read metadata and then move it to the next read pos */
+  /* SWord backOffset = startPoint[0]; */
+  SWord forwardOffset = startPoint[1];
+  SWord startXPos = startPoint[2] - xScrollOffset;
+  SWord startYPos = startPoint[3] - yScrollOffset;
+  SWord Xextent = startPoint[4];
+  SWord Yextent = startPoint[5];
+  int retVal;
+
+  if (xClick >= startXPos && xClick < (startXPos + Xextent) &&
+      yClick >= startYPos && yClick < (startYPos + Yextent)) {
+    /* it's in this region */
+    if (xcoordp) *xcoordp = xClick - startXPos;
+    if (ycoordp) *ycoordp = yClick - startYPos;
+    retVal = -1;
+  } else if ((startYPos > winYextent) || (startYPos > yClick)) {
+    /* about if we're off screen or already past the click */
+    retVal = -2;
+  } else {
+    /* it's not, look in the next one */
+    retVal = (forwardOffset / 2);
+  }
+  return retVal;
+}
+
+/* Returns -1 if no popup happened, 0 if Cancel, 1 if the first URL, 2 if
+   the second */
+int ClickImage(EventPtr pen, SWord *eventPiece, int xScrollOffset,
+    int yScrollOffset)
+{
+  int retval = -1;
+  Word attributes;
+  SWord startXPos = 0, startYPos = 0;
+  SWord Xextent = 0, Yextent = 0;
+
+  startXPos = eventPiece[2];
+  startYPos = eventPiece[3];
+  Xextent = eventPiece[4];
+  Yextent = eventPiece[5];
+  attributes = eventPiece[6];
+  
+  /* if there is an image with some type of link */
+  if ((attributes & IMAGE) &&
+      ((attributes & LINK) || (attributes & LINK_ALT))) {
+
+    int selection, PopLinkCnt = 0;
+    char *PopUpLink1 = "Goto link";
+    char *PopUpLink2 = "View full size ";
+    char *PopUpLink3 = "Cancel";
+    char *PopUpLink[3];
+    char *comparison;
+    ListPtr pList = FrmGetObjectPtr(FrmGetFormPtr(MainForm),
+				    FrmGetObjectIndex(FrmGetFormPtr(MainForm),
+						      ImageList));
+    if (attributes & LINK) {
+      StatusBarText((unsigned char *)
+	&eventPiece[(attributes & IMAGE_HAS_SERV_SIZE) ? 10 : 8], 1);
+    }
+
+    if (attributes & LINK) {
+      PopUpLink[PopLinkCnt++] = PopUpLink1;
+    }
+    if (attributes & LINK_ALT) {
+      PopUpLink[PopLinkCnt++] = PopUpLink2;
+    }
+    PopUpLink[PopLinkCnt++] = PopUpLink3;
+
+    LstSetHeight(pList, PopLinkCnt);
+    LstSetListChoices(pList, PopUpLink, PopLinkCnt);
+    LstSetSelection(pList, 0);
+    LstSetPosition(pList, (pen->screenX - 5), (pen->screenY - 5));
+    retval = 0;
+    selection = LstPopupList(pList);
+    if (selection != -1) {
+      comparison = LstGetSelectionText(pList, selection);
+      if (comparison) {
+	if (StrCompare(PopUpLink1, comparison) == 0) {
+	  retval = 1; 
+	} else if (StrCompare(PopUpLink2, comparison) == 0) {
+	  if (attributes & LINK) {
+	    retval = 2; 
+	  } else {
+	    retval = 1;
+	  }
+	} else {
+	  retval = 0;
+	}
+      }
+    }
+  }
+  INTWinProxyString(hPage, xScrollOffset, yScrollOffset, NULL, NULL, 0);
+  return retval;
+}
+
+/* event = -1 on penDown, 0 on penMove, 1 on penUp, -2 when hPage changes.
+   On penUp, returns 1 if the piece was clicked (penDown and penUp on same
+   piece without moving off), 0 otherwise.
+   On penDown, returns 1 if the piece needed nothing done on penDown, 0
+   otherwise. */
+int UpdateHiLiPiece(int event, int eventPieceOff, int xScrollOffset,
+    int yScrollOffset)
+{
+  Word attributes = 0;
+  SWord forwardOffset = 0, backOffset = 0;
+  SWord startXPos = 0, startYPos = 0;
+  SWord Xextent = 0, Yextent = 0;
+  RectangleType drawRegion;
+  int retval = 0;
+  SWord *eventPiece;
+  SWord *hPtr;
+
+  if (event == -2) {
+    /* This is called when hPage changes; it means to forget about any
+       piece we may have remembered */
+    penDownOrigPieceOff = -1;
+    penDownOrigImageFlag = 0;
+    return 0;
+  }
+
+  hPtr = MemHandleLock(hPage);
+  ErrFatalDisplayIf(!hPtr, "Cannot lock hPage");
+  eventPiece = eventPieceOff >= 0 ? hPtr + eventPieceOff : NULL;
+
+  if (eventPiece) {
+    backOffset = eventPiece[0];
+    forwardOffset = eventPiece[1];
+    startXPos = eventPiece[2];
+    startYPos = eventPiece[3];
+    Xextent = eventPiece[4];
+    Yextent = eventPiece[5];
+    attributes = eventPiece[6];
+
+    drawRegion.topLeft.x = (startXPos - xScrollOffset);
+    drawRegion.topLeft.y = (startYPos - yScrollOffset);
+    drawRegion.extent.x = Xextent;
+    drawRegion.extent.y = Yextent;
+  }
+
+  if (!(attributes & IMAGE)) {
+    if (event == -1 && (attributes & LINK)) {
+      /* pen down event on a link area */
+      /* penDownOrigImage = WinSaveBits(&drawRegion, &error); */
+      penDownOrigImageFlag = 1;
+      penDownOrigPieceOff = eventPieceOff;
+      WinDrawRectangle(&drawRegion, 0);
+      if (attributes & 0x20) {
+	/* don't do this with an image */
+	/* maybe fix later */
+      }
+      else {
+	INTWinProxyStringPiece(eventPiece, xScrollOffset, yScrollOffset,
+	    &drawRegion, NULL, 1);
+	/* This is where we draw the URL in the status bar */
+	StatusBarText((unsigned char *)&eventPiece[8], 1);
+      }
+      /* HiLiPiecesLink(event, eventPiece, (char *)&eventPiece[8], scrollOffset); */
+      
+    } else if (event == -1) {
+	retval = 1;
+    } else if ((event == 0 && penDownOrigPieceOff != eventPieceOff) ||
+	       (event == 1)) {
+      /* movement after penDown out of region OR
+       * penUp condition */
+      if (penDownOrigImageFlag) {
+        SWord *penDownOrigPiece = hPtr + penDownOrigPieceOff;
+	drawRegion.topLeft.x = (penDownOrigPiece[2] - xScrollOffset);
+	drawRegion.topLeft.y = (penDownOrigPiece[3] - yScrollOffset);
+	drawRegion.extent.x = penDownOrigPiece[4];
+	drawRegion.extent.y = penDownOrigPiece[5];
+	WinEraseRectangle(&drawRegion, 0);
+	INTWinProxyStringPiece(penDownOrigPiece, xScrollOffset,
+				yScrollOffset, &drawRegion, NULL, 0);
+	/* This is where we erase the URL from the status bar */
+	StatusBarText(NULL, 0);
+	/* WinRestoreBits(penDownOrigImage, penDownOrigPiece[2],
+	   penDownOrigPiece[3] - scrollOffset); */
+	penDownOrigImageFlag = 0;
+      }
+      /* HiLiPiecesLink(event, eventPiece, (char *)&eventPiece[8], scrollOffset); */
+    }
+    if (penDownOrigPieceOff == eventPieceOff) {
+      retval = 1;
+    } else {
+      penDownOrigPieceOff = -1;
+      retval = 0;
+    }
+    if (event == 1) {
+      penDownOrigPieceOff = -1;
+    }
+  }
+
+  MemHandleUnlock(hPage);
+  return retval;  
+}
+
+void GetCurPageDims(SWord *widthp, SWord *heightp) {
+  SWord pageXextent = 0;
+  SWord pageYextent = 0;
+  SWord *proxyText;
+  if (hPage) {
+      proxyText = MemHandleLock(hPage);
+      if (proxyText) {
+	int readPoint = 0; /* should always be offset to
+	                      a next forward offset */
+	SWord forwardOffset = proxyText[readPoint+1];
+	while (proxyText[readPoint] != 0xFFFF) {
+	  int newpageXextent = proxyText[readPoint+2] + proxyText[readPoint+4];
+	  int newpageYextent = proxyText[readPoint+3] + proxyText[readPoint+5];
+	  if (pageXextent < newpageXextent) pageXextent = newpageXextent;
+	  if (pageYextent < newpageYextent) pageYextent = newpageYextent;
+	  readPoint += (forwardOffset / 2);
+	  forwardOffset = proxyText[readPoint+1];
+	}
+      }
+      MemHandleUnlock(hPage);
+  }
+  if (widthp) *widthp = pageXextent;
+  if (heightp) *heightp = pageYextent;
+}
+ 
+/* this part of the code is currently unused; may be put in some other day */
+ 
+/* relies on the hope that same links are next to each other
+ * in the data structures */
+
+#ifdef 0
+
+void HiLiPiecesLink(int event, SWord *piece, char *linkURL, int scrollOffset) {
+  INTHiLiPiecesLink(event, piece, 0, linkURL, scrollOffset);
+  INTHiLiPiecesLink(event, piece, 1, linkURL, scrollOffset);
+}
+
+void INTHiLiPiecesLink(int event, SWord *eventPiece, int direction,
+		       char *linkURL, int scrollOffset) {
+  Word attributes;
+  SWord forwardOffset = 0, backOffset = 0;
+
+  backOffset = eventPiece[0];
+  forwardOffset = eventPiece[1];
+
+  if (direction == 0) {
+    eventPiece = eventPiece - (backOffset / 2);
+  } else if (direction == 1) {
+    eventPiece = eventPiece + (forwardOffset / 2) - 1;
+  }
+
+  backOffset = eventPiece[0];
+  forwardOffset = eventPiece[1];
+  attributes = eventPiece[6];
+
+  if ((attributes & LINK) && (StrCompare (linkURL,
+    (char*)&eventPiece[((attributes & IMAGE) &&
+			(attributes & IMAGE_HAS_SERV_SIZE)) ? 10 : 8]))) {
+    UpdateHiLiPiece(event, eventPiece, scrollOffset);
+    if (direction == 0) {
+      INTHiLiPiecesLink(event, eventPiece, 0, linkURL, scrollOffset);
+    } else if (direction == 1) {
+      INTHiLiPiecesLink(event, eventPiece, 1, linkURL, scrollOffset);
+    }
+  }
+}
+
+#endif
+
+@
+
+
+1.30
+log
+@Added Doc support (load source as a Doc file)
+@
+text
+@d18 1
+a18 1
+    int xScrollOffset, int yScrollOffset);
+d266 4
+d297 1
+a297 1
+      if (attributes & BOLD) {
+d393 1
+a393 1
+    int yScrollOffset)
+d408 2
+a409 1
+				 xClick, yClick, xScrollOffset, yScrollOffset);
+d433 1
+a433 1
+    int xScrollOffset, int yScrollOffset)
+d441 2
+a442 2
+  SWord startXPos = startPoint[2];
+  SWord startYPos = startPoint[3];
+d447 2
+a448 4
+  if (xClick >= (startXPos - xScrollOffset) &&
+      xClick < (startXPos - xScrollOffset + Xextent) &&
+      yClick >= (startYPos - yScrollOffset) &&
+      yClick < (startYPos - yScrollOffset + Yextent)) {
+d450 2
+d453 1
+a453 2
+  } else if ((startYPos - yScrollOffset > winYextent) ||
+	     (startYPos - yScrollOffset > yClick)) {
+d493 2
+a494 1
+      StatusBarText((unsigned char *)&eventPiece[8], 1);
+d688 3
+a690 1
+  if ((attributes & LINK) && (StrCompare (linkURL, (char*)&eventPiece[8]))) {
+@
+
+
+1.29
+log
+@.
+@
+text
+@d263 2
+a264 2
+		  startXPos - xScrollOffset + Xextent, 
+		  startYPos - yScrollOffset + internalOffset + Yextent);
+@
+
+
+1.28
+log
+@Handle empty pages
+@
+text
+@d481 1
+a481 1
+    char *PopUpLink2 = "View full screen ";
+@
+
+
+1.27
+log
+@Added a "smarter" scrolling routine; copy the overlapping rectangle, and only
+erase and update the remaining gnomon
+@
+text
+@d208 1
+a208 1
+  while (1) {
+a211 2
+    nextParseOffset += retVal;
+    /* do not change the evaluation order of the following if else stmt */
+a212 9
+      moreOffscreen = 1;
+      break; 
+    }
+    else if (proxyString[nextParseOffset] == 0xFFFF) {
+      if (lastLayoutYExtent > winYextent) {
+	moreOffscreen = 1; /* removed for now */
+      } else {
+	moreOffscreen = 0;
+      }
+d214 2
+a216 1
+
+d398 4
+a401 1
+  while (1) {
+d421 1
+a421 1
+
+d629 2
+a630 2
+  SWord pageXextent = -1;
+  SWord pageYextent = -1;
+@
+
+
+1.26
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@d14 1
+a14 1
+    int yScrollOffset, int mode);
+d16 1
+a16 1
+    int yScrollOffset, int mode);
+d144 12
+a155 1
+  return INTWinProxyString(hText, xScrollOffset, yScrollOffset, 0);
+d163 6
+a168 1
+  return INTWinProxyString(hText, xScrollOffset, yScrollOffset, 1);
+d191 1
+a191 1
+    int yScrollOffset, int mode)
+d206 2
+d210 2
+a211 1
+				    xScrollOffset, yScrollOffset, mode);
+d235 1
+a235 1
+    int yScrollOffset, int mode)
+d258 10
+a267 3
+  if (startYPos + Yextent > yScrollOffset &&
+      startXPos + Xextent > xScrollOffset &&
+      startXPos <= xScrollOffset + winXextent) {
+d466 2
+d471 1
+a471 1
+  int retval = 0;
+d511 1
+d530 1
+a530 1
+  INTWinProxyString(hPage, xScrollOffset, yScrollOffset, 0);
+d590 2
+a591 1
+	INTWinProxyStringPiece(eventPiece, xScrollOffset, yScrollOffset, 1);
+d611 1
+a611 1
+				yScrollOffset, 0);
+@
+
+
+1.25
+log
+@added function that returns height of current page
+@
+text
+@d13 6
+a18 4
+SWord INTWinProxyString(VoidHand hText, int scrollOffset, int mode);
+SWord INTWinProxyStringPiece(SWord *startPoint, int scrollOffset, int mode);
+int INTPieceClicked(SWord *startPoint, SWord xClick, SWord yClick, 
+		    int scrollOffset);
+d142 1
+a142 1
+SWord WinDrawProxyString(VoidHand hText, int scrollOffset)
+d144 1
+a144 1
+  return INTWinProxyString(hText, scrollOffset, 0);
+d147 1
+a147 1
+SWord WinEraseProxyString(VoidHand hText, int scrollOffset)
+d152 1
+a152 1
+  return INTWinProxyString(hText, scrollOffset, 1);
+d174 2
+a175 1
+SWord INTWinProxyString(VoidHand hText, int scrollOffset, int mode)
+d192 1
+a192 1
+				    scrollOffset, mode);
+d215 2
+a216 2
+SWord INTWinProxyStringPiece(SWord *startPoint, int scrollOffset,
+			     int mode)
+d239 4
+a242 1
+  if (startYPos + Yextent > scrollOffset) { /* reduce the amount of redrawing */
+d245 4
+a248 3
+      WinDrawLine(startXPos, startYPos - scrollOffset + internalOffset, 
+		  startXPos + Xextent, 
+		  startYPos - scrollOffset + internalOffset + Yextent);
+d279 2
+a280 1
+	WinDraw2Bitmap(image, startXPos, startYPos + -scrollOffset);
+d282 2
+a283 1
+	WinDrawBitmap(image, startXPos, startYPos + -scrollOffset);
+d286 2
+a287 1
+	WinDrawBitmap(image, startXPos, startYPos + -scrollOffset);
+d319 1
+a319 1
+	    (startYPos + -scrollOffset) > winYextent) {
+d326 1
+a326 1
+	  if (startYPos + -scrollOffset + internalOffset + 100> 0) {
+d331 2
+a332 2
+			    startXPos,
+			    startYPos + -scrollOffset + internalOffset);
+d337 2
+a338 2
+			   startXPos,
+			   startYPos + -scrollOffset + internalOffset);
+d357 1
+a357 1
+  lastLayoutYExtent = startYPos - scrollOffset + Yextent;
+d360 1
+a360 1
+  if (startYPos + -scrollOffset > winYextent ) {
+d368 1
+a368 1
+/* PieceClicked returns a pointer to the piece than recieved a click event 
+d372 2
+a373 1
+int PieceClicked(VoidHand hText, SWord xClick, SWord yClick, int scrollOffset)
+d385 1
+a385 1
+				 xClick, yClick, scrollOffset);
+d408 2
+a409 1
+int INTPieceClicked(SWord *startPoint, SWord xClick, SWord yClick, int scrollOffset)
+d423 4
+a426 4
+  if (xClick > startXPos &&
+      xClick < (startXPos + Xextent) &&
+      yClick > (startYPos - scrollOffset) &&
+      yClick < (startYPos - scrollOffset + Yextent)) {
+d429 2
+a430 2
+  } else if ((startYPos - scrollOffset > winYextent) ||
+	     (startYPos - scrollOffset > yClick)) {
+d440 2
+a441 1
+int ClickImage(EventPtr pen, SWord *eventPiece, int scrollOffset)
+d501 1
+a501 1
+  INTWinProxyString(hPage, scrollOffset, 0);
+d505 7
+a511 1
+int UpdateHiLiPiece(int event, int eventPieceOff, int scrollOffset)
+d543 2
+a544 2
+    drawRegion.topLeft.x = startXPos;
+    drawRegion.topLeft.y = (startYPos - scrollOffset);
+d561 1
+a561 1
+	INTWinProxyStringPiece(eventPiece, scrollOffset, 1);
+d567 2
+d575 2
+a576 2
+	drawRegion.topLeft.x = penDownOrigPiece[2];
+	drawRegion.topLeft.y = (penDownOrigPiece[3] - scrollOffset);
+d580 2
+a581 1
+	INTWinProxyStringPiece(penDownOrigPiece, scrollOffset, 0);
+d605 2
+a606 1
+SWord GetCurPageHeight() {
+d609 16
+a624 11
+  if (!hPage) return -1;
+  proxyText = MemHandleLock(hPage);
+  if (proxyText) {
+    int readPoint = 0; /* should always be offset to to a next forward offset */
+    SWord forwardOffset = proxyText[readPoint+1];
+    while (proxyText[readPoint] != -1) {
+      int newpageYextent = proxyText[readPoint+3] + proxyText[readPoint+5];
+      if (pageYextent < newpageYextent) pageYextent = newpageYextent;
+      readPoint += (forwardOffset / 2);
+      forwardOffset = proxyText[readPoint+1];
+    }
+d626 2
+a627 2
+  MemHandleUnlock(hPage);
+  return pageYextent;
+@
+
+
+1.24
+log
+@commiting in faster screen redraw routine. One optimization: now only
+draws what should be on the screen. (still searches though the page
+data top to bottom though.
+@
+text
+@d583 18
+@
+
+
+1.23
+log
+@Alarms and Find should no longer crash the Pilot.
+@
+text
+@d7 2
+d235 2
+d238 16
+a253 14
+  if (attributes == LINE) {
+    WinDrawLine(startXPos, startYPos - scrollOffset + internalOffset, 
+		startXPos + Xextent, 
+		startYPos - scrollOffset + internalOffset + Yextent);
+  }
+  if (attributes & LINK) {
+    currFragLen = startPoint[currParseLoc++];
+    /* use like this to get a link:
+       char aLink = (char*) &startPoint[currParseLoc]; */    
+    /* increment past the link */
+    if ((currFragLen % 2) == 0) {
+      currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+    } else {
+      currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+d255 10
+a264 11
+    WinSetUnderlineMode(grayUnderline);
+  }
+  if (attributes & LINK_ALT) {
+    currFragLen = startPoint[currParseLoc++];
+    /* use like this to get a link:
+       char aLink = (char*) &startPoint[currParseLoc]; */    
+    /* increment past the link */
+    if ((currFragLen % 2) == 0) {
+      currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+    } else {
+      currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+a265 1
+  }
+d267 4
+a270 4
+  if (attributes & IMAGE) {
+    BitmapPtr image;
+    image = (BitmapPtr) &startPoint[currParseLoc];
+    if (attributes & BOLD) {
+d272 1
+a272 1
+      WinDraw2Bitmap(image, startXPos, startYPos + -scrollOffset);
+d274 1
+a274 1
+      WinDrawBitmap(image, startXPos, startYPos + -scrollOffset);
+d276 3
+d280 5
+a284 16
+      WinDrawBitmap(image, startXPos, startYPos + -scrollOffset);
+    }
+  } else {
+    /* processing of display attributes except underline*/
+    if (attributes & BOLD) {
+      FntSetFont(boldFont);
+    }
+    if (attributes & ITALIC) {
+      /* Currently unsupported */
+    }
+    if (attributes & FONT_MASK) {
+      if ((attributes & FONT_MASK) == FONT_STD) {
+	FntSetFont(stdFont);
+      } else if ((attributes & FONT_MASK) == FONT_BIG1) {
+	FntSetFont(largeFont);
+      } else if ((attributes & FONT_MASK) == FONT_BIG2) {
+a285 2
+      } else if ((attributes & FONT_MASK) == FONT_BIG3) {
+	/* currently unsupported */
+d287 15
+a301 5
+    }
+    /* this attribute is independent of the others on the pilot */
+    if ((attributes & UNDERLINE) && !(attributes & LINK)) {
+      WinSetUnderlineMode(solidUnderline);
+    }
+d303 3
+a305 3
+    while(1) {
+      /* this part would by INTWinProxyStringFrag, but it's rolled in */
+      currFragLen = startPoint[currParseLoc++];
+d308 26
+a333 12
+      if (currFragLen == 0 ||
+	  (startYPos + -scrollOffset) > winYextent) {
+	break;
+      }
+      else {
+	/* yes, so its a proxy string frag */      
+	/* if attempts to draw optimized +100 is so that alignment works off 100 */
+	if (startYPos + -scrollOffset + internalOffset + 100> 0) {
+	  if (mode) {
+	    /* erase mode */
+	    WinEraseChars((char*) &startPoint[currParseLoc], (Word) currFragLen, 
+			  startXPos, startYPos + -scrollOffset + internalOffset);
+d335 1
+a335 3
+	    /* draw mode */
+	    WinDrawChars((char*) &startPoint[currParseLoc], (Word) currFragLen, 
+			 startXPos, startYPos + -scrollOffset + internalOffset);
+d337 3
+a340 9
+	/* how much do we increment the pointer */
+	if ((currFragLen % 2) == 0) {
+	  currParseLoc += (currFragLen >> 1) /* to the next read pos */;
+	} else {
+	  currParseLoc += ((currFragLen + 1) >> 1) /* to the next read pos */;
+	}
+	
+	/* start next line */
+	internalOffset += FntLineHeight();
+d342 3
+a345 3
+    /* clean up */
+    FntSetFont(stdFont);
+    WinSetUnderlineMode(noUnderline);
+@
+
+
+1.22
+log
+@added in display of URL for image links.
+@
+text
+@d444 1
+a444 1
+    if (attributes & LINK && attributes && LINK_ALT) {
+@
+
+
+1.21
+log
+@Fixed more nasty memory errors
+@
+text
+@d444 3
+@
+
+
+1.20
+log
+@o Fixed a bug that gets tickled when the pen is being held on a link at the
+  time a new page appears.
+o Added URLs to the status bar when you hold down on a link
+@
+text
+@d350 1
+a350 1
+ * returns NULL if there is no region */
+d352 1
+a352 1
+SWord* PieceClicked(VoidHand hText, SWord xClick, SWord yClick, int scrollOffset)
+d356 1
+a356 1
+  SWord* retVal;
+d358 1
+a358 1
+  if (xClick > winXextent || yClick > winYextent) return NULL;
+d367 1
+a367 1
+      retVal = &proxyString[nextParseOffset];
+d378 1
+a378 1
+      retVal = NULL;
+d479 1
+a479 1
+int UpdateHiLiPiece(int event, SWord *eventPiece, int scrollOffset)
+d487 2
+d493 2
+a494 1
+    penDownOrigPiece = NULL;
+d498 4
+d522 1
+a522 1
+      penDownOrigPiece = eventPiece;
+d529 1
+a529 1
+	INTWinProxyStringPiece(penDownOrigPiece, scrollOffset, 1);
+d531 1
+a531 1
+	StatusBarText((unsigned char *)&penDownOrigPiece[8], 1);
+d535 1
+a535 1
+    } else if ((event == 0 && penDownOrigPiece != eventPiece) ||
+d540 1
+d555 1
+a555 1
+    if (penDownOrigPiece == eventPiece) {
+d558 1
+a558 1
+      penDownOrigPiece = NULL;
+d562 1
+a562 1
+      penDownOrigPiece = NULL;
+d566 1
+@
+
+
+1.19
+log
+@Fixed positioning of text in status bar
+@
+text
+@d488 7
+d523 2
+d539 2
+@
+
+
+1.18
+log
+@o When loading a page with the Open form, the yoffset would incorrectly
+  be set to 0 (top) when the request was _sent_.  This caused a ghost
+  image to appear, overlaid on the real one.  Fixed.
+o If a download was canceled in the middle, and then you "Open" a URL in
+  your cache, the partway-done status bar would remain on the screen.  Fixed.
+@
+text
+@d8 2
+a9 1
+static const SWord winXextent = 160, winYextent = 149;
+@
+
+
+1.17
+log
+@FIXED UGLY BUG
+@
+text
+@a160 16
+/* Draw the status bar */
+void StatusDraw(void)
+{
+    /* It should be safe to remove this.  Tell me if I'm wrong.  - Ian */
+    /*
+    RectangleType r;
+    r.topLeft.x = 0;
+    r.topLeft.y = 150;
+    r.extent.x = 160;
+    r.extent.y = 10;
+    WinEraseRectangle(&r, 0);
+    */
+    WinDrawLine(0, 149, 160, 149);
+    ReNotify();
+}
+
+@
+
+
+1.16
+log
+@o Clicking in status bar no longer follows links drawn under it
+o URLForm is now a popup form
+@
+text
+@a564 10
+/* the following function is an ugly hack; used to support stop loadings;
+   should be implemented properly in next release */
+
+void cancelSend(void) {
+  CloseConnection(conID);
+  conID = -1;
+  StatusDraw();
+  conID = OpenConnection(proxyServer, proxyPort, storageDB);
+  RegisterNotify(conID);
+}
+@
+
+
+1.15
+log
+@close connection bug fixed
+@
+text
+@d369 1
+a369 1
+  SWord *proxyString = MemHandleLock(hText);
+d373 3
+@
+
+
+1.14
+log
+@Grew the status bar, so we can fit text in there.
+@
+text
+@d570 1
+@
+
+
+1.13
+log
+@Following has been added
+
+1. Stop/cancel load functionality (but buggy, transport layer state not reset)
+
+2. Moved PutInHistory to only when a new page is loaded
+   (this is a consequence of the cancel function/otherwise URL is
+    put in history even if cancel is hit; this lead to history
+    errors.)
+
+3. changed event loop to drop every 200 ticks; my pilot batteries go dead
+   way to fast
+
+4. can now move back and forward by backspace/space
+@
+text
+@d8 1
+a8 1
+static const SWord winXextent = 160, winYextent = 150;
+d164 2
+d171 3
+a173 3
+    /* It should be safe to remove this.  Tell me if I'm wrong.  - Ian */
+    /* WinEraseRectangle(&r, 0); */
+    WinDrawLine(0, 150, 160, 150);
+@
+
+
+1.12
+log
+@o Removed some (not all) of the "blinking" when loading pages
+o Made 2-bit images reappear after being obscured and unobscured by
+  a popup window
+@
+text
+@d560 12
+d611 1
+@
+
+
+1.11
+log
+@o UI fixed up: scroll bar at bottom.  It goes all black when the page is
+  requested, and disappears when the page has arrived completely.  The
+  view area is now 150 pixels high.
+o Various bugfixes
+@
+text
+@d5 1
+d169 2
+a170 1
+    WinEraseRectangle(&r, 0);
+d172 1
+@
+
+
+1.10
+log
+@Changed #ifdef TWOBIT to #ifndef NOTWOBIT
+@
+text
+@d6 2
+d149 23
+d185 9
+d216 1
+d488 1
+a488 1
+  Word attributes;
+@
+
+
+1.9
+log
+@fixed ALT_LINK bad URL problem, now viewing original and following link on an
+image work properly when there are both a LINK and an ALT_LINK url.
+@
+text
+@d242 1
+a242 1
+#ifdef TWOBIT
+@
+
+
+1.8
+log
+@fixes link screen refresh bug.
+@
+text
+@d434 1
+a434 1
+	  retval = 1;
+d436 5
+a440 1
+	  retval = 2;
+@
+
+
+1.7
+log
+@Added view image popup functionality. Supports view original
+functionality (though server support is still lacking.)
+CVS:----------------------------------------------------------------------
+CVS:
+@
+text
+@d67 1
+a67 1
+ *
+d196 1
+a196 1
+  SWord attributes = 0;
+d206 1
+a206 1
+  attributes = startPoint[6];
+d393 1
+a393 1
+  SWord attributes;
+d449 1
+a449 1
+  SWord attributes;
+d492 4
+d530 1
+a530 1
+  SWord attributes;
+@
+
+
+1.6
+log
+@Updated UI stuff. Fixed hi-light bug.
+@
+text
+@d226 11
+d390 57
+d454 1
+a454 1
+  int retval;
+d471 28
+a498 9
+  if (event == -1 && (attributes & LINK)) {
+    /* pen down event on a link area */
+    /* penDownOrigImage = WinSaveBits(&drawRegion, &error); */
+    penDownOrigImageFlag = 1;
+    penDownOrigPiece = eventPiece;
+    WinDrawRectangle(&drawRegion, 0);
+    if (attributes & 0x20) {
+      /* don't do this with an image */
+      /* maybe fix later */
+d500 5
+a504 2
+    else {
+      INTWinProxyStringPiece(penDownOrigPiece, scrollOffset, 1);
+d506 2
+a507 12
+    /* HiLiPiecesLink(event, eventPiece, (char *)&eventPiece[8], scrollOffset); */
+
+  } else if ((event == 0 && penDownOrigPiece != eventPiece) ||
+	     (event == 1)) {
+    /* movement after penDown out of region OR
+     * penUp condition */
+    if (penDownOrigImageFlag) {
+      WinEraseRectangle(&drawRegion, 0);
+      INTWinProxyStringPiece(penDownOrigPiece, scrollOffset, 0);
+      /* WinRestoreBits(penDownOrigImage, penDownOrigPiece[2],
+		     penDownOrigPiece[3] - scrollOffset); */
+      penDownOrigImageFlag = 0;
+a508 1
+    /* HiLiPiecesLink(event, eventPiece, (char *)&eventPiece[8], scrollOffset); */
+d511 1
+a511 10
+  if (penDownOrigPiece == eventPiece) {
+    retval = 1;
+  } else {
+    penDownOrigPiece = NULL;
+    retval = 0;
+  }
+  if (event == 1) {
+    penDownOrigPiece = NULL;
+  }
+  return retval;
+@
+
+
+1.5
+log
+@Fixed click memory bug. Implemented a possible catch to down server
+bug that destorys the pilot.
+@
+text
+@d70 1
+a70 1
+ * (when it is not a link)
+d406 1
+a406 2
+    penDownOrigImage = 1; /* BAD! should change type to non-pointer */
+    /* to be fixed later */
+d416 1
+d422 2
+a423 1
+    if (penDownOrigImage) {
+d427 1
+a427 1
+      penDownOrigImage = NULL;
+d429 1
+d435 1
+d444 9
+a452 1
+/* last piece to change in code: verify that pen down and pen up occur in same location */
+d454 4
+d459 2
+d462 21
+@
+
+
+1.4
+log
+@update to click visual ACK. Fixes image bug, improves click look.
+Still does poorly handles multiline links.
+@
+text
+@d406 2
+a407 1
+    penDownOrigImage = 1;
+@
+
+
+1.3
+log
+@Visual ack of penDown on links now work. Bugs:
+Destroys 2 -bit images. Doesn't handle multiple line links very well.
+@
+text
+@d303 1
+a385 1
+  Word error;
+d405 2
+a406 1
+    penDownOrigImage = WinSaveBits(&drawRegion, &error);
+d409 7
+d422 3
+a424 2
+      WinRestoreBits(penDownOrigImage, penDownOrigPiece[2],
+		     penDownOrigPiece[3] - scrollOffset);
+d441 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d378 55
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d180 1
+@

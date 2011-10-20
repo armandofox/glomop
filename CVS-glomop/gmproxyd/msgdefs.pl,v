@@ -1,0 +1,685 @@
+head	1.14;
+access;
+symbols
+	prewink:1.11
+	stable:1.9
+	release:1.7
+	current:1.12
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.14
+date	96.09.23.07.06.44;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.09.11.23.56.23;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.08.23.19.36.09;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.07.01.04.00.44;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.23.01.33.10;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.11.02.17.28;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.07.00.33.55;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.05.25.02.46.00;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.05.22.23.59.22;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.05.03.23.09.07;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.28.00.41.45;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.27.02.24.19;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.26.10.12.07;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.24.06.12.18;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.04.24.06.12.18;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.14
+log
+@Added serial.pl to configure serial port - still needs work.  Changed
+return string of AUTH_OK msg to make it distinct from all other msgs. New
+rule: msgs must have initial strings that are unique in first 2 letters
+(case insensitive).  Minor changes to msgdefs.pl and the lang_*.pl to allow
+passing of constant arg strings for code generation.  Added a "newt" client.
+@
+text
+@#
+# msgdefs.pl - message code auto generation
+# $Id: msgdefs.pl,v 1.13 1996/09/11 23:56:23 fox Exp $
+#
+
+
+=head1 NAME
+
+msgdefs - read hsk.txt and synthesize message sending and receiving functions
+
+=head1 SYNOPSIS
+
+ &Msg::init_msgs;
+
+ # ...various calls to send and receive messages; see below
+
+=head1 DESCRIPTION
+
+Calling init_msgs causes hsk.txt to be read, and message sending and/or
+receiving 
+functions to be defined for each message found therein.  Since this happens at
+runtime, there is no  need to "compile" the message definitions before running
+the proxy.
+
+For a given message
+"foo",  functions I<&Msg::send_foo>  and I<&Msg::receive_foo> are defined,
+provided the message is defined for sending and receiving (relative to the
+proxy).
+
+In addition, all the manifest constants in hsk.txt are defined as subroutines;
+e.g. I<&Msg::ERR_STR> returns "ER".
+
+To call the send function for a given message, the first argument should be the
+value of the message flags logical-OR'd together, and the remaining arguments
+the actual message body 
+components.  Note that even those message body components defined as constants
+in hsk.txt must be explicitly supplied; this is perhaps a bug.  For example,
+refer to the I<op_failed> message definition in hsk.txt.  Here is how you would
+actually send such a message to the client:
+
+C<&Msg::send_op_failed(&Msg::FLAG_MSG_ERROR | &Msg::FLAG_MSG_ENCRYPT,
+ &Msg::OP_FAIL, $doc_id, $err_msg);>
+
+And to receive the I<open_doc> message:
+
+C<($op,$locator,$max,$id) = &Msg::receive_open_doc();>
+
+Note that the receive functions are all B<blocking> functions, and will fail if
+the wrong type of message (or a malformed one) is received.  It is safest to
+call these inside of an I<eval{}> to protect yourself from dying.
+
+To receive a message without knowing in advance what you're expecting, see the
+stuff in L<bytestream(3)>.
+
+=head1 BUGS
+
+Rather than requiring encapsulation in an I<eval>, the receive functions
+should probably use stuff in L<Carp> to complain safely but loudly.
+
+=cut
+
+#
+#  Parse the message definitions file (recursive descent parser)
+#
+
+package Msg;
+
+sub parse {
+    my $last;
+    $Line = 0;
+    $Err = 0;
+    while (defined($Exp = shift @@Text)) {
+        $Line++;
+        chomp $Exp;
+        next if ($Exp =~ /^\s*$/);
+        eval { &stmt };
+        if ($@@) {
+            die "$@@, near '$Exp' (last good line: '$last')";
+        }
+        $last = $Exp;
+    }
+}
+
+sub match_safe {
+    my $ch = shift;
+    $Exp =~ s/^\s*//;
+    return  $Exp =~ s/^$ch//;
+}
+
+sub match {
+    my $ch = shift;
+    $Exp =~ s/^\s*//;
+    die unless $Exp =~ s/^$ch//;
+    return $1;
+}
+
+sub type {
+    $Exp =~ s/^\s*//;
+    die unless $Exp =~ s/^($Types)//;
+    return $1;
+}
+
+sub varname {
+    $Exp =~ s/^\s*//;
+    die unless $Exp =~ s/^(\S+)//;
+    return $1;
+}
+
+sub value {
+    $Exp =~ s/^\s*//;
+    if ($Exp =~ /^\"/) {                    #" 
+        return &qstring;
+    } else {
+        die unless $Exp =~ s/^(\S+)//;
+        return $1;
+    }
+}
+
+sub qstring {
+    $Exp =~ s/^\s*//;
+    die unless $Exp =~ s/^\"([^\"]+)\"//;   #" 
+    return $1;
+}
+
+sub defconst {
+    my ($varname,$type,$value);
+
+    &match("defconst");
+    $varname = &varname;
+    &match(":=");
+    $type = &type;
+    &match(":");
+    $value = &value;
+
+    $value = "\"$value\"" if $type =~ /str/;
+    &emit(&{"lang_${Lang}::emit_const"}($varname,$type,$value));
+
+    # Enter a macro definition for it too
+    $Const{$varname} = "$type:$value";
+}
+
+sub defmsg {
+    my ($msgname, $direction, $replname, @@args, @@types);
+
+    &match("defmsg");
+    $direction= &match("(<>|><|>|<)");
+    $msgname = &varname;
+    &debug("Message: $msgname\n" );
+    if (&match_safe(">")) {
+        # reply
+        $replname = &varname;
+    }
+    &match(":=");
+    # collect arguments
+    while ($Exp !~ /^\s*$/) {
+        $type = &type;
+        &match(":");
+        push(@@args, '"'.&value.'"', "\"$type\"");
+        push(@@types, "\"$type\"");
+    }
+    my $args = join(",", @@args);
+    my $types = join(",", @@types);
+    # if a send, generate the send function
+    if (1 || $direction =~ />/) {
+        &emit(&{"lang_${Lang}::emit_sendmsg"}($msgname, \@@types, \@@args));
+    }
+    # if a receive, generate the receive function
+    if (1 || $direction =~ /</ ) {
+        &emit(&{"lang_${Lang}::emit_receivemsg"}($msgname, \@@types, \@@args));
+        # if a receive, and a reply function was specified, do it
+    }
+}
+
+sub comment {
+    ($Exp =~ s|^//.*$||m);
+}
+
+sub stmt {
+    $Exp =~ s/^\s*//;
+    if ($Exp =~ m|^//| || $Exp =~ /^\s*$/) {
+        # comment
+        return &comment;
+    }
+    # not a comment: expand macros if any
+    while ($Exp  =~ m/\$(\w+)/ ) {
+	unless (defined ($Const{$1})) {
+	    $Err++;
+	    &debug("Undefined macro $1 at $Line");
+	}
+        $Exp =~ s/\$(\w+)/"$Const{$1}"/e;
+    }
+    if ($Exp =~ /^defmsg/i) {
+        # found msg header
+        return &defmsg;
+    } elsif ($Exp =~ /^defconst/i) {
+        # found const decl
+        return &defconst;
+    } else {
+        &debug("Unrecognized line - $Exp");
+        $Err++;
+        $Exp =~ s/.*$//;
+    }
+}
+
+sub debug {
+    if (defined &util::debug) {
+	&util::debug("msg", @@_);
+    } else {
+	warn "@@_\n";
+    }
+}
+
+sub emit {
+    $Code .= (join("\n", @@_));
+}
+
+sub get_msgs {
+    my $r = '';
+    my $file = shift || &util::configfile("hsk.txt");
+    open(M, $file) or die $!;
+    my @@r = <M>;
+    return @@r;
+}
+
+$Types = "str1|str2|i16|i32|byte";
+$Code = '';
+$Lang = '';
+
+# This routine allows the message generation code to be called externally.
+sub init_msgs_external {
+    $Debug = 1;
+    @@Text = &get_msgs("config/hsk.txt");
+    $Lang = shift or die "Language?\n";
+    &gencode;
+    # call "cleanup"
+    eval &emit(&{"lang_${Lang}::done"});
+    print STDOUT $Code;
+    return $Code;
+}
+
+sub init_msgs {
+    $Debug = $main::DbgMode;
+    @@Text = &get_msgs();
+    $Lang = "perl5";
+    &gencode ?  eval($Code) : die "Couldn't define messages, exiting";
+}
+
+sub gencode {
+    unless (defined ($Lang) && defined &{"lang_$Lang::emit_const"}) {
+        require "lang_$Lang.pl" or die "lang_$Lang.pl: $!";
+    }
+    &parse;
+    if ($Err > 0) {
+        warn "$Err parsing errors\n";
+        return undef;
+    }
+    return 1;
+}
+
+# If called standalone, do external init.
+
+if ($0 =~ /^msgdefs\.pl$/) {
+    &init_msgs_external (@@ARGV);
+    exit 0;
+}
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut
+
+1;
+
+@
+
+
+1.13
+log
+@patched msgdefs.pl to allow msgdefs to be called standalone.
+@
+text
+@d3 1
+a3 1
+# $Id: msgdefs.pl,v 1.12 1996/08/23 19:36:09 gribble Exp $
+d148 1
+a148 1
+    &util::debug("msg", "Message: $msgname\n" );
+d165 1
+a165 1
+        &emit(&{"lang_${Lang}::emit_sendmsg"}($msgname, @@types));
+d169 1
+a169 1
+        &emit(&{"lang_${Lang}::emit_receivemsg"}($msgname, @@types));
+d186 4
+a189 2
+        $Err++, &util::debug("msg", "Undefined macro $1 at $Line")
+            unless defined $Const{$1};
+d199 1
+a199 1
+        &util::debug("msg", "Unrecognized line - $Exp");
+d204 8
+a211 1
+    
+d214 1
+a214 1
+    $Code .= join("\n", @@_)."\n";
+d234 4
+a237 2
+    sub util::debug {};
+    &gencode &&  print STDOUT $Code;
+@
+
+
+1.12
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@d3 1
+a3 1
+# $Id: msgdefs.pl,v 1.3 96/08/22 15:47:08 glomop Exp $
+d210 2
+a211 1
+    open(M, &util::configfile("hsk.txt")) or die $!;
+a217 1
+@@Text = &get_msgs;
+d220 1
+d223 1
+d225 1
+d232 1
+@
+
+
+1.11
+log
+@Split the Charon stuff out into charon.pl.
+@
+text
+@d1 6
+d180 5
+a195 3
+    } elsif ($Exp =~ m|^//| || $Exp =~ /^\s*$/) {
+        # comment
+        return &comment;
+d210 1
+a210 1
+    open(M, "./hsk.txt") or die $!;
+d230 1
+a230 1
+    &gencode  && eval($Code);
+d234 1
+a234 1
+    unless (defined $Lang && defined &{"lang_$Lang::emit_const"}) {
+d239 1
+a239 1
+        &util::debug("msg", "$Err parsing errors\n");
+d251 10
+@
+
+
+1.10
+log
+@Added extensive documentation in the form of embedded perlpod.
+@
+text
+@d54 2
+@
+
+
+1.9
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.
+@
+text
+@d1 53
+@
+
+
+1.8
+log
+@Added utilities file (with debugging stuff and generalization of
+instance-variable access for various classes), and segment manager
+(provides generic segmentation services).  'tm' submodule will contain
+high-level document type (htype) "chunkers".  added close_doc message to
+hsk.txt.
+@
+text
+@a104 1
+        #&emit("sub send_$msgname { eval {\&raw_write(\&pack_msg(\@@_, $types))} }");
+a108 1
+        #&emit("sub receive_$msgname { eval{\&unpack_msg($types)} }"); # "
+d171 1
+a171 1
+    unless (defined &{"lang_$Lang::emit_const"}) {
+@
+
+
+1.7
+log
+@no longer a need for http transport mgr; using LWP perl module.
+completed multilanguage support for msgdef generation.  added messages
+for doc open and chunk xmission to hsk.txt.  added monitor calls for
+showing open documents.  modified testdrv to use as generic send/receive
+of any messags defined in hsk.txt.  began working on doc.pl document
+abstraction.
+@
+text
+@d87 1
+a87 1
+    warn "Message: $msgname\n" if $Debug;
+d122 2
+a123 1
+        $Err++, warn "Undefined macro $1 at $Line" unless defined $Const{$1};
+d136 1
+a136 1
+        warn "Unrecognized line - $Exp";
+d178 1
+a178 1
+        warn "$Err parsing errors\n";
+@
+
+
+1.6
+log
+@moved some globals into config file.  first cut at mainloop.  created
+directories for front-end servers, transport managers, and doc type
+segmenters.  split out message-parsing-code generation so that various
+language back-ends can be used, allowing message code to be generated
+automatically for clients in different languages; say 'perl5 msgdefs.pl
+<lang>' to do it.
+@
+text
+@d75 1
+a75 1
+    &emit("sub $varname { ($value) }");
+d103 3
+a105 2
+    if ($direction =~ />/) {
+        &emit("sub send_$msgname { eval {\&raw_write(\&pack_msg(\@@_, $types))} }");
+d108 3
+a110 2
+    if ($direction =~ /</ ) {
+        &emit("sub receive_$msgname { eval{\&unpack_msg($types)} }"); # "
+a111 2
+        &emit("\$Nextmsg = '$replname';")
+            if defined($replname); #"
+d162 1
+d172 3
+a174 1
+    require "lang_$Lang.pl" or die "lang_$Lang.pl: $!";
+@
+
+
+1.5
+log
+@Added support for monitoring (to external GUI monitor) in mon.pl.
+currently talks to tcl/tk monitor app via udp packets.
+@
+text
+@d156 7
+d166 6
+d174 2
+a175 1
+        die "$Err parsing errors\n";
+d177 1
+a177 1
+    eval($Code);
+d179 8
+@
+
+
+1.4
+log
+@Kerberos handshake works.  Need to put in code to actually check fields
+of received packets, timestamps, etc., and remove debugging printf's.
+@
+text
+@d104 1
+a104 1
+        &emit("sub send_$msgname { \&raw_write(\&pack_msg(\@@_, $types)) }");
+d108 1
+a108 1
+        &emit("sub receive_$msgname { \&unpack_msg($types) }"); # "
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d82 1
+a82 1
+    my ($msgname, $direction, $replname, @@args);
+d98 1
+d101 1
+d104 1
+a104 1
+        &emit("sub send_$msgname { \&raw_write(pack_msg(\$_[0], \@@_, $args)) }");
+d107 2
+a108 2
+    if ($direction =~ /</ && defined($replname)) {
+        &emit("sub receive_$msgname { \&unpack_msg($args) }"); # "
+d110 2
+a111 1
+        &emit("\$Nextmsg = '$replname';"); #"
+d158 1
+a158 1
+    $Debug = &main::DbgMode;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d9 2
+d12 1
+d14 1
+d87 1
+d99 1
+a99 1
+    my $args = join(",", $args);
+d105 2
+a106 2
+    if ($direction =~ /</) {
+        &emit("sub receive_$msgname { unpack_msg($args) }"); # "
+d113 1
+a113 1
+    $Exp =~ s|^//.*$||m;
+d118 4
+a121 1
+    $Exp =~ s/\$(\S+)/$Const{$1}/eg;         # macro subst
+d128 1
+a128 1
+    } elsif ($Exp =~ m|^//|) {
+d132 2
+a133 1
+        warn "Unrecognized line";
+a139 1
+    warn "*** Emitting @@_" if $Debug;
+d145 1
+a145 1
+    open(M, "/disks/barad-dur/now/pythia/fox/work/GloMop/hsk.txt") or die $!;
+d153 9
+a161 2
+&parse;
+eval($Code);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d97 1
+a97 1
+        &emit("sub send_$msgname { pack_msg(\$_[0], \@@_, $args) }");
+d101 1
+a101 1
+        &emit("sub receive_$msgname { unpack_msg(\$_[0], $args);"); # "
+@
+
+
+1.1.1.1
+log
+@gmproxyd, for real. All Proxy perl code will live here.
+@
+text
+@@

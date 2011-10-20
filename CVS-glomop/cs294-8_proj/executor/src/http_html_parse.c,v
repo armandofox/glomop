@@ -1,0 +1,570 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.12.15.00.36.34;	author randit;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.12.09.06.36.32;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Cookie now must be a 16 byte Hexadecimal ASCII encoded string.
+Port number is a command line argument: ./executor -p 5004
+Will truncate stderr and stdout if use same COOKIE for a subsequent job.
+@
+text
+@/*
+ * http_html_parse.c
+ *
+ * This file contains the HTTP and HTML parsing functionality needed to
+ * extract out parameters, commands, and cookies from client or
+ * economic agent submissions.
+ *
+ * We'll also throw in some convenience routines for generating the
+ * responses.
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include "config_cs294.h"
+#include "http_html_parse.h"
+#include "utils.h"
+
+#define HTTP_PARSE_BUFLEN 1024
+#define HTTP_BUF_GROWTH_THRESH 64
+
+int parse_http_header(int socket, char **header, int *header_len,
+		      char **leftover, int *leftover_len)
+{
+  int return_val = PARSE_OK, hdr_len = 0, hdr_data_len = 0;
+  char *hdr = NULL, *lftover = NULL;
+  
+  hdr_len = HTTP_PARSE_BUFLEN;
+  hdr = (char *) malloc(hdr_len*sizeof(char) + 1);
+  if (hdr == NULL) {
+    DEBUG_LOG("Out of memory in parse_http_header\n", NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+
+  while (1) {
+    int res;
+    char *hdr_term;
+
+    /* test to see if we need to grow the buffer */
+    if ( (hdr_len - hdr_data_len) < HTTP_BUF_GROWTH_THRESH ) {
+      char *tmp_buf;
+
+      tmp_buf = realloc(hdr, hdr_len + HTTP_PARSE_BUFLEN + 1);
+      if (tmp_buf == NULL) {
+	DEBUG_LOG("Out of memory in parse_http_header (2)\n", NULL, NULL,
+		  NULL, NULL);
+	exit(1);
+      }
+      hdr = tmp_buf;
+      hdr_len += HTTP_PARSE_BUFLEN;
+    }
+
+    DEBUG_LOG("Pre-read: hdr_len %d, hdr_data_len %d\n",
+	      hdr_len, hdr_data_len, NULL, NULL);
+
+    /* We have space in our buffer.  Let's go ahead and read! */
+    res = read(socket, hdr + hdr_data_len, (hdr_len-hdr_data_len));
+    if (res <= 0) {
+      if ( ( (res == -1 ) && ((errno == EINTR) || (errno == EAGAIN)) )) {
+	/* Jump back to the top of the loop */
+	continue;
+      } else {
+	/* Bona fide read error happened.  Bail. */
+	free(hdr);
+	hdr = NULL;
+	return_val = PARSE_FAIL;
+	goto PARSE_EXIT;
+      }
+    }
+
+    DEBUG_LOG("read returned %d\n", res, NULL, NULL, NULL);
+    hdr_data_len += res;
+    hdr[hdr_data_len] = '\0';
+    DEBUG_LOG("Post-read: hdr_len %d, hdr_data_len %d\n",
+	      hdr_len, hdr_data_len, NULL, NULL);
+    
+    /* Look for HTTP header terminator */
+    if ( (hdr_term = strstr(hdr, "\r\n\r\n")) != NULL) {
+      hdr_term += 4;
+    } else if ( (hdr_term = strstr(hdr, "\n\n")) != NULL) {
+      hdr_term += 2;
+    } else if ( (hdr_term = strstr(hdr, "\r\r")) != NULL) {
+      hdr_term += 2;
+    } else {
+      /* didn't find terminator, keep reading */
+      continue;
+    }
+
+    DEBUG_LOG("hdr_term-hdr is %d\n", hdr_term-hdr,
+	      NULL, NULL, NULL);
+
+    if ((hdr_term - hdr) < hdr_data_len) {
+      /* must handle leftover */
+      int lftover_len = hdr_data_len - (hdr_term - hdr);
+
+      lftover = (char *) malloc(lftover_len * sizeof(char) + 1);
+      if (lftover == NULL) {
+	DEBUG_LOG("Out of memory in parse_http_header (3)\n", NULL, NULL, 
+		  NULL, NULL);
+	exit(1);
+      }
+      memcpy(lftover, hdr_term, lftover_len);
+      lftover[lftover_len] = '\0';
+      *hdr_term = '\0';
+      *header = hdr;
+      *header_len = (hdr_term - hdr);
+      *leftover = lftover;
+      *leftover_len = lftover_len;
+      goto PARSE_EXIT;
+    } else if ((hdr_term - hdr) == hdr_data_len) {
+      /* all is groovy */
+      *hdr_term = '\0';  /* we made sure to do +1 on malloc/realloc for this */
+      *header = hdr;
+      *header_len = (hdr_term - hdr);
+      *leftover = NULL;
+      *leftover_len = 0;
+      goto PARSE_EXIT;
+    } else {
+      fprintf(stderr, "This should never happen (parse_http_header)! "
+                      "Aaaugh.\n");
+      exit(1);
+    }
+  }  /* end while(1) */
+
+PARSE_EXIT:
+  return return_val;
+}
+
+
+/* Some locally scoped utility functions */
+int scan_firstline(char *line, int *method, char **url, int *url_len);
+int scan_subsequent_line(char *line, int *content_length);
+
+int scan_through_header(char *header, int header_len,
+			int *method,
+			char **url, int *url_len,
+			int *content_length)
+{
+  char  bup, *bup_ptr;
+  char *current_line, *rest_of_buffer, *end_of_line;
+  int   return_val = PARSE_OK, is_firstline = 1;
+  
+  *url = NULL;
+  *url_len = 0;
+  *content_length = -1;
+  
+  rest_of_buffer = header;
+  /* Loop through headers, pulling 'em out one at a time */
+  while ( (rest_of_buffer - header) < header_len ) {
+    current_line = rest_of_buffer;
+
+    /* look for \n terminating the current line */
+    end_of_line = strchr(current_line, '\n');
+
+    /* Wacked out HTTP - bonk out */
+    if (end_of_line == NULL) {
+      if (*url != NULL) {
+	free(*url);
+	*url = NULL;
+      }
+      return_val = PARSE_FAIL;
+      goto PARSE_EXIT;
+    }
+
+    rest_of_buffer = end_of_line + 1;
+    /* We have the \n - look for a \r before it */
+    if (end_of_line == current_line) {
+      /* Nasty case of an empty line */
+      continue;
+    }
+    if (*(end_of_line-1) == '\r') {
+      end_of_line = end_of_line - 1;
+    }
+    if (end_of_line == current_line) {
+      /* Nasty case of an empty line */
+      continue;
+    }
+
+    /* We've found our end of line - temporarily NULL term it */
+    bup = *end_of_line;
+    bup_ptr = end_of_line;
+    *end_of_line = '\0';
+
+    /* Parse out contents of the line */
+    if (is_firstline) {
+      if (scan_firstline(current_line, method, url, url_len) != PARSE_OK) {
+	/* Parsing the first line failed - bonk out */
+	if (*url != NULL) {
+	  free(*url);
+	  *url = NULL;
+	}
+	return_val = PARSE_FAIL;
+	*bup_ptr = bup;
+	goto PARSE_EXIT;
+      }
+      is_firstline = 0;
+    } else {
+      if (scan_subsequent_line(current_line, content_length) != PARSE_OK) {
+
+	/* The parsing of a subsequent line failed - bonk out */
+	if (end_of_line == NULL) {
+	  if (*url != NULL) {
+	    free(*url);
+	    *url = NULL;
+	  }
+	  return_val = PARSE_FAIL;
+	  *bup_ptr = bup;
+	  goto PARSE_EXIT;
+	}
+      }
+    }
+
+    /* restore the NULL-ed out character */
+    *bup_ptr = bup;
+  }
+
+PARSE_EXIT:
+  return return_val;
+}
+
+
+
+int scan_firstline(char *line, int *method, char **url, int *url_len)
+{
+  char *first_space, *next_space, *url_start;
+
+  /* Grab the method */
+  if (strncmp(line, "GET ", 4) == 0) {
+    *method = HEADER_GET;
+  } else if (strncmp(line, "POST ", 5) == 0) {
+    *method = HEADER_POST;
+  } else if (strncmp(line, "HEAD ", 5) == 0) {
+    *method = HEADER_HEAD;
+  } else {
+    *method = HEADER_UNKNOWN;
+  }
+
+  /* Now look for the URL */
+  first_space = strchr(line, ' ');
+  if (first_space == NULL) {
+    return PARSE_FAIL;
+  }
+  while (*(first_space + 1) == ' ')
+    first_space++;
+  url_start = first_space + 1;    /* now points to beginning of the URL */
+  next_space = strchr(url_start, ' ');
+  if (next_space == NULL) {
+    return PARSE_FAIL;
+  }
+
+  /* Figure out the length of the URL, allocate a buffer, and copy it */
+  *url_len = next_space - url_start;
+  DEBUG_LOG("url_len is %d\n", *url_len, NULL, NULL, NULL);
+  *url = (char *) malloc(sizeof(char) * (*url_len) + 1);
+  if (*url == NULL) {
+    DEBUG_LOG("Out of memory in scan_first_line\n", NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+  memcpy(*url, url_start, *url_len);
+  *(*url + (*url_len)) = '\0';
+  return PARSE_OK;
+}
+
+int scan_subsequent_line(char *line, int *content_length)
+{
+  char *colon, *start_digit;
+  int  clen, num;
+
+  if (strncasecmp(line, "content-length:", 15) != 0)
+    return PARSE_OK;
+
+  /* find the first non-whitespace character after the : */    
+  colon = strchr(line, ':');
+  start_digit = colon + 1;
+  while (isspace(*start_digit))
+    start_digit++;
+
+  if ( (num = sscanf(start_digit, "%d", &clen)) != 1) {
+    return PARSE_FAIL;
+  }
+
+  *content_length = clen;
+  return PARSE_OK;
+}
+
+int get_rest_of_data(int socket,
+		     char **leftover_buffer,
+		     int *leftover_len,
+		     int chars_left_to_read)
+{
+  int retval = PARSE_OK;
+  char *temp;
+
+  DEBUG_LOG("leftover_len is %d, chars_left is %d\n",
+	    *leftover_len, chars_left_to_read, NULL, NULL);
+
+  if (*leftover_len == 0){
+    temp = (char *)malloc(chars_left_to_read * (sizeof(char)) + 1);
+    
+    if (temp == NULL) {
+      DEBUG_LOG("Out of memory in get_rest_of_datae\n", NULL, NULL, NULL, 
+		NULL);
+      exit(1);
+    }
+  }
+  else {
+    temp = (char *) realloc(*leftover_buffer, 
+	    (*leftover_len + chars_left_to_read + 1) * (sizeof(char)));
+    if (temp == NULL) {
+      DEBUG_LOG("Out of memory in get_rest_of_datae\n", NULL, NULL, NULL, 
+		NULL);
+      exit(1);
+    }
+  }
+
+  *leftover_buffer = temp;
+
+  if (correct_read(socket,temp + *leftover_len, chars_left_to_read) !=
+      chars_left_to_read) {
+    if (*leftover_len ==0){
+      free (temp);
+    }
+    return (PARSE_FAIL);
+  }
+  *leftover_len += chars_left_to_read;
+  *(temp + *leftover_len) = '\0';
+  return (PARSE_OK);
+}
+
+int parse_URL(char *url,
+	      char **cookie,
+	      char **command)
+{
+  /* We know the structure of URLs are /COOKIE/command */
+  if (*url != '/')
+    return PARSE_FAIL;
+
+  *cookie = url+1;
+  *command = strchr(*cookie, '/');
+  if (*command == NULL)
+    return PARSE_FAIL;
+
+  **command = '\0';
+  *command += 1;
+  return PARSE_OK;
+}
+
+int add_name_value_to_buffer(char **buffer, int *buf_len,
+			     char *name, char *value)
+{
+  int additional_space = strlen(name) + strlen(value);
+  char *tmp;
+  
+  tmp = realloc(*buffer, *buf_len + additional_space + 1);
+  if (tmp == NULL) {
+    DEBUG_LOG("Out of memory in add_name_value_to_buffer\n",
+	      NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+  sprintf(tmp + *buf_len, "%s=%s\r\n", name, value);
+  *buffer = tmp;
+  *buf_len = *buf_len + additional_space;
+  return PARSE_OK;
+}
+
+int add_string_to_buffer(char **buffer, int *buf_len,
+			 char *string)
+{
+  int additional_space = strlen(string);
+  char *tmp;
+  
+  tmp = realloc(*buffer, *buf_len + additional_space + 1);
+  if (tmp == NULL) {
+    DEBUG_LOG("Out of memory in add_name_value_to_buffer\n",
+	      NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+  sprintf(tmp + *buf_len, "%s", string);
+  *buffer = tmp;
+  *buf_len = *buf_len + additional_space;
+  return PARSE_OK;
+}
+
+int prepend_response_header(char **buffer, int *buf_len,
+			    char *response_value,
+			    char *content_type)
+{
+  int additional_space;
+  char *tmp;
+  char length[64];
+  char savechar;
+  
+  sprintf(length, "%d", *buf_len);
+
+  additional_space = strlen("HTTP/1.0 \r\n") + strlen(response_value)
+    + strlen("content-length: \r\n\r\n") + strlen(length) +
+    + strlen("content-type: \r\n") + strlen(content_type);
+
+  tmp = realloc(*buffer, *buf_len + additional_space + 1);
+  if (tmp == NULL) {
+    DEBUG_LOG("Out of memory in add_name_value_to_buffer\n",
+	      NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+
+  /* Our sprintf will trounce once character with a NULL - save it */
+  if (*buf_len)
+    savechar = *tmp;
+
+  /* Move the buffer over to the right to make room for the header */
+  memmove(tmp+additional_space, tmp, *buf_len);
+
+  /* Slam down the header and restore our trounced character */
+  sprintf(tmp, 
+	  "HTTP/1.0 %s\r\nContent-type: %s\r\nContent-length: %s\r\n\r\n",
+	  response_value, content_type, length);
+  *(tmp + additional_space) = savechar;
+
+  *buf_len += additional_space;
+  *buffer = tmp;
+
+  return PARSE_OK;
+}
+
+/* The following was borrowed from the public domain utility
+   "cgi-util.h" by Bill Kendrick */
+
+char  x2c(char *what);
+void  unescape_url(char *url);
+void  plustospace(char *str);
+
+char x2c(char *what)
+{
+  register char digit;
+  
+  digit = (what[0] >= 'A' ? ((what[0] & 0xdf) - 'A')+10 : (what[0] - '0'));
+  digit *= 16;
+  digit += (what[1] >= 'A' ? ((what[1] & 0xdf) - 'A')+10 : (what[1] - '0'));
+  return (digit);
+}
+
+void unescape_url(char *url)
+{
+  register int x,y;
+  
+  for (x=0, y=0; url[y]; ++x, ++y)
+    {
+      if ((url[x] = url[y]) == '%')
+        {
+          url[x] = x2c(&url[y+1]);
+          y+=2;
+        }
+    }
+  url[x] = '\0';
+}
+
+void plustospace(char *str)
+{
+  register int x;
+  
+  for (x=0; str[x]; x++)
+    if (str[x] == '+')
+      str[x] = ' ';
+}
+
+int scan_name_value(char *buffer,
+		    char **name, char **value,
+		    char **next_buffer)
+{
+  char *name_start, *name_end, *val_start, *val_end, *next;
+  char *tmp;
+
+  *next_buffer = NULL;
+
+  name_start = buffer;
+  while ( (*name_start == '&') || (*name_start == '\r') ||
+	  (*name_start == '\n'))
+    name_start++;
+
+  /* Look for name= */
+  tmp = strchr(name_start, '=');
+  if (tmp == NULL)
+    return PARSE_FAIL;
+  name_end = tmp;
+
+  /* look for value& or value\r or value\n or value\0 */
+  val_start = tmp+1;
+  tmp = strchr(name_start, '&');
+  if (tmp == NULL) {
+    tmp = strchr(name_start, '\r');
+    if (tmp == NULL) {
+      tmp = strchr(name_start, '\n');
+      if (tmp == NULL) {
+	tmp = strchr(name_start, '\0');
+	if (tmp == NULL)
+	  return PARSE_FAIL;
+      }
+    }
+  }
+  val_end = tmp;
+
+  /* Go ahead and allocate some buffers */
+  *name = (char *) malloc(sizeof(char)*(1 + name_end-name_start));
+  *value = (char *) malloc(sizeof(char)*(1 + val_end-val_start));
+  if ((*name == NULL) || (*value == NULL)) {
+    DEBUG_LOG("Out of memory in scan_name_value\n",
+	      NULL, NULL, NULL, NULL);
+    exit(1);
+  }
+  *next_buffer = val_end;
+
+  /* Copy in the data, remembering to NULL-terminate */
+  memcpy(*name, name_start, name_end-name_start);
+  *(*name + (name_end-name_start)) = '\0';
+  memcpy(*value, val_start, val_end-val_start);
+  *(*value + (val_end-val_start)) = '\0';  
+
+  /* Now do the plus-to-space and unescaping */
+  plustospace(*name);
+  plustospace(*value);
+  unescape_url(*name);
+  unescape_url(*value);
+
+  return PARSE_OK;
+}
+
+
+
+@
+
+
+1.1
+log
+@Added some files that implement the command parser and helper
+functions.
+@
+text
+@d528 3
+@

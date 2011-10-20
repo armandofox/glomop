@@ -1,0 +1,167 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.03.20.17.52.11;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.03.20.17.47.13;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Added summary author to summaries
+@
+text
+@<html>
+<title>
+Postgres Storage System
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+The Design of the Postgres Storage System
+</h1>
+<strong>
+Michael Stonebraker
+</strong>
+<p>
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+A novel storage system for Postgres is presented - transactions are
+supported without needing WAL (instantaneous crash recovery), full history
+of database can be kept, and the design is of many asynchronous processes,
+enabling parallelism.
+</p>
+
+<h2>Relevance</h2>
+A cool storage system - much simpler than ARIES, although much less
+rigorously presented and analyzed.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> How often will people really want historical queries?
+     <Li> There is nothing in this paper that convinces me of the
+	  correctness of this storage system in all failure modes.
+     <li> what is the real overhead of vaccuuming?  Seems analogous to
+	  &quot;cleaning&quot; in LFS, biggest point of contention in LFS
+	  is cost of cleaning.
+     <li> the concurrency control section is very ambiguous - I read it
+	  quite carefully, but cannot glean an understanding of exactly how
+	  concurrency control works in Postgres.
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> No data is ever overwritten - all updates are inserts
+     <li> transactions:
+	  <ul>
+	       <li> transaction identifier (XID);  transaction log has 2
+		    bits per transaction indicating committed, aborted, or
+		    in progress.
+	       <li> tail of log - from oldest active transaction to
+		    present.  body of log - transactions are not in
+		    progress, so only need 1 bit to describe
+		    (committed/aborted).
+	       <li> bloom filter to compress log
+	  </ul>
+     <li> relational storage:
+	  <ul>
+	       <LI> one file per relation (arbitrary length achieved with
+		    continuation list)
+	       <li> each record contains (in addition to data):
+		    <ul>
+			 <li> OID: system-assigned unique record ID
+			 <li> Xmin: transaction identifier of the
+			      interaction inserting record
+			 <li> Tmin: commit time of Xmin
+			 <li> Cmin: command ID of insertion interaction
+			 <li> Xmax: transaction id of interaction deleting
+			      record
+			 <li> Tmax: commit time of Xmax
+			 <li> Cmax: command ID of deletion interaction
+			 <li> PTR: forward pointer to next record for
+			      relation.
+		    </ul>
+	       <li> when record is updated, store compressed deltas in new
+		    record. The initial record is called anchor point;
+		    successive updates are found through PTR chain, and are
+		    called delta records.
+	       <li> Tmin and Tmax can be used for historical queries.
+	  </ul>
+     <li> concurrency control:
+	  <ul>
+	       <li> two-phase locking for concurrency, implying time-stamps
+		    in records must be set to commit time of each
+		    transaction &quot;in order to avoid anomolous
+		    behaviour&quot;.
+	       <li> time stamps are filled in asynchronously at time
+		    transaction commits (into a TIME relation which stores
+		    commit time of each transaction).
+	       <li> each relation in POSTGRES is tagged with archival
+		    designation - either no archive (no historical
+		    queries), light archive (some historical queries, but
+		    little expected), or heavy archive.  If no archive,
+		    Tmin and Tmax never filled in.  If light archive,
+		    whenever historical query, commit Tmin and Tmax read
+		    for appropriate transaction from TIME relation (mega
+		    I/Os).  For heavy archive, the first time you hit the
+		    TIME relation, but then you store Tmin and Tmax in the
+		    appropriate queried record.
+	  </ul>
+     <li> archival system
+	  <ul>
+	       <li> periodically (or continuously in background)
+		    &quot;vaccuum&quot; the disk, which sweeps old and
+		    invalid records to a WORM archive.  If aborted, just
+		    reclaim space.  If committed, copy to archive.
+	       <li> build arbitrary number of secondary indexes on
+		    archive.  Indexes are normally stored on magnetic
+		    device, but if they become large, may split them across
+		    magnetic and WORM.
+	       <li> vacuuming phases:
+		    <ol>
+			 <li> write an archive record and its associated
+			      index records
+			 <li> write a new anchor point in the current DB
+			 <li> reclaim the space occupied by the old anchor
+			      point and its delta records
+		    </ol>
+	       <li> shows that survives crashes, with worst case being
+		    allocated but never used records in archive.
+	       <li> combined mag and optical indexes - some pages of
+		    index on mag, some on optical.  pages are moved from
+		    mag to optical as index grows.
+	  </ul>
+</ul>
+
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@added acta and sonebraker storage system for postgres
+@
+text
+@d13 2
+@

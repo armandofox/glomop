@@ -1,0 +1,68 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+# @configure_input@
+
+DISTLIB = -L../lib -ldist -lclib -lmon
+LIBS = @LIBS@
+
+################# end site variables #################
+
+ifdef DEBUG
+	OPTFLAGS = -DDEBUG -g
+endif
+
+INCLUDEPATH = @INCLUDEPATH@
+INCLUDES = $(patsubst %,-I%,$(INCLUDEPATH) .)
+LDFLAGS = @LDFLAGS@
+CPPFLAGS = @CPPFLAGS@ $(INCLUDES) @DEFS@
+CFLAGS = @CFLAGS@ -Dbool=char
+CFLAGS += $(OPTFLAGS)
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef DEBUGGING
+CFLAGS += -DDEBUGGING
+endif
+
+TARGETS = perl_stub
+
+all: $(TARGETS)
+
+install: ../sbin/perl_stub
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+MYOBJS = perl_stub.o @LIBOBJS@
+MYLIBS =  -lm @LIBPERL@
+PERL_INSTALLARCHLIB = $(shell @PERL@ -e 'use Config; print $$Config{installarchlib}')
+
+LDRUNPATHOPTS = @LDRUNPATHARGS@$(PERL_INSTALLARCHLIB)/CORE
+
+perl_stub: $(MYOBJS) ../lib/libclib.a
+	$(LD) $(LDFLAGS) -o $@ $(LDRUNPATHOPTS) -u DistillerBufferFree -u InitializeDistillerCache -u Distill $^ $(DISTLIB) -L$(PERL_INSTALLARCHLIB)/CORE $(MYLIBS) $(LIBS) $(PERL_INSTALLARCHLIB)/auto/DynaLoader/DynaLoader.a @LIBTHREAD@
+
+../ptm/libdist.a:
+	cd ../ptm && $(MAKE) libdist.a
+
+snprintf.o: ../frontend/src/snprintf.c
+	$(CC) $(CPPFLAGS) -I$(PERL_INSTALLARCHLIB)/CORE $(CFLAGS) $< -c -o $@
+
+%.o: src/%.c
+	$(CC) $(CPPFLAGS) -I$(PERL_INSTALLARCHLIB)/CORE $(CFLAGS) $< -c -o $@
+
+tags:
+	find . -name \*.[ch] -print | etags -
+
+clean:
+	rm -f *.o *~ perl_stub
+
+distclean: clean
+	rm -f Makefile

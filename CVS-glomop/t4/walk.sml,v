@@ -1,0 +1,1469 @@
+head	1.15;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.15
+date	99.02.16.23.12.33;	author daw;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	99.02.16.23.03.31;	author daw;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	99.02.16.02.26.46;	author daw;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	99.01.28.23.05.22;	author daw;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	99.01.28.02.52.11;	author daw;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	99.01.23.01.36.09;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.01.15.22.03.33;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	99.01.12.22.21.32;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	99.01.12.04.25.11;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	99.01.11.20.06.22;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	99.01.08.23.42.05;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.01.08.03.53.38;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.12.08.23.05.41;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.08.22.48.32;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.07.21.34.57;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.12.07.21.34.57;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@structure Walk =
+
+    struct
+
+        open Bane.Pretty
+
+        fun idAppend id str = AST.mkIdentifier ((AST.idToString id) ^ str)
+
+        open Context
+
+        fun applyOpt f NONE = ()
+          | applyOpt f (SOME x) = f x
+	
+        val ge'     = Constraint.>=;     infix ge'
+        val eq'     = Constraint.=;      infix eq'
+        val plus'   = Constraint.+;      infix plus'
+        val minus'  = Constraint.-;      infix minus'
+        val mul'    = Constraint.*;      infix mul'
+        val div'    = Constraint./;      infix div'
+        val subset' = Constraint.subset; infix subset'
+        val union'  = Constraint.union;  infix union'
+        val const'  = Constraint.constantTerm
+        val min'    = Constraint.min;
+        val queryge = Constraint.queryge;
+        fun le' (x,y) = y ge' x;         infix le'
+        (* Because string lengths are constrained to be >= 1. *)
+        (* val top'    = Constraint.top; *)
+        fun forceLenTop t =
+              ((const' 1) subset' t; (t plus' (const' 1)) subset' t)
+
+        (* `assign (dstCtx,srcCtx)' treats the effect of `dst = src;' *)
+        fun assign (None,_) = ()
+          | assign (_,None) = ()
+          | assign (Int di, Int si) = si subset' di
+          | assign (Str {siz=ds,len=dl}, Str {siz=ss,len=sl}) =
+              (* FIX: this should do a points-to analysis. *)
+              (print "Debug: string assignment.\n";
+               sl subset' dl; ss subset' ds)
+          | assign (_,_) = (print "Error: unexpected assignment types.\n";
+                            raise (Fail "assign"))
+
+        (* `advance (Str x, Int i)' returns a `Str y' context which models
+           the effect of `y = x+i;' when x,y are strings. *)
+        (* FIX: I'm not sure if this code is correct (!) -- check it. *)
+        fun advance' (Str {siz,len}, Int iset) =
+              (* XXX: The reason why I chose this approach is subtle.
+                 (One useful property: len <= siz implies len-i <= siz-i.)
+                 An older, worse approach:
+                       (val new as Str {siz=ns,len=nl} = freshStr NONE
+                        (const' 0) subset' ns; siz subset' ns;
+                        (const' 1) subset' nl; len subset' nl; new) *)
+              let val ival = Constraint.freshTerm ()
+                   (* ^-- represents the value of i at some single instance,
+                          rather than representing the set of possible values
+                          for i across all instances. *)
+              in
+                 Constraint.makeSingleton ival;
+                 ival subset' iset;
+                 Str{siz=(siz minus' ival), len=(len minus' ival)}
+              end
+          | advance' (_,_) =
+              (print "Error: unexpected ptr advance types.\n";
+               raise (Fail "advance"))
+        fun advance (Str {siz,len}, Int i) =
+              Str {siz=(siz minus' i), len=(len minus' i)}
+          | advance (_,_) =
+              (print "Error: unexpected ptr advance types.\n";
+               raise (Fail "advance"))
+
+
+        fun freshStr x =
+              let val siz = Constraint.freshTerm ()
+                  val len = Constraint.freshTerm ()
+                  val name = case x of SOME(n) => n | NONE => "(unnamed)"
+                  fun endptToStr Constraint.Infinity = "+Infinity"
+                    | endptToStr Constraint.NegativeInfinity = "-Infinity"
+                    | endptToStr (Constraint.Int(i)) = (Int.toString i)
+                  fun rangeToStr (x,y) = (endptToStr x)^".."^(endptToStr y)
+                  fun overflow (sr,lr) =
+                        print ("Possible buffer overflow in "^name^": " ^
+                               (rangeToStr sr)^" bytes allocated, " ^
+                               (rangeToStr lr)^" bytes used.\n")
+                  fun unnatural (sr,lr) =
+                        print ("Warning: unnatural string len for "^name^": " ^
+                               (rangeToStr sr)^" bytes allocated, " ^
+                               (rangeToStr lr)^" bytes used.\n")
+              in
+                  queryge (siz, len, overflow);
+                  (* Now they are queries (don't create infeasible systems). *)
+                  queryge (siz, (const' 0), unnatural);
+                  queryge (len, (const' 1), unnatural);
+                              (* ^^^^^^^^ Even the empty str has a '\0' byte. *)
+                  Str({siz=siz,len=len})
+              end
+
+        datatype typKind = StrKind | IntKind | NoneKind;
+        fun tkind (AST.SyntacticType(_, AST.Char, _,
+                      ([AST.Array _]|[AST.Pointer _]))) = StrKind
+          | tkind (AST.SyntacticType(_, (AST.Int|AST.UnsignedInt
+	           |AST.ShortInt|AST.UnsignedShortInt|AST.LongInt
+		   |AST.UnsignedLongInt), _, [])) = IntKind
+          | tkind _ = NoneKind
+
+
+        (* A symbol table, keyed on variable name, which stores
+           information about the Context associated with that variable. *)
+        datatype varInfo = VarInfo of {varCtx : Context, visible : bool}
+
+        fun varCtx (VarInfo {varCtx,...}) = varCtx
+
+        val varMap = ref(PTUtil.IdMap.empty) : varInfo PTUtil.IdMap.map ref
+
+        fun getVarInfo id = PTUtil.IdMap.find(!varMap, id)
+
+        fun makeTemporary id =
+              let val SOME(VarInfo {varCtx,visible}) = getVarInfo id
+                  val newInfo = VarInfo {varCtx=varCtx,visible=false}
+              in
+                  varMap := PTUtil.IdMap.insert(!varMap, id, newInfo)
+              end
+
+        fun getFret funId =
+	      AST.mkIdentifier ("@@" ^ (AST.idToString funId) ^ "_return")
+
+        (* Maps function names to the list of terms representing
+           the formal parameters. *)
+        val funMap = ref(PTUtil.IdMap.empty) : Context list PTUtil.IdMap.map ref
+
+        fun unify (Str({siz=xs,len=xl}), Str({siz=ys,len=yl})) =
+               (xs eq' ys; xl eq' yl; ())
+          | unify (Int(x), Int(y)) = (x eq' y; ())
+          | unify ((Int _, Str _)|(Str _, Int _)) =
+               (print "Bad unification.\n"; raise (Fail "unify"))
+          | unify _ = ()
+
+        (* Must be run after the param-decls are traversed. *)
+        fun rememberFunParams funName params =
+              let fun lookupFormals [] = []
+                    | lookupFormals ((AST.EllipsisDecl{...})::xs) =
+                        lookupFormals xs
+                    | lookupFormals ((AST.VarDecl{name,init=NONE,...})::xs) =
+                        (case (getVarInfo name) of
+                           SOME(VarInfo {varCtx,visible}) =>
+                               varCtx::(lookupFormals xs)
+                         | NONE => (print "Saw undeclared fun param.\n";
+                                    raise (Fail "FunParams")))
+                    | lookupFormals _ = (print "Saw bad fun param.\n";
+                                         raise (Fail "FunParams"))
+                  fun unifyl ([],[] )= ()
+                    | unifyl (([],_)|(_,[])) =
+                        (print "Inconsistent fun params lists.\n";
+                         raise (Fail "FunParams"))
+                    | unifyl (x::xs,y::ys) = (unify (x,y); unifyl (xs,ys))
+
+                  val pInfo = lookupFormals params
+              in 
+                  case PTUtil.IdMap.find(!funMap, funName) of
+                      NONE => ()
+                    | SOME pInfo' => unifyl (pInfo,pInfo');
+                  funMap := PTUtil.IdMap.insert(!funMap, funName, pInfo);
+                  ()
+              end
+
+        val allocID = ref 0
+        fun freshAllocStr () =
+              let val i = !allocID
+                  val v = AST.mkIdentifier ("alloc@@" ^ Int.toString(i))
+              in  allocID := i+1;
+                  freshStr(SOME(AST.idToString v))
+              end
+
+        fun reset () = (
+               varMap := PTUtil.IdMap.empty;
+               funMap := PTUtil.IdMap.empty;
+               allocID := 0;
+               Constraint.reset ()
+              )
+
+        val warnedStrcat = ref false
+        fun warnStrcat () =
+               if not (!warnedStrcat)
+               then (print "Warning: str[n]cat() calls are not checked...\n";
+                      warnedStrcat := true)
+               else ()
+
+        (* FIX: would be nice to detect strings which might not be
+           nul-terminated, e.g. after a strncpy(). *)
+        (* FIX: would be nice to detect char *'s which might hold NULL
+           values that might be dereferenced, e.g. after a strchr(). *)
+        (* FIX: add the memcopy(), bcopy(), type of calls.
+           See e.g. man 3 bstring. *)
+        (* FIX: To do:
+            strcoll(), strxfrm(), strspn(),
+            strpbrk(), strtok(), strerror(), index(), rindex(),
+            strsep(), strsignal(), stpncpy(), stpcpy(), swab(),
+            sprintf(), snprintf(), scanf(), gethostbyname()->h_length,
+            gethostbyaddr()->h_{name,length},
+            vsprintf(), syslog(), getenv(), putenv(), argv[], argc,
+            fread(), sscanf(), read(), gethostname(), environ
+         *)
+        (* FIX: double-check semantics.  Watch out for off-by-one errors;
+           e.g. strlen(s) = #len s - 1. *)
+
+        fun checkStrOp "strcpy@@0" [Str {siz=ds,len=dl},
+                                 src as Str {siz=ss,len=sl}] =
+               (sl subset' dl; SOME(src))
+          | checkStrOp "strncpy@@0"
+                   [dst as Str {siz=ds,len=dl}, Str {siz=ss,len=sl},Int i] =
+               ((min'(sl,i)) subset' dl; SOME(dst))
+          | checkStrOp "strlen@@0" [Str {siz,len}] =
+               (* Subtract one for the '\0'. *)
+               SOME(Int(len minus' (const' 1)))
+          | checkStrOp "strdup@@0" [Str {siz,len}] =
+               let val new as Str {siz=ns,len=nl} = freshAllocStr ()
+               in
+                   (* FIX: This is suboptimal, because if `len' is a
+                      non-trivial range (e.g. not just a singleton set),
+                      then the program will always find a (probably
+                      spurious) vulnerability in the strdup().
+                      Can we fix this somehow?? *)
+                   (* FIX: Is unifying `ns' and `len' is a good idea?
+                      Can you get get ``backwards information flow''? *)
+                   ns eq' len;
+                   len subset' nl;
+                   SOME(new)
+               end
+          | checkStrOp "strcat@@0"
+                   [dst as Str {siz=ds,len=dl}, Str {siz=ss,len=sl}] =
+               (* FIX: It's impossible to model strcat() correctly in a
+                  flow-insensitive analysis, so we punt.  Oh well. *)
+               (warnStrcat (); sl subset' dl; SOME(dst))
+          | checkStrOp "strncat@@0"
+                   [dst as Str {siz=ds,len=dl}, Str {siz=ss,len=sl}, Int i] =
+               (* Be warned: the semantics of strncat() are a little confusing.
+                  Check the libc code yourself; don't trust anything you read
+                  here. *)
+               (* FIX: It's very hard to model strncat() accurately in a
+                  flow-insensitive analysis.  I do something very pessimistic;
+                  as a side effect, strncat() will almost always trigger false
+                  alarms, unless you use e.g.
+                      strncat(a, b, sizeof(a) - strlen(b) - 1);
+                  It would be nice to do better.  Maybe we can assume
+                  optimistically that any given strncat() will be
+                  executed only "once"? *)
+               (warnStrcat ();
+                ((min'(sl minus' (const' 1), i)) plus' dl) subset' dl;
+                SOME(dst))
+          | checkStrOp ("strchr@@0"|"strrchr@@0"|"strstr@@0")
+                   [s as Str {siz,len}, _] =
+               let val n as Str {siz=ns,len=nl} = freshStr NONE
+               in
+                   (const' 1) subset' ns; siz subset' ns;
+                   (const' 1) subset' nl; len subset' nl;
+                   (* (ns minus' nl) ge' (siz minus' len) *)
+                   SOME(n)
+               end
+               (* No longer as good.
+               let val n = Constraint.freshTerm ()
+                    (* ^-- represents the index into the string where the
+                           named character first (last) appears, so that the
+                           return value of the str*() function is s+i. *)
+               in  (const' 0) subset' n; (len minus' (const' 1)) subset' n;
+                   case advance (s,Int(n)) of
+                       x as Str _ => SOME(x)
+                     | None       => (print "Error: str([r]chr|str)().\n";
+                                      raise (Fail "advance"))
+               end
+               *)
+          | checkStrOp "fgets@@0" [s as Str {siz,len}, Int i, _] =
+               ((const' 1) subset' len; i subset' len; SOME(s))
+          | checkStrOp "gets@@0" [s as Str {siz,len}] =
+               (print "Dear god, a call to gets()!\n";
+                forceLenTop len; SOME(s))
+          (* sprintf(), snprintf(), vsprintf() should have been caught earlier.
+             (sprintf, snprintf, vsprintf don't fit in here, because
+             we need to know the value of the string passed as the
+             format (not the context associated with the format string).) *)
+          | checkStrOp ("sprintf@@0"|"snprintf@@0"|"vsprintf@@0") _ =
+               raise (Fail "unexpected [v]s[n]printf")
+          | checkStrOp "getenv@@0" _ =
+               let val t = Constraint.freshTerm ();
+                   val s = Str {siz=t,len=t}
+               in  forceLenTop t; SOME(s)
+               end
+          | checkStrOp ( "malloc@@0" | "valloc@@0" | "xmalloc@@0" | "alloca@@0"
+                     | "__builtin_alloca@@0" ) [Int i] =
+                (* FIX: Should also add calloc, realloc support. *)
+                let val new as Str {siz=ns,len=nl} = freshAllocStr ()
+                in
+                    i eq' ns;
+                    SOME(new)
+                end
+          | checkStrOp _ _ = NONE
+
+        
+        fun getStr id =
+              (* Need to strip @@0 and quotes before running `size'. *)
+              let val all = AST.idToString id
+                  val noAt = PTUtil.beforeLast #"@@" all
+                  val noFinalQuote = PTUtil.beforeLast #"\"" noAt
+                  val noQuotes = PTUtil.afterFirst #"\"" noFinalQuote
+              in
+                  noQuotes
+              end
+
+        (* Model a printf() style invocation.
+           `f' is the format string, `pl' is the list of Context's
+           of the parameters following the format string.
+           Returns a Context corresponding to the result. *)
+        fun parseFmt f pl =
+              let open Substring
+                  val SOME pct = Char.fromString "%"
+              in
+              case first f of
+                  NONE => const' 1
+                | SOME x =>
+                    if x=pct
+                    then case first (slice (f,1,NONE)) of
+                             NONE => const' 2
+                           | SOME x' => expandPercent x' (slice (f,2,NONE)) pl
+                    else (const' 1) plus' (parseFmt (slice (f,1,NONE)) pl)
+              end
+        and expandPercent c xs pl =
+              if SOME(c)=(Char.fromString "%")
+              then (const' 1) plus' (parseFmt xs pl)
+              else if SOME(c)=(Char.fromString "s")
+              then case pl of
+                       (Str {siz,len})::ps =>
+                             (* Don't double-count the '\0'. *)
+                             len minus' (const' 1) plus' (parseFmt xs ps)
+                     | _ => raise (Fail "printf")
+              else if Char.contains "#0-+hlL" c
+              then case Substring.first xs of
+                        SOME x =>
+                            expandPercent x (Substring.slice (xs,1,NONE)) pl
+                      | NONE => raise (Fail "printf")
+              else if Char.contains "dixXuU" c
+              then case pl of
+                       ((Int(_)|None)::ps) => 
+                           (* For a 64-bit long, it can take up to 19 digits
+                              to express 2^63 base 10, plus one for the minus
+                              sign. *)
+                           let val t = Constraint.freshTerm ()
+                           in  (const' 1) subset' t; (const' 20) subset' t;
+                               t plus' (parseFmt xs ps)
+                           end
+                      | _ => raise (Fail "printf")
+              else if SOME(c)=(Char.fromString "c")
+              then case pl of
+                       ((Int(_)|None)::ps) => 
+                          (const' 1) plus' (parseFmt xs ps)
+                     | _ => raise (Fail "printf")
+              else raise (Fail "printf")
+
+        (* Check a sprintf() call.  Called with list of (unprocessed) args
+           and list of (processed) arg-contexts. *)
+        fun modelSprintf (_::AST.Constant(AST.String fmtId,_)::_)
+                         ((dst as Str {siz=ds,len=dl})::_::rest) =
+              let val fmt = getStr fmtId
+                  val _ = print ("Debug: sprintf(.,\""^fmt^"\",...).\n")
+                  val parsedLen = parseFmt (Substring.all fmt) rest
+              in
+                  parsedLen subset' dl;
+                  dst
+              end
+          | modelSprintf _ _ =
+              (print "Weird sprintf() call.\n"; raise (Fail "modelSprintf"))
+        fun modelSnprintf (_::_::AST.Constant(AST.String fmtId,_)::_)
+                         ((dst as Str {siz=ds,len=dl})::Int(n)::_::rest) =
+              let val fmt = getStr fmtId
+                  val _ = print ("Debug: snprintf(.,"^(Constraint.toString n)^
+                                 ",\""^fmt^"\",...).\n")
+                  val parsedLen = parseFmt (Substring.all fmt) rest
+              in
+                  (min' (parsedLen,n)) subset' dl;
+                  dst
+              end
+          | modelSnprintf _ _ =
+              (print "Weird snprintf() call.\n"; raise (Fail "modelSnprintf"))
+              
+
+
+        (* These are here because ML doesn't allow forward references, argh!
+           All this just so freshVarCtx can call expression. *)
+        (*
+          freshVarCtx (AST.SyntacticType(_, AST.Char, _,
+	           [AST.Array(SOME(AST.Constant(AST.Integer(i),_)))] )) v =
+         *)
+        fun freshVarCtx lookup (AST.SyntacticType(_, AST.Char, _,
+	           [AST.Array(SOME(e))] )) v =
+              (case expr lookup e of
+                   Int i =>
+	             let val s as Str {siz,len} = freshStr(SOME(v))
+	             in
+	                 siz eq' i;
+                         s
+	             end
+                 | _ => freshStr(SOME(v)))
+          | freshVarCtx _ typ v =
+              case tkind typ of
+                  StrKind => freshStr(SOME(v))
+                | IntKind => Int(Constraint.freshTerm ())
+                | _       => None
+        and createVar lookup id visible typ =
+            let val vname = AST.idToString id
+                val varCtx = freshVarCtx lookup typ vname
+                val isVisible = visible andalso (not (PTUtil.varIsFretName id))
+                      (* ^-- Don't print function return info. *)
+                val vInfo = VarInfo {varCtx=varCtx, visible=isVisible}
+            in
+                (print ("Debug: New var " ^ vname ^ " ["
+		 ^ (Context.toString varCtx) ^ "]\n"));
+                varMap := PTUtil.IdMap.insert(!varMap, id, vInfo);
+                vInfo
+            end
+        and newVar lookup id visible typ =
+            let val vOpt = getVarInfo id
+            in  case vOpt of
+                    SOME v => (print ("Debug: var "^(AST.idToString id)^
+                                      " already exists, not creating.\n"); v)
+                  | NONE   => createVar lookup id visible typ
+            end
+        and newUnknownVar lookup id =
+              (* Generate fresh varinfo's even when we can't
+                 find the variable, because it might be a previously-
+                 unmentioned symbol that isn't bound until link time. *)
+              let val fallback = AST.SyntacticType(NONE, AST.Void, [], [])
+                  val t = case lookup AST.VarNames id of
+                              (SOME(AST.SymInfo {typ,...})) => typ
+                            | NONE => (print ("Debug: Couldn't find typ for "
+                                         ^ (AST.idToString id)
+                                         ^ ", assuming void.\n");
+                                       fallback)
+              in
+                print ("Debug: Couldn't find variable info for "
+                       ^ (AST.idToString id) ^ "; trying to make "
+                       ^ "something up.\n");
+                varCtx (newVar lookup id true t)
+              end
+        and applyFun lookup id pl = (
+              case checkStrOp (AST.idToString id) pl of
+                  SOME(x) => x
+                | NONE =>
+                    let fun mapAssign (x::xs) (y::ys) =
+                              (assign (x,y); mapAssign xs ys)
+                          | mapAssign [] [] = ()
+                          | mapAssign _ _ =
+                              (print "Wrong number of fun args?\n";
+                               raise (Fail "FunParams"))
+                        val formals = PTUtil.IdMap.find(!funMap, id)
+                        val fret = getFret id
+                    in
+                      case formals of
+                        NONE => () (* FIX: should really do newUnknownVar's *)
+                      | SOME(formalCtxs) => mapAssign formalCtxs pl;
+                      case getVarInfo fret of
+                        NONE => (print ("Warning: no return info for "
+                                        ^ (AST.idToString id) ^ "().\n");
+                                 newUnknownVar lookup fret)
+                      | SOME vInfo => varCtx vInfo
+                    end
+             )
+
+
+
+
+
+        and expr lookup (AST.Variable (v,_)) = (
+              case getVarInfo v of
+                  NONE => newUnknownVar lookup v
+                | SOME vInfo => varCtx vInfo
+             )
+          | expr _ (AST.Constant (AST.Integer(i),_)) =
+              Int(const' i)
+          | expr _ (AST.Constant (AST.Character(c),_)) =
+              if (AST.idToString c)="'\\0'" then StringTerminator else None
+          | expr _ (AST.Constant (AST.String(id),_)) =
+              let val str = getStr id
+                  (* Don't forget to add one for the trailing '\0'! *)
+                  val slen = 1 + (size str)
+	          val t = const' slen
+              in
+	          print ("Debug: saw " ^ str ^ "; size(" ^ str
+                          ^ ") = " ^ (Int.toString slen) ^ ".\n");
+	          Str({siz=t, len=t})
+              end
+          | expr _ (AST.Constant _) = None
+          | expr lookup (AST.Conditional(e1, e2, e3, _)) =
+              (* Merge control flow *)
+              (expr lookup e1;
+               case (expr lookup e2, expr lookup e3) of
+                   (Int i,Int j) =>
+                      let val t = Constraint.freshTerm ()
+                      in
+                        i subset' t; j subset' t;
+                        Int(t)
+                      end
+                 | (Str {siz=s2,len=l2}, Str {siz=s3,len=l3}) =>
+                      let val s as Str {siz=ns,len=nl} = freshStr NONE
+                      in  
+                        s2 subset' ns; s3 subset' ns;
+                        l2 subset' nl; l3 subset' nl;
+                        s
+                      end
+                 | (StringTerminator,StringTerminator) => StringTerminator
+                 | (None,_) => None
+                 | (_,None) => None
+                 | (_,_) => (print "Saw weird conditional; bad code?\n";
+                             raise (Fail "BadCode"))
+              )
+          | expr lookup (a as AST.Application(e, el, _, _)) =
+              let val e' = expr lookup e
+                  val el' = map (expr lookup) el
+              in
+                 case e' of
+                     None => (* ok *) ()
+                   | _ => (print "Bad function app?!?\n";
+		           raise (Fail "BadApp"));
+                 case e of
+                     AST.Variable (id,_) =>
+                         (case AST.idToString id of
+                              "sprintf@@0" => modelSprintf el el'
+                            | "snprintf@@0" => modelSnprintf el el'
+                            | _ => applyFun lookup id el')
+                   | _ => (print ("Warning: function pointers; "
+                                  ^ "analysis is unsafe...\n"); None)
+              end
+          | expr lookup (node as AST.Operation(AST.Incr, [e], region)) =
+                   expr lookup (AST.Assignment(e, SOME AST.Plus,
+                            AST.Constant (AST.Integer 1, region), region))
+          | expr lookup (node as AST.Operation(AST.Decr, [e], region)) =
+                   expr lookup (AST.Assignment(e, SOME AST.Minus,
+                            AST.Constant (AST.Integer 1, region), region))
+          | expr lookup (node as AST.Operation(oper, el, region)) = (
+              case (oper,map (expr lookup) el) of
+                  ((AST.Plus|AST.Minus|AST.Mul|AST.Div),[Int(i),Int(j)]) =>
+                     (case oper of
+                          AST.Plus => Int(i plus' j)
+                        | AST.Minus => Int(i minus' j)
+                        | AST.Mul => Int(i mul' j)
+                        | AST.Div => Int(i div' j))
+                | (_,[Int _, Int _]) =>
+                        (print "Unknown binary op.\n"; raise (Fail "BadOp"))
+                | (AST.UnaryMinus,[Int(i)]) =>
+                     Int(Constraint.negate i)
+                | (AST.Address,[Int _]) => (print ("Warning: int pointers; "
+                     ^ "analysis is unsafe.\n"); None)
+                | (AST.Address,[Str _]) => (print ("Warning: string pointers; "
+                     ^ "analysis is unsafe.\n"); None)
+                | (AST.Deref,[Int _]) =>
+                     (print "Dereferencing int constant!?\n";
+                      raise (Fail "BadOper"))
+                | (AST.Deref,[Str({siz,len})]) =>
+                     (* redundant, but here for emphasis *)
+                     let fun fencepost _ =
+                               print ("Possible deref after end in ``"^
+                                      (Unparse.expression node)^"''.\n")
+                     in  queryge (len, const' 1, fencepost); None
+                     end
+                | (AST.Plus,[s as Str _,i as Int _]) => advance (s,i)
+                | _ => None
+                (*
+                | (_,[(Str(_)|Int(_)),Str _]) =>
+                    (print "Int/Str op Str!?  Probably bad code.\n";
+                     raise (Fail "BadOper"))
+                | (AST.Not,[Str _]) => None
+                | (_,([None]|[None,None]|[Int _]|[Int _,Int _])) => None
+                | _ => (print "Unknown operator.\n"; raise (Fail "BadOp"))
+                *)
+              )
+          | expr lookup (AST.Assignment(e1, SOME oper, e2, region)) =
+              expr lookup (AST.Assignment(e1, NONE,
+                  AST.Operation(oper, [e1,e2], region), region))
+          | expr lookup (AST.Assignment(dst, NONE, src, _)) =
+              (* FIX: This is not right.  Should find out what dst points
+                 to and set it to src'; but we'll need a points-to analysis
+                 for that. *)
+              let val dst' = expr lookup dst
+                  val src' = expr lookup src
+              in
+                 assign (dst',src');
+                 src'
+              end
+          | expr lookup (AST.Comma(e1, e2, _)) =
+                (expr lookup e1; expr lookup e2)
+          | expr lookup (AST.Cast(t, e, _)) =
+                let val e' = expr lookup e
+                in
+                    case (tkind t,e') of
+                        (IntKind,Int _) => e'
+                      | (StrKind,Str _) => e'
+                      | _               => None
+                end
+          | expr lookup (AST.SizeOfExpr(e, _)) =
+                (case (expr lookup e) of
+                     Str({siz,len}) => Int(siz)
+                   | _  => (print "Saw a Sizeof; let's implement this later.\n";
+                           None))
+          | expr _ (AST.SizeOfTypeExpr _) =
+                (print "Saw a SizeofTypeExpr; let's implement this later.\n";
+                 None)
+          | expr lookup (AST.FieldDirect(e, id, _)) =
+                (print "Saw a FieldDirect; let's implement this later.\n";
+                 None)
+          | expr lookup (AST.FieldIndirect(e, id, region)) =
+                (print "Saw a FieldIndirect; let's implement this later.\n";
+                 None)
+          | expr lookup (AST.Postfix(oper, e, region)) =
+                expr lookup (AST.Operation(oper, [e], region))
+          | expr lookup (AST.Index(a, i, region)) =
+              expr lookup (AST.Operation (AST.Deref,
+                [AST.Operation(AST.Plus, [a, i], region)], region))
+          | expr _ (AST.Extension (stmt,_)) =
+                 case stmt of
+                     AST.Compound {decls, body, lookup, ...} =>
+                         (app (declaration lookup) decls;
+                          app (statement lookup) body;
+                          case List.last body of
+                              AST.Expression (SOME e, _) =>
+                                  expr lookup e
+                            | _ => (print ("Extension's last statement is " ^
+                                          "not an expr\n");
+                                    raise (Fail "Extension")))
+                   | _ => (print "Extension doesn't contain compound stmt\n";
+                          raise (Fail "Extension"))
+
+        and expression lookup e =
+              (expr lookup e handle ex =>
+                       (print (" "^(Unparse.expression e)^"\n"); raise ex);
+               ())
+
+
+        (* Generates constraints for expressions within the statement. *)
+        and stmt lookup (AST.Return(SOME e, SOME f, astInfo)) =
+              (* FIX: I suspect `fretvar' will have to go into some
+                 symbol table somewhere, somehow. *)
+              let val fretvar = AST.Variable(getFret f, PTUtil.nullASTInfo)
+              in
+                  expression lookup (AST.Assignment(fretvar, NONE, e, astInfo))
+              end
+          | stmt _ (AST.Return _) = ()
+          | stmt lookup (AST.Expression(SOME e, _)) =
+              expression lookup e
+          | stmt _ (AST.Expression(NONE, _)) = ()
+          | stmt lookup (AST.IfThen(e, s, _)) =
+              (expression lookup e; stmt lookup s)
+          | stmt lookup (AST.IfThenElse(e, s1, s2, _)) =
+              (expression lookup e; stmt lookup s1; stmt lookup s2)
+          | stmt lookup (AST.WhileDo(e, s, _)) =
+              (expression lookup e; stmt lookup s)
+          | stmt lookup (AST.DoWhile(s, e, _)) =
+              (expression lookup e; stmt lookup s)
+          | stmt _ (AST.GoTo _) = ()      (* Goto has no effect *)
+          | stmt lookup (AST.For(eopt1, eopt2, eopt3, s, _)) =
+            (applyOpt (expression lookup) eopt1;
+             applyOpt (expression lookup) eopt2;
+             applyOpt (expression lookup) eopt3;
+             stmt lookup s)
+          | stmt lookup (AST.Switch(e, s, _)) =
+              (expression lookup e; stmt lookup s)
+          | stmt lookup (AST.Case(_, s, _)) = stmt lookup s
+          | stmt lookup (AST.Labeled(_, s, _)) = stmt lookup s
+          | stmt _ (AST.Break _) = ()
+          | stmt _ (AST.Continue _) = ()
+            (* Break and continue have no effect *)
+          | stmt _ (AST.Compound {decls, body, lookup, ...}) =
+                (map (declaration lookup) decls;
+                 map (stmt lookup) body; ())
+
+        and statement lookup x =
+              (print ("Debug statement: "^(Unparse.statement x));
+               stmt lookup x)
+
+
+        and declaration lookup (AST.VarDecl{name, init, region, typ}) =
+            (* FIX: Need to handle the case `char a[] = "foo";' properly.
+               Currently, it finds that 4 \in len(a), but it doesn't
+               discover that siz(a) = 4. *)
+            let val newCtx = newVar lookup name true typ
+                val astInfo = {region=region, extraInfo=ref NONE}
+                val varExpr = AST.Variable(name, astInfo)
+            in
+               case init of
+                   NONE => expression lookup varExpr
+                 | SOME(AST.Initial e) => expression lookup
+                      (AST.Assignment(varExpr, NONE, e, astInfo))
+                 | SOME(AST.InitialList _) => (print "VarDecl InitialList.\n";
+                      raise (Fail "VarDecl"))
+                      (* FIX: handle array types in InitialList. *)
+            end
+          | declaration l (fd as AST.FunDef{name, decls, body, lookup, params,
+                                            region, return, ...}) = (
+	          newVar l (getFret name) false return;
+                  map (declaration lookup) params;
+                  rememberFunParams name params;
+                  map (declaration lookup) decls;
+                  map (statement lookup) body;
+		  ()
+	      )
+          | declaration lookup (f as AST.FunDecl{name, return,
+                                                 params=pOpt, ...}) = (
+                  newVar lookup (getFret name) false return;
+                  case pOpt of
+                      SOME p => (print ("Debug FunDecl: "^
+                                        (Unparse.declaration f)^"\n");
+                                 map (declaration lookup) p;
+                                 (* FIX: does this create the same formals
+                                    twice?  That'd be very bad. *)
+                                 rememberFunParams name p)
+                    | NONE   => ();
+                  ()
+              )
+          | declaration lookup (AST.EllipsisDecl{...}) = ()
+          | declaration lookup (AST.TypeDef{...}) = ()
+
+        and program (AST.Program {decls, lookup}) =
+              (map (declaration lookup) decls; Constraint.solve ())
+
+        fun parseFile filename =
+            let val _ = (print "Scanning ";
+                         print filename;
+                         print "\n")
+                val ind = TextIO.openIn filename
+                val {sourceMap, tree=result} = (CParser.parse (ind,filename)
+                                                handle (Fail s) =>
+                                                    (TextIO.closeIn ind;
+                                                     raise Fail s))
+                val _ = TextIO.closeIn ind
+            in
+                result
+            end
+
+        (* Run the (non-callgraph) analysis on a file *)
+        fun runAnalysis filename =
+            let val parsed = parseFile filename
+                val converted = Convert.convert filename parsed
+            in
+                program converted
+            end
+
+        fun walk filename = (
+
+                (* Reset the system *)
+                reset();
+                Bane.Flags.set NONE "print_dontCompress";
+                Bane.reset();
+                ExtraInfo.reset();
+
+                (* Analyze the program *)
+                runAnalysis filename;
+                ()
+        )
+
+    end
+@
+
+
+1.14
+log
+@Many small bugfixes.
+@
+text
+@d528 6
+a543 6
+                | (AST.Incr,[Int(i)]) =>
+                     expr lookup (AST.Assignment(hd el, SOME AST.Plus,
+                             AST.Constant (AST.Integer 1, region), region))
+                | (AST.Decr,[Int(i)]) =>
+                     expr lookup (AST.Assignment(hd el, SOME AST.Minus,
+                             AST.Constant (AST.Integer 1, region), region))
+@
+
+
+1.13
+log
+@Some improvements to the cycle-finding.
+@
+text
+@d196 4
+a199 3
+            sprintf(), snprintf(), scanf(), gethostbyname()->h_addrlen,
+            vsprintf(), syslog(), getenv(), putenv(), argv[],
+            fread(), sscanf(), read(), gethostname()
+d420 1
+a420 1
+                                      "already exists, not creating.\n"); v)
+@
+
+
+1.12
+log
+@More bugfixes.
+@
+text
+@d198 1
+a198 1
+            fread(), sscanf(), read()
+@
+
+
+1.11
+log
+@An attempt to use the new setsolver with the walker.
+@
+text
+@a103 13
+        fun freshVarCtx (AST.SyntacticType(_, AST.Char, _,
+	           [AST.Array(SOME(AST.Constant(AST.Integer(i),_)))] )) v =
+	      let val s as Str {siz,len} = freshStr(SOME(v))
+	      in
+	          siz eq' (const' i);
+                  s
+	      end
+          | freshVarCtx typ v =
+              case tkind typ of
+                  StrKind => freshStr(SOME(v))
+                | IntKind => Int(Constraint.freshTerm ())
+                | _       => None
+
+a112 13
+        fun createVar id visible typ =
+            let val vname = AST.idToString id
+                val varCtx = freshVarCtx typ vname
+                val isVisible = visible andalso (not (PTUtil.varIsFretName id))
+                      (* ^-- Don't print function return info. *)
+                val vInfo = VarInfo {varCtx=varCtx, visible=isVisible}
+            in
+                (print ("Debug: New var " ^ vname ^ " ["
+		 ^ (Context.toString varCtx) ^ "]\n"));
+                varMap := PTUtil.IdMap.insert(!varMap, id, vInfo);
+                vInfo
+            end
+
+a114 8
+        fun newVar id visible typ =
+            let val vOpt = getVarInfo id
+            in  case vOpt of
+                    SOME v => (print ("Debug: var "^(AST.idToString id)^
+                                      "already exists, not creating.\n"); v)
+                  | NONE   => createVar id visible typ
+            end
+
+a121 18
+        fun newUnknownVar lookup id =
+              (* Generate fresh varinfo's even when we can't
+                 find the variable, because it might be a previously-
+                 unmentioned symbol that isn't bound until link time. *)
+              let val fallback = AST.SyntacticType(NONE, AST.Void, [], [])
+                  val t = case lookup AST.VarNames id of
+                              (SOME(AST.SymInfo {typ,...})) => typ
+                            | NONE => (print ("Debug: Couldn't find typ for "
+                                         ^ (AST.idToString id)
+                                         ^ ", assuming void.\n");
+                                       fallback)
+              in
+                print ("Debug: Couldn't find variable info for "
+                       ^ (AST.idToString id) ^ "; trying to make "
+                       ^ "something up.\n");
+                varCtx (newVar id true t)
+              end
+
+d381 59
+a439 1
+        fun applyFun lookup id pl = (
+d464 4
+a467 1
+        fun expr lookup (AST.Variable (v,_)) = (
+d678 1
+a678 1
+            let val newCtx = newVar name true typ
+d690 1
+a690 1
+          | declaration _ (fd as AST.FunDef{name, decls, body, lookup, params,
+d692 1
+a692 1
+	          newVar (getFret name) false return;
+d701 1
+a701 1
+                  newVar (getFret name) false return;
+@
+
+
+1.10
+log
+@A stub to get to setsolver.c.  Lots of changes.
+Changes to the interface for ranges, etc.
+@
+text
+@d24 1
+d27 3
+a29 1
+        val top'    = (* (Constraint.top ()) plus' *) (const' 1);
+d45 1
+a45 1
+        fun advance (Str {siz,len}, Int iset) =
+d49 1
+a49 1
+                       (val new as Str {siz=ns,len=nl} = freshString NONE
+d61 5
+d83 4
+d88 5
+a92 3
+                  Constraint.queryge (siz, len, overflow);
+                  siz ge' (const' 0);
+                  len ge' (const' 1); (* Even the empty str has a '\0' byte. *)
+d301 8
+d319 1
+d324 1
+a324 1
+                top' subset' len; SOME(s))
+d334 1
+a334 1
+               in  top' subset' t; SOME(s)
+d545 5
+a549 1
+                     (len ge' (const' 1); None)
+@
+
+
+1.9
+log
+@Just archiving the in-progress version of setsolver.c.
+@
+text
+@d26 1
+a26 1
+        val top'    = (Constraint.top ()) plus' (const' 1);
+a61 12
+        fun rangeToStr (NONE,NONE) = "-Infinity..+Infinity"
+          | rangeToStr (NONE,SOME(u)) = "<="^(Int.toString u)
+          | rangeToStr (SOME(l),NONE) = ">="^(Int.toString l)
+          | rangeToStr (SOME(l),SOME(u)) =
+              if l=u then (Int.toString l)
+              else (Int.toString l)^".."^(Int.toString u)
+
+        (* `rangeLt (x,y)' = true iff x is definitely less than y,
+           i.e. 1..5 is definitely less than 6..9 but 1..7 isn't. *)
+        fun rangeLt ((_,NONE),_) = false
+          | rangeLt (_,(NONE,_)) = false
+          | rangeLt ((_,SOME(i)),(SOME(j),_)) = (i < j)
+d67 4
+d72 3
+a74 7
+                        let val maybe = if rangeLt (sr,lr)
+                                  then "Buffer overflow"
+                                  else "Possible buffer overflow"
+                        in  print (maybe^" in "^name^": " ^
+                                   (rangeToStr sr)^" bytes allocated, " ^
+                                   (rangeToStr lr)^" bytes used.\n")
+                        end
+@
+
+
+1.8
+log
+@Now handles sprintf(), snprintf().
+Fixes to Constraint.min.
+Now strings are of length >= 1.
+Various bugfixes.
+@
+text
+@d524 1
+a524 5
+                     let val t = Constraint.freshTerm ()
+                     in
+                         t ge' (Constraint.negate i);
+                         Int(t)
+                     end
+@
+
+
+1.7
+log
+@Bugfixes.  Now examples/{rlogin,getenv}.c work.
+@
+text
+@a23 1
+        val top'    = Constraint.top ();
+d25 2
+d48 1
+a48 1
+                        (const' 0) subset' nl; len subset' nl; new) *)
+d69 6
+d80 7
+a86 3
+                        print ("Possible buffer overflow in "^name^": " ^
+                               (rangeToStr sr)^" bytes allocated, " ^
+                               (rangeToStr lr)^" bytes used.\n")
+d90 1
+d248 1
+d303 1
+a303 1
+               in  (const' 0) subset' n; len subset' n;
+d310 1
+a310 1
+               ((const' 0) subset' len; i subset' len; SOME(s))
+d312 8
+a319 6
+               (print "Dear god, a call to gets()!\n"; SOME(s))
+          | checkStrOp "sprintf@@0" ((d as Str _)::_) =
+               (print "Warning: punting on sprintf().\n"; SOME(d))
+          | checkStrOp "snprintf@@0" ((d as Str {siz,len})::(Int i)::_) =
+               (print "Warning: punting on snprintf().\n";
+                (const' 0) subset' len; i subset' len; SOME(d))
+d335 87
+d456 2
+a457 6
+          | expr _ (AST.Constant (AST.String(s),_)) =
+              (* Need to strip @@0 and quotes before running `size'. *)
+              let val str = AST.idToString s
+                  val noAt = PTUtil.beforeLast #"@@" str
+                  val noFinalQuote = PTUtil.beforeLast #"\"" noAt
+                  val noQuotes = PTUtil.afterFirst #"\"" noFinalQuote
+d459 1
+a459 1
+                  val slen = 1 + (size noQuotes)
+d462 1
+a462 1
+	          print ("Debug: saw " ^ str ^ "; size(" ^ noQuotes
+d499 5
+a503 1
+                     AST.Variable (id,_) => applyFun lookup id el'
+d538 1
+a538 1
+                     (len ge' (const' 0); None)
+@
+
+
+1.6
+log
+@Lots of stuff.  New str*() functions modeled.  Now detect which
+variables the overrun is in, and how bad the overrun might be.
+Lots of bugfixes.  Probably other stuff which I'm forgetting
+right now.
+@
+text
+@d24 1
+d82 8
+d97 5
+a101 9
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _, [AST.Array _])) v =
+              freshStr(SOME(v))
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _, [AST.Pointer _])) v =
+              freshStr(SOME(v))
+          | freshVarCtx (AST.SyntacticType(_, (AST.Int|AST.UnsignedInt
+	           |AST.ShortInt|AST.UnsignedShortInt|AST.LongInt
+		   |AST.UnsignedLongInt), _, [])) v =
+              Int(Constraint.freshTerm ())
+          | freshVarCtx _ _ = None
+d112 1
+a112 1
+        fun newVar id visible typ =
+d127 8
+d167 7
+d187 6
+d195 5
+a199 1
+                  funMap := PTUtil.IdMap.insert(!funMap, funName, pInfo); ()
+d231 1
+a231 1
+            strcoll(), strxfrm(), strspn(), strstr(),
+d234 2
+d305 5
+d320 1
+a320 1
+        fun applyFun id pl = (
+d331 1
+a331 1
+                        val retInfo = getVarInfo (getFret id)
+d334 1
+a334 1
+                        NONE => ()
+d336 1
+a336 1
+                      case retInfo of
+d338 3
+a340 2
+                                        ^ (AST.idToString id) ^ "().\n"); None)
+                      | SOME(VarInfo {varCtx,visible}) => varCtx
+d383 1
+a383 1
+                        l2 subset' ns; l3 subset' ns;
+d401 1
+a401 1
+                     AST.Variable (id,_) => applyFun id el'
+d464 7
+a470 1
+                expr lookup e
+d510 2
+a511 3
+        (* Generates constraints for expressions within the
+         statement. *)
+        and statement lookup (AST.Return(SOME e, SOME f, astInfo)) =
+d518 2
+a519 2
+          | statement _ (AST.Return _) = ()
+          | statement lookup (AST.Expression(SOME e, _)) =
+d521 11
+a531 11
+          | statement _ (AST.Expression(NONE, _)) = ()
+          | statement lookup (AST.IfThen(e, s, _)) =
+              (expression lookup e; statement lookup s)
+          | statement lookup (AST.IfThenElse(e, s1, s2, _)) =
+              (expression lookup e; statement lookup s1; statement lookup s2)
+          | statement lookup (AST.WhileDo(e, s, _)) =
+              (expression lookup e; statement lookup s)
+          | statement lookup (AST.DoWhile(s, e, _)) =
+              (expression lookup e; statement lookup s)
+          | statement _ (AST.GoTo _) = ()      (* Goto has no effect *)
+          | statement lookup (AST.For(eopt1, eopt2, eopt3, s, _)) =
+d535 7
+a541 7
+             statement lookup s)
+          | statement lookup (AST.Switch(e, s, _)) =
+              (expression lookup e; statement lookup s)
+          | statement lookup (AST.Case(_, s, _)) = statement lookup s
+          | statement lookup (AST.Labeled(_, s, _)) = statement lookup s
+          | statement _ (AST.Break _) = ()
+          | statement _ (AST.Continue _) = ()
+d543 1
+a543 1
+          | statement _ (AST.Compound {decls, body, lookup, ...}) =
+d545 5
+a549 1
+                 map (statement lookup) body; ())
+d577 13
+a589 1
+          | declaration lookup (AST.FunDecl{...}) = ()
+@
+
+
+1.5
+log
+@Yah, we have a working buffer overflow detector.
+@
+text
+@d22 3
+d30 29
+a58 2
+          | assign (Str {siz=ds,len=dl}, Str {siz=ss,len=sl}) = sl subset' dl
+          | assign (_,_) = print "Warning: unexpected assignment types.\n"
+d77 2
+a78 2
+                  siz ge' (Constraint.constantTerm 0);
+                  {siz=siz,len=len}
+d83 1
+a83 1
+	      let val {siz,len} = freshStr(SOME(v))
+d85 2
+a86 2
+	          siz eq' (Constraint.constantTerm i);
+		  Str({siz=siz,len=len})
+d89 1
+a89 1
+              Str(freshStr(SOME(v)))
+d91 1
+a91 1
+              Str(freshStr(SOME(v)))
+d187 21
+a207 3
+        (* FIX: Remember to check whether I got the semantics of the
+           string operations correct.  Is there an off-by-one in strncpy(),
+           for instance? *)
+d212 61
+a272 3
+                   [Str {siz=ds,len=dl}, src as Str {siz=ss,len=sl},Int i] =
+               (ds ge' i; sl subset' dl; SOME(src))
+          | checkStrOp "strlen@@0" [Str {siz,len}] = SOME(Int(len))
+d276 1
+a276 1
+                let val {siz=ns,len=nl} = freshAllocStr ()
+d278 2
+a279 2
+                    ns ge' i;
+                    SOME(Str({siz=ns,len=nl}))
+d313 1
+a313 1
+              Int(Constraint.constantTerm i)
+d324 1
+a324 1
+	          val t = Constraint.constantTerm slen
+d342 1
+a342 1
+                      let val {siz=ns,len=nl} = freshStr NONE
+d346 1
+a346 1
+                        Str({siz=ns,len=nl})
+d367 1
+a367 1
+          | expr lookup (AST.Operation(oper, el, region)) = (
+d370 5
+a374 9
+                    let val t = Constraint.freshTerm ()
+                    in
+                      case oper of
+                          AST.Plus => (i plus' j) subset' t
+                        | AST.Minus => (i minus' j) subset' t
+                        | AST.Mul => (i mul' j) subset' t
+                        | AST.Div => (i div' j) subset' t;
+                      Int(t)
+                    end
+d398 4
+a401 8
+                     (len ge' (Constraint.constantTerm 0); None)
+                | (AST.Plus,[Str({siz=os,len=ol}),Int(i)]) =>
+                     let val {siz=ns,len=nl} = freshStr NONE
+                     in  
+                       ns ge' (os minus' i);
+                       nl ge' (ol minus' i);
+                       Str({siz=ns,len=nl})
+                     end
+d405 4
+a408 1
+                | _ => None
+d416 1
+a416 2
+                 for that.  Also, we should make sure that the C statement
+                 'char *p;' gets assigned a Str({...}) context elsewhere. *)
+d427 5
+a431 3
+          | expr _ (AST.SizeOfExpr(e, _)) =
+                (print "Saw a Sizeof; let's implement this later.\n";
+                 None)
+d461 3
+a463 5
+              let val _ = expr lookup e handle ex =>
+                            (Unparse.expression e; print "\n"; raise ex)
+              in
+                ()
+              end
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d30 7
+d41 4
+d46 1
+a46 1
+                  Constraint.queryge (siz, len, "Possible overflow in "^name);
+@
+
+
+1.3
+log
+@Fixed: `char **x;' no longer generates a Str context for `x'.
+Got the function stuff working nicely (I think).
+@
+text
+@d33 1
+d35 1
+a35 1
+                  siz ge' len;
+d41 2
+a42 2
+	           [AST.Array(SOME(AST.Constant(AST.Integer(i),_)))] )) =
+	      let val {siz,len} = freshStr ()
+d47 4
+a50 4
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _, [AST.Array _])) =
+              Str(freshStr ())
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _, [AST.Pointer _])) =
+              Str(freshStr ())
+d53 1
+a53 1
+		   |AST.UnsignedLongInt), _, [])) =
+d55 1
+a55 1
+          | freshVarCtx _ = None
+d68 1
+a68 1
+                val varCtx = freshVarCtx typ
+d136 1
+a136 1
+                  freshStr(SOME v)
+d424 1
+a424 1
+              (map (declaration lookup) decls; ())
+@
+
+
+1.2
+log
+@Added support for functions.
+Also minor changes to string support (off-by-ones, etc.).
+@
+text
+@d46 1
+a46 1
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _, (AST.Array _::_))) =
+d48 1
+a48 2
+          | freshVarCtx (AST.SyntacticType(_, AST.Char, _,
+	           (AST.Pointer []::_))) =
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d23 7
+a56 25
+        val allocID = ref 0
+        fun freshAllocStr () =
+              let val i = !allocID
+                  val v = AST.mkIdentifier ("alloc@@" ^ Int.toString(i))
+              in  allocID := i+1;
+                  freshStr(SOME v)
+              end
+
+        fun applyFun "strcpy@@0" [Str {siz=ds,len=dl},
+                                 src as Str {siz=ss,len=sl}] =
+               (sl subset' dl; src)
+          | applyFun "strncpy@@0"
+                   [Str {siz=ds,len=dl}, src as Str {siz=ss,len=sl},Int i] =
+               (ds ge' i; sl subset' dl; src)
+          | applyFun "strlen@@0" [Str {siz,len}] = Int(len)
+          | applyFun ( "malloc@@0" | "valloc@@0" | "xmalloc@@0" | "alloca@@0"
+                     | "__builtin_alloca@@0" ) [Int i] =
+                (* FIX: Should also add calloc, realloc support. *)
+                let val {siz=ns,len=nl} = freshAllocStr ()
+                in
+                    ns ge' i;
+                    Str({siz=ns,len=nl})
+                end
+          | applyFun _ _ = None
+
+a87 3
+        fun getFret funId =
+	      AST.mkIdentifier ("@@" ^ (AST.idToString funId) ^ "_return")
+
+d106 83
+d246 3
+a248 3
+                     AST.Variable (id,_) => applyFun (AST.idToString id) el'
+                   | _ => (print
+                    "Warning: function pointers; analysis is unsafe...\n"; None)
+d309 2
+a310 8
+                case (dst', src') of
+                    (None,_) => ()
+                  | (_,None) => ()
+                  | (Int di, Int si) => si subset' di
+                  | (Str {siz=ds,len=dl}, Str {siz=ss,len=sl}) =>
+                      sl subset' dl
+                  | (_,_) => (print "Warning: unexpected assignment types.\n");
+                src'
+d396 2
+a397 2
+               Currently, it finds that 3 \in len(a), but it doesn't
+               discover that siz(a) = 3. *)
+d414 1
+d451 1
+a451 1
+                (* reset(); *)
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

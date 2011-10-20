@@ -1,0 +1,501 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	98.12.04.02.09.38;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.02.00.12.59;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.01.21.42.37;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@<html><head><title>Answers to homework #2</title></head>
+<body bgcolor="white">
+<h1 align="center">Answers to homework #2</h1>
+<p>Here are some suggested solutions to the second homework.</p>
+
+<p>Note that the homework you handed in should have been much
+shorter than this page.
+There are two important reasons why this page is so long:
+<nl>
+<li>In many cases, we have listed several possible answers for each
+	question; but you only needed to give one answer.
+<li>For clarity, we have described the answer in greater detail
+	than necessary; you could have just sketched the main idea.
+</nl>
+
+<h2 align="center">Question 1: Stateful packet inspection</h2>
+
+<h3>1. Compared to application firewalls</h3>
+
+<p>The reason to use a stateful packet inspection is that you
+hope it might provide better performance and/or transparency than
+an application firewall can offer.
+But first, we have to analyze the security implications of these
+optimizations.
+
+<p>One important distinction is that packet filters allow direct network
+connections to to inside hosts, whereas application firewalls interpose
+a level of indirection between inside and outside hosts.  As a consequence,
+application firewalls give better protection against low-level TCP attacks.
+
+<p>Imagine: tomorrow some new attack is discovered that plays funny
+games with IP fragments and TCP header options.  Which firewalls will
+protect against it?  I'd bet that 99% of all application proxies will
+be safe, and 99% of all stateful packet filters will be vulnerable.
+
+<p>An application firewall won't send funny TCP options to
+internal hosts, and thus we don't care if internal hosts have TCP
+stacks with obscure bugs;
+in contrast, stateful packet filters have to make more
+assumptions about the correctness of the software on internal hosts.
+This says that the split-phase nature of application firewalls gives
+you packet sanitization for free: because they re-generate incoming packets
+from scratch, application firewalls won't send crazy packets to internal hosts.
+In contrast, stateful packet filters have to explicitly check for
+all the dangerous TCP constructs you can think of.
+
+<p>A very important philosophical difference between the two approaches
+is that application firewalls forward <em>data streams</em>
+while packet filters forward <em>packets</em>.
+As a result, it is much harder for stateful packet filters to make
+security decisions based on the content of application data streams
+(unless they re-implement a TCP stack from scratch---ick!).
+Furthermore, application firewalls can sanitize application data---e.g.,
+strip out Javascript from all web pages, or send IAC DONT's to normalize
+a telnet flow down to a small subset of the telnet protocol---which is
+in general nearly impossible for a stateful packet filter.
+
+<p>Other second-order differences:
+<ul>
+<li>With stateful packet filters, it might be harder to attack the firewall
+	host itself, because packet filters need not implement any services
+	while application firewalls by design must do so.
+<li>With stateful packet filters, security mechanisms are implemented in a
+	different form than the application itself, which forces us to think
+	differently about security, so you might have a better chance
+	of catching bugs in the application itself.
+<li>Stateful packet filters can detect simultaneous attacks against multiple
+	applications: for instance, detecting port scans is easy on a stateful
+	packet filter but very awkward for an application firewall.
+<li>Application firewalls support finer-grained, more-expressive
+	filtering rules.
+<li>Application firewalls allow for better information hiding, since you
+	don't need to expose e.g. the IP addresses of internal hosts.
+<li>With application firewalls, it is <em>much</em> easier to implement
+	strong user authentication (e.g. using a hand-held token).
+<li>An application firewall might even be able to complete an entire
+	transaction with an outside host before opening a second connection
+	to an internal host (e.g. mail transport).  This reduces the
+	potential for attack even further, by denying the attacker the
+	ability to interactively probe internal hosts.
+<li>It might be somewhat harder for a stateful packet filter to stay
+	synchronized with internal hosts.
+	For instance, if an internal host crashes, a stateful packet filter
+	won't notice, and might allow a temporary ``hole'' (for e.g. an
+	existing FTP connection) to persist across the reboot, which is bad.
+	Because application firewalls keep a separate connection with the
+	internal host, desynchronization is less of a risk.
+</ul>
+
+<p>One fallacy was very common:
+<blockquote>
+<p>Many folks seemed to think that stateful packet filters would be
+easier to implement, maintain, and audit because one chunk of code
+protects all applications, whereas application firewalls must use
+a different chunk of code for each application they want to protect.
+
+<p>The observation about the structure of the code is true,
+but it misses the point.
+Stateful packet filters do indeed use only one chunk of code, but
+what a chunk!
+You have to remember that this single chunk of code is likely to be
+extremely complicated: it has to keep track of all the interactions
+between IP processing, TCP processing, and application-level processing;
+all that state is likely to be entertwined and interelated in some
+extremely confusing way.
+If you ever try to implement a stateful packet filter, you'll
+quickly see what I mean, and then you'll be thankful for the
+high-level programming model for application proxies.
+
+<p>In principle, a stateful packet filter could implement every
+check found in an application firewall, by encoding those checks in
+one state diagram.
+That's true, but in practice, that state diagram will quickly become
+astronomically huge, and this complexity tends to limit what protections
+you can reasonably implement in a stateful packet filter.
+You could follow this implementation path, but why would you want to?
+
+<p>In short, the application firewall's separation of the mechanisms
+used to protect each application is exactly its strong point.
+For the same reasons that modular code is more likely to be correct
+than one monolithic mess of spaghetti code, the layering and abstraction
+found in application firewalls is there precisely to improve the odds
+of getting it right.
+If you try to implement the functionality associated with application
+firewalls in a stateful packet filter, the assurance level of the
+packet filter implementation is likely to suffer.
+</blockquote>
+
+<p>In general, the best implementation approach may often involve a hybrid
+of application proxying and stateful packet inspection techniques.  The point
+is to understand the strengths and weaknesses of each approach.
+
+
+<h3>2. Compared to intrusion detection</h3>
+
+<p>Stateful packet filters are fail-safe; IDS's aren't.
+If you flood an IDS, it might miss attacks; stateful packet filters
+will just drop packets (at worst).
+
+<p>Also, stateful packet filters are actively involved in the network flow,
+so they have a better opportunity to stay synchronized with end hosts.
+There is no chance that they will miss a packet, and that makes them
+significantly more secure against the elusion/insertion attacks that are
+so deadly to a naive IDS.
+
+<p>Some second-order differences:
+<ul>
+<li>Stateful packet filters are more intrusive and somewhat harder to
+	deploy and maintain than IDS's, so end users might complain.
+	A related observation is that stateful packet filters might
+	add latency, whereas IDS's are guaranteed not to affect performance.
+<li>IDS's can detect outgoing attacks (attacks by insiders against
+	external hosts) as well as incoming attacks, whereas stateful
+	packet filters focus primarily on stopping incoming attacks
+	and typically aren't as well-suited for detecting outgoing attacks.
+<li>IDS's might generate lots of false alarms.  (If you page a sysadmin
+	with a message saying there's a portscan going on, what's he going
+	to say other than ``block it''?  A stateful packet firewall can just
+	go ahead and block it without bothering the sysadmin.)
+</ul>
+
+<p>Some false impressions are worth clearing up:
+<blockquote>
+<p>A lot of people seemed to think that IDS's are much more powerful
+than stateful packet filters.
+This is manifestly false: any check that can be implemented in an IDS
+can be just as easily implemented in a stateful packet filter, since the
+packet filter sees at least as many of the packets as the IDS.
+In fact, a stateful packet filter is strictly more powerful than an IDS,
+since it can drop packets, which is usually impossible for an IDS.
+(There is one case where a stateful packet filter might not be able to
+do any better than an IDS, and that is where the security checks are
+so computationally-intensive that they need to be done after-the-fact;
+in this case, the two systems are roughly equivalent in power, although
+a stateful packet filter might be slightly better since it is actively
+involved in the packet flow and thus less likely to miss packets.)
+
+<p>On a related note, many people seemed to think that IDS's can
+be more aware of application semantics than stateful packet filters.
+I don't see any reason for this to be the case; both operate at the
+same level of the network protocol stack, and both will have to work
+equally hard to parse application semantics.
+
+<p>Some people claimed that stateful packet filters are at a disadvantage
+because they don't keep logs.  There is no reason that a stateful packet
+filter couldn't produce exactly the same audit logs that an IDS would; in
+fact, a stateful packet filter's logs might even be more reliable since it
+will never miss any packets.
+</blockquote>
+
+
+
+<h2 align="center">Question 2: Growing the stack upwards</h2>
+
+<p>You can still use buffer overruns to overwrite security-critical
+state, abuse stdio (or other global function pointers), or overwrite
+function pointers stored on the stack.
+
+<p>One person pointed out that for C++, the <tt>this</tt> variable
+(defined for every method?) is stored on the stack and is an obvious
+function pointer that is interesting to overwrite.  Very clever...
+
+<p>It becomes harder to do any form of stack smashing that involves
+overwriting the return address on the stack, because the return address
+for frame <tt>f()</tt> appears below any buffers allocated in <tt>f()</tt>.
+But see below for a new attack which allows you to overwrite the return
+address on the stack if you can overflow a buffer allocated by a callee.
+
+<p>New attacks:
+<ul>
+<li>If you overflow a buffer allocated in the stack frame of a callee,
+you can overwrite the current return address.  Consider:
+<pre>
+void caller() {
+    char buf[80];
+    callee(buf);
+}
+void callee(char *p) {
+    gets(p);
+}
+</pre>
+This is vulnerable, because you can change the return address stored
+in the <tt>callee()</tt>'s stack frame.
+(You got points if you noticed this.)
+<li>In fact, note that the dangerous calling pattern outlined in the
+previous note is quite a bit more common than you might expect.
+For instance, if the callee is a library function (such as <tt>gets()</tt>,
+<tt>strcpy()</tt>, <tt>sprintf()</tt>, etc.) which can cause a buffer
+overflow, you've immediately got a problem.
+Thus, the following code is in fact directly vulnerable:
+<pre>
+void caller(char *some_possibly_long_string) {
+    char buf[80];
+    ...
+    strcpy(buf, some_possibly_long_string);
+    ...
+}
+</pre>
+(You got extra bonus points if you noticed this.)
+<li>Buffer underflows might still allow tampering with the return address.
+Of course, buffer underflows are much rarer than overflows, but they
+can happen in some special cases.  (For instance, if your <tt>char</tt>
+type is signed, then one of the obvious ways to compute a hash of a
+string can unexpectedly produce a negative result in some cases and
+thereby cause array dereferences with negative indices.)
+</ul>
+
+<p>A lot of people said you could initialize uninitialized variables
+of a function about to be called; but that seems relatively implausible
+to us, since any code allowing for this exploit would already break
+quite often in practice even when not under attack, and thus is likely
+to be noticed and fixed.  So we would be surprised to see realistic
+examples of this type of hole.
+
+<p>Several folks suggested you might be able to overwrite the heap
+by overflowing the stack.  But this is unlikely to work in practice,
+because the two are usually separated by unmapped pages which would
+cause a page fault before you could affect the heap,
+and because the stack and heap are mapped so far apart in
+virtual memory that it would take an exceedingly long overflow to
+affect the heap.
+
+<p>A lot of people were confused about how the <tt>stdio</tt> attack works.
+The main observation is that <tt>stdio</tt> defines a global data structure
+(<tt>__iob[0]</tt>, or somesuch) which contains both a buffer and a
+function pointer.  If you overflow that buffer, you get to overwrite the
+function pointer to point to some malicious code somewhere.
+(The function pointer is used to re-fill the buffer when it is drained,
+so with any luck your malicious code will get called at some point in
+the not-too-distant future.)
+So this is just an example of an exploit of an overwriteable global
+function pointer; there's nothing particularly special or magic
+about it, except that it makes a good example because it is so prevalent.
+
+<h2 align="center">Question 3: Compiler modifications</h2>
+<p>To get a good mark, you describe more than one of the following.
+(This question called for brainstorming...)</p>
+
+<ul>
+<li>Emit warnings whenever <tt>gets()</tt>, <tt>strcpy()</tt>, etc.
+are used.  (The FreeBSD solution.)
+<li>Emit code to add an unmapped page after every buffer, so an overrun will
+trigger a page fault.
+<li>Put buffers on code pages which are marked non-executable.
+<li>Allocate space for buffers and variables in a random, unpredictable
+order which changes on every execution, so it will be harder to exploit
+any overrun vulnerabilities.
+<li>Use separate stacks.  You might separate the stacks into trusted
+and untrusted values; or into constant-length and fixed-length values;
+or into return-addresses and everything else; many approaches are possible,
+with different tradeoffs.
+None of these approaches are complete solutions; they can only reduce
+the risk.  (For instance, if one of your buffers includes security-critical
+state, such as the username of the authenticated user, then an overflow
+might still be problematic.  I should mention here an anecdote: I've seen
+one claim that the Internet worm could have just overwritten the string
+"<tt>/usr/bin/finger</tt>" with "<tt>/bin/sh</tt>" and the attack would
+still have worked, without any need for modifying return addresses on
+the stack.  I'll let you figure out why this is likely to work---it's
+a pretty clever observation.)
+<li>Allocate all stacks on the heap, instead of on the stack.
+(This is a slight variant of the previous approach.)
+<li>Check the stack integrity before returning from any function call.
+To ensure that the stack hasn't changed, you might write an extra value
+(a "canary") at the appropriate end of the stack frame just before the
+function call, and check that the canary hasn't changed just before
+you do the return.
+Picking a value for the canary is a little subtle: in general, you don't
+want the value to be guessable, or else the attacker could easily subvert
+the check; and it should be different every time, or the attacker could
+potentially learn it adaptively by probing lots of values.
+(However, including a zero byte in the canary might be useful, because
+it is the string terminator which makes it difficult to insert in a buffer
+overrun in most cases.)
+Thus, you might use a cryptographically-strong pseudo-random number generator
+to generate canary values.
+<li>Bounds checking for all pointer dereferences.  Note that you have
+to track the length of each buffer, and this has to be done dynamically:
+e.g. you must emit code to recognize all calls to <tt>malloc()</tt> etc.
+as well as remembering the lengths of stack-allocated buffers.  The best
+approach seems to be to change the representation of a C pointer: instead
+of being just an address, it will become the concatenation of an
+address and a length field.  (Storing the length with the buffer is worse,
+because it fails in the presence of pointer arithmetic, whereas if you store
+the length with the pointer itself you can easily handle pointer arithmetic.)
+Performance might be a problem.  And making pointers safe like this will
+probably break some applications, since it does change the language semantics
+slightly, although that might be acceptable if the set of programs that
+break is small enough.
+Also, if the application handles its own
+memory management, e.g. defines its own variant of <tt>malloc()</tt> which
+the compiler doesn't know about, this approach won't help.
+(Most folks did not catch on to all the complexities and pitfalls associated
+with this approach.)
+<li>Do full dynamic garbage collection; and make <tt>free()</tt> a no-op.
+<li>Software fault isolation mumble...
+<li>You could write a safe interpreter for C...
+</ul>
+<p>Note that there seems to plenty of grist for the research mill here...
+
+<p>In fact, a number of these suggestions have been implemented.
+There is a patch to the Linux kernel which makes the
+stack segment non-executable; the
+<a href="http://www.cse.ogi.edu/DISC/projects/immunix/StackGuard/">StackGuard</a>
+system described a Linux implementation of the canary idea and the
+SFI idea at this year's Usenix security symposium;
+and there was a multi-stacked EGCS-variant announced recently on
+the bugtraq mailing list.
+
+<p>Some question were unsure about changing the compiler vs changing
+the language.  We had asked for potential changes for the compiler,
+although we also gave points for good ideas that slightly tweaked the
+semantics of the language so long as they didn't break most
+existing code.
+
+<p>Some people thought you could convert e.g. <tt>strcpy()</tt> calls to
+<tt>strncpy()</tt> calls lexically with a pre-processor.
+They didn't realize that it's not easy to figure out what length
+argument to give to <tt>strncpy()</tt>: how do you tell the size of the
+destination buffer?  It's not always easy, and in general it can be
+very difficult.  The pre-processor would have to be exceptionally cool
+to be able to pull this off...
+
+
+</body></html>
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d16 1
+a16 1
+<h2 align="center">Question 1: stateful packet inspection</h2>
+d51 2
+a52 1
+security decisions based on the content of application data streams.
+d56 1
+a56 1
+nearly impossible for a stateful packet filter.
+d97 2
+a98 1
+<p>That's true, but it misses the point.
+d107 2
+a108 2
+quickly see what I mean, and then you'll appreciate the programming model
+for application proxies.
+d131 1
+a131 1
+is to understand the strengths of weaknesses of each approach.
+d150 2
+d164 1
+a164 1
+<p>A lot of people seemed to think that IDS's are more powerful
+d174 3
+a176 1
+in this case, the two systems are roughly equivalent in power.)
+d193 1
+a193 1
+<h2 align="center">Question 2: growing the stack upwards</h2>
+d195 13
+d209 38
+a246 1
+A lot of people were confused about how the stdio attack works.
+d248 26
+d275 1
+a275 1
+<h2 align="center">Question 3: compiler modifications</h2>
+d279 76
+a354 2
+Some question got confused about changing the compiler vs changing
+the language.
+d356 2
+a357 2
+Some people thought you could convert e.g. strcpy() calls to
+strncpy() calls lexically with a pre-processor.
+d359 5
+a363 2
+argument to give to strncpy(): how do you tell the size of the
+appropriate buffer?  It's not always easy.
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d16 1
+a16 1
+<h2>Question 1: stateful packet inspection</h2>
+d48 2
+a49 2
+is that application firewalls forward <em>data streams</em> while packet
+filters forward <em>packets</em>.
+d53 3
+a55 2
+strip out Javascript from all web pages---which is nearly impossible
+for a stateful packet filter.
+d89 1
+d91 1
+a91 2
+<p>One fallacy was very common.
+Many folks seemed to think that stateful packet filters would be
+d152 1
+a152 1
+<li>IDS's may generate lots of false alarms.  (If you page a sysadmin
+d158 1
+a159 2
+<p>Some false impressions are worth clearing up.
+
+d175 2
+a176 1
+same level of the network protocol stack.
+d181 2
+a182 2
+fact, it might even be more reliable since it will never miss important
+packets.
+d187 1
+a187 1
+<h2>Question 2: growing the stack upwards</h2>
+d190 1
+d193 1
+a193 1
+<h2>Question 3: compiler modifications</h2>
+d196 9
+@

@@ -1,0 +1,403 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.11.23.03.20;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.11.23.03.20;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* Main code for template
+   See the README file for copyright/licensing terms */
+
+#pragma pack(2)
+
+#include <Pilot.h>
+
+#include "md2.h"
+#include "md5.h"
+#include "sha.h"
+#include "des.h"
+#include "rc4.h"
+#include "rc2.h"
+#include "idea.h"
+#include "rand.h"
+#include "blowfish.h"
+
+#include "CryptTestRsc.h"
+
+static char hs[] = "0123456789abcdef";
+
+typedef enum { CRYPT_NONE, CRYPT_DES, CRYPT_IDEA, CRYPT_RC4, CRYPT_RC2,
+	       CRYPT_BF, CRYPT_MD2, CRYPT_MD5, CRYPT_SHA, CRYPT_SHA1,
+	       CRYPT_RAND}
+	       CryptMethod;
+
+static void encrypt(int imethod, CharPtr ktxt, CharPtr ptxt, int plen,
+    CharPtr ctxt, int *clen, int decP)
+{
+    int i;
+    int isblock;
+    CryptMethod method = imethod;
+    MD5_CTX md5ctx;
+    unsigned char keyiv[32];
+    unsigned char *iv = keyiv;
+    int pplen;
+    char *pptxt;
+    
+    if (method >= CRYPT_MD2 && decP) {
+	/* Can't decrypt hash functions */
+	*clen = 0;
+	ctxt[0] = '\0';
+	return;
+    }
+
+    switch (method) {
+    case CRYPT_DES: case CRYPT_IDEA: case CRYPT_RC2: case CRYPT_BF:
+	isblock = 1; break;
+    default:
+	isblock = 0; break;
+    }
+
+    /* Pad the input for encryption with block algorithms */
+    if (isblock && !decP) {
+	/* Do padding */
+	pplen = plen + 8 - (plen % 8);
+	pptxt = MemPtrNew(pplen);
+	MemMove(pptxt,ptxt,plen);
+	MemSet(pptxt+plen,pplen-plen,pplen-plen);
+    } else if (isblock) {
+	pplen = plen & ~7;
+	pptxt = ptxt;
+    } else {
+	pplen = plen;
+	pptxt = ptxt;
+    }
+
+    /* Create the key and IV */
+    switch(method) {
+    case CRYPT_DES: case CRYPT_RC4:
+	MD5(ktxt,StrLen(ktxt),keyiv);
+	iv = keyiv+8;
+	break;
+
+    case CRYPT_IDEA: case CRYPT_RC2: case CRYPT_BF:
+	MD5(ktxt,StrLen(ktxt),keyiv);
+	MD5_Init(&md5ctx);
+	MD5_Update(&md5ctx,keyiv,16);
+	MD5_Update(&md5ctx,ktxt,StrLen(ktxt));
+	MD5_Final(keyiv+16,&md5ctx);
+	iv = keyiv+16;
+	break;
+
+    default:
+	break;
+    }
+
+    /* Encrypt and set output length */
+    switch(method) {
+#ifdef HAVE_DES
+    case CRYPT_DES: {
+	des_key_schedule sk;
+	des_set_key((des_cblock*)keyiv, sk);
+	des_ncbc_encrypt((des_cblock*)pptxt, (des_cblock*)ctxt, pplen,
+	    sk, (des_cblock*)iv, decP ? DES_DECRYPT : DES_ENCRYPT);
+	*clen = pplen;
+	break;
+    }
+#endif
+#ifdef HAVE_IDEA
+    case CRYPT_IDEA: {
+	IDEA_KEY_SCHEDULE eks, dks;
+	idea_set_encrypt_key(keyiv, &eks);
+	if (decP) idea_set_decrypt_key(&eks, &dks);
+	idea_cbc_encrypt(pptxt, ctxt, pplen, decP ? &dks : &eks, iv,
+	    decP ? IDEA_DECRYPT : IDEA_ENCRYPT);
+	*clen = pplen;
+	break;
+    }
+#endif
+#ifdef HAVE_RC4
+    case CRYPT_RC4: {
+	RC4_KEY ks;
+	RC4_set_key(&ks, 16, keyiv);
+	if (pplen) RC4(&ks, pplen, pptxt, ctxt);
+	*clen = pplen;
+	break;
+    }
+#endif
+#ifdef HAVE_RC2
+    case CRYPT_RC2: {
+	RC2_KEY ks;
+	RC2_set_key(&ks, 16, keyiv, 1024);
+	RC2_cbc_encrypt(pptxt, ctxt, pplen, &ks,
+	    iv, decP ? RC2_DECRYPT : RC2_ENCRYPT);
+	*clen = pplen;
+	break;
+    }
+#endif
+#ifdef HAVE_BF
+    case CRYPT_BF: {
+#if 0
+	BF_KEY *bfks = MemPtrNew(sizeof(BF_KEY));
+	BF_set_key(bfks, 16, keyiv);
+	BF_cbc_encrypt(pptxt, ctxt, pplen, bfks,
+	    iv, decP ? BF_DECRYPT : BF_ENCRYPT);
+	*clen = pplen;
+	MemPtrFree(bfks);
+#else
+	static BF_KEY bfks;
+	BF_set_key(&bfks, 16, keyiv);
+	BF_cbc_encrypt(pptxt, ctxt, pplen, &bfks,
+	    iv, decP ? BF_DECRYPT : BF_ENCRYPT);
+	*clen = pplen;
+#endif
+	break;
+    }
+#endif
+    case CRYPT_MD2:
+	MD2(pptxt, pplen, ctxt);
+	*clen = 16;
+	break;
+    case CRYPT_MD5:
+	MD5(pptxt, pplen, ctxt);
+	*clen = 16;
+	break;
+#ifdef HAVE_SHA
+    case CRYPT_SHA:
+	SHA(pptxt, pplen, ctxt);
+	*clen = 20;
+	break;
+    case CRYPT_SHA1:
+	SHA1(pptxt, pplen, ctxt);
+	*clen = 20;
+	break;
+#endif
+#ifdef HAVE_RAND
+    case CRYPT_RAND:
+	RAND_seed(pptxt, pplen);
+	RAND_bytes(ctxt, 20);
+	*clen = 20;
+	break;
+#endif
+    default:
+	StrCopy(ctxt, "Not supported");
+	*clen = 13;
+	break;
+    }
+
+    if (isblock && !decP) {
+	MemPtrFree(pptxt);
+    } else if (isblock) {
+	/* Unpad */
+	if (pplen > 7 && ctxt[pplen-1] > 0 && ctxt[pplen-1] <= 8) {
+	    for (i=1;i<=ctxt[pplen-1];++i) {
+		if (ctxt[pplen-i] != ctxt[pplen-1]) return;
+	    }
+	    *clen = pplen-ctxt[pplen-1];
+	}
+    }
+    ctxt[*clen] = '\0';
+}
+
+/* Do a hexdump of slen bytes from the contents of sfld into hfld */
+static void hexdump(FieldPtr sfld, FieldPtr hfld, int slen)
+{
+    VoidHand hhnd;
+    CharPtr stxt, htxt;
+    int i;
+
+    stxt = FldGetTextPtr(sfld);
+    if (!stxt) stxt="";
+    hhnd = MemHandleNew(slen ? 3*slen : 1);
+    htxt = MemHandleLock(hhnd);
+
+    for(i=0;i<slen;++i) {
+	htxt[3*i] = hs[((unsigned char)stxt[i])>>4];
+	htxt[3*i+1] = hs[((unsigned char)stxt[i])&15];
+	htxt[3*i+2] = ' ';
+    }
+    if (i) htxt[3*i-1] = '\0'; else htxt[0] = '\0';
+
+    MemHandleUnlock(hhnd);
+    FldSetTextHandle(hfld, (Handle)hhnd);
+    FldDrawField(hfld);
+}
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    CryptMethod method;
+    FormPtr frm;
+    ListPtr lstp;
+    FieldPtr kfld, pfld, phfld, cfld, chfld;
+    CharPtr ktxt, ptxt, ctxt;
+    VoidHand chnd;
+    int plen, clen;
+
+    switch (e->eType) {
+    case frmOpenEvent:
+	FrmDrawForm(FrmGetActiveForm());
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	frm = FrmGetActiveForm();
+	lstp = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,MethodList));
+	method = (LstGetSelection(lstp)+1);
+	if (method == CRYPT_NONE) method = CRYPT_DES;
+	kfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,KField));
+	pfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,PField));
+	phfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,PHField));
+	cfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CField));
+	chfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,CHField));
+
+	switch(e->data.ctlEnter.controlID) {
+	case encryptBtn:
+	    ktxt = FldGetTextPtr(kfld);
+	    ptxt = FldGetTextPtr(pfld);
+	    if (!ktxt) ktxt="";
+	    if (!ptxt) ptxt="";
+	    clen = plen = StrLen(ptxt);
+	    hexdump(pfld,phfld,plen);
+	    clen += 8-clen%8;
+	    if (clen < 24) clen = 24;
+	    chnd = MemHandleNew(clen+1);
+	    ctxt = MemHandleLock(chnd);
+	    encrypt(method,ktxt,ptxt,plen,ctxt,&clen,0);
+	    MemHandleUnlock(chnd);
+	    FldSetTextHandle(cfld, (Handle)chnd);
+	    FldDrawField(cfld);
+	    hexdump(cfld,chfld,clen);
+	    handled = true;
+	    break;
+	case decryptBtn:
+	    ktxt = FldGetTextPtr(kfld);
+	    ptxt = FldGetTextPtr(cfld);
+	    if (!ktxt) ktxt="";
+	    if (!ptxt) ptxt="";
+	    clen = plen = StrLen(ptxt);
+	    hexdump(cfld,chfld,clen);
+	    chnd = MemHandleNew(clen+1);
+	    ctxt = MemHandleLock(chnd);
+	    encrypt(method,ktxt,ptxt,plen,ctxt,&clen,1);
+	    MemHandleUnlock(chnd);
+	    FldSetTextHandle(pfld, (Handle)chnd);
+	    FldDrawField(pfld);
+	    hexdump(pfld,phfld,clen);
+	    handled = true;
+	    break;
+	}
+	break;
+
+    default:
+	break;
+    }
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e)
+{
+    FormPtr frm;
+    Word    formId;
+    Boolean handled = false;
+
+    if (e->eType == frmLoadEvent) {
+	formId = e->data.frmLoad.formID;
+	frm = FrmInitForm(formId);
+	FrmSetActiveForm(frm);
+
+	switch(formId) {
+	case MainForm:
+	    FrmSetEventHandler(frm, MainFormHandleEvent);
+	    break;
+	}
+	handled = true;
+    }
+
+    return handled;
+}
+
+static Word StartApplication(void)
+{
+    return 0;
+}
+
+static void StopApplication(void)
+{
+    FrmSaveAllForms();
+    FrmCloseAllForms();
+}
+
+/* The main event loop */
+static void EventLoop(void)
+{
+    Word err;
+    EventType e;
+
+    do {
+	EvtGetEvent(&e, evtWaitForever);
+	if (! SysHandleEvent (&e))
+	    if (! MenuHandleEvent (NULL, &e, &err))
+		if (! ApplicationHandleEvent (&e))
+		    FrmDispatchEvent (&e);
+    } while (e.eType != appStopEvent);
+}
+
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+    Word err;
+
+    if (cmd == sysAppLaunchCmdNormalLaunch) {
+
+	err = StartApplication();
+	if (err) return err;
+
+	FrmGotoForm(MainForm);
+	EventLoop();
+	StopApplication();
+
+    } else {
+	return sysErrParamErr;
+    }
+
+    return 0;
+}
+@
+
+
+1.1.1.1
+log
+@pilotSSLeay-1.1
+@
+text
+@@

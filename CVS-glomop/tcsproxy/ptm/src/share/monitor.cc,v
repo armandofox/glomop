@@ -1,0 +1,693 @@
+head	1.18;
+access;
+symbols
+	Yatin-final:1.18
+	Yatin:1.18.0.2
+	pre-yatin-merge:1.18
+	transend-beta2:1.17
+	fox-dev:1.17
+	ptm-ng:1.15
+	transend-beta-latest:1.15
+	Aggregators:1.15
+	NoAggregators:1.15
+	iang:1.15.0.4
+	transend-beta:1.15.0.2
+	SOSP:1.15
+	stable_ptm:1.14
+	merged_preintegrate:1.7
+	heisenbug:1.3
+	PRE_INTEGRATION:1.3;
+locks; strict;
+comment	@// @;
+
+
+1.18
+date	97.09.15.03.09.42;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.07.21.21.30.23;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.07.15.02.43.18;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.17.03.01.32;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.01.29.23.50.58;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.01.29.23.26.15;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.01.29.22.15.12;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.29.06.00.58;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.29.04.13.32;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.08.03.39.26;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.04.09.55.52;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.16.05.18.04;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.15.23.34.53;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.15.13.46.43;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.13.03.52.21;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.05.01.27.32;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.24.08.12.32;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.22.08.21.45;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@#include <string.h>
+#include <iostream.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include "defines.h"
+#include "log.h"
+#include "monitor.h"
+
+
+Log Log::log_;
+
+/*static int CurrentMonitorSock = 0;
+static char *CurrentUnitId = NULL;*/
+
+MonitorClient *MonitorClient::defaultClient = NULL;
+char MonitorClient::Separator = '\001';
+
+extern "C" void MonitorClientSigHandler(int sig);
+
+MonitorClient::MonitorClient(const char *unitID_, const char *ipAddr, 
+			     Port port, int ttl)
+    : socket(NULL)
+{
+  sprintf(address, "%s/%d/%d", ipAddr, port, ttl);
+  
+  if (IN_CLASSD(ntohl(inet_addr(ipAddr)))==0) {
+    // this is a UDP address
+    UdpSocket *udp = new UdpSocket;
+    if (udp->Connect(ipAddr, port, gm_False)==gm_False) {
+      delete udp;
+      return;
+    }
+
+    socket = udp;
+  } 
+  else {
+    // this is a multicast address
+    MulticastSocket *mcast = new MulticastSocket;
+    if (mcast->CreateSender(ipAddr, port, ttl)==gm_False) {
+      delete mcast;
+      return;
+    }
+
+    socket = mcast;
+  }
+
+  if (strlen(unitID_) < MAXLINE) strcpy(unitID, unitID_);
+  else { 
+    strncpy(unitID, unitID_, MAXLINE-1); 
+    unitID[MAXLINE]='\0'; 
+  }
+
+  CommunicationObject::GetHostName(hostName);
+  pid = getpid();
+}
+
+
+gm_Bool
+MonitorClient::Send(const char *unitID_, const char *fieldID, 
+		    const char *value,   const char *script)
+{
+  if (socket==NULL) {
+    Return(gm_False, errGenericError);
+  }
+
+  char *buffer;
+  gm_Bool returnValue;
+  int  len = strlen(hostName) + 1 + 25 + strlen(unitID_) + 1 + strlen(fieldID) 
+    + 1 + strlen(value) + 1 + strlen(script) + 1;
+
+  buffer = new char [len];
+  if (buffer==NULL) Return(gm_False, errOutOfMemory);
+  sprintf(buffer, "%s%c%ld%c%s%c%s%c%s%c%s", hostName, Separator, (long) pid, 
+	  Separator, unitID_, Separator, fieldID, Separator, value, 
+	  Separator, script);
+  returnValue = socket->Write(buffer, strlen(buffer)+1);
+  delete [] buffer;
+  return returnValue;
+}
+
+
+void
+MonitorClient::GaspOnSignals(int nsigs, int sigs[])
+{
+  int i;
+
+  defaultClient = this;
+  for (i=0; i<nsigs; i++)
+    (void)signal(sigs[i], MonitorClient::SigHandler);
+}
+
+
+void
+MonitorClient::GaspOnStdSignals()
+{
+  int sigs[] = {
+    SIGTERM,
+    SIGKILL,
+    SIGILL,
+    SIGABRT
+  };
+
+  GaspOnSignals(sizeof(sigs)/sizeof(int), sigs);
+}
+
+
+
+void
+MonitorClient::Gasp(int sig)
+{
+  static char sigString[50];
+  sprintf(sigString, "%d", sig);
+  Send("%DEATH%", sigString, "");
+}
+
+
+void
+MonitorClient::SigHandler(int sig)
+{
+  if (defaultClient) defaultClient->Gasp(sig);
+  exit(-1);
+}
+    
+
+MonitorClientID
+MonitorClientCreate(const char *unitID, const char *multicastAddr, 
+		    Port port, int ttl)
+{
+  return (MonitorClientID) new MonitorClient(unitID, multicastAddr, port, ttl);
+}
+
+
+void
+MonitorClientDestroy(MonitorClientID client)
+{
+  if (client!=NULL) delete ((MonitorClient*)client);
+}
+
+
+const char *
+MonitorClientUnitID(MonitorClientID client)
+{
+  return ((MonitorClient*)client)->getUnitID();
+}
+
+
+gm_Bool
+MonitorClientSend(MonitorClientID client, const char *fieldID, 
+		  const char *value, const char *script)
+{
+  if (client==NULL) return gm_False;
+  return ((MonitorClient*)client)->Send(fieldID, value, script);
+}
+
+
+gm_Bool
+MonitorClientSend_With_Unit(MonitorClientID client, const char *unitID, 
+			    const char *fieldID, const char *value, 
+			    const char *script)
+{
+  if (client==NULL) return gm_False;
+  return ((MonitorClient*)client)->Send(unitID, fieldID, value, script);
+}
+
+
+
+Log&
+Log::operator << (const char *string)
+{
+  if (client!=0) {
+    client->Send("PTM Log", string, "Log");
+  }
+  else if (logFD!=0) {
+    fprintf(logFD, string);
+  }
+  else cerr << prefix << string;
+  return *this;
+}
+
+@
+
+
+1.17
+log
+@Changes to monitor to do unicast and multicast listening properly
+Modified distiller database so that everything after "--" is assumed to
+be command line args to the distiller
+@
+text
+@d141 7
+@
+
+
+1.16
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d4 2
+d21 1
+a21 1
+MonitorClient::MonitorClient(const char *unitID_, const char *multicastAddr, 
+d23 1
+a23 1
+    : MulticastSocket()
+d25 22
+a46 2
+  sprintf(multicast, "%s/%d/%d", multicastAddr, port, ttl);
+  if (CreateSender(multicastAddr, port, ttl)==gm_False) return;
+d54 1
+a54 1
+  GetHostName(hostName);
+d63 4
+d77 1
+a77 1
+  returnValue = Write(buffer, strlen(buffer)+1);
+@
+
+
+1.15
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d72 1
+a72 1
+    SIGHUP,
+@
+
+
+1.14
+log
+@Still more changes to the monitor to make kill work
+@
+text
+@d42 1
+d51 3
+a53 1
+  return Write(buffer, len);
+@
+
+
+1.13
+log
+@More changes for killing processes via the monitor
+@
+text
+@d93 1
+@
+
+
+1.12
+log
+@Changes to the monitor for killing
+@
+text
+@a58 1
+  gm_Debug(dbgTmp, "Inside GaspOnSignals: nsigs = " << nsigs << '\n');
+d71 2
+a72 2
+    SIGSEGV,
+    SIGBUS
+@
+
+
+1.11
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d11 5
+a15 2
+static int CurrentMonitorSock = 0;
+static char *CurrentUnitId = NULL;
+d31 3
+a33 2
+  CurrentMonitorSock = socketID;
+  CurrentUnitId = unitID;
+d42 2
+a43 2
+  int  len = strlen(unitID_) + 1 + strlen(fieldID) + 1 
+    + strlen(value) + 1 + strlen(script) + 1;
+d47 3
+a49 2
+  sprintf(buffer, "%s%c%s%c%s%c%s", unitID_, (char)1, fieldID, (char)1, value, 
+	  (char) 1, script);
+d53 1
+d58 3
+d62 1
+a62 1
+    (void)signal(sigs[i], MonitorClientSigHandler);
+d65 1
+d67 1
+a67 1
+MonitorClient::DyingGasp(void)
+d69 8
+a76 1
+  MonitorClientSigHandler(0);
+d79 4
+a82 2
+extern "C" void
+MonitorClientSigHandler(int sig)
+d84 10
+a93 6
+  static char death[256];
+  if (CurrentMonitorSock) {
+    int len = sprintf(death, "%s%c%c%%DEATH%%%c", CurrentUnitId, (char)1,
+                      (char)1, (char)1);
+    write(CurrentMonitorSock, death, len);
+  }
+@
+
+
+1.10
+log
+@changed distiller interface to use struct DistillerInput/DistillerOutput in frontend,gif_munge,html_munge
+@
+text
+@d113 1
+a113 1
+    client->Send("Log", string, "Log");
+@
+
+
+1.9
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@d65 1
+a66 1
+    char *death = new char [strlen(CurrentUnitId) + 1 + 1 + 7];
+@
+
+
+1.8
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d3 1
+d11 4
+d28 2
+d48 7
+d56 17
+@
+
+
+1.7
+log
+@Brought back the old, working monitor.cc into the main trunk.  Head of
+main trunk should now be totally consistent.
+@
+text
+@d15 1
+d35 1
+a35 1
+  if (buffer==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d81 7
+a87 2
+  if (client==0) cerr << string;
+  else client->Send("Log", string, "Log");
+@
+
+
+1.6
+log
+@Various changes and 'fixes' but they are not stable yet.  the 'heisenbug' contour seems more stable; should debug from that contour, then merge diffs with head (i.e. this) contour.
+@
+text
+@a16 2
+  pid = (UINT32)getpid();
+
+a21 2
+
+  sprintf(multicast, "%s/%d/%d", multicastAddr, port, ttl);
+d30 1
+a30 3
+  
+  int  len = 5 /*strlen(getppid())*/ + 1
+    + strlen(unitID_) + 1 + strlen(fieldID) + 1 
+d35 2
+a36 4
+  len = 1 + sprintf(buffer, "%05lu%c%s%c%s%c%s%c%s", pid, (char)1,
+                    unitID_, (char)1, fieldID, (char)1, value, 
+                    (char) 1, script);
+
+d80 2
+a81 11
+  if (client!=0) {
+    client->Send("Log", string, "Log");
+  }
+  else if (logFD!=NULL) {
+    fprintf(logFD, "%s", string);
+    fflush(logFD);
+  }
+  else {
+    cerr << string;
+  }
+
+@
+
+
+1.5
+log
+@Yatin's first commit from India
+@
+text
+@d34 3
+a36 1
+  int  len = strlen(unitID_) + 1 + strlen(fieldID) + 1 
+d41 4
+a44 3
+  sprintf(buffer, "%lu%c%s%c%s%c%s%c%s", pid, (char)1,
+          unitID_, (char)1, fieldID, (char)1, value, 
+	  (char) 1, script);
+@
+
+
+1.4
+log
+@made specific Read method for MluticastSocket, to get correct read() behavior for UDP
+@
+text
+@d24 2
+d85 11
+a95 2
+  if (client==0) cerr << string;
+  else client->Send("Log", string, "Log");
+@
+
+
+1.3
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d17 2
+d37 2
+a38 1
+  sprintf(buffer, "%s%c%s%c%s%c%s", unitID_, (char)1, fieldID, (char)1, value, 
+@
+
+
+1.2
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d15 1
+a15 1
+  if (CreateSender(multicastAddr, port, ttl)==FALSE) return;
+d25 1
+a25 1
+Bool
+d34 1
+a34 1
+  if (buffer==NULL) BoolErrorReturn(errOutOfMemory);
+d57 1
+a57 1
+Bool
+d61 1
+a61 1
+  if (client==NULL) return FALSE;
+d66 1
+a66 1
+Bool
+d71 1
+a71 1
+  if (client==NULL) return FALSE;
+@
+
+
+1.1
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d11 1
+a11 1
+MonitorClient::MonitorClient(char *unitID_, char *multicastAddr, 
+d17 1
+a17 1
+  if (strlen(unitID_) < 80) strcpy(unitID, unitID_);
+d19 2
+a20 2
+    strncpy(unitID, unitID_, 79); 
+    unitID[79]='\0'; 
+d26 2
+a27 1
+MonitorClient::Send(char *unitID_, char *fieldID, char *value, char *script)
+d43 2
+a44 1
+MonitorClientCreate(char *unitID, char *multicastAddr, Port port, int ttl)
+d58 2
+a59 2
+MonitorClientSend(MonitorClientID client, char *fieldID, char *value, 
+		  char *script)
+d67 3
+a69 2
+MonitorClientSend_With_Unit(MonitorClientID client, char *unitID, 
+			    char *fieldID, char *value, char *script)
+d78 1
+a78 1
+Log::operator << (char *string)
+@

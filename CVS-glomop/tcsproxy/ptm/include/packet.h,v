@@ -1,0 +1,726 @@
+head	1.12;
+access;
+symbols
+	Yatin-final:1.12
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.11
+	fox-dev:1.11
+	ptm-ng:1.11
+	transend-beta-latest:1.11
+	Aggregators:1.11
+	NoAggregators:1.11
+	iang:1.11.0.4
+	transend-beta:1.11.0.2
+	SOSP:1.11
+	stable_ptm:1.9
+	merged_preintegrate:1.6
+	heisenbug:1.6
+	PRE_INTEGRATION:1.6
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.12
+date	97.09.18.22.45.19;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.26.04.14.53;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.17.03.01.07;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.05.03.49.01;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.29.06.00.49;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.04.09.55.36;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.13.00.18.41;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.10;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.08.12.11;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.45;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.34;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@#ifndef __PACKET_H__
+#define __PACKET_H__
+
+#include "defines.h"
+#include "eventhan.h"
+#define  MAGIC_KEY             0x12345678
+#define  evPacketReceived      (evUserDefinedEvent+1)
+#define  MAXDGRAMSIZE          1024
+
+class CommunicationObject;
+class EventSystem;
+class gm_PacketHandler;
+
+struct gm_PacketHeader {
+  gm_PacketHeader() 
+    : magic(MAGIC_KEY), type(0), length(0), requestReplyID(NoRequestReply) { };
+  gm_PacketHeader(UINT32 t, UINT32 l, UINT32 id) 
+    : magic(MAGIC_KEY), type(t), length(l), requestReplyID(id) { };
+  void HostToNetwork();
+  void NetworkToHost();
+
+  UINT32 AddToPacket(char *pktStream);
+  UINT32 ExtractFromPacket(const char *pktStream);
+  void   Print();
+
+  static UINT32 Size() { return 4*sizeof(UINT32); }
+
+  UINT32 magic;
+  UINT32 type;
+  UINT32 length;
+  UINT32 requestReplyID;
+};
+
+
+class gm_Packet {
+public:
+  gm_Packet(UINT32 type, UINT32 length, char *_data,gm_Bool isDynamic=gm_False)
+    : header(type, length, NoRequestReply), 
+    data(_data), 
+    isDynamicallyAllocated(isDynamic) { };
+  gm_Packet(UINT32 type, UINT32 length, UINT32 requestReplyID, char *_data, 
+	    gm_Bool isDynamic=gm_False)
+    : header(type, length, requestReplyID), 
+    data(_data), 
+    isDynamicallyAllocated(isDynamic) { };
+  
+  gm_Packet() : header(), data(0), isDynamicallyAllocated(gm_False) { };
+  ~gm_Packet();
+
+  void Delete();
+  void    Print(UINT32 start=0, UINT32 len=0);
+  static  void PrintDump(const char* msg, const char *buffer, UINT32 len);
+
+  char*  FreezeData() { // use UnfreezeData() once you are done with the data!
+    if(isDynamicallyAllocated==gm_False) return NULL;
+    isDynamicallyAllocated = gm_False;
+    return data;
+  }
+  static void UnfreezeData(char *data) {
+    delete [] data;
+  }
+
+  char*  getData()          { return data; };
+  UINT32 getType()          { return header.type; };
+  UINT32 getLength()        { return header.length; };
+  UINT32 getRequestReplyID(){ return header.requestReplyID; };
+
+protected:
+  static void CreateChecksum(char *checksumLocation, const char *buffer,
+			     UINT32 bufferLength);
+  static gm_Bool VerifyChecksum(const char *checksumLocation, 
+				const char *buffer, UINT32 bufferLength);
+
+private:
+  gm_PacketHeader header;
+  char         *data;
+  gm_Bool isDynamicallyAllocated;
+  friend class Socket;
+  friend class MulticastSocket;
+};
+
+
+class gm_PacketHandler {
+protected:
+  gm_Bool EvSelect(EventSystem *evs); 
+  // EvSelect is not automatically called by anyone - you must explicitly 
+  // call it from the EvSelect function of the inherited Socket object
+
+  virtual gm_Bool ReadPacket(gm_Packet *packet)=0;
+  virtual gm_Bool EvConnectionBroken(EventSystem */*evs*/) 
+  { Return(gm_False, errSocketEOF); };
+  virtual gm_Bool EvPacketReceived(EventSystem */*evs*/, gm_Packet */*packet*/)
+  { return gm_True; };
+
+  virtual gm_Bool HandleSelectError(EventSystem *evs, gm_Packet *packet);
+  virtual void ErrorOutput(const char *string)=0;
+};
+
+
+
+class Stream;
+typedef void (Stream::*ManipFunc)(void *args);
+
+struct Manip {
+  Manip(ManipFunc f, void *a) : func(f), args(a) { };
+  ManipFunc func;
+  void      *args;
+};
+
+
+class Stream
+{
+public:
+  Stream() : isGood(gm_True), binaryMode(gm_False) { };
+  Stream& operator << (const Manip manip) 
+  { ManipFunc func=manip.func; func(manip.args); return *this; };
+  Stream& operator >> (const Manip manip) 
+  { ManipFunc func=manip.func; func(manip.args); return *this; };
+  
+  virtual void Delimit_(void* /*ch*/) { };
+  virtual void SetW_(void* /*width*/) { };
+  virtual void Skip_(void* /*howMany*/) { };
+  void Binary_(void *flag) { binaryMode = (gm_Bool)flag; };
+
+  gm_Bool IsBinary() { return binaryMode; };
+
+  gm_Bool IsGood() { return isGood; };
+  void SetGoodFlag(gm_Bool flag) { isGood = flag; };
+
+private:
+  gm_Bool   isGood;
+  gm_Bool   binaryMode;
+};
+
+
+class IStream : public Stream {
+
+public:
+  IStream(const char *d, UINT32 l);
+  char     getDelimit() { return delimiter; };
+  UINT32   getW() { return stringWidth; };
+  //Istream& Binary(gm_Bool flag=gm_True) { binaryMode = flag; return *this; };
+  //gm_Bool     IsBinary() { return binaryMode; };
+
+  IStream& operator >> (char *string);  
+  IStream& operator >> (int &value);    
+  IStream& operator >> (UINT32 &value); 
+  IStream& operator >> (INT32 &value); 
+  IStream& operator >> (const Manip manip) 
+  { *(Stream*)this >> manip; return *this; };
+
+  IStream& Extract(void *extract, UINT32 extractLength);
+
+  gm_Bool IsDone() 
+  { return (current!=NULL && data!=NULL && UINT32(current-data) < length)
+      ? gm_False : gm_True;};
+
+protected:
+  void Delimit_(void* ch)   { if (this!=0) delimiter   = (char)ch;   };
+  void SetW_(void* width)   { if (this!=0) stringWidth = (UINT32)width; };
+  void Skip_(void* howMany) { if(IsDone()==gm_False)current+=(UINT32)howMany;};
+  IStream& InputBinary(void *binaryData, UINT32 numberOfBytes);
+
+private:
+  const  char *data;
+  UINT32 length, stringWidth;
+  const  char *current;
+  char   delimiter;
+};
+
+
+class OStream : public Stream {
+public:
+  OStream(char *buffer, UINT32 len);
+  OStream();
+  virtual ~OStream() 
+  { if (isDynamic==gm_True && data!=NULL) { delete [] data; data=NULL; } };
+
+  OStream& operator << (const char *string);
+  OStream& operator << (char ch);
+  OStream& operator << (int value);
+  OStream& operator << (UINT32 value);
+  OStream& operator << (INT32 value);
+  OStream& operator << (const Manip manip) 
+  { *(Stream*)this  << manip; return *this; };
+
+  OStream& Append(void *append, UINT32 appendLength);
+    
+
+  char*    getData()   { return data; };
+  UINT32   getLength() { return bytesWritten+1; };
+
+protected:
+  OStream& OutputBinary(const void *binaryData, UINT32 numberOfBytes);
+  gm_Bool GrowBufferToAtLeast(UINT32 newLength);
+
+private:
+  char   *data;
+  UINT32 length, bytesWritten;
+  gm_Bool   isDynamic;
+};
+
+
+#define Binary(flag) Manip(Stream::Binary_,  (void*)flag)
+#define Delimit(ch)  Manip(Stream::Delimit_, (void*)ch)
+#define SetW(width)  Manip(Stream::SetW_,    (void*)width)
+#define Skip         Manip(Stream::Skip_,    (void*)1)
+#define SkipMany(no) Manip(Stream::Skip_,    (void*)no)
+
+
+#endif // __PACKET_H__
+
+@
+
+
+1.11
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d12 1
+a12 1
+class PacketHandler;
+d14 2
+a15 2
+struct PacketHeader {
+  PacketHeader() 
+d17 1
+a17 1
+  PacketHeader(UINT32 t, UINT32 l, UINT32 id) 
+d35 1
+a35 1
+class Packet {
+d37 1
+a37 1
+  Packet(UINT32 type, UINT32 length, char *_data, gm_Bool isDynamic=gm_False)
+d39 4
+a42 4
+      data(_data), 
+      isDynamicallyAllocated(isDynamic) { };
+  Packet(UINT32 type, UINT32 length, UINT32 requestReplyID, char *_data, 
+	 gm_Bool isDynamic=gm_False)
+d44 5
+a48 5
+      data(_data), 
+      isDynamicallyAllocated(isDynamic) { };
+
+  Packet() : header(), data(0), isDynamicallyAllocated(gm_False) { };
+  ~Packet();
+d75 1
+a75 1
+  PacketHeader header;
+d83 1
+a83 1
+class PacketHandler {
+d89 1
+a89 1
+  virtual gm_Bool ReadPacket(Packet *packet)=0;
+d92 1
+a92 1
+  virtual gm_Bool EvPacketReceived(EventSystem */*evs*/, Packet */*packet*/)
+d95 1
+a95 1
+  virtual gm_Bool HandleSelectError(EventSystem *evs, Packet *packet);
+@
+
+
+1.10
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@a50 2
+  gm_Bool Send   (CommunicationObject *object);
+  gm_Bool Receive(CommunicationObject *object);
+d78 2
+@
+
+
+1.9
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@d76 1
+a78 1
+
+d91 1
+a91 1
+  { Return(gm_False, errSocketReadEOF); };
+d130 1
+a130 1
+protected:
+d157 1
+a157 2
+  //gm_Bool IsGood() { return isGood; };
+  //void SetGoodFlag(gm_Bool flag) { isGood = flag; };
+d161 1
+a161 1
+  void Skip_(void* howMany) { if (IsDone()==gm_False) current+=(UINT32)howMany; };
+d164 1
+d197 1
+a200 2
+  /*gm_Bool   isGood;
+    gm_Bool   binaryMode;*/
+@
+
+
+1.8
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d24 1
+d53 2
+d73 2
+a74 2
+  static gm_Bool VerifyChecksum(const char *checksumLocation, const char *buffer,
+			     UINT32 bufferLength);
+@
+
+
+1.7
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d149 2
+d183 3
+@
+
+
+1.6
+log
+@Changed "int" argument type to be signed rather than unsigned.  Required
+addition of INT32 type to config.h.in, and addition of overload
+operators '<<', '>>' for type "long int" to IStream and OStream classes
+in ptm (mods to packet.{cc,h}).  Added various "make run" targets at top
+level.  Minor fixes to monitor's GUI.  Added simple argument parsing to
+gif_munge in ARGS.h, which will be the standard filename where distiller
+args are defined.  Added tags target to ptm makefile.
+@
+text
+@a66 4
+  /*gm_Bool ReceiveAndHandle(EventSystem *evs, PacketHandler *handler, 
+			CommunicationObject *object);
+  void HandleIgnorableErrors(void (*LogError)(char*));*/
+
+d88 1
+a88 1
+  { gm_BoolErrorReturn(errSocketReadEOF); };
+d90 1
+a90 1
+  { gm_BoolErrorReturn(success); };
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d149 1
+d182 1
+@
+
+
+1.4
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d36 1
+a36 1
+  Packet(UINT32 type, UINT32 length, char *_data, Bool isDynamic=FALSE)
+d41 1
+a41 1
+	 Bool isDynamic=FALSE)
+d46 1
+a46 1
+  Packet() : header(), data(0), isDynamicallyAllocated(FALSE) { };
+d50 2
+a51 2
+  Bool Send   (CommunicationObject *object);
+  Bool Receive(CommunicationObject *object);
+d54 2
+a55 2
+    if(isDynamicallyAllocated==FALSE) return NULL;
+    isDynamicallyAllocated = FALSE;
+d67 1
+a67 1
+  /*Bool ReceiveAndHandle(EventSystem *evs, PacketHandler *handler, 
+d74 1
+a74 1
+  static Bool VerifyChecksum(const char *checksumLocation, const char *buffer,
+d80 1
+a80 1
+  bool isDynamicallyAllocated;
+d86 1
+a86 1
+  Bool EvSelect(EventSystem *evs); 
+d90 5
+a94 5
+  virtual Bool ReadPacket(Packet *packet)=0;
+  virtual Bool EvConnectionBroken(EventSystem */*evs*/) 
+  { BoolErrorReturn(errSocketReadEOF); };
+  virtual Bool EvPacketReceived(EventSystem */*evs*/, Packet */*packet*/)
+  { BoolErrorReturn(success); };
+d96 1
+a96 1
+  virtual Bool HandleSelectError(EventSystem *evs, Packet *packet);
+d115 1
+a115 1
+  Stream() : isGood(TRUE), binaryMode(FALSE) { };
+d124 1
+a124 1
+  void Binary_(void *flag) { binaryMode = (Bool)flag; };
+d126 1
+a126 1
+  Bool IsBinary() { return binaryMode; };
+d128 2
+a129 2
+  Bool IsGood() { return isGood; };
+  void SetGoodFlag(Bool flag) { isGood = flag; };
+d132 2
+a133 2
+  Bool   isGood;
+  Bool   binaryMode;
+d143 2
+a144 2
+  //Istream& Binary(Bool flag=TRUE) { binaryMode = flag; return *this; };
+  //Bool     IsBinary() { return binaryMode; };
+d152 1
+a152 1
+  Bool IsDone() 
+d154 3
+a156 3
+      ? FALSE : TRUE;};
+  //Bool IsGood() { return isGood; };
+  //void SetGoodFlag(Bool flag) { isGood = flag; };
+d160 1
+a160 1
+  void Skip_(void* howMany) { if (IsDone()==FALSE) current+=(UINT32)howMany; };
+d175 1
+a175 1
+  { if (isDynamic==TRUE && data!=NULL) { delete [] data; data=NULL; } };
+d189 1
+a189 1
+  Bool GrowBufferToAtLeast(UINT32 newLength);
+d193 3
+a195 3
+  Bool   isDynamic;
+  /*Bool   isGood;
+    Bool   binaryMode;*/
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d23 1
+a23 1
+  UINT32 ExtractFromPacket(char *pktStream);
+d72 1
+a72 1
+  static void CreateChecksum(char *checksumLocation, char *buffer,
+d74 1
+a74 1
+  static Bool VerifyChecksum(char *checksumLocation, char *buffer,
+d97 1
+a97 1
+  virtual void ErrorOutput(char *string)=0;
+d140 1
+a140 1
+  IStream(char *d, UINT32 l);
+d163 1
+a163 1
+  char   *data;
+d165 1
+a165 1
+  char   *current;
+d177 1
+a177 1
+  OStream& operator << (char *string);
+d188 1
+a188 1
+  OStream& OutputBinary(void *binaryData, UINT32 numberOfBytes);
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d22 2
+a23 2
+  int  AddToPacket(char *pktStream);
+  int  ExtractFromPacket(char *pktStream);
+d25 1
+a25 1
+  static int Size() { return 4*sizeof(UINT32); }
+d72 5
+d101 37
+a137 1
+class IStream {
+a140 2
+  IStream& Delimit(char ch) { if (this!=0) delimiter = ch; return *this; };
+  IStream& SetW(int width) { if (this!=0) stringWidth = width; return *this; };
+d142 10
+a151 8
+  int      getW() { return stringWidth; };
+  IStream& Binary(Bool flag=TRUE) { binaryMode = flag; return *this; };
+  Bool     IsBinary() { return binaryMode; };
+
+  IStream& operator >> (char *string);  // discards the delimiting character
+  IStream& operator >> (int &value);    // discards the delimiting character
+  IStream& operator >> (UINT32 &value); // discards the delimiting character
+  
+d155 2
+a156 2
+  Bool IsGood() { return isGood; };
+  void SetGoodFlag(Bool flag) { isGood = flag; };
+d158 3
+a166 2
+  Bool   isGood;
+  Bool   binaryMode;
+d170 1
+a170 1
+class OStream {
+d172 1
+a172 1
+  OStream(char *buffer, int len);
+a176 3
+  OStream& Binary(Bool flag=TRUE) { binaryMode = flag; return *this; };
+  Bool     IsBinary() { return binaryMode; };
+
+d181 2
+a186 2
+  Bool IsGood() { return isGood; };
+  void SetGoodFlag(Bool flag) { isGood = flag; };
+d194 2
+a195 2
+  Bool   isGood;
+  Bool   binaryMode;
+d198 6
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d15 4
+a18 2
+  PacketHeader() : magic(MAGIC_KEY), type(0), length(0) { };
+  PacketHeader(uint32 t, uint32 l) : magic(MAGIC_KEY), type(t), length(l) { };
+d22 2
+a23 2
+  int  AddToStream(char *buffer);
+  int  ExtractFromStream(char *buffer);
+d25 1
+a25 1
+  static int Size() { return 3*sizeof(uint32); }
+d27 4
+a30 3
+  uint32 magic;
+  uint32 type;
+  uint32 length;
+d36 7
+a42 2
+  Packet(uint32 type, uint32 length, char *_data, Bool isDynamic=FALSE)
+    : header(type, length), 
+d53 13
+a65 4
+  char*  getData()   { return data; }
+  uint32 getType()   { return header.type; }
+  uint32 getLength() { return header.length; }
+
+d67 1
+a67 1
+  Bool ReceiveAndHandle(EventSystem *evs, PacketHandler *handler, 
+d69 1
+a69 1
+  void HandleIgnorableErrors(void (*LogError)(char*));
+d79 50
+a128 1
+class PacketHandler : public EventHandler {
+d130 18
+a147 2
+  PacketHandler();
+  virtual ~PacketHandler();
+d149 8
+a156 3
+  virtual Bool HandleEvent(EventSystem *evs, EventType eventType, void *args);
+  virtual Bool EvPacketReceived(EventSystem *evs, Packet *packet, 
+				CommunicationObject *object);
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

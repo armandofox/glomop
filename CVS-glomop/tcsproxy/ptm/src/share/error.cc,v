@@ -1,0 +1,280 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.6
+	pre-yatin-merge:1.6
+	transend-beta2:1.6
+	fox-dev:1.6
+	ptm-ng:1.6
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.6
+	stable_ptm:1.5
+	merged_preintegrate:1.3
+	heisenbug:1.3
+	PRE_INTEGRATION:1.3
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.6
+date	97.02.17.03.01.30;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.30.02.25.45;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.01.04.09.55.51;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.23.06.03.27;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.43.06;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.40;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.40;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@#include "error.h"
+#include "log.h"
+#include "threads.h"
+#include <errno.h>
+#include <iostream.h>
+
+static pthread_key_t errorKey;
+
+
+static class ErrorInitializer {
+public:
+  ErrorInitializer() { Error::Initialize(); };
+} __error__init__;
+
+
+Error *
+Error::get()
+{
+  Error *error;
+  error = (Error*) pthread_getspecific(errorKey);
+  if (error==NULL) {
+    error = new Error;
+    if (pthread_setspecific(errorKey, (void*) error)!=0) {
+      return 0;
+    }
+  }
+  return error;
+}
+
+
+void
+Error::Initialize()
+{
+  ThreadError(pthread_key_create(&errorKey, Error::Destroy));
+}
+
+
+void 
+Error::Destroy(void *value)
+{
+  Error *error = (Error*) value;
+  if (error!=0) delete error;
+}
+
+
+void
+Error::Print_()
+{
+  gm_Log("Program status:\n");
+  gm_Log("           Error status        = " << Error::getStatus() << "\n");
+  gm_Log("           Thread error status = " << Error::getThreadStatus()
+	 << "\n");
+
+  if (Error::getStatus()!=success) {
+    gm_Log("           Error file-name     = " << Error::getFilename()<< "\n");
+    gm_Log("           Error line number   = " << Error::getLineNo() << "\n");
+  }
+
+  gm_Log(   "           errno = " << errno << "\n");
+  if (errno!=0) {
+    gm_Log( "           Errno explanation: " << strerror(errno) << "\n");
+  }
+}
+
+
+void 
+Error::Print() {
+  Error *error = get();
+  if (error!=NULL) error->Print_();
+  else {
+    gm_Log("Cannot locate error object!\n");
+  }
+}
+
+
+void
+gm_Abort(char *message)
+{
+  cerr << "Fatal error occurred:\n" << message << "\nAborting program...\n";
+  abort();
+}
+
+
+
+void new_error()
+{
+  cerr << "operator new failed: aborting program\n";
+  abort();
+}
+
+
+typedef void (*PF)();
+extern "C" PF set_new_handler(PF);
+
+
+static class NewErrorInitializer {
+public:
+  NewErrorInitializer() {
+    set_new_handler(new_error);
+  }
+
+} __newErrorInitializer__;
+
+
+
+
+Debug_ Debug_::instance_;
+@
+
+
+1.5
+log
+@Added a hook to the new error handler to dump core
+@
+text
+@d76 8
+@
+
+
+1.4
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d76 23
+@
+
+
+1.3
+log
+@Removed bugs from stub.cc etc.
+@
+text
+@d2 4
+d7 1
+a8 1
+Error error = { 0, 0, "", 0 };
+d10 4
+d15 3
+a17 2
+int
+SetThreadError__(int te, char *f, int l)
+d19 7
+a25 3
+  if (te==0) {
+    error.globalErrorCode = success;
+    error.threadErrorCode = te;
+d27 35
+a61 5
+  else {
+    error.globalErrorCode = errThreadError;
+    error.threadErrorCode = te;
+    error.filename        = f;
+    error.lineNo          = l;
+a62 1
+  return te;
+d67 5
+a71 6
+SetError__(int e, char *f, int l) 
+{
+  error.globalErrorCode = e;
+  if (e!=success) {
+    error.filename        = f;
+    error.lineNo          = l;
+d76 1
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d4 1
+a4 1
+Error error = { 0, 0, 0, 0 };
+d28 4
+a31 2
+  error.filename        = f;
+  error.lineNo          = l;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d8 1
+a8 1
+SetThreadError(int te, char *f, int l)
+d25 1
+a25 1
+SetError(int e, char *f, int l) 
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

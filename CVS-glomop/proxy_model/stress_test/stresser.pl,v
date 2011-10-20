@@ -1,0 +1,200 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.03.06.04.36.18;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@run.pl: modified gifmunch runner and spawner
+scripto.sh: used to coordinate all other pieces
+spawner.pl:  spawns a number of gifmunchers on the local machine
+stresser.pl: stress tests a number of gifmunchers with a file
+stats.pl: computes mean, stddev, variance, etc.
+@
+text
+@#!/usr/sww/bin/perl5
+
+# stresser.pl - stress test gifmunchers already running on a machine
+#             - run spawner.pl on that machine to start up many
+#               gifmunchers
+#
+#   ARGS:  startport nummunchers giffile
+
+BEGIN { 
+    $arch = `uname` || `/bin/uname` || `/usr/ucb/uname` || 
+	die "can't get archtype from uname.";
+    chomp $arch;
+    unshift(@@INC, "/disks/barad-dur/now/pythia/gribble/perlsrc/${arch}_ext/Times/");
+    unshift(@@INC, "/disks/barad-dur/now/pythia/gribble/perlsrc/${arch}_ext/Times/blib/arch");
+}
+
+use Times;
+require "run.pl";
+
+package stresser;
+
+$startport = shift @@ARGV or die "usage: stresser.pl startport nummunchers gf";
+$nummunchers = shift @@ARGV or 
+    die "usage: stresser.pl startport nummunchers gf";
+$gf = shift @@ARGV or die "usage: stresser.pl startport nummunchers gf";
+
+&openlogs;
+&initmunchers;
+&munchloop;
+&cleanup;
+
+sub openlogs {
+    local $respcore = "response_time.log.";
+    local $tpcore = "throughput.log.";
+    local $lognum = 0;
+    local ($respname, $tpname);
+
+    while (-e $respcore . $lognum) {
+	$lognum++;
+    }
+    $respname = $respcore . $lognum;
+
+    $lognum = 0;
+    while (-e $tpcore . $lognum) {
+	$lognum++;
+    }
+    $tpname = $tpcore . $lognum;
+
+    print STDOUT "Opening log files $respname and $tpname.\n";
+    
+    open(RESPLOG, ">$respname") or die "Couldn't open $respname for write.\n";
+    open(TPLOG, ">$tpname") or die "Coudln't open $tpname for write.\n";
+}
+
+sub initmunchers {
+    # we know the starting port number and number of munchers that will
+    # be spawned, so listen on each until all are spawned.  Assume they
+    # will be spawned in linear order.
+
+    local $curport;
+    local $i;
+
+    for ($i=0; $i<$nummunchers; $i++) {
+	$curport = $startport + $i;
+	
+	&run::init($curport, 0);
+    }
+    $theHost = $run::gHost;
+    $thePort = $run::gListenport - ($i - 1);
+    print "host $theHost, port $thePort is gifMuncher base.\n";
+
+    # slurp in a gif file
+    $data = &run::slurp($gf);
+}
+
+sub munchloop {
+    local ($i, $j);
+    local $maxX = 50;
+    local $maxY = 50;
+    local $maxcolors = 8;
+
+    $numloops = 225;      # number of times to distill a file
+    $ein = $rin = $win = '';
+    
+    for ($i=0; $i<$nummunchers; $i++) {
+	$curport = $thePort + $i;
+	$theSock = &outputData($theHost, $curport,
+				     "$maxX $maxY $maxcolors \#ffffff",
+				     $data);
+	$selArray[2*$i] = $theSock;
+	$selArray[2*$i + 1] = "r";
+	$inFD = $theSock->{ReadFH};
+	$sockArray{$inFD} = $i;
+
+	($secs,$usecs) = &Times::gtod(); # what time did we squirt off the gif
+	$ssecArray{$inFD} = $secs;
+	$susecArray{$inFD} = $usecs;
+    }
+
+    for ($i=0; $i<$numloops; ) {
+	@@readyArr = &gm_sock::selectsock(-1, @@selArray);
+	$numReady = scalar(@@readyArr);
+
+	# one is ready - find it.
+	if ($numReady == 0) {
+	    die "selectsock returned empty array.";
+	}
+	
+	for ($sel=0; $sel<$numReady; $sel+=2) {
+	    $redSock = $readyArr[$sel];
+	    $cond = $readyArr[$sel + 1];
+
+	    # we have a socket ready to read.  Do inputData.
+	    $j = $sockArray{$redSock->{ReadFH}};
+	    $outD = &inputData($redSock);
+	    ($secs,$usecs) = &Times::gtod();
+	    $diff = &Times::utimesdiff($secs, $usecs, 
+				       $ssecArray{$redSock->{ReadFH}},
+				       $susecArray{$redSock->{ReadFH}});
+	    print RESPLOG $diff . " j=$j FH=$redSock->{ReadFH}\n";
+	    # done the input data.  Now write out again to restart munching
+	    
+	    if ($i < ($numloops - $nummunchers) ) {
+		$curport = $thePort + $j;
+		$theSock = &outputData($theHost, $curport, 
+				       "$maxX $maxY $maxcolors \#ffffff",
+				       $data);
+		$selArray[2*$j] = $theSock;
+		$selArray[2*$j + 1] = "r";
+		$sockArray{$theSock->{ReadFH}} = $j;
+		($secs,$usecs) = &Times::gtod(); # time we squirted off the gif
+		$ssecArray{$theSock->{ReadFH}} = $secs;
+		$susecArray{$theSock->{ReadFH}} = $usecs;
+	    }
+	    $i += 1;
+	}
+    }
+}
+
+sub outputData {
+    my ($gmHost, $gmListenport, $params,$data) = @@_;
+    my $output;
+    my $nsock;
+
+    #print "Outputing to $gmHost $gmListenport\n";
+    do {
+	$nsock = connectsock gm_sock $gmHost,$gmListenport;
+	if (!$nsock) {
+	    warn ("connect $gmHost $gmListenport: $!");
+	    sleep 1;
+	}
+    } until ($nsock);
+
+    warn ("connect: $!"), return undef unless $nsock;
+
+    $nsock->writesock("d $params $data");
+    return $nsock;
+}
+
+sub inputData {
+    my $nsock = shift;
+
+    return undef unless ($nsock->readsock());     # discard content-type line
+    $output .= $_ while ($_ = $nsock->readsock_raw());
+    $nsock->closesock();
+    return $output;
+}
+
+sub cleanup {
+
+}
+
+1;
+@

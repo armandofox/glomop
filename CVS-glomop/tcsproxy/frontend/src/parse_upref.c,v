@@ -1,0 +1,839 @@
+head	1.11;
+access;
+symbols
+	Yatin-final:1.11
+	Yatin:1.11.0.2
+	pre-yatin-merge:1.11
+	transend-beta2:1.10
+	fox-dev:1.10.4.2
+	frontend-ng:1.10
+	transend-beta-latest:1.10
+	Aggregators:1.10
+	NoAggregators:1.10
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.6;
+locks; strict;
+comment	@ * @;
+
+
+1.11
+date	97.08.30.21.34.20;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.05.01.23.50.54;	author yatin;	state Exp;
+branches
+	1.10.4.1;
+next	1.9;
+
+1.9
+date	97.04.09.01.31.28;	author fox;	state Exp;
+branches
+	1.9.4.1;
+next	1.8;
+
+1.8
+date	97.04.08.22.55.47;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.04.08.02.44.40;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.19.01.29.27;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.13.03.41.54;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.13.02.14.53;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.12.02.58.22;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.08.03.06.38;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.07.22.47.59;	author fox;	state Exp;
+branches;
+next	;
+
+1.9.4.1
+date	97.05.06.23.49.36;	author iang;	state Exp;
+branches;
+next	;
+
+1.10.4.1
+date	97.08.11.04.12.53;	author fox;	state Exp;
+branches;
+next	1.10.4.2;
+
+1.10.4.2
+date	97.08.15.03.43.04;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.11
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  parse_upref.c:  Receive a "set preferences" request from client,
+ *  parse and validate the preferences values, and call the userprefs
+ *  interface to actually change the preferences in the database.  
+ *
+ */
+
+#include "config_tr.h"
+#include "utils.h"
+#include "debug.h"
+#include "frontend.h"
+#include "userpref.h"
+#include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+extern Monitor *gMon;
+
+static gm_Bool remove_from_arglist(UINT32 id, ArgumentList *al);
+
+
+/*
+ *  Parse the URL from the "GET" command and use the info to change the prefs.
+ *
+ *  URL format is something like:
+ *  .../?name=val&name=val&name=val&...&name=val/
+ *
+ *  ARGS:
+ *  input:  http headers struct of the incoming request, including the
+ *      pre-parsed URL (but not the HTTP version)
+ *  input:  socket to collect more data from or write data to
+ *  RETURNS:  true/false (success/failure)
+ *  SIDE EFFECTS: calls http_error_return to send the status message back to
+ *              the user
+ *  REENTRANT: yes, but in practice only called from a non-reentrant single
+ *      thread 
+ */
+
+HTTP_Status
+parse_and_change_prefs(const char *url, userkey ukey, char *err_str)
+{
+  int changed = 0;
+  char *token, *val;
+  char *tmp;
+  ts_strtok_state *ts_st;
+  ArgumentList arglist;
+  Argument *al = arglist.arg;
+  int argct = 0;
+  char *error_string;
+  int i;
+  char type;
+  UINT32 arg_id;
+  UINT32 tmp_u;
+  double tmp_f;
+#ifdef DEBUG_USER_PREF
+  char str[HTTP_RESPONSE_BODY_MAX];
+#endif /* DEBUG_USER_PREF */
+
+  /* get the userkey from the socket connecting ip address*/
+
+  if (ukey == 0) {
+    snprintf(err_str, HTTP_ERRMSG_MAX, "Can't determine user");
+    return HTTP_ERR_UNSPECIFIED;
+  }
+
+  get_userprefs_with_write_intent(ukey, &arglist);
+
+#ifdef DEBUG_USER_PREF
+  sprintf(str, "<p>You are connecting from %lu.%lu.%lu.%lu<p>",
+	   (ukey >> 24),
+	   (ukey >> 16) % 256,
+	   (ukey >> 8) % 256,
+	   (ukey) % 256);
+  correct_write(sock, str, -1);  
+
+  sprintf(str,"You have %i args before setting <br>", arglist.nargs);
+  correct_write(sock, str, -1);  
+
+  for (i=0; i < arglist.nargs;i++) {
+    switch (al[i].type) {
+    case typeInt:
+      sprintf(str, "<tt>[%i] Id = %lu, type = int, value = %lu</tt><br>", i, 
+	      ARG_ID(al[i]), ARG_INT(al[i]));
+      correct_write(sock, str, -1);
+      break;
+    case typeDouble:
+      sprintf(str, "<tt>[%i] Id = %lu, type = dbl, value = %f</tt><br>", i,
+	      ARG_ID(al[i]), ARG_DOUBLE(al[i]));
+      correct_write(sock, str, -1);      
+      break;
+    case typeString:
+      sprintf(str, "<tt>[%i] Id = %lu, type = str, value = %s</tt><br>", i, 
+	      ARG_ID(al[i]), ARG_STRING(al[i]));
+      correct_write(sock, str, -1);      
+    }
+  }
+#endif /* DEBUG_USER_PREF */
+  /* look for the initial question mark. */
+
+  if ((tmp = strchr(url, '?')) == NULL) {
+    snprintf(err_str, HTTP_ERRMSG_MAX,"User preferences");
+    return HTTP_ERR_MALFORMED_REQUEST;
+  }
+  tmp++;
+  ts_st = ts_strtok_init(tmp);
+
+  changed = 0;
+
+  while ((token = ts_strtok("&", ts_st)) != NULL) {
+
+    error_string = NULL;
+    
+    /* token should have the form "name=val" where val may be null. */
+    if ((tmp = strchr((const char *)token, '=')) == NULL) {
+      error_string = token;
+      break;
+    }
+    /* name should be of the form "xnnnn" where x is a type specifier letter
+     *  ('i' for int, 'f' for float, 's' for string), and nnnn is 
+     *  the argument id.
+     */
+    type = token[0];
+    if (sscanf((const char *)token+1, "%lu", &arg_id) != 1) {
+      /* couldn't scan the argument id number */
+      error_string = token+1;
+      break;
+    }
+    /*
+     *  Value can be anything, including the null string; but if it's an 'i' or
+     *  'f' argument, the value should be parsable as an int or float
+     *  respectively.
+     */
+    if ((val = strchr((const char *)token, '=')) == NULL) {
+      error_string = token;
+      break;
+    }
+    /* now find out if the argument is in the current set of arguments 
+       and if so, just change that value.
+    */
+    argct = -1;
+    for (i = 0; i < arglist.nargs; i++) {
+      if (ARG_ID(al[i]) == arg_id) {
+	argct = i;
+      } 
+    }
+    /* if we don't find the id add it to the arg list if we can*/
+    if (argct == -1) {
+      /* make sure we don't go over the max number of args, if we would */
+      if (arglist.nargs >= MAX_ARGS) {
+	continue;
+      }
+      arglist.nargs++;
+      argct = arglist.nargs-1;
+      SET_ARG_ID(al[argct], arg_id);
+    }
+    val++;
+    /* BUG::what if incrementing 'val' overflowed the string? */
+    switch(type) {
+    case 'i':
+      if (*val == '\0') {
+	remove_from_arglist(arg_id, &arglist);
+        break;
+      }
+      if (sscanf(val, "%lu", &tmp_u) == 1) {
+        SET_ARG_INT(al[argct], tmp_u);
+      } else {
+        error_string = val;
+      }
+      break;
+    case 'f':
+      if (*val == '\0') {
+	remove_from_arglist(arg_id, &arglist);
+	break;
+      }
+      if (sscanf(val, "%lf", &tmp_f) == 1) {
+        SET_ARG_DOUBLE(al[argct], tmp_f);
+      } else {
+        error_string = val;
+      } break;
+    case 's':
+      if (*val == '\0') {
+	remove_from_arglist(arg_id, &arglist);
+	break;      
+      }
+      SET_ARG_STRING(al[argct], val);
+      break;
+    default:
+      error_string = token;
+      break;
+    }
+    if (error_string)
+      break;
+  }
+
+  /*
+   *  Loop finishes when we run out of args in the URL, when we have filled the
+   *  allowed arg list size, or when we encounter a parsing error.
+   */
+  ts_strtok_finish(ts_st);
+  if (error_string) {
+    snprintf(err_str, HTTP_ERRMSG_MAX, error_string);
+    changed = 0;
+    return HTTP_ERR_BAD_TOKEN;
+  } 
+#ifdef DEBUG_USER_PREF
+  sprintf(str,"<p>Your have %i args after setting<br>", arglist.nargs);
+  correct_write(sock, str, -1);  
+    
+  for (i=0; i < arglist.nargs;i++) {
+    switch (al[i].type) {
+    case typeInt:
+      sprintf(str, "<tt>[%i] Id = %lu, type = int, value = %lu</tt><br>", i, 
+	      ARG_ID(al[i]), ARG_INT(al[i]));
+      correct_write(sock, str, -1);
+      break;
+    case typeDouble:
+      sprintf(str, "<tt>[%i] Id = %lu, type = dbl, value = %f</tt><br>", i, 
+	      ARG_ID(al[i]), ARG_DOUBLE(al[i]));
+      correct_write(sock, str, -1);      
+      break;
+    case typeString:
+      sprintf(str, "<tt>[%i] Id = %lu, type = str, value = %s</tt><br>", i, 
+	      ARG_ID(al[i]), ARG_STRING(al[i]));
+      correct_write(sock, str, -1);      
+    }
+    correct_write(sock, "</tt>", -1);      
+  }
+#endif /*DEBUG_USER_PREF*/
+
+  set_userprefs(ukey, &arglist);
+
+  return HTTP_NO_ERR;
+}    
+
+gm_Bool
+remove_from_arglist(UINT32 id, ArgumentList *al) {
+  int i;
+  int found = 0;
+
+  for (i=0; i<al->nargs; i++) {
+    if (ARG_ID(al->arg[i]) == id) {
+      found = 1;      
+      i++;      
+      break;
+    } 
+  }
+  if (found) {
+    for (;i<al->nargs; i++) {
+      memcpy(&(al->arg[i-1]), &(al->arg[i]), sizeof(Argument));
+    }
+    al->nargs--;
+    return gm_True;
+  } else {
+    return gm_False;
+  }
+}
+@
+
+
+1.10
+log
+@Changed the ending <center> to </center>.
+@
+text
+@d8 1
+a8 3
+#include "proxy.h"
+#include "userpref.h"
+#include "ALLARGS.h"
+d10 2
+a11 1
+#include "thr_cntl.h"
+a12 2
+#include "debug.h"
+#include "httpreq.h"
+d21 1
+a21 1
+#define PREF_SET_MESG "<html><head><title>Your preferences have been set</title></head><body><center><h1>Preferences set</h1><p>Your new preferences have been set.  Press the back button twice to resume browsing.</p></center></body></html>"
+a22 73
+/*static*/ gm_Bool parse_and_change_prefs(struct http_headers *hp, int sock);
+
+/*
+ *  Collecting incoming prefs request from open file descriptor, parse
+ *  them, and call userpref routines to do the work.  It should not
+ *  close or shutdown the file descriptor - that is done by the caller.
+ *  
+ *
+ *  ARGS: file descriptor of open socket
+ *  REENTRANT: No - only one thread is doing userprefs on a single
+ *  socket
+ *  RETURNS: true/false (success/failure);
+ *  SIDE EFFECTS: calls http_error_return to return a result to the
+ *  client
+ */
+gm_Bool
+parse_prefs_request(int sock)
+{
+  struct http_headers hd;
+  struct http_headers *hp = &hd;
+  size_t headerlen = sizeof(HeaderData);
+  ts_strtok_state *ts_st;
+  char *method;
+  char *tmp;
+  gm_Bool result = gm_False;
+  
+  hp->len = readline_or_timeout(sock, hp->header_data, &headerlen,
+                                READ_ALL_HEADERS);
+
+  if (hp->len == -1) {
+    /* request timed out */
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+
+  ts_st = ts_strtok_init(hp->header_data);
+
+  /*
+   *  Currently, user prefs are delivered via the "GET" method and an
+   *  HTML form.  Form data is parsed out of the URL, which has the form
+   *  "name=val&name=val&...."
+   */
+  if (((method = ts_strtok(" ",ts_st)) == NULL)
+      || (strncasecmp(method, "get", (size_t)3) != 0)) {
+    /* no tokens on line! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  if ((hp->url = ts_strtok(" ", ts_st)) == NULL) {
+    /* No URL! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  /* note, we don't really care about the HTTP version, but we need to know
+     where the URL terminates, so.... */
+
+  if ((tmp = ts_strtok(" ", ts_st)) != NULL) {
+    *(tmp-1) = '\0';            /* terminator for hp->url */
+  }
+  /* now analyze the URL.  */
+
+  result = parse_and_change_prefs(hp, sock);
+  ts_strtok_finish(ts_st);
+
+PARSE_PREFS_RETURN:
+  return result;
+}
+d41 2
+a42 2
+/*static*/ gm_Bool
+parse_and_change_prefs(struct http_headers *hp, int sock)
+a51 1
+  userkey ukey;
+d57 1
+d59 1
+d63 3
+a65 4
+  if (!(ukey = userkey_from_sock_ipaddr(sock))) {
+    http_error_return(sock, HTTP_VERSION_10_OR_LATER,
+                      HTTP_ERR_UNSPECIFIED, "Can't determine user");
+    return gm_False;
+a67 3
+  sprintf(str, "HTTP/1.0 200\r\nContent-type: text/html\r\n\r\n");
+  correct_write(sock, str, -1);
+
+d102 3
+a104 4
+  if ((tmp = strchr((const char *)hp->url, '?')) == NULL) {
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, "User preferences");
+    return gm_False;
+d203 1
+a203 2
+    http_error_return(sock, HTTP_VERSION_10_OR_LATER,
+                      HTTP_ERR_BAD_TOKEN, error_string);
+d205 1
+a205 1
+    return gm_False;
+a231 4
+#ifndef DEBUG_USER_PREF
+  correct_write(sock, PREF_SET_MESG, -1);
+#endif /*DEBUG_USER_PREF*/
+
+d234 1
+a234 1
+  return gm_True;
+d237 2
+a238 1
+gm_Bool remove_from_arglist(UINT32 id, ArgumentList *al) {
+@
+
+
+1.10.4.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d8 1
+a8 1
+#include "config_tr.h"
+d10 1
+d13 1
+d15 1
+a15 4
+#include "clib.h"
+#include "frontend.h"
+#include "proxyinterface.h"
+#include "userpref.h"
+d24 1
+a24 1
+static gm_Bool remove_from_arglist(UINT32 id, ArgumentList *al);
+d26 1
+a26 2
+
+#define PREF_SET_MESG "<html><head><title>Your preferences have been set</title></head><body><center><h1>Preferences set</h1><p>Your new preferences have been set.  Press the back button twice to resume browsing.</p></center></body></html>"
+d44 2
+a45 2
+  Request hd;
+  Request *hp = &hd;
+d52 2
+a53 1
+  hp->len = readline_or_timeout(hp, READ_ALL_HEADERS, NULL);
+d117 2
+a118 2
+gm_Bool
+parse_and_change_prefs(Request *hp, int sock)
+d311 3
+a313 1
+#else  /* not DEBUG_USER_PREF */
+d322 1
+a322 2
+gm_Bool
+remove_from_arglist(UINT32 id, ArgumentList *al) {
+@
+
+
+1.10.4.2
+log
+@*** empty log message ***
+@
+text
+@d9 1
+d11 1
+d13 1
+d15 1
+d28 73
+d118 2
+a119 2
+HTTP_Status
+parse_and_change_prefs(const char *url, userkey ukey, char *err_str)
+d129 1
+a134 1
+#ifdef DEBUG_USER_PREF
+a135 1
+#endif /* DEBUG_USER_PREF */
+d139 4
+a142 3
+  if (ukey == 0) {
+    snprintf(err_str, HTTP_ERRMSG_MAX, "Can't determine user");
+    return HTTP_ERR_UNSPECIFIED;
+d145 3
+d182 4
+a185 3
+  if ((tmp = strchr(url, '?')) == NULL) {
+    snprintf(err_str, HTTP_ERRMSG_MAX,"User preferences");
+    return HTTP_ERR_MALFORMED_REQUEST;
+d284 2
+a285 1
+    snprintf(err_str, HTTP_ERRMSG_MAX, error_string);
+d287 1
+a287 1
+    return HTTP_ERR_BAD_TOKEN;
+d312 2
+d318 1
+a318 1
+  return HTTP_NO_ERR;
+@
+
+
+1.9
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d24 1
+a24 1
+#define PREF_SET_MESG "<html><head><title>Your preferences have been set</title></head><body><center><h1>Preferences set</h1><p>Your new preferences have been set.  Press the back button twice to resume browsing.<p><center></body></html>"
+@
+
+
+1.9.4.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@d24 1
+a24 3
+#define PREF_SET_MESG "<html><head><title>Your preferences have been set</title></head><body><center><h1>Preferences set</h1><p>Your new preferences have been set.  Press the back button twice to resume browsing.</p></center></body></html>"
+
+#define PREF_BAD_PW "<html><head><title>Preferences not set: bad password</title></head><body><center><h1>Bad Passowrd</h1><p>Your preferences have <b>not</b> been set, as you gave an incorrect password.  Press the back button twice to resume browsing.</p></center></body></html>"
+a134 2
+  char *prefpw;
+  int pwmatch = 0;
+d138 1
+a138 2
+  if (!userkey_cmp((ukey = userkey_from_sock_ipaddr_and_headers(sock,hp)),
+		    USERKEY_NONE)) {
+a148 13
+  /* Find the prefs password, if any */
+  prefpw = NULL;
+  for (i=0; i<arglist.nargs; ++i) {
+    if (ARG_ID(al[i]) == FRONT_PASSWD && al[i].type == typeString) {
+	int pwlen = strlen(ARG_STRING(al[i]));
+	if (pwlen > 0) {
+	    prefpw = ALLOCA((pwlen+1));
+	    strcpy(prefpw, ARG_STRING(al[i]));
+	    break;
+	}
+    }
+  }
+
+a267 6
+      /* Check if this was the password arg.  The !pwmatch is here
+         so that, if your current password is "foo", you can change it to
+	 "bar" by doing http://me.taz/set?s0=foo&s0=bar" */
+      if (!pwmatch && prefpw && ARG_ID(al[argct]) == FRONT_PASSWD) {
+	pwmatch = !strcmp(prefpw, ARG_STRING(al[argct]));
+      }
+a287 8
+
+  /* Now make sure the password was correct */
+  if (prefpw && !pwmatch) {
+    /* Nope. */
+    correct_write(sock, PREF_BAD_PW, -1);
+    return gm_False;
+  }
+
+@
+
+
+1.8
+log
+@setting prefs gives a nicer page
+@
+text
+@d8 1
+a9 1
+#include "proxy.h"
+d12 3
+@
+
+
+1.7
+log
+@POST works, though logic is ugly and should be moved mostly into proxy_dispatch
+@
+text
+@d21 2
+d144 3
+a153 2
+  get_userprefs_with_write_intent(ukey, &arglist);
+
+d175 1
+a175 1
+
+d285 1
+a285 1
+
+d308 5
+a313 1
+  
+@
+
+
+1.6
+log
+@changes so that preferences are changed with an http://ChangePrefs
+not by connecting to a seperate port
+@
+text
+@d47 2
+a48 1
+  hp->len = readline_or_timeout(sock, hp->header_data, &headerlen);
+@
+
+
+1.5
+log
+@killed some warnings
+@
+text
+@d21 1
+a21 1
+static gm_Bool parse_and_change_prefs(struct http_headers *hp, int sock);
+d111 1
+a111 1
+static gm_Bool
+@
+
+
+1.4
+log
+@uses userkey_from_sock_ipaddr
+@
+text
+@d123 1
+a123 1
+  int i,j;
+@
+
+
+1.3
+log
+@preferences use cache and database
+@
+text
+@a122 2
+  int socknamelen;
+  struct sockaddr_in sockname;
+d132 1
+a132 2
+  socknamelen = sizeof(struct sockaddr_in);
+  if (getpeername(sock, (struct sockaddr *) (&sockname), &socknamelen)) {
+d138 1
+a138 1
+  sprintf(str, "HTTP/1.0\r\nContent-type: text/html\r\n\r\n");
+a139 2
+
+  ukey = ntohl(sockname.sin_addr.s_addr);
+@
+
+
+1.2
+log
+@Monitor local kill still doesn't work.  Frontend user prefs parsing
+works for simple form submission; the form is in tcsproxy/prefs.html,
+and is generated automatically when run_frontend is done. the user prefs
+port is 1+the proxy main port.
+@
+text
+@d15 3
+d122 54
+d189 1
+a189 6
+  while ((token = ts_strtok("&", ts_st)) != NULL
+         && (argct < MAX_ARGS)) {
+    char type;
+    UINT32 arg_id;
+    UINT32 tmp_u;
+    double tmp_f;
+d217 19
+d240 2
+a241 1
+      if (*val == '\0')
+d243 1
+a245 1
+        argct++;
+d251 4
+a254 2
+      if (*val == '\0')
+        break;
+a256 1
+        argct++;
+d261 4
+a265 1
+      argct++;
+a278 1
+  arglist.nargs = argct;
+d285 45
+a329 23
+  } else {
+    /* echo args to see if they got thru */
+    int i;
+    char foo[1024];
+    int len = 0;
+    for (i=0; i<argct; i++) {
+      switch(ARG_TYPE(al[i])) {
+      case typeInt:
+        len += sprintf(foo+len, "<tt>Type=int   Value=%lu<BR></tt>",
+                       ARG_INT(al[i]));
+        break;
+      case typeDouble:
+        len += sprintf(foo+len, "<tt>Type=dbl   Value=%f<BR></tt>",
+                       ARG_DOUBLE(al[i]));
+        break;
+      case typeString:
+        len += sprintf(foo+len, "<tt>Type=str   Value=%s<BR></tt>",
+                       ARG_STRING(al[i]));
+        break;
+      default:
+        len += sprintf(foo+len, "<tt><b>Type=???</b></tt><br>");
+        break;
+      }
+d331 1
+a331 2
+    http_error_return(sock, HTTP_VERSION_10_OR_LATER,
+                      HTTP_ERR_UNSPECIFIED, foo);
+d333 3
+a335 1
+  }    
+@
+
+
+1.1
+log
+@User prefs skeleton working
+@
+text
+@d41 1
+d76 2
+a77 2
+  /* note, we don't really care about the HTTP version. */
+  ts_strtok_finish(ts_st);
+d79 3
+d85 1
+d91 17
+d112 2
+a113 1
+  char *token, *property, *val;
+d115 83
+a197 2
+  
+  ts_st = ts_strtok_init((char*)hp->url);
+d199 5
+d205 33
+a237 4
+
+  http_error_return(sock, HTTP_VERSION_10_OR_LATER,
+                    HTTP_ERR_BAD_TOKEN, "Request completed OK");
+  return gm_True;
+@

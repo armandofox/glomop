@@ -1,0 +1,318 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.06.19.00.28.39;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.18.01.06.19;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Made some changes - ipse now seems to work with my new parser.
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+
+static char asc[256][20];
+static int asclen[256];
+
+int version = 4;
+
+char *stream_ntoa(unsigned long addr);
+void  do_read_or_die(int fd, char *buf, size_t length);
+void  asc_init(void);
+
+int main(int argc, char **argv)
+{
+  if (argc != 2) {
+    fprintf(stderr, "Usage: httpde_univ vers < stdin > stdout\n", argv[0]);
+    exit(1);
+  }
+  sscanf(*(argv+1), "%d", &version);
+  if ((version < 4) || (version > 4)) {
+    fprintf(stderr, "bad version\n");
+    exit(1);
+  }
+  asc_init();
+
+  while(1) {
+    unsigned long ultmp;
+    unsigned short ustmp;
+    long ltmp;
+    short stmp;
+    unsigned long crs, cru, cip, sip, urllen, mimetypelen, sfs, sfu,
+      rhl, rdl, sls, slu;
+    unsigned long longF, cims, sep, slm;
+    unsigned short shortF, cpt, spt, url;
+    unsigned char charF = 0xFF, *cbuf = NULL, *mbuf = NULL,
+      cpr, spr;
+
+    longF = htonl(0xFFFFFFFF);
+    shortF = htons(0xFFFF);
+
+    /* Client request seconds and useconds */
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    crs = (unsigned long) ltmp;
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    cru = (unsigned long) ltmp;
+
+    /* Client IP and port */
+    do_read_or_die(0, (char *) &cip, sizeof(unsigned long));
+    do_read_or_die(0, (char *) &cpt, sizeof(unsigned short));
+
+    /* Server IP and port */
+    do_read_or_die(0, (char *) &sip, sizeof(unsigned long));
+    do_read_or_die(0, (char *) &spt, sizeof(unsigned short));
+
+    /* Url length and URL */
+    do_read_or_die(0, (char *) &urllen, sizeof(unsigned long));
+    cbuf = (char *) malloc(sizeof(char) * (ntohl(urllen) + 1));
+    if (cbuf == NULL) {
+      fprintf(stderr, "Out of memory in httpde_univ..\n");
+      exit(1);
+    }
+    do_read_or_die(0, (char *) cbuf, ntohl(urllen));
+    *(cbuf + ntohl(urllen)) = '\0';
+
+    /* mimetype length and mimetype */
+    do_read_or_die(0, (char *) &mimetypelen, sizeof(unsigned long));
+    mbuf = (char *) malloc(sizeof(char) * (ntohl(mimetypelen) + 1));
+    if (mbuf == NULL) {
+      fprintf(stderr, "Out of memory in httpde_univ..\n");
+      exit(1);
+    }
+    do_read_or_die(0, (char *) mbuf, ntohl(mimetypelen));
+    *(mbuf + ntohl(mimetypelen)) = '\0';
+
+    /* Server first request seconds and useconds */
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    sfs = (unsigned long) ltmp;
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    sfu = (unsigned long) ltmp;
+
+    /* Response header and data length */
+    do_read_or_die(0, (char *) &rhl, sizeof(unsigned long));
+    do_read_or_die(0, (char *) &rdl, sizeof(unsigned long));
+
+    /* Server last request seconds and useconds */
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    sls = (unsigned long) ltmp;
+    do_read_or_die(0, (char *) &ltmp, sizeof(long));
+    slu = (unsigned long) ltmp;    
+
+    /* client pragma and if_modified_since date */
+    do_read_or_die(0, (char *) &cpr, sizeof(char));
+    do_read_or_die(0, (char *) &cims, sizeof(long));
+    if (cpr & 0x08) {
+      if (ntohl(cims) == (unsigned long) 0xFFFFFFFF)
+	cims = (unsigned long) (htonl(0));
+    } else
+      cims = (unsigned long) (htonl(0xFFFFFFFF));
+
+    /* server pragma, exp, and last mod date */
+    do_read_or_die(0, (char *) &spr, sizeof(char));
+    do_read_or_die(0, (char *) &sep, sizeof(long));
+    do_read_or_die(0, (char *) &slm, sizeof(long));
+    if (spr & 0x04) {
+      if (ntohl(sep) == (unsigned long) 0xFFFFFFFF)
+	sep = (unsigned long) (htonl(0));
+    } else
+      sep = (unsigned long) (htonl(0xFFFFFFFF));
+    if (spr & 0x08) {
+      if (ntohl(slm) == (unsigned long) 0xFFFFFFFF)
+	slm = (unsigned long) (htonl(0));
+    } else
+      slm = (unsigned long) (htonl(0xFFFFFFFF));
+
+/*    fprintf(stderr, "%lu:%lu %lu:%u %lu:%u %d %s %d %s %lu:%lu %lu %lu \
+%lu:%lu %d %lu %d %lu %lu\n",
+	    ntohl(crs), ntohl(cru), ntohl(cip), ntohs(cpt),
+	    ntohl(sip), ntohs(spt), ntohl(urllen), cbuf,
+	    ntohl(mimetypelen), mbuf, htonl(sfs), htonl(sfu),
+	    htonl(rhl), htonl(rdl), htonl(sls), htonl(slu),
+	    cpr, htonl(cims), spr, htonl(sep), htonl(slm)); */
+
+    /* Let's start writing stuff out - remember, network order! */
+    if (crs == 0) { 
+      write(1, &longF, 4);
+      write(1, &longF, 4);
+    } else { 
+      write(1, &crs, 4);
+      write(1, &cru, 4);
+    }
+    if (sfs == 0) {
+      write(1, &longF, 4);
+      write(1, &longF, 4);
+    } else {
+      write(1, &sfs, 4);
+      write(1, &sfu, 4);
+    }
+    if (sls == 0) {
+      write(1, &longF, 4);
+      write(1, &longF, 4);
+    } else {
+      write(1, &sls, 4);
+      write(1, &slu, 4);
+    }
+    if (cip == 0) {
+      write(1, &longF, 4);
+      write(1, &shortF, 2);
+    } else {
+      write(1, &cip, 4);
+      write(1, &cpt, 2);
+    }
+    if (sip == 0) {
+      write(1, &longF, 4);
+      write(1, &shortF, 2);
+    } else {
+      write(1, &sip, 4);  /* already net order */
+      write(1, &spt, 2);  /* already net order */
+    }
+    if (version == 1) {
+      write(1, &charF, 1);
+      write(1, &charF, 1);
+    } else {
+      write(1, &cpr, 1);
+      write(1, &spr, 1);
+    }
+    write(1, &cims, 4);
+    write(1, &sep, 4);
+    write(1, &slm, 4);
+    write(1, &rhl, 4);
+    write(1, &rdl, 4);
+    urllen = ntohl(urllen) - 2;  /* get rid of pesky quotes around URL */
+    url = htons( (unsigned short) urllen);
+    write(1, &url, 2);
+    if (ntohs(url) != strlen(cbuf)-2) {
+      fprintf(stderr, "%d %d %d\n", url, ntohs(url), strlen(cbuf)-2);
+      fprintf(stderr, "%s!!!!\n", cbuf);
+      /*die_painful_death();*/
+    }
+    write(1, cbuf+1, ntohs(url));
+
+    free(cbuf);
+    free(mbuf);
+  }
+   
+}
+
+char *stream_ntoa(unsigned long addr)
+{
+    static char buf[100];
+    sprintf(buf, "%lu.%lu.%lu.%lu",
+        (addr >> 24),
+        (addr >> 16) % 256,
+        (addr >> 8) % 256,
+        (addr) % 256);
+    return buf;
+}
+
+void  do_read_or_die(int fd, char *buf, size_t length)
+{
+  int sofar = 0, next;
+
+  while (1) {
+    next = read(fd, buf + (unsigned long int) sofar, length-sofar);
+    if (next <= 0) {
+      exit(1);
+    }
+    sofar += next;
+    if (sofar >= length)
+      break;
+  }
+}
+
+void  asc_init(void)
+{
+    int i;
+
+    for(i=128;i<=255;++i)
+    {
+        sprintf(asc[i], "\x03%02x", i);
+        asclen[i] = 3;
+    }
+    for(i=0;i<=31;++i)
+    {
+        sprintf(asc[i], "\x03^%c", i+64);
+        asclen[i] = 3;
+    }
+    for(i=32;i<=126;++i)
+    {
+        sprintf(asc[i], "%c", i);
+        asclen[i] = 1;
+    }
+    strcpy(asc[10], "\n"); asclen[10] = 1;
+    strcpy(asc[13], "\x03\\r");
+    strcpy(asc[27], "\x03\\e");
+    strcpy(asc[8], "\x03\\b");
+    strcpy(asc[7], "\x03\\a");
+    strcpy(asc[9], "\x03\\t");
+    strcpy(asc[12], "\x03\\f");
+    strcpy(asc[127], "\x03^?");
+}
+
+void die_painful_death(char *dm)
+{
+  fprintf(stderr, "aaaaaaaaaugugugghgghhhh (%s).\n", dm);
+  exit(1);
+}
+
+@
+
+
+1.1
+log
+@universal parser
+@
+text
+@a61 1
+
+a84 1
+    fprintf(stderr, "sfs %lu, sfu %lu\n", ntohl(sfs), ntohl(sfu));
+d87 2
+a88 2
+    do_read_or_die(0, (char *) &rhl, sizeof(long));
+    do_read_or_die(0, (char *) &rdl, sizeof(long));
+d120 8
+d130 2
+a131 1
+      write(1, &longF, 4); write(1, &longF, 4);
+d137 2
+a138 1
+      write(1, &longF, 4); write(1, &longF, 4);
+d144 2
+a145 1
+      write(1, &longF, 4); write(1, &longF, 4);
+d151 2
+a152 1
+      write(1, &longF, 4); write(1, &shortF, 2);
+d158 2
+a159 1
+      write(1, &longF, 4); write(1, &shortF, 2);
+d165 2
+a166 1
+      write(1, &charF, 1);  write(1, &charF, 1);
+d177 2
+a178 1
+    url = htons( (unsigned short) url);   write(1, &url, 2);
+@

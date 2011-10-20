@@ -1,0 +1,168 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.30.20.47.54;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From geweke@@bang.cs.berkeley.edu  Fri Oct 30 11:44:15 1998
+Return-Path: geweke@@bang.cs.berkeley.edu
+Received: from bang.cs.berkeley.edu (bang.CS.Berkeley.EDU [128.32.36.35]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id LAA13716 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 30 Oct 1998 11:44:14 -0800
+Received: (from geweke@@localhost)
+	by bang.cs.berkeley.edu (8.8.7/8.8.7) id LAA01076
+	for cs261-homeworks@@joseph.cs.berkeley.edu; Fri, 30 Oct 1998 11:44:28 -0800
+Message-Id: <199810301944.LAA01076@@bang.cs.berkeley.edu>
+Date: Fri, 30 Oct 1998 11:44:28 -0800 (PST)
+From: geweke@@millennium.berkeley.edu
+Subject: HW #2, geweke@@cs, 12183838
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+MIME-Version: 1.0
+Content-Type: TEXT/plain; CHARSET=US-ASCII
+Status: RO
+
+Andrew Geweke / 12183838 / geweke@@{cs,millennium}.berkeley.edu
+CS 261 / Homework #2 / 30 Oct 1998
+
+1.
+    Here, I am assuming that the stateful firewall can basically only
+    drop packets or pass them on -- not rewrite them substantially
+    (for example, to exclude a SMTP command known to allow security
+    holes) or respond "on behalf of" the server/client that's behind
+    the firewall. If it *can* do these latter things, I would consider
+    it more like a proxy than a firewall.
+	
+    1. Stateful Firewall vs. Proxy:
+        (+ indicates advantages of a firewall; - indicates disadvantages)
+
+	+ Transparency -- no need to change clients to know about the
+	  device; clients don't even know it's there.
+	+ Speed -- clients access resources faster as they don't need
+	  to go through the proxy.
+	+ Speed -- the SFW can likely use fewer resources and less
+	  hardware than a proxy.
+	- General case is NP-hard. When accepting a packet from the
+	  outside, you have to decide if it will tickle a bug/hole on
+	  its destination machine. In the general case, you can only
+	  do this by actually *simulating* the internal machine
+	  entirely. This is clearly not reasonable.
+	- Has an "allow by default" problem. That is, you tell your
+	  SFW to drop packets when you notice something that will
+	  tickle a bug/hole on an internal server/client (level 7
+	  here; we assume level 3/4 holes are taken care of
+	  already). So you code in the list of all known security
+	  holes/bugs and drop when you see them. New bugs/holes -- or
+	  ones you forgot -- will make it through, though.
+	- Installation of new versions of server/client software on
+	  the inside will require changes to the firewall to
+	  compensate for any holes/bugs these may have. Imagine what
+	  happens when somebody installs sendmail 8.0.0 with its
+	  myriad holes on the inside! You'll never catch them all at
+	  the SFW.
+	- Complexity. The SFW is going to be very complicated and
+	  require lots of maintenance; the proxy can actually be quite
+	  simple. The SFW violates the KISS rule.
+
+    2. Stateful Firewall vs. Intrustion Detection System:
+
+        + The SFW can actually *stop* attacks. It is very likely that
+          an IDS will only alert you after it's too late.
+	+ In general, a SFW is *proactive*, not *reactive*.
+	+ The SFW will guard against bugs as well as security holes.
+	+ The SFW will not annoy you with incessant alarms.
+	- The IDS is much more transparent. It, by definition, lets
+          everything through. This is probably of most advantage in a
+          research environment where there are lots of new protocols
+          being created and used; you won't have time to update the
+          SFW correctly.
+
+2.
+    Growing the stack upwards instead of downwards definitely does
+    help. Basically, you can now only overwrite certain local
+    variables instead of the entire stack.
+
+    Of the five possible attacks outlined, three are still possible:
+
+      1. You can overwrite any local variables declared *after* the
+         buffer is declared. This depends on the order the compiler
+         places the variables on the stack, but in C they are
+         typically in the same order in which the programmer declares
+         them. Notably, this is more restrictive than before; you
+         *cannot* overwrite variables in your callers.
+      2. This depends on where stdio locates its global variables. If
+         stdio variables are located in a segment that has unmapped
+         memory between it and the bottom of the stack, they cannot be
+         overwritten. If there is no such unmapped memory, then the
+         traditional (down-growing) stack would allow such overruns
+         while the new one would not. If the stdio variables are
+         somehow allocated as local variables of a very-high-up
+         function, the traditional method would allow such overrun
+         exploits and the new method would not.
+      3. Assuming the return address is stored "lower" on the stack
+         than any local variables, then the new stack direction
+         completely prevents this sort of attack. However, see new
+         attack #2 below.
+      4. See (3).
+      5. Since function pointers often *are* local variables
+         (especially, nastily, "this", although it's often allocated
+         "lower" on the stack than the buffer), this is completely
+         exploitable even with the new stack direction.
+
+    New attacks:
+
+      1. A subtle attack involving unintialized variables: you can
+         overwrite portions of memory *beyond the end* of the stack
+	 with the new direction. If any functions called by the
+	 function with the buffer have uninitialized local variables
+	 that are used before being initialized, then you can
+         influence what values those variables first get -- which
+         might be usable as an exploit.
+      2. This is not new -- it's doable with either stack direction
+         -- but it's worth mentioning. Often functions take buffers
+         that they allocate on the stack and pass pointers into them
+         down to their children. Now, with the new stack direction,
+         you *can* overwrite the return address and do attacks 3 and 4
+         from the old attack section above.
+
+3.
+    It is much easier to do this if you can make changes (some subtle,
+    some gross) to the language itself. For example, Pascal can get
+    around this problem: you disallow pointer arithmetic and taking
+    the address of something in the middle of an array (which is
+    really the same thing; &(a[5]) == (a + 5)). Now you store a length
+    at the beginning of each array in memory, and check that length on
+    all accesses to the array.
+
+    Another option is software fault isolation. This can come in
+    several forms; the easiest way is to allocate unmapped pages on
+    either side of heap-allocated buffers. Doing this to the stack is
+    probably possible, too, though this goes under the heading of
+    "nasty tricks to play on your system".
+
+    It *is* possible to do the first trick with software only; before
+    every store for which you cannot determine statically (at
+    compile-time) that the address is safe, you check to make sure the
+    address being stored into is within a validly allocated
+    buffer. This is possible for stack-allocated buffers, too. (You
+    did not say, after all, that it needed to be fast.)
+
+    Right answer: use Java, Modula-n, or another type-safe language
+    with garbage collection. Pointers and arbitrary pointer arithmetic
+    just make this a very difficult problem.
+
+
+@

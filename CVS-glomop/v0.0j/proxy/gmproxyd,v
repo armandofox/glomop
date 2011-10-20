@@ -1,0 +1,933 @@
+head	1.22;
+access;
+symbols
+	release:1.21
+	Release:1.18
+	initial:1.1.1.1
+	dgourley:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.22
+date	95.10.25.23.01.55;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	95.10.25.03.00.15;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	95.10.20.05.53.40;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	95.10.19.22.23.49;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	95.10.18.05.20.18;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	95.10.18.03.09.00;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	95.10.17.03.23.01;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.10.17.01.28.09;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.10.17.01.14.20;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.10.16.23.12.06;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.10.16.21.46.44;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.10.16.19.35.52;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.10.13.03.19.33;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.10.11.01.21.07;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.08.23.22.25.35;	author dgourley;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.08.18.21.45.32;	author dgourley;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.08.18.08.12.38;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.08.18.00.08.12;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.08.17.22.28.41;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.08.17.08.58.13;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.17.06.59.37;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.06.22.50.05;	author dgourley;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.06.22.50.06;	author dgourley;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.22
+log
+@cleaned up some other stuff.  socket stuff is nicer now.
+@
+text
+@#!/usr/sww/bin/perl5
+
+#
+#  gmproxyd: POSIX proxy that listens for connections, authenticates them, and
+#  forks copies of itself to handle each connection.
+#
+#  $Date: 1995/10/25 03:00:15 $
+#
+#  Revision: $Id: gmproxyd,v 1.21 1995/10/25 03:00:15 fox Exp $
+#
+
+package main;
+
+######################################################################
+#
+#               Beginning of main program....
+#
+######################################################################
+
+&init;
+&mainloop;
+&parent_cleanup;
+
+sub parent_cleanup
+{
+    eval "shutdown(S, 2)";
+    close S;
+    exit (0);
+}
+
+######################################################################
+#
+#               ...End of main program.
+#
+######################################################################
+
+
+sub init {
+
+    # Hose the environment, to avoid weird residual dependencies.
+
+    foreach (keys(%ENV)) { delete $ENV{$_}; }
+
+    $SIG{QUIT} = $SIG{INT} = $SIG{PIPE} = "main'parent_cleanup";
+
+    require 'gm_aux.pl' || die "No gm_aux.pl\n";
+    require 'gm_sock.pl'|| die "No gm_sock.pl\n";
+    require 'gm_auth.pl' || die "No gm_auth.pl\n";
+    #
+    #  Set default values of globals
+    #
+    $ConfigFile = "./glomop.cf";
+    #
+    #  Parse cmd line
+    #
+    while ($_ = shift @@ARGV) {
+	$main'Debug = 1, next if /^-d/;
+        $ConfigFile = (shift @@ARGV || die("$_: no config file name\n")), next
+            if /^-c/;
+        &help, exit 0;                      # unrecognized
+    }
+    #
+    #  Read config file
+    #
+    %Config = &aux'read_config($ConfigFile)
+        or die ("Couldn't read $ConfigFile");
+
+    &aux'log("\007*** WARNING! ***  Running insecurely!\007\n")
+        if $Config{debugging} eq 'pythia';
+    
+    return 1;
+}
+
+sub help {
+    print STDERR <<endofhelp;
+$0: start proxy service; most options are set in config file.
+
+Usage: $0 [options]
+  -d   debugging messages
+  -c   config file (default: $ConfigFile)
+endofhelp
+}
+
+#
+#  Main loop.  listen for proxy connection, fork child to handle it, ad
+#  infinitum.
+#
+
+sub mainloop {
+    local($con) = 0;
+    local($c, $c2);
+    my($success, $devname, $username);
+    my($auth) = new gm_auth $Config{matrix},$Config{debugging};
+    my($sock,$newsock);
+
+    &aux'log("Listening on port $Config{port}...\n");
+    # open socket for listening
+    $sock = listensock gm_sock $Config{port},($Config{qsize} || 10);
+    
+    # Fake socket for forking children.
+    select(main'NS); $| = 1; select(STDOUT);
+
+    $con = 0;
+  CON:
+    while (1) {
+        &aux'log("Waiting for connection on port $main'Config{port}.");
+        $newsock = $sock->acceptsock();
+        ($success, $devname, $username) = conn_handshake $auth $newsock;
+
+        if (! $success) {
+            #
+            #  Handshaking or authentication failed.
+            #
+            &aux'log("Handshake or auth failed");
+            writesock $newsock "ERR 0 authentication failed";
+            next CON;
+        }
+        #
+        # Here if authentication succeeded
+        #
+        ($newuid, $newgid) = (getpwnam($username))[2,3];
+        if (!defined($newuid) || !defined($newgid)) {
+            writesock $newsock ("ERR can't determine uid/gid");
+            next CON;
+        }
+        #
+        #  Authentication OK, and we have a valid target UID and GID
+        #
+        $con++;
+        if ($c = fork()) {
+            # this is the parent
+            waitpid($c,0);                  # child will be reaped quickly.
+            print STDERR "$$ reaped $c, continuing\n";
+            closesock $newsock;
+            print STDERR "$$ next...";
+            next CON;
+        } elsif (! (defined $c)) {
+            # fork failed
+            writesock $newsock ("ERR fork failed: $!");
+            next CON;
+        } else  {
+            #
+            #  Fork again, so that the child will be inherited by init.
+            #
+            if ($c2 = fork()) {
+                # this is the short-lived child
+                exit 0;
+            } elsif (! (defined $c)) {
+                # grandchild fork failed, but this child is still running.
+                # Use this child to report the error, then let this child
+                # exit so parent can reap it.
+                writesock $newsock ("ERR fork failed: $!");
+                &aux'log("Grandchild fork failed");
+                exit 0;
+            } else {
+                #
+                #  This is the grandchild that will become the real process
+                #  
+                #
+                # this is the child.  become the user...
+                ($(, $)) = ($newgid, $newgid); 
+                ($<, $>) = ($newuid, $newuid) unless $>;
+                # make sure it worked
+                if ($> != $newuid) {
+                    writesock $newsock ("ERR 0 effective uid stuck at $>");
+                    exit 0;
+                }
+                sleep 1 until getppid == 1; # wait to be inherited
+                #
+                #  Initialize a new proxy object and run it.
+                #
+                $newsock->redirect(STDIN, STDOUT);
+                exec "./gm_proxy.pl", $username, $devname, $ConfigFile,
+                ($Debug? "-d": "-n");
+                &aux'log("Exec failed: $!");
+                exit 1;
+            }
+        }
+    }
+}
+
+@
+
+
+1.21
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/10/20 05:53:40 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.20 1995/10/20 05:53:40 fox Exp $
+a90 1
+    local($addr);
+d94 1
+a94 1
+    my($sock);
+d98 1
+a98 1
+    $sock = opensock gm_sock $Config{port},($Config{qsize} || 10);
+d107 2
+a108 2
+        $addr = acceptsock $sock "main'NS";
+        ($success, $devname, $username) = conn_handshake $auth $sock;
+d115 1
+a115 1
+            writesock $sock "ERR 0 authentication failed";
+d123 1
+a123 1
+            writesock $sock ("ERR can't determine uid/gid");
+d134 1
+a134 1
+            closesock $sock;
+d139 1
+a139 1
+            writesock $sock ("ERR fork failed: $!");
+d152 1
+a152 1
+                writesock $sock ("ERR fork failed: $!");
+d165 1
+a165 1
+                    writesock $sock ("ERR 0 effective uid stuck at $>");
+d172 1
+a172 1
+                redirect $sock;
+@
+
+
+1.20
+log
+@gifs seem to work.   empty inbox is now detected and returned as empty
+toc, rather than as an error
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/10/19 22:23:49 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.19 1995/10/19 22:23:49 fox Exp $
+d67 4
+d94 1
+a94 1
+    my($auth) = new gm_auth $Config{matrix};
+d176 1
+a176 1
+                &aux'log("Exec failed: $?");
+@
+
+
+1.19
+log
+@added last_error method, changed Exec to set error cond instead of
+sending error to client
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/10/18 05:20:18 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.18 1995/10/18 05:20:18 fox Exp $
+d158 1
+@
+
+
+1.18
+log
+@Mail works again!
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/10/17 01:28:09 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.15 1995/10/17 01:28:09 fox Exp $
+d39 4
+@
+
+
+1.17
+log
+@auth and proxy now totally separate.
+@
+text
+@d108 1
+d165 2
+a166 1
+                exec "./gm_main.pl", $username, $devname, $ConfigFile;
+@
+
+
+1.16
+log
+@cleaned up exec stuff, seems to work using weird trick from perl book
+p.349.
+@
+text
+@d4 2
+a5 2
+#  gmproxyd: Perl prototype of the proxy process for version 0.0j and 0.0m
+#  of the client.
+d39 3
+a57 1
+    
+d59 1
+a59 1
+    #  Read configuration options from config file
+d61 3
+a63 17
+
+    open(CFG, $ConfigFile) || die "$ConfigFile: $!\n";
+
+    while (<CFG>) {
+        next if /^#/;
+        next if /^\s*$/;
+        if (/^\s*(\S+)\s+(.*)$/) {
+            local($arg) = $2;
+            eval "\$Config{$1} = $arg";
+            die "Error in $ConfigFile: $_\n" if $@@;
+            next;
+        }
+        die "Bad line in $ConfigFile: $_\n";
+    }
+    close CFG;
+
+    unshift(@@INC,$1) if  ($Config{home} =~ /(\S+)/);
+a120 1
+        $SIG{QUIT} = $SIG{INT} = $SIG{PIPE} = "main'parent_cleanup";
+d164 1
+a164 1
+                exec "./gm_main.pl", "0";
+d166 1
+a166 8
+                unless (require 'gm_proxy.pl') {
+                    writesock $sock ("ERR 0 couldn't load child proxy");
+                    &aux'log("$$ exiting, couldn't load proxy code");
+                    die;
+                }
+                run {new gm_proxy $sock,$username,$devname};
+                # Returns when the client shuts down the connection.
+                exit 0;
+@
+
+
+1.15
+log
+@xx
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/10/13 03:19:33 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.10 1995/10/13 03:19:33 fox Exp $
+a146 13
+            # this is the child.  become the user...
+            no "gm_auth.pl";                # unimport auth functions.
+            $) = $newgid;
+            $> = $newuid;
+            # make sure it worked
+            if ($> != $newuid) {
+                writesock $sock ("ERR couldn't set effective uid");
+                next CON;
+            }
+#             if ( ((split(/\s+/, $))))[0] != $newgid) {
+#                 writesock $sock ("ERR couldn't set effective gid");
+#                 next CON;
+#             }
+a151 1
+                &aux'log("$$ exiting to be reaped");
+d165 7
+d176 3
+@
+
+
+1.14
+log
+@foo bar
+@
+text
+@a125 1
+        print STDERR "newuid=$newuid, newgid=$newgid\n";
+d148 1
+@
+
+
+1.13
+log
+@foo
+@
+text
+@d75 1
+a75 1
+    @@INC = ($1) if  ($Config{home} =~ /(\S+)/);
+@
+
+
+1.12
+log
+@setgid and  other changes
+@
+text
+@d75 1
+a75 1
+    @@INC = $Config{home};
+@
+
+
+1.11
+log
+@foo
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl5  -w
+d74 2
+a75 1
+    
+d126 1
+d149 1
+a149 1
+            $< = $newuid;
+a150 2
+            $( = $newgid;
+            $) = $newgid;
+a151 4
+            if ($< != $newuid) {
+                writesock $sock ("ERR couldn't set real uid");
+                next CON;
+            }
+d156 4
+a159 8
+            if ($( != $newgid) {
+                writesock $sock ("ERR couldn't set real gid");
+                next CON;
+            }
+            if ($) != $newgid) {
+                writesock $sock ("ERR couldn't set effective gid");
+                next CON;
+            }
+d183 1
+a183 1
+                unless (require('gm_proxy.pl')) {
+@
+
+
+1.10
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/23 22:25:35 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.8 1995/08/23 22:25:35 dgourley Exp $
+d147 4
+a150 2
+            $< = $> = $newuid;
+            $( = $) = $newgid;
+@
+
+
+1.9
+log
+@Compactified and encapsulated some of the code.  Auth seems to be in
+reasonable shape.  Still need to test the suid stuff.
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl
+d26 1
+a26 1
+    shutdown(S, 2);
+a27 2
+    shutdown(NS, 2);
+    close NS;
+d39 3
+a41 6
+    require 'gm_sock.pl';
+    require 'gm_pgetdoc.pl';                    # fetch source documents
+    require 'gm_pputdoc.pl';                    # upload documents
+    require 'gm_aux.pl';                        # helper function
+    require 'gm_type.pl';                       # type helper functions
+    require 'gm_auth.pl';                       # authentication
+d105 1
+a105 1
+    select(main'NS); $| = 1; select(stdout);
+d107 1
+d109 1
+a109 2
+    while (++$con) {
+        killsock $sock;
+d120 44
+a163 7
+        } else {
+            #
+            #  Authentication succeeded
+            #
+            ($newuid, $newgid) = (getpwnam($username))[2,3];
+            if (!defined($newuid) || !defined($newgid)) {
+                writesock $sock ("ERR can't determine uid/gid");
+d167 1
+a167 1
+            #  Authentication OK, and we have a valid target UID and GID
+d169 4
+a172 6
+            $SIG{QUIT} = $SIG{INT} = $SIG{PIPE} = main'done;
+            if ($c = fork()) {
+                # this is the parent
+                &aux'log("conn \#$con: [$c]\n");
+                wait;                       # child will be reaped quickly.
+                killsock $sock;
+d174 3
+a176 1
+                # fork failed
+d178 8
+a185 22
+                next CON;
+            } else  {
+                # this is the child.  become the user...
+                $< = $> = $newuid;
+                $( = $) = $newgid;
+                # make sure it worked
+                if ($< != $newuid) {
+                    writesock $sock ("ERR couldn't set real uid");
+                    next CON;
+                }
+                if ($> != $newuid) {
+                    writesock $sock ("ERR couldn't set effective uid");
+                    next CON;
+                }
+                if ($( != $newgid) {
+                    writesock $sock ("ERR couldn't set real gid");
+                    next CON;
+                }
+                if ($) != $newgid) {
+                    writesock $sock ("ERR couldn't set effective gid");
+                    next CON;
+                }
+d187 1
+a187 1
+                #  Fork again, so that the child will be inherited by init.
+d189 4
+a192 20
+                if ($c2 = fork()) {
+                    # this is the short-lived parent
+                    exit 0;
+                } elsif (! (defined $c)) {
+                    # grandchild fork failed, but this child is still running.
+                    # Use this child to report the error, then let this child
+                    # exit so parent can reap it.
+                    writesock $sock ("ERR fork failed: $!");
+                    exit 0;
+                } else {
+                    #
+                    #  This is the grandchild
+                    #
+                    sleep 1 until getppid == 1; # wait to be inherited
+                    #
+                    #  Initialize a new proxy object and run it.
+                    #
+                    &gm_pconnect'proxy(main'NS, $addr);
+                    # Returns when the client shuts down the connection.
+                    exit 0;
+d194 3
+a199 14
+}
+
+
+######################################################################
+#  cleanup
+######################################################################
+
+sub done {
+    shutdown(main'NS, 2);
+    close(main'NS);
+    shutdown(main'S, 2);
+    close(main'S);
+    &aux'log("Exiting.");
+    exit 0;
+@
+
+
+1.8
+log
+@seni stable version of the mime capable proxy
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/18 21:45:32 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.7 1995/08/18 21:45:32 dgourley Exp $
+d14 5
+a18 2
+$Debug = 0;
+$Config{configFile} = $ENV{GLOMOP_CONFIG} || "./glomop.cf";
+d20 71
+a90 7
+require 'structs.pl';                       # perl data structures, sort of
+require 'gm_pconfig.pl';                    # read config options
+require 'gm_pconnect.pl';                   # accept/close connections
+require 'gm_pgetdoc.pl';                    # fetch source documents
+require 'gm_pputdoc.pl';                    # upload documents
+require 'gm_aux.pl';                        # helper function
+require 'gm_type.pl';                       # type helper functions
+d97 1
+a97 1
+sub main {
+d100 5
+a104 2
+    local($c);
+    
+d107 2
+a108 2
+    &gm_pconnect'opensock(main'S);                               
+
+d112 1
+a112 1
+    $SIG{INTR} = main'done;
+d114 1
+d116 9
+a124 7
+        $addr = accept(main'NS, main'S) || die "$0: accept: $!";
+        if ($c = fork()) {
+            # this is the parent
+            &aux'log("conn \#$con: [$c]\n");
+            # shutdown(NS,2);
+            close(main'NS);
+            wait;                           # reap child
+d126 67
+a192 4
+            # this is the child
+            &gm_pconnect'proxy(main'NS, $addr);
+            # Returns when the client shuts down the connection.
+            exit 0;
+a196 5
+sub parse_cmd_line {
+    while ($_ = shift @@ARGV) {
+	$main'Debug = 1, next if /^-d/;
+    }
+}
+a210 7
+#######################################################################
+#  Call main loop
+#######################################################################
+
+&parse_cmd_line;
+&main;
+exit 0;
+@
+
+
+1.7
+log
+@stupid emtry
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/18 08:12:38 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.6 1995/08/18 08:12:38 fox Exp $
+d22 2
+a23 1
+require 'gm_aux.pl';                        # helper functions
+@
+
+
+1.6
+log
+@Uplink works! woo hoo!
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/18 00:08:12 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.5 1995/08/18 00:08:12 fox Exp $
+d14 1
+d60 6
+d83 1
+@
+
+
+1.5
+log
+@added structs.pl package
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/17 22:28:41 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.4 1995/08/17 22:28:41 fox Exp $
+d16 1
+@
+
+
+1.4
+log
+@downlink works
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/17 08:58:13 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.3 1995/08/17 08:58:13 fox Exp $
+d19 1
+@
+
+
+1.3
+log
+@appears to work for sending TOC and incoming mail
+@
+text
+@d7 1
+a7 1
+#  $Date: 1995/08/17 06:59:37 $
+d9 1
+a9 1
+#  Revision: $Id: gmproxyd,v 1.2 1995/08/17 06:59:37 fox Exp $
+d64 2
+@
+
+
+1.2
+log
+@added pgetdoc
+@
+text
+@d7 1
+a7 1
+#  $Date$
+d9 1
+a9 1
+#  Revision: $Id$
+d31 1
+a31 1
+    &aux'log("Listening on port $global{port}...\n");
+d33 1
+a33 1
+    &gm_pconnect'opensock(S);                               
+d36 1
+a36 1
+    select(NS); $| = 1; select(stdout);
+d38 1
+d40 2
+a41 1
+        $addr = accept(NS, S) || die "$0: accept: $!";
+d46 1
+a46 1
+            close(NS);
+d50 1
+a50 1
+            &gm_pconnect'proxy(NS, $addr);
+d55 11
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 57
+a60 1
+#  $
+@
+
+
+1.1.1.1
+log
+@initial import
+@
+text
+@@

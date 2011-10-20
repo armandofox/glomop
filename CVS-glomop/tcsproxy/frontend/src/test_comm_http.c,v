@@ -1,0 +1,186 @@
+head	1.2;
+access;
+symbols
+	Yatin-final:1.2
+	Yatin:1.2.0.2
+	pre-yatin-merge:1.2
+	fox-dev:1.1.2.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.08.30.21.34.21;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.11.04.13.25;	author fox;	state dead;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.08.11.04.13.25;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@#include "config_tr.h"
+#include "debug.h"
+#include "clib.h"
+#include "thr_cntl.h"
+#include "frontend.h"
+#include "utils.h"
+#include "comm_http.h"
+
+#include <stdio.h>
+#include <string.h>
+
+Monitor *gMon = NULL;
+
+clib_response
+Clib_Lowlevel_Op(char *indata, unsigned inlen,
+                 char **outdata, unsigned *outlen,
+                 int *fd)
+{
+  return CLIB_OK;
+}
+
+int
+main(int ac,char *argv[]) {
+  Request hp;
+  int sock;
+  int len;
+  int quit = 0;
+  int newconn;
+  
+  sock = slisten(argv[1]);
+
+  while (! quit) {
+    newconn = saccept(sock);
+    if (newconn == -1) {
+      fprintf(stderr, "Conn failed: %s\n", strerror(errno));
+      continue;
+    }
+    init_Request(&hp);
+    hp.cli_hdrs.mime_headers = (char *)MALLOC(PERF_HTTP_TOTAL_HEADERLEN);
+    assert(hp.cli_hdrs.mime_headers);
+    hp.cli_hdrs.mime_size = PERF_HTTP_TOTAL_HEADERLEN;
+    hp.cli_hdrs.fd = newconn;
+    len = readline_or_timeout(&hp, -1, NULL);
+    if (len == -1) {
+      fprintf(stderr, "Error %d\n", len);
+      continue;
+    }
+    fprintf(stderr, "Headers = '%s'\n", hp.cli_hdrs.mime_headers);
+    len = parse_status_and_headers(&hp);
+    if (len != HTTP_NO_ERR) {
+      fprintf(stderr, "Error %s\n", http_strerror(len));
+    } else {
+      fprintf(stderr, "URL = '%s'\nMethod = '%s'\nHeaders='%s'\n\n\n",
+              hp.url, hp.method, hp.cli_hdrs.mime_headers);
+      if (strcmp(hp.method, "quit") == 0) {
+        quit = 1;
+      }
+    }
+  }
+  shutdown(sock,2);
+  close(sock);
+  return 0;
+}
+
+  
+@
+
+
+1.1
+log
+@file test_comm_http.c was initially added on branch fox-dev.
+@
+text
+@d1 65
+@
+
+
+1.1.2.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@a0 65
+#include "config_tr.h"
+#include "debug.h"
+#include "clib.h"
+#include "thr_cntl.h"
+#include "frontend.h"
+#include "utils.h"
+#include "comm_http.h"
+
+#include <stdio.h>
+#include <string.h>
+
+Monitor *gMon = NULL;
+
+clib_response
+Clib_Lowlevel_Op(char *indata, unsigned inlen,
+                 char **outdata, unsigned *outlen,
+                 int *fd)
+{
+  return CLIB_OK;
+}
+
+int
+main(int ac,char *argv[]) {
+  Request hp;
+  int sock;
+  int len;
+  int quit = 0;
+  int newconn;
+  
+  sock = slisten(argv[1]);
+
+  while (! quit) {
+    newconn = saccept(sock);
+    if (newconn == -1) {
+      fprintf(stderr, "Conn failed: %s\n", strerror(errno));
+      continue;
+    }
+    init_Request(&hp);
+    hp.cli_hdrs.mime_headers = (char *)MALLOC(PERF_HTTP_TOTAL_HEADERLEN);
+    assert(hp.cli_hdrs.mime_headers);
+    hp.cli_hdrs.mime_size = PERF_HTTP_TOTAL_HEADERLEN;
+    hp.cli_hdrs.fd = newconn;
+    len = readline_or_timeout(&hp, -1, NULL);
+    if (len == -1) {
+      fprintf(stderr, "Error %d\n", len);
+      continue;
+    }
+    fprintf(stderr, "Headers = '%s'\n", hp.cli_hdrs.mime_headers);
+    len = parse_status_and_headers(&hp);
+    if (len != HTTP_NO_ERR) {
+      fprintf(stderr, "Error %s\n", http_strerror(len));
+    } else {
+      fprintf(stderr, "URL = '%s'\nMethod = '%s'\nHeaders='%s'\n\n\n",
+              hp.url, hp.method, hp.cli_hdrs.mime_headers);
+      if (strcmp(hp.method, "quit") == 0) {
+        quit = 1;
+      }
+    }
+  }
+  shutdown(sock,2);
+  close(sock);
+  return 0;
+}
+
+  
+@

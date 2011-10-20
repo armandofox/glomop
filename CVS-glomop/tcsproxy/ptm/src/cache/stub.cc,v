@@ -1,0 +1,426 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.6
+	pre-yatin-merge:1.6
+	transend-beta2:1.6
+	fox-dev:1.6
+	ptm-ng:1.6
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.5
+	stable_ptm:1.5
+	merged_preintegrate:1.5
+	heisenbug:1.5
+	PRE_INTEGRATION:1.5;
+locks; strict;
+comment	@// @;
+
+
+1.6
+date	97.04.17.21.45.17;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.20;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.23.06.03.24;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.23.00.51.19;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.22.08.21.38;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.49;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@config.h is now config_tr.h
+@
+text
+@#include "config_tr.h"
+#include "defines.h"
+#include "distinterface.h"
+#include "proxyinterface.h"
+#include <stdio.h>
+#include <string.h>
+
+
+void Usage(int arg)
+{
+  fprintf(stderr, 
+	  "Usage: stub -d distiller-type -i inputfile -o outputfile \n"
+	  "      [-l monitor-ip-address/port]\n(Errorcode=%d)\n", arg);
+  exit(-1);
+}
+
+
+int main(int argc, char **argv)
+{
+  char filename[256], outputFilename[256], monitorAddr[25];
+  C_DistillerType type;
+  int optCh;
+  Port monitorPort=0;
+  char     *options = "d:i:o:l:";
+  
+  strcpy(filename, "");
+  strcpy(outputFilename, "");
+  strcpy(monitorAddr, "");
+  optind = 1;
+  while ( (optCh = getopt(argc, argv, options))!=-1) {
+    switch (optCh) {
+    case 'd':
+      strcpy(type.string, optarg);
+      break;
+
+    case 'i':
+      strcpy(filename, optarg);
+      break;
+
+    case 'o':
+      strcpy(outputFilename, optarg);
+      break;
+
+    case 'l':
+      if (sscanf(optarg, "%[^/]/%d", monitorAddr, &monitorPort)!=2) Usage(1);
+      break;
+
+    case ':':
+    case '?':
+    default:
+      Usage(2);
+      break;
+    }
+  }
+
+  if (*filename=='\0' || *outputFilename=='\0' || *type.string=='\0') Usage(3);
+
+
+  InitializeDistillerCache(".gm_options.sample", "", 0);
+  fprintf(stderr, "Waiting for PTM...\n");
+  WaitForPTM();
+  fprintf(stderr, "Found PTM.\n");
+
+  Argument *args = new Argument[argc - optind];
+  if (args==NULL) {
+    fprintf(stderr, "Out of memory\n");
+    exit(-1);
+  }
+  for (int idx=optind; idx < argc; idx++) {
+    SET_ARG_ID(args[idx-optind], idx);
+    SET_ARG_STRING(args[idx-optind], argv[idx]);
+  }
+
+
+  FILE *fp = fopen(filename, "r");
+  if (fp==NULL) {
+    fprintf(stderr, "Could not open file: %s\n", filename);
+    exit(-1);
+  }
+
+  fseek(fp, 0, SEEK_END);
+  UINT32 length = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+
+  char *input = new char[length];
+  if (input==NULL) {
+    fprintf(stderr, "Out of memory\n");
+    exit(-1);
+  }
+  if (fread(input, sizeof(char), length, fp) != length) {
+    fprintf(stderr, "File read error\n");
+    exit(-1);
+  }
+  fclose(fp);
+
+  char *output;
+  UINT32 outputLength;
+  DistillerStatus status;
+  status = Distill(&type, args, argc-optind, input, length, 
+		   (void**)&output, &outputLength);
+  fprintf(stderr, "Distiller status: %d\n", status);
+  if (status!=distOk) {
+    exit(-1);
+  }
+
+  if (output==NULL || outputLength==0) {
+    fprintf(stderr, "No output generated\n");
+    exit(-1);
+  }
+
+  fp = fopen(outputFilename, "w");
+  if (fp==NULL) {
+    fprintf(stderr, "Error opening output file\n");
+    exit(-1);
+  }
+
+  if (fwrite(output, sizeof(char), outputLength, fp)
+      !=outputLength) {
+    fprintf(stderr, "Error writing output file\n");
+    exit(-1);
+  }
+
+  fclose(fp);
+  delete [] args;
+  delete [] input;
+  FreeOutputBuffer(output);
+  fprintf(stderr, "Succeeded...\n");
+  return 0;
+}
+
+
+
+#if 0
+#include "communication.h"
+
+int main()
+{
+  MulticastSocket sock;
+  char buffer[500];
+  int len;
+
+  if (sock.CreateSender("224.6.6.6", 6666, 1)==gm_False) {
+    printf("Couldn't create multicast socket\n");
+    return 1;
+  }
+
+  while(1) {
+    printf("--> ");
+    gets(buffer);
+    if (strcmp(buffer, "quit")==0 || strcmp(buffer, "exit")==0) break;
+
+    len = strlen(buffer);
+    while(len > 0 && (buffer[len-1]=='\n' || buffer[len-1]=='\r')) 
+      buffer[--len] = '\0';
+
+    int read=0, write = 0;
+    while(read <= len) {
+      if (buffer[read]=='\\' && buffer[read+1]=='n') { 
+	buffer[write] = '\n';
+	read += 2;
+      }
+      else {
+	buffer[write] = buffer[read];
+	read++;
+      }
+      write++;
+    }
+
+    if (sock.Write(buffer, strlen(buffer)+1)==gm_False) {
+      printf("Write error\n");
+    }
+  }
+
+  return 0;
+}
+
+#endif
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d1 1
+a1 1
+#include "config.h"
+@
+
+
+1.4
+log
+@Removed bugs from stub.cc etc.
+@
+text
+@d59 1
+a59 3
+  InitializeDistillerCache("", DefaultMulticastAddress, DefaultMulticastPort,
+			   DefaultTTL, "", 0, monitorAddr, monitorPort,
+			   DefaultTTL);
+d142 1
+a142 1
+  if (sock.CreateSender("224.6.6.6", 6666, 1)==FALSE) {
+d169 1
+a169 1
+    if (sock.Write(buffer, strlen(buffer)+1)==FALSE) {
+@
+
+
+1.3
+log
+@Update after merging config.h.in
+@
+text
+@d1 2
+a2 3
+#include "distdb.h"
+#include "packet.h"
+#include "communication.h"
+d4 3
+d9 1
+a9 1
+void Usage()
+d12 2
+a13 1
+	  "Usage: stub -d distiller-type -i inputfile -o outputfile\n");
+d18 1
+a18 1
+void main(int argc, char **argv)
+d20 5
+a24 4
+  char filename[256], outputFilename[256], distType[256];
+  int optCh, ch;
+  RemoteID distAddress;
+  char     *options = "d:i:o:";
+d28 1
+d33 1
+a33 1
+      strcpy(distType, optarg);
+d44 4
+d51 1
+a51 1
+      Usage();
+d56 2
+a57 1
+  if (*filename=='\0' || *outputFilename=='\0' || *distType=='\0') Usage();
+d59 6
+d87 1
+a87 1
+  input = new char[length];
+d102 1
+a102 1
+		   &output, &outputLength);
+d130 1
+d135 1
+a135 1
+#ifdef 0
+@
+
+
+1.2
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@a0 2
+#if 0
+
+d10 1
+a10 1
+	  "Usage: stub -d dist-ip/dist-port -i inputfile -o outputfile\n");
+d17 1
+a17 1
+  char filename[256], outputFilename[256];
+d28 1
+a28 2
+      if (sscanf(optarg,"%[^/]/%d",distAddress.ipAddress,&distAddress.port)!=2)
+	Usage();
+d47 1
+a47 1
+  if (*filename=='\0' || outputFilename=='\0' || distAddress.port==0) Usage();
+a48 2
+  OStream argsStream;
+  argsStream.Binary() << argc-optind;
+d50 5
+d56 2
+a57 1
+    argsStream << typeString << idx-optind << argv[idx] << '\0';
+d60 1
+a60 1
+  OStream dataStream;
+d67 3
+a69 8
+  while ( (ch=fgetc(fp))!=EOF ) {
+    dataStream << (char) ch;
+    if (dataStream.IsGood()==FALSE) {
+      fprintf(stderr, "Out of memory\n");
+      exit(-1);
+    }
+  }
+  fclose(fp);
+d71 3
+a73 7
+  Packet argsPacket(pktDistillerArguments, argsStream.getLength(), 0, 
+		    argsStream.getData());
+  Packet dataPacket(pktDistillerData, dataStream.getLength(), 0, 
+		    dataStream.getData());
+  TcpSocket sck;
+  if (sck.Connect(distAddress.ipAddress, distAddress.port)==FALSE) {
+    fprintf(stderr, "Could not connect to distiller\n");
+d76 2
+a77 3
+
+  if (argsPacket.Send(&sck)==FALSE) {
+    fprintf(stderr, "Could not send arguments\n");
+d80 1
+d82 7
+a88 2
+  if (dataPacket.Send(&sck)==FALSE) {
+    fprintf(stderr, "Could not send data\n");
+d92 2
+a93 7
+  Packet status, output;
+  if (status.Receive(&sck)==FALSE) {
+    fprintf(stderr, "Error receiving status packet\n");
+    exit(-1);
+  }
+  if (output.Receive(&sck)==FALSE) {
+    fprintf(stderr, "Error receiving output data packet\n");
+d103 2
+a104 2
+  if (fwrite(output.getData(), 1, output.getLength(), fp)
+      !=output.getLength()) {
+d110 4
+a113 6
+
+  IStream statusStream(status.getData(), status.getLength());
+  UINT32 s;
+  statusStream.Binary() >> s;
+
+  fprintf(stderr, "Distiller status: %lu\n", s);
+a114 1
+#endif
+d118 1
+d162 1
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d1 2
+a8 1
+
+d125 47
+@

@@ -1,0 +1,538 @@
+head	1.24;
+access;
+symbols
+	v15b:1.24
+	v10b3:1.22
+	v10b2:1.20
+	v10b1:1.20;
+locks; strict;
+comment	@ * @;
+
+
+1.24
+date	97.11.15.00.26.06;	author aspolito;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.11.11.21.24.33;	author aspolito;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.10.28.05.18.41;	author iang;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.10.25.19.50.24;	author iang;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.10.07.19.04.31;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.09.25.03.28.45;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.09.12.21.46.07;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.09.12.17.30.07;	author aspolito;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.09.11.19.23.07;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.10.23.49.24;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.08.00.24.28;	author lcddave;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.06.02.26.28;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.06.02.18.59;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.04.00.22.50;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.03.00.49.23;	author aspolito;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.08.29.23.25.03;	author lcddave;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.08.28.01.16.22;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.08.26.23.21.01;	author lcddave;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.08.26.23.03.56;	author lcddave;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.08.16.20.17.03;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.09.00.10.18;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.08.00.10.27;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.06.22.25.19;	author lcddave;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.25;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@#include <Pilot.h>
+
+#include "trans.h"
+#include "globals.h"
+
+DmOpenRef cacheDB;
+DmOpenRef cacheInfoDB;
+DmOpenRef hotlistDB;
+DmOpenRef storageDB;
+DmOpenRef historyDB;
+DmOpenRef offlineDB;
+DmOpenRef offlineInfoDB;
+
+
+ConID conID;           /* connection id for network subsystem */
+VoidHand hPage;        /* handle to the current page */
+WinHandle disp;        /* handle to the display window */
+Word dispError;        /* error for window, needed to create window */
+int currYPosOffset;    /* scrolling position for the page */
+int currXPosOffset;    /* scrolling position for the page */
+int lastLayoutYExtent; /* a trick to maybe get scroll limit working */
+int penDownOrigPieceOff;    /* original pen down location */
+SWord penDownOrigImageFlag; /* image save of pen down piece */
+VoidHand hProxyServer;
+char proxyServer[64];
+int proxyPort;
+char fallbackServer[64];
+int fallbackPort;
+int currRequestID;     /* data to allow dropping of old data */
+int firstOpen;         /* redirects cancel back to splash on first instance */
+ChunkHand curChunk;
+VoidHand curURL;
+Word curURLLength;
+VoidHand transURL;
+Word transURLLength;
+int curHistory;
+int tcurHistory;
+Int curTop;
+
+Boolean remap;
+Int scrollSize;
+Int histSize;
+ULong cacheSize;
+DWord version;
+
+void SetGlobals() {
+  version = PROTOCOL_VERSION;
+  conID = -1;
+  hPage = NULL;
+  disp = 0;
+  dispError = 0;
+  currYPosOffset = 0;
+  currXPosOffset = 0;
+  lastLayoutYExtent = 0;
+  penDownOrigPieceOff = -1; 
+  penDownOrigImageFlag = 0; 
+
+  currRequestID = 0;
+  curChunk = NULL;
+  curURL = NULL;
+  curURLLength = 0;
+  transURL = NULL;
+  transURLLength = 0;
+  curHistory = -1;
+  tcurHistory = -1;
+  curTop = 0;
+
+  remap = DEF_REMAP_VAL;
+  scrollSize = DEF_SCROLL_VAL;
+  histSize = DEF_HIST_VAL;
+  cacheSize = DEF_CACHE_VAL;
+  StrCopy(proxyServer, DEF_PROXY_IP);
+  proxyPort = DEF_PROXY_PORT;
+
+  fallbackServer[0] = 0;
+  fallbackPort = 0;
+
+  firstOpen = 1;
+}
+
+@
+
+
+1.23
+log
+@out of memory handled gracefully.  Fallback proxies added
+@
+text
+@d37 1
+d65 1
+@
+
+
+1.22
+log
+@Handle empty pages
+@
+text
+@d25 1
+a25 1
+char proxyServer[30];
+d27 2
+d72 3
+@
+
+
+1.21
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@a18 1
+int moreOffscreen;     /* have we displayed to the end of doc yet? */
+a48 1
+  moreOffscreen = 0;
+@
+
+
+1.20
+log
+@Changed version to 1.0 beta1
+@
+text
+@d21 1
+d52 1
+@
+
+
+1.19
+log
+@Fixed more nasty memory errors
+@
+text
+@d44 1
+a44 1
+  version = 0x00010001;
+@
+
+
+1.18
+log
+@o UI fixed up: scroll bar at bottom.  It goes all black when the page is
+  requested, and disappears when the page has arrived completely.  The
+  view area is now 150 pixels high.
+o Various bugfixes
+@
+text
+@d22 1
+a22 1
+SWord *penDownOrigPiece;    /* original pen down location */
+d52 1
+a52 1
+  penDownOrigPiece = NULL; 
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@a21 1
+SWord winXextent , winYextent;/* x,y of big window */
+a51 2
+  winXextent = 0;
+  winYextent = 0;
+@
+
+
+1.16
+log
+@*** empty log message ***
+@
+text
+@d33 2
+d62 2
+@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@a0 1
+#pragma pack(2)
+d2 1
+@
+
+
+1.14
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@a41 7
+#define DEF_REMAP_VAL true
+#define DEF_SCROLL_VAL 150
+#define DEF_HIST_VAL 15
+#define DEF_CACHE_VAL 102400
+#define DEF_PROXY_IP "128.32.131.63"
+#define DEF_PROXY_PORT 4446
+
+@
+
+
+1.13
+log
+@Globals.c points to avro 4446 now
+@
+text
+@d25 2
+a26 1
+char *proxyServer;
+d29 1
+a29 1
+
+d42 2
+a43 2
+#define DEF_REMAP_VAL false
+#define DEF_SCROLL_VAL 50
+d46 2
+a62 3
+  proxyServer = "128.32.131.63";
+  proxyPort =  4446;
+
+a63 1
+
+d74 4
+@
+
+
+1.12
+log
+@version numbers added to the protocol
+@
+text
+@d60 1
+a60 6
+#if 0
+  proxyServer = "128.32.131.68";
+  proxyPort =  4444;
+#else
+  /*  proxyServer = "128.32.131.63";*/
+  proxyServer = "208.1.88.248";
+a61 2
+#endif
+
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d39 1
+a39 1
+
+d47 1
+d60 1
+a60 1
+#if 1
+d62 1
+d64 3
+a66 1
+  proxyServer = "128.32.131.63";
+a68 1
+  proxyPort =  4444;
+@
+
+
+1.10
+log
+@various on/off-line fixes
+@
+text
+@d4 1
+d23 1
+a23 1
+SWord penDownOrigPiece;    /* original pen down location */
+@
+
+
+1.9
+log
+@fixed ALT_LINK bad URL problem, now viewing original and following link on an
+image work properly when there are both a LINK and an ALT_LINK url.
+@
+text
+@d39 1
+@
+
+
+1.8
+log
+@OFFLINE MODE WORKS
+@
+text
+@d57 1
+a57 1
+#if 0
+@
+
+
+1.7
+log
+@fixed testing module
+@
+text
+@a32 1
+Boolean ignoreUp;
+d45 1
+a45 1
+  conID = 0;
+a71 1
+  ignoreUp = false;
+@
+
+
+1.6
+log
+@- disabled proxy menu item (still not ready)
+- open dialog box now displays current URL
+@
+text
+@d58 1
+a58 1
+#if 1
+@
+
+
+1.5
+log
+@Updated UI stuff. Fixed hi-light bug.
+@
+text
+@a44 1
+
+d58 3
+d62 2
+@
+
+
+1.4
+log
+@bug fixes and offline cache
+@
+text
+@d23 1
+a23 1
+WinHandle penDownOrigImage; /* image save of pen down piece */
+d57 1
+a57 1
+  penDownOrigImage = NULL; 
+@
+
+
+1.3
+log
+@Fixed click memory bug. Implemented a possible catch to down server
+bug that destorys the pilot.
+@
+text
+@d10 3
+@
+
+
+1.2
+log
+@Visual ack of penDown on links now work. Bugs:
+Destroys 2 -bit images. Doesn't handle multiple line links very well.
+@
+text
+@d19 1
+a19 1
+SWord *penDownOrigPiece;    /* original pen down location */
+d23 1
+d42 1
+d59 2
+d73 1
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d19 2
+d51 3
+@

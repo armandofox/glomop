@@ -1,0 +1,846 @@
+head	1.9;
+access;
+symbols
+	stable:1.7
+	current:1.7
+	release:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	96.08.23.19.57.35;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.07.25.22.12.20;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.14.21.53.59;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.11.02.18.45;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.07.05.08.36;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.07.00.26.45;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.01.00.04.33;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.24.21.30.48;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.22.00.45.52;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTk_CS.c --
+ *
+ * This file provides the implementation of the chunk scheduler and
+ * storage management.  This manager stores and indexes all chunks
+ * according to document and chunk id, and is responsible for passing
+ * those chunks through the transformation libraries if appropriate.
+ *
+ * $Id: glomopTk_CS.c,v 1.1 96/08/19 14:39:23 glomop Exp $
+ * 
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include "glomopTk.h"
+ 
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.1 96/08/19 14:39:23 glomop Exp $";
+
+static hash_table connections, socket_connects;
+
+/*
+ * Hash table hashing functions, deletors, comparators, etc.
+ */
+
+int  proxyConnectionIHash(void *element, int num_slots);
+int  proxyConnectionHash(void *element, int num_slots);
+int  proxyConnectionComp(void *element1, void *element2);
+void proxyConnectionDel(void *element);
+
+int  proxySockConnIHash(void *element, int num_slots);
+int  proxySockConnHash(void *element, int num_slots);
+int  proxySockConnComp(void *element1, void *element2);
+void proxySockConnDel(void *element);
+
+int  documentInfoIHash(void *element, int num_slots);
+int  documentInfoHash(void *element, int num_slots);
+int  documentInfoComp(void *element1, void *element2);
+void documentInfoDel(void *element);
+
+int  GM_DocChunkIHash(void *element, int num_slots);
+int  GM_DocChunkHash(void *element, int num_slots);
+int  GM_DocChunkComp(void *element1, void *element2);
+void GM_DocChunkDel(void *element);
+
+/*
+ * Publically accessible CS functions
+ */
+
+int CS_init(void)
+{
+  if (chained_hash_create(10, &connections) != 0) {
+    fprintf(stderr, "Couldn't create connections hash table.\n");
+    return -1;
+  }
+  if (chained_hash_create(10, &socket_connects) != 0) {
+    fprintf(stderr, "Couldn't create socket_connects hash table.\n");
+    return -1;
+  }
+  return 0;
+}
+
+int CS_addConnection(GM_ConnectId connect_id, int socketID, char *proxyhost,
+		     char *proxyport, char *session_key,
+		     unsigned short is_asynch)
+{
+  /* We must add an entry to both the connections and the socket_connects
+     hash tables */
+  
+  proxyConnection *newC;
+  proxySockConn   *newSC;
+
+  newC = (proxyConnection *) malloc(sizeof(proxyConnection));
+  newSC = (proxySockConn *) malloc(sizeof(proxySockConn));
+  if ((newC == NULL) || (newSC == NULL)) {
+    fprintf(stderr, "Couldn't allocate new connection structures.\n");
+    return -1;
+  }
+  newC->connect_id = connect_id;
+  newC->proxy_socket = socketID;
+  strncpy(newC->proxy_host, proxyhost, PHOST_MAXSIZE-1);
+  strncpy(newC->proxy_port, proxyport, PPORT_MAXSIZE-1);
+  memcpy(newC->session_key, session_key, (size_t) 8);
+  newC->is_asynchronous = is_asynch;
+  if (chained_hash_create(10, &(newC->documents_ht)) != 0) {
+    fprintf(stderr, "Couldn't create documents_ht hash table.\n");
+    return -1;
+  }
+
+  if (chained_hash_insert(connections, (void *) newC, proxyConnectionIHash)
+      != 0) {
+    fprintf(stderr, "Couldn't insert into connections hash table.\n");
+    return -1;
+  }
+
+  newSC->proxy_socket = socketID;
+  newSC->proxy_connection = connect_id;
+  if (chained_hash_insert(socket_connects, (void *) newSC, proxySockConnIHash)
+      != 0) {
+    fprintf(stderr, "Couldn't insert into socket_connects hash table.\n");
+    return -1;
+  }
+  
+  return 0;
+}
+
+int CS_removeConnection(GM_ConnectId connect_id)
+{
+  /* We must remove from both the connections and socket_connects hashes */
+  proxyConnection *theC;
+
+  theC = CS_getConnection(connect_id);
+  if (theC == NULL)
+    return -1;
+
+  if (chained_hash_delete(socket_connects, (void *) theC->proxy_socket,
+			  proxySockConnHash, proxySockConnDel,
+			  proxySockConnComp) != 1) {
+    fprintf(stderr, "Couldn't delete from socket_connects.\n");
+    return -1;
+  }
+
+  if (chained_hash_delete(connections, (void *) connect_id,
+			  proxyConnectionHash, proxyConnectionDel,
+			  proxyConnectionComp) != 1) {
+    fprintf(stderr, "Couldn't delete from connections.\n");
+    return -1;
+  }
+  return 0;
+}
+
+proxyConnection *CS_getConnection(GM_ConnectId connect_id)
+{
+  return (proxyConnection *) chained_hash_search(connections,
+						 (void *) connect_id,
+						 proxyConnectionHash,
+						 proxyConnectionComp);
+}
+
+GM_ConnectId CS_getConnectId(int socketID)
+{
+  proxySockConn *theC;
+
+  theC = (proxySockConn *) chained_hash_search(socket_connects,
+					       (void *) socketID,
+					       proxySockConnHash,
+					       proxySockConnComp);
+  if (theC == NULL)
+    return (GM_ConnectId) 0;
+
+  return theC->proxy_connection;
+}
+
+int CS_addDocument(GM_ConnectId connect_id, GM_DocId doc_id,
+		   GM_DocCallbackProcPtr callback_ptr,
+		   unsigned callbackThreshold, unsigned maxChunks,
+		   char *extra)
+{
+  /* add an entry to the documents_ht hash table of the right structure */
+  proxyConnection *theC;
+  documentInfo    *newD;
+
+  theC = CS_getConnection(connect_id);
+  if (theC == NULL)
+    return -1;
+
+  newD = (documentInfo *) malloc(sizeof(documentInfo));
+  if (newD == NULL) {
+    fprintf(stderr, "Couldn't allocate new documentinfo structure.\n");
+    return -1;
+  }
+
+  newD->document_id = doc_id;
+  newD->callback_ptr = callback_ptr;
+  newD->callbackThreshold = callbackThreshold;
+  newD->maxChunks = maxChunks;
+  newD->numChunks = (unsigned) 0;
+  if (extra != NULL)
+    strcpy(newD->extra, extra);
+  else
+    strcpy(newD->extra, "");
+
+  if (chained_hash_create(10, &(newD->chunks_ht)) != 0) {
+    fprintf(stderr, "Couldn't create chunks_ht hash table.\n");
+    return -1;
+  }
+  if (chained_hash_insert(theC->documents_ht, (void *) newD, documentInfoIHash)
+      != 0) {
+    fprintf(stderr, "Couldn't insert into documents_ht table.\n");
+    return -1;
+  }
+  return 0;
+}
+
+int CS_removeDocument(GM_ConnectId connect_id, GM_DocId doc_id)
+{
+  /* remove from the correct hash */
+  proxyConnection *theC;
+
+  theC = CS_getConnection(connect_id);
+  if (theC == NULL)
+    return -1;
+
+  if (chained_hash_delete(theC->documents_ht, (void *) doc_id,
+			  documentInfoHash, documentInfoDel,
+			  documentInfoComp) != 1) {
+    fprintf(stderr, "Couldn't delete from documents_ht\n");
+    return -1;
+  }
+  return 0;
+}
+
+documentInfo *CS_getDocument(GM_ConnectId connect_id, GM_DocId doc_id)
+{
+  proxyConnection *theC;
+
+#ifdef DEBUG
+  printf("getting doc for connect_id %lu, doc_id %lu\n",
+	 connect_id, doc_id);
+#endif
+
+  theC = CS_getConnection(connect_id);
+  if (theC == NULL)
+    return NULL;
+
+#ifdef DEBUG
+  printf("got connection: id %lu, socket %d, host %s, port %s\n",
+	 theC->connect_id, theC->proxy_socket, theC->proxy_host,
+	 theC->proxy_port);
+#endif
+
+  return (documentInfo *) chained_hash_search(theC->documents_ht,
+					      (void *) doc_id,
+					      documentInfoHash,
+					      documentInfoComp);
+}
+
+int CS_addChunk(GM_ConnectId connect_id, GM_DocId doc_id, GM_ChunkId chunk_id,
+		GM_DocLocator refine_dl, GM_MimeType mime_type,
+		BlobPtr metadata_obj, long int metadata_len,
+		BlobPtr chunk_obj, long int blob_len)
+{
+  documentInfo   *theDoc;
+  GM_DocChunk    *newChunk;
+
+  theDoc = CS_getDocument(connect_id, doc_id);
+  if (theDoc == NULL)
+    return -1;
+
+  /** Add chunk information to the hash table in theDoc **/
+  newChunk = (GM_DocChunk *) malloc(sizeof(GM_DocChunk));
+  if (newChunk == NULL) {
+    fprintf(stderr, "Out of memory while adding new chunk.\n");
+    return -1;
+  }
+  newChunk->chunk_id = chunk_id;
+  newChunk->doc_id = doc_id;
+  newChunk->refine_dl = refine_dl;
+  newChunk->mime_type = mime_type;
+  newChunk->metadata_obj = metadata_obj;
+  newChunk->metadata_len = metadata_len;
+  newChunk->chunk_obj = chunk_obj;
+  newChunk->blob_len = blob_len;
+
+  if (chained_hash_insert(theDoc->chunks_ht, (void *) newChunk, 
+			  GM_DocChunkIHash) != 0) {
+    fprintf(stderr, "Couldn't insert into chunks_ht table.\n");
+    return -1;
+  }
+
+  return 0;
+}
+
+int CS_removeChunk(GM_ConnectId connect_id, GM_DocId doc_id,
+		   GM_ChunkId chunk_id)
+{
+  documentInfo *theD;
+
+  theD = CS_getDocument(connect_id, doc_id);
+  if (theD == NULL)
+    return -1;
+  
+  if (chained_hash_delete(theD->chunks_ht, (void *) chunk_id,
+			  GM_DocChunkHash, GM_DocChunkDel,
+			  GM_DocChunkComp) != 1) {
+    fprintf(stderr, "Coudln't delete from chunks_ht.\n");
+    return -1;
+  }
+  return 0;
+}
+
+GM_DocChunk *CS_getChunk(GM_ConnectId connect_id, GM_DocId doc_id,
+			 GM_ChunkId chunk_id)
+{
+  documentInfo *theD;
+
+  theD = CS_getDocument(connect_id, doc_id);
+  if (theD == NULL)
+    return NULL;
+
+#ifdef DEBUG
+  printf("in CS_getChunk:  got doc %lu, cbt %u, maxChunks %u, numChunks %u,
+extra %s\n", theD->document_id, theD->callbackThreshold, theD->maxChunks,
+	 theD->numChunks, theD->extra);
+#endif
+
+  return (GM_DocChunk *) chained_hash_search(theD->chunks_ht,
+					     (void *) chunk_id,
+					     GM_DocChunkHash,
+					     GM_DocChunkComp);
+}
+
+/*
+ * Hashing functions - definitions of local functions
+ */
+
+int proxyConnectionIHash(void *element, int num_slots)
+{
+  proxyConnection *theC = (proxyConnection *) element;
+  int theH;
+  
+  if (element == NULL)
+    return -1;
+
+  theH = theC->connect_id % num_slots;
+  return theH;
+}
+
+int proxyConnectionHash(void *element, int num_slots)
+{
+  GM_ConnectId theConId = (GM_ConnectId) element;
+  int theH;
+  
+  if (element == NULL)
+    return -1;
+
+  theH = theConId % num_slots;
+  return theH;
+}
+
+int proxyConnectionComp(void *element1, void *element2)
+{
+  GM_ConnectId     theID = (GM_ConnectId) element1;
+  proxyConnection *theC = (proxyConnection *) element2;
+
+  if (theC == NULL)
+    return -1;
+  
+  if (theID < theC->connect_id)
+    return -1;
+  else if (theID > theC->connect_id)
+    return 1;
+  else
+    return 0;
+
+  return 0;
+}
+
+void proxyConnectionDel(void *element)
+{
+  proxyConnection *theC = (proxyConnection *) element;
+
+  /** Now we must sift through the entries in the documents_ht hash
+    * table and delete every living thing from it.  Can do with the
+    * hash table destroy function.
+    */
+
+  if (theC == NULL)
+    return;
+  
+  chained_hash_destroy(theC->documents_ht, documentInfoDel);
+  free(theC);
+}
+
+int proxySockConnIHash(void *element, int num_slots)
+{
+  proxySockConn *theC = (proxySockConn *) element;
+  int theH;
+  
+  if (element == NULL)
+
+    return -1;
+
+  theH = theC->proxy_socket % num_slots;
+  return theH;
+}
+
+int proxySockConnHash(void *element, int num_slots)
+{
+  int thesock = (int) element;
+  int theH;
+  
+  if (element == NULL)
+
+    return -1;
+
+  theH = thesock % num_slots;
+  return theH;
+}
+
+int proxySockConnComp(void *element1, void *element2)
+{
+  int            theSock = (int) element1;
+  proxySockConn *theC = (proxySockConn *) element2;
+
+  if (theC == NULL)
+    return -1;
+  
+  if (theSock < theC->proxy_socket)
+    return -1;
+  else if (theSock > theC->proxy_socket)
+    return 1;
+  else
+    return 0;
+
+  return 0;
+}
+
+void proxySockConnDel(void *element)
+{
+  proxySockConn *theC = (proxySockConn *) element;
+
+  if (theC != NULL)
+    free(theC);
+}
+
+int documentInfoIHash(void *element, int num_slots)
+{
+  documentInfo *theD = (documentInfo *) element;
+  int theH;
+  
+  if (element == NULL)
+
+    return -1;
+
+  theH = theD->document_id % num_slots;
+  return theH;
+}
+
+int documentInfoHash(void *element, int num_slots)
+{
+  GM_DocId theDId = (GM_DocId) element;
+  int theH;
+  
+  if (element == NULL)
+
+    return -1;
+
+  theH = theDId % num_slots;
+  return theH;
+}
+
+int documentInfoComp(void *element1, void *element2)
+{
+  GM_DocId       docId = (GM_DocId) element1;
+  documentInfo  *theD = (documentInfo *) element2;
+
+  if (theD == NULL)
+    return -1;
+  
+  if (docId < theD->document_id)
+    return -1;
+  else if (docId > theD->document_id)
+    return 1;
+  else
+    return 0;
+
+  return 0;
+}
+
+void documentInfoDel(void *element)
+{
+  documentInfo *theD = (documentInfo *) element;
+
+  /*
+   * Now we must destroy all of the elements in the chunks_ht hash
+   * table.  The hash table destroy function will do this for us.
+   */
+
+  if (theD == NULL)
+    return;
+  
+  chained_hash_destroy(theD->chunks_ht, GM_DocChunkDel);
+  free(theD);
+}
+
+int  GM_DocChunkIHash(void *element, int num_slots)
+{
+  GM_DocChunk *theC = (GM_DocChunk *) element;
+  int theH;
+  
+  if (element == NULL)
+    return -1;
+
+  theH = theC->chunk_id % num_slots;
+  return theH;
+}
+
+int  GM_DocChunkHash(void *element, int num_slots)
+{
+  GM_ChunkId theCid = (GM_ChunkId) element;
+  int theH;
+  unsigned long int ns = (unsigned long int) num_slots;
+  
+/*   if (element == NULL)
+    return -1; */
+
+  theH = (int) (theCid % ns);
+#ifdef DEBUG
+  printf("in GM_DocChunkHash: theH is %d, ns is %lu, theCid is %lu\n",
+	 theH, ns, theCid);
+#endif
+  return theH;
+}
+
+int  GM_DocChunkComp(void *element1, void *element2)
+{
+  GM_ChunkId    chunkId = (GM_ChunkId) element1;
+  GM_DocChunk  *theC = (GM_DocChunk *) element2;
+
+  if (theC == NULL)
+    return -1;
+  
+  if (chunkId < theC->chunk_id)
+    return -1;
+  else if (chunkId > theC->chunk_id)
+    return 1;
+  else
+    return 0;
+
+  return 0;
+}
+
+void GM_DocChunkDel(void *element)
+{
+  GM_DocChunk *theC = (GM_DocChunk *) element;
+
+  if (theC == NULL)
+    return;
+
+  if (theC->chunk_obj != NULL)
+    free(theC->chunk_obj);
+
+  if (theC->metadata_obj != NULL)
+    free(theC->metadata_obj);
+
+  free(theC);
+  return;
+}
+@
+
+
+1.8
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d2 8
+d17 1
+a17 1
+ * $Id: glomopTk_CS.c,v 1.7 1996/06/14 21:53:59 gribble Exp $
+a18 33
+ * $Log: glomopTk_CS.c,v $
+ * Revision 1.7  1996/06/14 21:53:59  gribble
+ * Tweaked to work on BSD - I made mistakes with htonl and ntohl...
+ *
+ * Revision 1.6  1996/06/11 02:18:45  gribble
+ * Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+ * and bugfixes to get it working correctly.
+ *
+ * Revision 1.5  1996/06/07 05:08:36  gribble
+ * Threw in "extra" field into document structure to store callback
+ * command name for Tcl (yes, a hack), and added a BlobPtr length field
+ * to keep track of how big chunks are.  Built straw-man GetImageChunk
+ * and GetChunkType procedures and Tcl commands to actually retrieve
+ * chunks.  Built Tcl callback functionality (I think).
+ *
+ * Revision 1.4  1996/06/07 00:26:45  gribble
+ * Tweaked the chunk format to better suit the minimalistic GloMop API.
+ *
+ * Revision 1.3  1996/06/01 00:04:33  gribble
+ * Fixed up so that the gm_connectproxy command successfully uses the
+ * Charon authentication module.
+ *
+ * Revision 1.2  1996/05/24 21:30:48  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+ * Revision 1.1  1996/02/22 00:45:52  gribble
+ * Skeleton core structure complete.  Next stage: implementation of core
+ * routines.
+ *
+ *
+d27 1
+a27 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.7 1996/06/14 21:53:59 gribble Exp $";
+d249 1
+d269 2
+d552 3
+@
+
+
+1.7
+log
+@Tweaked to work on BSD - I made mistakes with htonl and ntohl...
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.6 1996/06/11 02:18:45 gribble Exp $
+d12 3
+d52 1
+a52 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.6 1996/06/11 02:18:45 gribble Exp $";
+d98 2
+a99 1
+		     char *proxyport, char *session_key)
+d118 1
+@
+
+
+1.6
+log
+@Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+and bugfixes to get it working correctly.
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.5 1996/06/07 05:08:36 gribble Exp $
+d12 4
+d49 1
+a49 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.5 1996/06/07 05:08:36 gribble Exp $";
+d246 5
+d254 6
+@
+
+
+1.5
+log
+@Threw in "extra" field into document structure to store callback
+command name for Tcl (yes, a hack), and added a BlobPtr length field
+to keep track of how big chunks are.  Built straw-man GetImageChunk
+and GetChunkType procedures and Tcl commands to actually retrieve
+chunks.  Built Tcl callback functionality (I think).
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.4 1996/06/07 00:26:45 gribble Exp $
+d12 7
+d45 1
+a45 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.4 1996/06/07 00:26:45 gribble Exp $";
+d202 1
+d312 6
+d514 1
+d516 2
+a517 2
+  if (element == NULL)
+    return -1;
+d519 5
+a523 1
+  theH = theCid % num_slots;
+a557 1
+
+@
+
+
+1.4
+log
+@Tweaked the chunk format to better suit the minimalistic GloMop API.
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.3 1996/06/01 00:04:33 gribble Exp $
+d12 3
+d38 1
+a38 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.3 1996/06/01 00:04:33 gribble Exp $";
+d174 2
+a175 1
+		   unsigned callbackThreshold, unsigned maxChunks)
+d195 5
+d246 1
+a246 1
+		BlobPtr chunk_obj)
+d266 1
+@
+
+
+1.3
+log
+@Fixed up so that the gm_connectproxy command successfully uses the
+Charon authentication module.
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.2 1996/05/24 21:30:48 gribble Exp $
+d12 4
+d35 1
+a35 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.2 1996/05/24 21:30:48 gribble Exp $";
+d236 1
+a236 2
+		GM_DocId refine_id, int chunk_nrefs,
+		GM_DocLocator *chunk_refs, GM_DocSubType subtype,
+d254 2
+a255 4
+  newChunk->refine_id = refine_id;
+  newChunk->chunk_nrefs = chunk_nrefs;
+  newChunk->chunk_refs = chunk_refs;
+  newChunk->subtype = subtype;
+a522 3
+  if (theC->chunk_refs != NULL)
+    free(theC->chunk_refs);
+
+d525 1
+a525 1
+  
+@
+
+
+1.2
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d9 1
+a9 1
+ * $Id: glomopTk_CS.c,v 1.1 1996/02/22 00:45:52 gribble Exp $
+d12 6
+d31 1
+a31 1
+static char gm_rcsid[] = "$Id: glomopTk_CS.c,v 1.1 1996/02/22 00:45:52 gribble Exp $";
+d76 2
+a77 1
+int CS_addConnection(GM_ConnectId connect_id, int socketID, char *proxyAddr)
+d93 3
+a95 1
+  strncpy(newC->proxy_addr, proxyAddr, PADDR_MAXSIZE-1);
+d100 1
+@
+
+
+1.1
+log
+@Skeleton core structure complete.  Next stage: implementation of core
+routines.
+@
+text
+@d9 1
+a9 1
+ * $Id$
+d11 5
+a15 1
+ * $Log$
+d19 4
+d25 497
+a521 1
+static char gm_rcsid[] = "$Id$";
+@

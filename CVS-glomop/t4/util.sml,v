@@ -1,0 +1,460 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     98.12.07.21.34.57;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.12.07.21.34.57;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@(*
+Copyright (c) 1997,1998 The Regents of the University of California.
+All rights reserved.
+
+Permission to use, copy, modify, and distribute this software for any
+purpose, without fee, and without written agreement is hereby granted,
+provided that the above copyright notice and the following two
+paragraphs appear in all copies of this software.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF THE UNIVERSITY OF
+CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
+ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATION TO
+PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+*)
+
+(* Some generally useful stuff *)
+structure PTUtil =
+    struct
+
+	(*************************************************************
+
+	 Useful exceptions/global variables
+
+	 *************************************************************)
+
+	exception Unimplemented of string    (* Code not yet implemented *)
+
+	val matchSH = true (* true iff should do what SH does; if false,
+			      do the more correct thing *)
+
+	val curSourceMap = ref NONE : SourceMap.sourcemap option ref
+
+	(*************************************************************
+
+	 Some useful structures
+
+	 *************************************************************)
+
+	structure StringKey =
+	    struct
+		type ord_key = string
+		fun compare(a:ord_key, b:ord_key) =
+		    if a=b then EQUAL
+		    else if a<b then LESS
+		    else GREATER
+	    end
+
+	structure StringSet = BinarySetFn(StringKey)
+
+	structure IdMap = BinaryMapFn(AST.IdKey)
+
+	(*************************************************************
+
+	 Generic ML utilities
+
+	 *************************************************************)
+
+	fun id x = x
+
+	fun member x [] = false
+	  | member x (y::ys) = if (x=y) then true else (member x ys)
+
+
+	val maxList = foldl Int.max 0
+
+	exception differentSizeLists
+	(* one of the two-map functions was passed lists of
+	   different lengths *)
+
+	fun mapTwo f ([], []) = []
+	  | mapTwo f (x::xs, y::ys) = (f x y) :: (mapTwo f (xs, ys))
+	  | mapTwo _ _ = raise differentSizeLists
+
+	fun appTwo f ([], []) = ()
+	  | appTwo f (x::xs, y::ys) = (f x y; appTwo f (xs, ys))
+	  | appTwo _ _ = raise differentSizeLists
+
+	fun mapTwoPair f ([], []) = []
+	  | mapTwoPair f (x::xs, y::ys) = (f (x, y)) :: (mapTwoPair f (xs, ys))
+	  | mapTwoPair _ _ = raise differentSizeLists
+
+	fun appTwoPair f ([], []) = ()
+	  | appTwoPair f (x::xs, y::ys) = (f (x, y); appTwoPair f (xs, ys))
+	  | appTwoPair _ _ = raise differentSizeLists
+
+
+	exception mapFirstFailed   (* map first couldn't compute a result *)
+
+	(* Apply a function f:'a->'b option to a list, returning the
+	   subfield part of the first SOME. *)
+	fun mapFirst f [] = raise mapFirstFailed
+	  | mapFirst f (x::xs) =
+	    let val r = f x
+	    in
+		case r of
+		    NONE => (mapFirst f xs)
+		  | SOME result => result
+	    end
+
+	fun apply_opt f NONE = NONE
+	  | apply_opt f (SOME x) = SOME(f x)
+
+	fun removeDups _ [] = []
+	  | removeDups eq (x::xs) =
+	    let fun member _ _ [] = false
+		  | member eq x (y::xs) =
+		(eq (x,y) orelse member eq x xs)
+		val rest = removeDups eq xs
+	    in
+		if member eq x rest then
+		    rest
+		else
+		    x::rest
+	    end
+
+	fun removeDupStrs slist =
+	    let fun addString (s, sset) =
+		StringSet.add(sset, s)
+		val sset = foldl addString StringSet.empty slist
+	    in
+		StringSet.listItems sset
+	    end
+
+	fun assert b e =
+	    if b then
+		()
+	    else
+		raise e
+
+	val sum = foldl (fn (x:int, y:int) => x+y) 0
+
+	(* Compute the tail of a list, returning the empty list
+	 if the list is empty. *)
+	fun safeTail [] = []
+	  | safeTail (x::xs) = xs
+
+	(* Return true iff suf is a suffix of s *)
+	fun isSuffix suf s =
+	    let open List String
+		val revStr = implode o rev o explode
+		val sufRev = revStr suf
+		val sRev = revStr s
+	    in
+		isPrefix sufRev sRev
+	    end
+
+	(* Remove suffix suf from s, if it exists *)
+	fun stripSuffix suf s =
+	    if isSuffix suf s then
+		substring (s, 0, (size s) - (size suf))
+	    else
+		s
+
+	(* Return true iff sub is a substring of s *)
+	fun isSubstring sub s =
+	    case s of
+		"" => false
+	      | s => (String.isPrefix sub s) orelse
+		    (isSubstring sub (substring (s, 1, size s - 1)))
+
+	(* Return s up to the first occurrence of c, exclusive *)
+	fun keepTo c s =
+	    let fun keepToList c [] = []
+		  | keepToList c (x::xs) =
+		    if c = x then
+			[]
+		    else
+			x :: (keepToList c xs)
+	    in
+		String.implode (keepToList c (String.explode s))
+	    end
+
+	fun eqPTName (s1, s2) =
+	    let val s1Unnumbered = keepTo #"#" s1
+		val s2Unnumbered = keepTo #"#" s2
+	    in
+		s1Unnumbered = s2Unnumbered
+	    end
+	
+
+	(*************************************************************
+
+	 AST utilities
+
+	 *************************************************************)
+
+	val nullASTInfo = {region=SourceMap.nullRegion,
+			   extraInfo=ref NONE} : AST.astInfo
+
+	fun idAppend id str =
+	    AST.mkIdentifier ((AST.idToString id) ^ str)
+
+	(* Return true iff expr is a variable *)
+	fun isVar (AST.Variable _) = true
+	  | isVar _ = false
+
+	(* Return true if the syntacticType is a functino pointer type *)
+	fun isFunPointer (AST.SyntacticType
+			  (_, _, _, (AST.Function _)::_)) = true
+	  | isFunPointer _ = false
+
+	(* Project a variable name from a variable expression *)
+	fun varName (AST.Variable (v,_)) = AST.idToString v
+
+	(* Project a function name from a function definition *)
+	fun declName (AST.FunDef {name,...}) = AST.idToString name
+
+	(* Return true iff a pointer passed to the operator cannot
+	   reasonably be recovered from applying the operator.  May
+	   need to be changed for deliberately malicious code. *)
+	fun pointerDestroyingOper oper =
+	    (oper = AST.And orelse
+	     oper = AST.Or orelse
+	     oper = AST.Not orelse
+	     oper = AST.Lt orelse
+	     oper = AST.Le orelse
+	     oper = AST.Gt orelse
+	     oper = AST.Ge orelse
+	     oper = AST.Eq orelse
+	     oper = AST.Ne orelse
+	     oper = AST.Mul orelse
+	     oper = AST.Div orelse
+	     oper = AST.Lshift orelse
+	     oper = AST.Rshift orelse
+	     oper = AST.BitAnd orelse
+	     oper = AST.BitOr)
+
+	(* Return true iff name is malloc or some other such memory
+	 allocation function. *)
+	fun allocFunc name =
+	    let val nameStr = AST.idToString name
+	    in
+		(nameStr = "malloc@@0") orelse
+		(nameStr = "calloc@@0") orelse
+		(nameStr = "realloc@@0") orelse
+		(nameStr = "valloc@@0") orelse
+		(nameStr = "xmalloc@@0") orelse
+		(nameStr = "__builtin_alloca@@0") orelse
+		(nameStr = "alloca@@0")
+	    end
+
+	val allocName = "alloc@@"
+
+	(* Return true iff id corresponds to a function return name *)
+	fun varIsFretName id =
+	    let val name = AST.idToString id
+	    in
+		String.isPrefix "@@" name
+	    end
+
+	(* Return true iff str corresponds to a global-level identifier *)
+	fun isGlobalName str =
+	    isSuffix "@@0" str
+
+	local 
+	    fun getFirst l leftRev [] = (rev leftRev, [])
+	      | getFirst l leftRev (x::xs) =
+		if x = l then
+		    (rev leftRev, xs)
+		else
+		    getFirst l (x::leftRev) xs
+	in
+	    (* Divide s into two strings, the portion before the first
+	     occurrence of l and the portion after the first occurrence of
+	     l. *)
+	    fun chopFirst l s =
+		let val (left, right) = getFirst l [] (String.explode s)
+		in
+		    (String.implode left, String.implode right)
+		end
+
+	    (* Divide s into two strings, the portion before the last
+	     occurrence of l and the portion after the last occurrence of l. *)
+	    fun chopLast l s =
+		let val (rightRev, leftRev) = getFirst l [] (rev
+							  (String.explode s))
+		    val (left, right) = (rev leftRev, rev rightRev)
+		in
+		    (String.implode left, String.implode right)
+		end
+	end
+
+	fun beforeFirst l s = #1 (chopFirst l s)
+	fun beforeLast  l s = #1 (chopLast l s)
+	fun afterFirst  l s = #2 (chopFirst l s)
+	fun afterLast   l s = #2 (chopLast l s)
+
+	(*************************************************************
+	 
+	 File utilities
+
+	 *************************************************************)
+
+	val invisible_file = String.isPrefix "."
+
+	val c_file = isSuffix ".c"
+
+	fun build_file_list path f =
+	    let val filename = f()
+	    in
+		if (size filename = 0) then
+		    []
+		else
+		    let val completeName = path ^ filename
+			val rest = build_file_list path f
+		    in
+			if (not (invisible_file filename)) andalso
+			    (OS.FileSys.isDir completeName) then
+			    (flatten_dir completeName) @@ rest
+			else if c_file filename then
+			    completeName :: rest
+			else
+			    rest
+		    end
+	    end
+
+	and flatten_dir filename =
+	    if OS.FileSys.isDir filename then
+		let val dir = OS.FileSys.openDir filename
+		    val fileList =
+			build_file_list (filename ^ "/")
+			                (fn () => OS.FileSys.readDir dir)
+		in
+		    OS.FileSys.closeDir dir;
+		    fileList
+		end
+	    else
+		[filename]
+
+	fun translate_filename filename =
+	    let val home = UnixEnv.getEnv "HOME"
+		fun expand_tilde #"~" = Option.valOf home
+		  | expand_tilde c = Char.toString c
+	    in
+		case home of
+		    NONE => filename
+		  | SOME(s) => String.translate expand_tilde filename
+	    end
+
+	(*************************************************************
+
+	 Output
+
+	 *************************************************************)
+
+	fun printSet printElement name s =
+	    let fun printSet' [] = ()
+		  | printSet' [x] = printElement x
+		  | printSet' (x::xs) = (printElement x;
+					 print ", ";
+					 printSet' xs)
+		val len = length s
+	    in
+		if (len > 0) then
+		    (print name;
+		     print " --> {";
+		     printSet' s;
+		     print "} (";
+		     print (Int.toString len);
+		     print ")\n")
+		else
+		    ()
+	    end
+
+	fun printNStrs _ 0 = ()
+	  | printNStrs s n = (print s; printNStrs s (n - 1))
+
+	fun tabTo s n =
+	    printNStrs " " (Int.max (n - (size s), 0))
+
+	(*************************************************************
+
+	 Timing
+
+	 *************************************************************)
+
+	val timer = ref (Timer.startCPUTimer())
+
+	val time_so_far = ref ({gc=Time.zeroTime,
+				sys=Time.zeroTime,
+				usr=Time.zeroTime})
+
+	fun resetTime() =
+	    time_so_far := {gc=Time.zeroTime,
+			     sys=Time.zeroTime,
+			     usr=Time.zeroTime}
+
+	fun startTime() =
+	    timer := Timer.startCPUTimer()
+
+	fun accumTime() =
+	    let open Time Timer
+		val {gc,sys,usr} = checkCPUTimer (!timer)
+		val {gc=gc_old,sys=sys_old,usr=usr_old} = !time_so_far
+	    in
+		time_so_far := {gc=gc_old+gc,
+				sys=sys_old+sys,
+				usr=usr_old+usr}
+	    end
+
+	fun printTime() =
+	    let open Time
+		val {gc,sys,usr} = !time_so_far
+		val total = gc+sys+usr
+	    in
+		print "total= ";
+		print (toString total);
+		print "s  (gc=";
+		print (toString gc);
+		print "s, sys=";
+		print (toString sys);
+		print "s, usr=";
+		print (toString usr);
+		print "s)"
+	    end
+    end
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

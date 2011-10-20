@@ -1,0 +1,218 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	Yatin-final:1.1.1.1
+	Yatin:1.1.1.1.0.2
+	pre-yatin-merge:1.1.1.1
+	inital:1.1.1.1
+	inital:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.09.23.00.02.26;	author tkimball;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.09.23.00.02.26;	author tkimball;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
+#include "link.h"
+#include "distinterface.h"
+
+
+
+
+
+ArgumentList *duplicateList(ArgumentList Original) {
+    ArgumentList *newList;
+    int i;
+    newList = (ArgumentList *)malloc(sizeof(ArgumentList));
+    for (i=0;i<Original.nargs;i++) { 
+       newList->arg[i] = Original.arg[i];
+    }
+    newList->nargs = Original.nargs;
+    return newList;
+}
+
+int addArgument(ArgumentList *argList,Argument argToAdd) {
+    int i;
+    int done = 0;
+
+    i = 0;
+    while ((!done) && (i<argList->nargs)) {
+       if (argList->arg[i].id == argToAdd.id) {
+          switch (argToAdd.type) {
+             case typeInt: 
+                  SET_ARG_INT(argList->arg[i],_ARG_INT(argToAdd));
+                  break;
+             case typeString: 
+                  SET_ARG_STRING(argList->arg[i],_ARG_STRING(argToAdd));
+                  break;
+             case typeDouble: 
+                  SET_ARG_DOUBLE(argList->arg[i],_ARG_DOUBLE(argToAdd));
+                  break;
+             default:
+                return 0;
+          }
+          done = 1;
+       } 
+       i++;
+    }
+    if (!done) {
+       if (argList->nargs<MAX_ARGS) {
+          argList->arg[argList->nargs] = argToAdd;
+          argList->nargs++;
+          return 1;
+       }
+       else return 0;
+    } else return 1;
+}
+
+
+int readInArguments(char *line,ArgumentList *baseArgs) {
+  char *rest[MAX_TOKEN_LEN];
+  char *name,*s;
+  int i;
+  double d;
+  Argument tempArg;
+  name = strtok_r(line,"= ",rest);
+  while ((name != NULL) && (isalpha(*name))) {
+    switch (name[0]) {
+      case ARG_IS_STRING:
+          s = strtok_r(rest[0],"\"",rest);
+          SET_ARG_STRING(tempArg,s);
+          break;
+
+      case ARG_IS_INT:
+          s = strtok_r(rest[0]," ",rest);
+          i = atoi(s);
+          SET_ARG_INT(tempArg,i);
+          break;
+
+      case ARG_IS_DOUBLE:
+          d = atof(strtok_r(rest[0]," ",rest));
+          SET_ARG_DOUBLE(tempArg,d);
+          break;
+
+    }
+    name = name + 1; /* Skip var type character */
+    SET_ARG_ID(tempArg,atoi(name));
+
+    if (!addArgument(baseArgs,tempArg))  {
+       fprintf(stdout,"Bad Argument or not enough room in argument list - Var Name:%s",name);
+       return 0;
+    }
+
+
+    name = strtok_r(rest[0],"= ",rest);
+  }
+  return 1;
+
+}
+
+void printArguments(FILE *f,ArgumentList toPrint) {
+   int i;
+ 
+   fprintf(f,"Arguments:\n");
+   for (i=0;i<toPrint.nargs;i++) {
+      switch(ARG_TYPE(toPrint.arg[i])) {
+         case typeInt:
+            fprintf(f,"Var: %5d Type: Integer Val: %d\n",(int)ARG_ID(toPrint.arg[i]),(int)_ARG_INT(toPrint.arg[i]));
+            break;
+         case typeDouble:
+            fprintf(f,"Var: %5d Type: Double  Val: %f\n",(int)ARG_ID(toPrint.arg[i]),_ARG_DOUBLE(toPrint.arg[i]));
+            break;
+         case typeString:
+            fprintf(f,"Var: %5d Type: String  Val: '%s'\n",(int)ARG_ID(toPrint.arg[i]),_ARG_STRING(toPrint.arg[i]));
+            break;
+      }
+   }
+}
+
+
+int readInputFile(char *filename,TestRun *runs) {
+  char line[MAX_LINE_SIZE];
+  char *rest[MAX_TOKEN_LEN];
+  FILE *f,*t; 
+  int lineNumber = 0;
+  ArgumentList baseArgs;
+  char *inputFile;
+  int numRuns = 0;
+  
+
+  if ((f = fopen(filename, "r")) == NULL) {
+    fprintf(stderr, "Can't open input file %s\n", filename);
+    return 0;
+  }
+
+  lineNumber++;
+
+  fgets(line,MAX_LINE_SIZE,f);
+
+  baseArgs.nargs = 0;
+
+  if (!readInArguments(line,&baseArgs)) {
+     fprintf(stderr, "%d:Error reading in base arguments.\n", lineNumber);
+     return 0;
+  }
+
+  fgets(line,MAX_LINE_SIZE,f);
+  while (!feof(f) && (numRuns < MAX_TESTRUNS)) {
+    lineNumber++;
+
+    inputFile = strtok_r(line," ",rest);
+
+    if (strcmp(inputFile,"") != 0) {
+       if (inputFile[ strlen(inputFile)-1 ] == '\n') 
+          inputFile[strlen(inputFile)-1] = NULL;
+ 
+       if ((t = fopen(inputFile, "r")) != NULL) {
+          fclose(t);
+          strcpy(runs[numRuns].inputFileName,inputFile);
+          runs[numRuns].argList = duplicateList(baseArgs);
+          if (!readInArguments(rest[0],runs[numRuns].argList)) {
+             fprintf(stderr, "%d: Error reading in base arguments.\n", lineNumber);
+             exit(1);
+          }
+       } else {
+          fprintf(stderr, "%d: Invalid file name - %s\n",lineNumber,inputFile);
+          return 0;
+       }
+    } else {
+       fprintf(stderr, "%d: Invalid file name\n",lineNumber);
+       return 0;
+    }
+    numRuns++;
+    fgets(line,MAX_LINE_SIZE,f);
+  }
+  return numRuns;
+}
+@
+
+
+1.1.1.1
+log
+@Final attempt at updating harness... please work
+@
+text
+@@

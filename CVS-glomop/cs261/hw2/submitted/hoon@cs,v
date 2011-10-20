@@ -1,0 +1,163 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.31.02.12.54;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@Question 1
+1.Compare and contrast stateful packet inspection firewalls to application-level proxying
+     firewalls. What are the advantages and disadvantages of replacing an application-level
+     proxying firewall by a stateful packet inspection firewall? 
+
+(SPI have following advantage over ALP)
+-SPI is generally faster then ALP since it is done at routing level; More throughput. 
+-SPI gets rid of the suspicious packet early on before it reaching top of the layer in network.(source 
+routing, spoofing) while IDS make decision top in application stack.
+-SPI is cheaper to deploy; generally less work required to set up while IDS needs every proxy-application 
+software for every application to support insider’s computation needs.(programming effort is required)
+-SPI can run with small kernel image rather than full OS support while IDS needs full OS support; SPI has 
+simpler code and easy to maintain less error-prone code than ALP.
+-SPI might be useful to detect and block port scans since it scans traffic across all ports while ALP 
+generally tends to do just watching specific ports. Of course ALP can detect port scan also.
+
+(ALP have following advantage over SPI)
+-ALP does strong user authentication while SPI doesn’t.
+-ALP can do more sophisticated checks than SPI by enforcing complex rules based on the contents of the data 
+stream;
+-ALP can give more intelligent reply (service-dependent response; HTTP/FTP error message) to remote end, 
+while SPI just drop the packet or close connections.
+-ALP’s limited number of proxy software can give more assurance than SPI where a new protocol or new 
+application’s security hole is exploited as long as they play by the rule in SPI.  This is again 
+disadvantage of ALP where new untested protocol application service can not be easily available.
+
+
+   2.Compare and contrast stateful packet inspection firewalls to network intrusion detection
+     systems. What are the advantages and disadvantages of replacing a network intrusion
+     detection system by a stateful packet inspection firewall? 
+
+-In general, IDS is fail-open by definition while SPI can shut down the routing gateway (fail-closed).
+-SPI actively control the flow while IDS is passively listen. But if we change IDS’s role by having IDS in 
+the middle of connection IDS can be active in controlling the flow.
+-IDS might be doing better job in detecting unknown new attack while SPI only works against known 
+pattern.
+-IDS does more sophisticated analysis the SPI since it can do log analysis at the application level.
+-IDS is cheaper to deploy than SPI since IDS is orthogonal to the rest of the system and SPI needs to 
+modify routers.
+-IDS does not slow down the performance a lot since it just passively listen all the activity while SPI have 
+to inspect every packet to be routed slowing down the routing speed.
+-IDS can detect outgoing attacks and also insider attacks while SPI only protect insider from outsider’s 
+attack.
+-IDS can give more detail logs to catch the hackers and make them liable in court while SPI just deter the 
+attack and don’t trace the origin of attacks.
+
+Question 2
+
+   1.Overrun a buffer and overwrite a security-critical piece of internal state 
+can still be exploited the same way.
+   2.A slight variant: abuse stdio (overwrite a global variable used by stdio; then get stdio to do the
+     dirty work) 
+can still be exploited the same way.
+
+   3.Stack smashing: overrun a buffer on the stack to put malicious code on the stack, and then
+     overwrite the return value to point to that malicious code 
+Overwriting the return address of calling(caller) function is not working but now overwriting the return 
+Address (or function pointer for case 5.) of callee by overflowing the caller function’s buffer is easily 
+exploited.  And putting malicious code on the stack is still exploitable.
+
+   4.Variants on stack smashing: point to malicious code in data segment, heap segment, or in
+     environment variables; point to an existing library call in libc 
+As in stack smashing above, we can modify the return address or function pointer of callee by overflowing 
+the buffer in the caller and we put the pointer to malicious code in data,heap segs etc as we discussed in 
+class for down-growing stack.
+
+   5.Overwrite a function pointer stored on the stack (instead of a return address on the stack) so it
+     points to your malicious code; then wait for the program to call the function pointer 
+This is still easily exploitable as stack smashing case in 3 above.  And the difference might be the chance 
+of to-be-called that function pointer might be depend on the possibility of function calls loaded from the 
+frames in the stack as opposed to up in the stack in the stack-down-growing case.
+
+New attack method is same as explained in 3. For example,
+
+A()
+{
+   char buf[126];
+   gets(buf);
+}
+
+We can overwrite the function pointer or return address of gets()'s frame, not A()'s fp and retp this time.
+So the flow of control can be derailed by buffer overflow attack on returning from gets() not A() in return 
+address overwriting case.
+
+In simple stack smashing attack with downgrowing stack case, we put (malicious code) + (pointer to that 
+malicious code in place of return address) while we put (pointer to malicious code) + (original strcpy code) 
++ (malicious code) in this upgrowing stack case.
+
+Aside, if we assume that stack and heap are growing towards each other this upgrowing stack can be used to 
+eat up the space in between these two.  Could this be used as denial of service attack ? I think OS will 
+just overwrite that space for heap or stack space since OS thinks the space is available. 
+I am not quite sure whether we could overwrite heap or data segment from growing stack. Maybe we got seg-
+fault in most implementation.  Some crazy implementation might not check this.  
+ 
+However, since we have a bit more easily manageable stack space in which we can put a malicious code, naïve 
+simple stack smashing is slightly easier than down-growing stack case where the malicious code needs to do 
+more trick for small buffer case.  Yes, of course down-growing stack can exploit the small buffer limitation 
+by some other trick. 
+
+Question 3
+
+This is another brainstorming question; give as many good answers as you can. 
+As we saw in class, C programs are commonly prone to buffer-overflow attacks. What changes
+could be made to the C compiler to help protect against (or prevent) these attacks?
+
+- Having the buffer overrun to be wrap-around (modular n)
+- Assume we have plenty of memory :-) and then we can align the buffer to the page boundary, this will make 
+every buffer overflow leads into page fault.
+- Stack integrity check before we can reference the appropriate return value.
+- Replace the problematic functions like gets, strcpy, sprintf with non-exploitable function; this may be 
+against programming principle but as long as we can find perfect replacement then it is doable.
+- Compiler can generate warning message when it detects possible buffer overflow holes through static 
+analysis or data flow analysis, array bounds analysis, so that the pgmer have to address this warning and 
+can be aware of the possible security holes in developing stage.  This would be a good practice in SW 
+company where they can at least try to ship product with compiler-error and warning free.  Well we all know 
+lots of company ship product even with compiler warnings, or maybe they can trick themselves by setting low 
+warning-level flag. : -)
+
+- By taking advantage of some memory architecture we can make return pointer unwritable when we growing the 
+stack.
+
+- Compiler can generate code which does bounds checking but the performance is bad.
+(One implementation is modifying the representation of pointers into three items, pointer, lower and upper 
+bound of address space to do bounds checking and the execution slowed down 10th or more.
+Another approach is pointer arithmetic checking (Jone,Kelly at Imperial). Only one pointer is valid for a 
+given region and on can check whether a pointer arithmetic expression is by finding its base pointer's 
+storage region.  This is checked again to insure that the expression's result points to the same storage 
+region)
+
+
+
+================================================================= 
+UC BERKELEY                                  hoon@@cs.berkeley.edu
+ATTN: ByungHoon Kang/ 493 SODA HALL           (voice)510-642-8468 
+COMPUTER SCIENCE DIVISION                     (fax)  510-642-5775 
+387 SODA HALL                                    Attn:B.Hoon Kang
+BERKELEY, CA 94720                                     Rm493-Soda               
+================================================================= 
+
+
+@

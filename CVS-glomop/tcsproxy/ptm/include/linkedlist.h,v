@@ -1,0 +1,709 @@
+head	1.7;
+access;
+symbols
+	Yatin-final:1.7
+	Yatin:1.7.0.6
+	pre-yatin-merge:1.7
+	transend-beta2:1.7
+	fox-dev:1.7
+	ptm-ng:1.7
+	transend-beta-latest:1.7
+	Aggregators:1.7
+	NoAggregators:1.7
+	iang:1.7.0.4
+	transend-beta:1.7.0.2
+	SOSP:1.7
+	stable_ptm:1.5
+	merged_preintegrate:1.3
+	heisenbug:1.3
+	PRE_INTEGRATION:1.3
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	97.02.26.04.14.52;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.17.03.01.06;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.05.20.20.49;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.01.04.09.55.36;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.05.01.27.09;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.33;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@#ifndef __LINKEDLIST_H__
+#define __LINKEDLIST_H__
+
+
+#include "error.h"
+#include "gm_mutex.h"
+
+
+typedef void *ListIndex;
+
+
+template <class T>
+class List {
+
+public:
+  List() : isTraversing(gm_False), head(0), tail(0), count(0) { };
+  virtual ~List() { RemoveAll(); };
+
+  virtual gm_Bool IsEmpty() { 
+    gm_Bool returnValue;
+    BeginTraversal();
+    returnValue = ((head==0) && (tail==0)) ? gm_True:gm_False; 
+    EndTraversal();
+    return returnValue;
+  }
+  virtual int getSize() { 
+    int returnValue;
+    BeginTraversal();
+    returnValue = count; 
+    EndTraversal();
+    return returnValue;
+  };
+
+
+  /* traversal functions */
+  virtual ListIndex BeginTraversal() { 
+    if (isTraversing==gm_True) {
+      gm_Abort("List::BeginTraversal() called twice\n");
+    }
+    isTraversing = gm_True; 
+    return (ListIndex) head;
+  };
+  virtual void      EndTraversal() { 
+    if (isTraversing==gm_False) 
+      gm_Abort("List::EndTraversal() called without invoking "
+	       "BeginTraversal()\n");
+    isTraversing = gm_False; 
+  };
+  virtual ListIndex getNext(ListIndex idx);
+  virtual ListIndex getPrev(ListIndex idx);
+  virtual T*        getData(ListIndex idx);
+  virtual gm_Bool   IsDone (ListIndex idx);
+  virtual gm_Bool   InsertAfter(ListIndex idx, T *data);
+  virtual gm_Bool   InsertBefore(ListIndex idx, T *data);
+  virtual void      Remove(ListIndex idx);
+
+  /* insertion and removal functions */
+  virtual gm_Bool InsertAtHead(T *data, gm_Bool amITraversing=gm_False) {
+    gm_Bool returnValue;
+    if (amITraversing==gm_False) BeginTraversal();
+    returnValue = InsertAfter_WithNULL(0, data);
+    if (amITraversing==gm_False) EndTraversal();
+    return returnValue;
+  }
+  virtual gm_Bool InsertAtTail(T *data, gm_Bool amITraversing=gm_False) {
+    gm_Bool returnValue;
+    if (amITraversing==gm_False) BeginTraversal();
+    returnValue = InsertAfter_WithNULL( (ListIndex) tail, data);
+    if (amITraversing==gm_False) EndTraversal();
+    return returnValue;
+  }
+  virtual T*   RemoveFromHead(gm_Bool amITraversing=gm_False);
+  virtual T*   RemoveFromTail(gm_Bool amITraversing=gm_False);
+  virtual void Remove(T *data, gm_Bool amITraversing=gm_False);
+  virtual T*   PeekAtHead(gm_Bool amITraversing=gm_False) { 
+    T* returnValue;
+    if (amITraversing==gm_False) BeginTraversal();
+    returnValue = ((head==0) ? 0 : head->data);
+    if (amITraversing==gm_False) EndTraversal();
+    return returnValue;
+  }
+  virtual T*   PeekAtTail(gm_Bool amITraversing=gm_False) { 
+    T* returnValue;
+    if (amITraversing==gm_False) BeginTraversal();
+    returnValue = ((tail==0) ? 0 : tail->data);
+    if (amITraversing==gm_False) EndTraversal();
+    return returnValue;
+  }
+
+protected:
+  gm_Bool InsertAfter_WithNULL(ListIndex idx, T *data);
+  void    Remove_(ListIndex idx);
+  void    RemoveAll();
+
+  gm_Bool isTraversing; /* used as a sanity check for traversal functions */
+
+  struct ListNode {
+    ListNode(T *d=0, ListNode *n=0, ListNode *p=0) 
+      : data(d), next(n), prev(p) { };
+    T        *data;
+    ListNode *next;
+    ListNode *prev;
+  };
+
+private:
+  ListNode *head;
+  ListNode *tail;
+  int      count;
+};
+
+
+/*#define LockingCall1(call) \
+  BeginTraversal(); \
+  call; \
+  EndTraversal();
+
+
+#define LockingCall2(returnType, call) \
+  returnType returnValue; \
+  BeginTraversal(); \
+  returnValue = call; \
+  EndTraversal(); \
+  return returnValue; */
+
+
+template <class T>
+class LockingList : public List<T> {
+
+public:
+  LockingList() : List<T>(), mutex("*-ll") { };
+  /*
+  virtual gm_Bool IsEmpty() { 
+    LockingCall2(gm_Bool, List<T>::IsEmpty()); 
+  }
+  virtual int getSize() { LockingCall2(int, List<T>::getSize()); }
+  */
+
+  /* traversal functions */
+
+  virtual ListIndex BeginTraversal() { 
+    ListIndex idx;
+    mutex.Lock();
+    idx = List<T>::BeginTraversal();
+
+    /* do not unlock the mutex here; EndTraversal() does that! */
+    return idx;
+  }
+  virtual void EndTraversal() { 
+    List<T>::EndTraversal();
+    mutex.Unlock();
+  }
+  /*
+  virtual void Remove(ListIndex idx) {
+    // need to add this function since it clashes with Remove(T*)
+    // don't grab the mutex, since BeginTraversal() already has!
+    List<T>::Remove(idx);
+  }*/
+
+  /* insertion and removal functions */
+  /*virtual gm_Bool InsertAtHead(T *data) {
+    LockingCall2(gm_Bool, List<T>::InsertAtHead(data));
+  }
+  virtual gm_Bool InsertAtTail(T *data) {
+    LockingCall2(gm_Bool, List<T>::InsertAtTail(data));
+  }
+  virtual T* RemoveFromHead() { LockingCall2(T*, List<T>::RemoveFromHead()); }
+  virtual T* RemoveFromTail() { LockingCall2(T*, List<T>::RemoveFromTail()); }
+  virtual void Remove(T *data) { LockingCall1(List<T>::Remove(data)); }
+
+  virtual T*   PeekAtHead() { LockingCall2(T*, List<T>::PeekAtHead()); }
+  virtual T*   PeekAtTail() { LockingCall2(T*, List<T>::PeekAtTail()); }*/
+
+private:
+  Mutex mutex;
+};
+
+
+//#undef LockingCall1
+//#undef LockingCall2
+
+
+template <class T>
+ListIndex
+List<T>::getNext(ListIndex idx)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::getNext() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) return 0;
+  else return ((ListNode*)idx)->next;
+}
+
+
+template <class T>
+ListIndex
+List<T>::getPrev(ListIndex idx)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::getPrev() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) return 0;
+  else return ((ListNode*)idx)->prev;
+}
+
+
+template <class T>
+T*
+List<T>::getData(ListIndex idx)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::getNext() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) return 0;
+  else return ((ListNode*)idx)->data;
+}
+
+
+template <class T>
+gm_Bool
+List<T>::IsDone(ListIndex idx)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::IsDone() without invoking BeginTraversal()\n");
+  }
+
+  return ((idx==0) ? gm_True : gm_False);
+}
+
+
+template <class T>
+gm_Bool
+List<T>::InsertAfter(ListIndex idx, T *data)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::InsertAfter() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) Return(gm_False, errNULLPointer);
+  return InsertAfter_WithNULL(idx, data);
+}
+
+
+template <class T>
+gm_Bool
+List<T>::InsertBefore(ListIndex idx, T *data)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::InsertBefore() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) Return(gm_False, errNULLPointer);
+  return InsertAfter_WithNULL(getPrev(idx), data);
+}
+
+
+template <class T>
+void
+List<T>::Remove(ListIndex idx)
+{
+  if (isTraversing==gm_False) {
+    // you can't get here unless you've invoked BeginTraversal()!
+    gm_Abort("Called List::Remove() without invoking BeginTraversal()\n");
+  }
+
+  if (idx==0) VoidReturn(errNULLPointer);
+  Remove_(idx);
+}
+
+
+template <class T>
+T*
+List<T>::RemoveFromHead(gm_Bool amITraversing)
+{
+  T *data, *returnValue;
+  if (amITraversing==gm_False) BeginTraversal();
+  if (head==0) returnValue = 0;
+  else {
+    data = head->data;
+    Remove_((ListIndex)head);
+    returnValue = data;
+  }
+  if (amITraversing==gm_False) EndTraversal();
+  return returnValue;
+}
+
+
+template <class T>
+T*
+List<T>::RemoveFromTail(gm_Bool amITraversing)
+{
+  T *data, *returnValue;
+  if (amITraversing==gm_False) BeginTraversal();
+  if (tail==0) returnValue = 0;
+  else {
+    data = tail->data;
+    Remove_((ListIndex)tail);
+    returnValue = data;
+  }
+  if (amITraversing==gm_False) EndTraversal();
+  return returnValue;
+}
+
+
+template <class T>
+void
+List<T>::Remove(T *data, gm_Bool amITraversing)
+{
+  ListNode *node;
+
+  if (amITraversing==gm_False) BeginTraversal();
+  for (node=head; node!=NULL; node=node->next) {
+    if (node->data==data) {
+      Remove_((ListIndex)node);
+      break;
+    }
+  }
+  if (amITraversing==gm_False) EndTraversal();
+}
+
+
+template <class T>
+gm_Bool
+List<T>::InsertAfter_WithNULL(ListIndex idx, T *data)
+{
+  ListNode *node = (ListNode *) idx;
+  ListNode *newNode = new ListNode(data);
+  if (newNode==0) Return(gm_False, errOutOfMemory);
+
+  if (node==0) {
+    newNode->next = head;
+    if (head!=0) head->prev = newNode;
+    head = newNode;
+
+    if (tail==0) tail = newNode;
+  } 
+  else {
+    ListNode *nextNode = node->next;
+    // must add newNode between node and nextNode!
+
+    node   ->next = newNode;
+    newNode->next = nextNode;
+    newNode->prev = node;
+    
+    if (nextNode==0) tail = newNode;
+    else nextNode->prev = newNode;
+  }
+
+  count++;
+  return gm_True;
+}
+
+
+template <class T>
+void
+List<T>::Remove_(ListIndex idx)
+{
+  ListNode *node = (ListNode*) idx, *prevNode, *nextNode;
+
+  if (node==0 || (head==0 && tail==0)) return;
+
+  prevNode = node->prev;
+  nextNode = node->next;
+
+  if (prevNode!=0) prevNode->next = nextNode;
+  else head = nextNode;
+  if (nextNode!=0) nextNode->prev = prevNode;
+  else tail = prevNode;
+
+  delete node;
+  count--;
+}
+
+
+template <class T>
+void
+List<T>::RemoveAll()
+{
+  while (IsEmpty()==gm_False) RemoveFromHead();
+}
+
+#endif // __LINKEDLIST_H__
+@
+
+
+1.6
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d130 1
+@
+
+
+1.5
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d5 2
+a6 1
+#include "defines.h"
+d9 1
+a9 1
+typedef void *ListIdx;
+d13 77
+a89 1
+class LinkedList {
+d91 6
+d98 3
+a100 3
+    ListNode(T *r=0, ListNode *n=0, ListNode *p=0) 
+      : record(r), next(n), prev(p) { };
+    T      *record;
+d105 1
+d109 19
+d130 8
+a137 2
+  LinkedList() : head(0), tail(0), count(0) { };
+  virtual ~LinkedList() { DeleteAll(); }
+d139 4
+a142 18
+  gm_Bool IsEmpty() { return (head==0 && tail==0) ? gm_True : gm_False; }
+  int     getSize() { return count; }
+  void    DeleteAll();
+
+  void    DeleteNode(ListIdx idx);
+  gm_Bool InsertAfter(ListIdx idx, T *record); 
+  gm_Bool InsertAtHead(T *record) { return InsertAfter(0, record); };
+  gm_Bool InsertAtTail(T *record) { return InsertAfter(Tail(), record); };
+
+  ListIdx Find  (T *record);
+  void    Remove(T *record);
+  T*      RemoveFromHead();
+  T*      Record(ListIdx idx) { return (idx==0) ? 0:((ListNode*)idx)->record;};
+  ListIdx Head() { return (ListIdx) head; };
+  ListIdx Tail() { return (ListIdx) tail; };
+  ListIdx Next  (ListIdx idx) { return (idx==0) ? 0:((ListNode*)idx)->next; };
+  ListIdx Prev  (ListIdx idx) { return (idx==0) ? 0:((ListNode*)idx)->prev; };
+  gm_Bool    IsDone(ListIdx idx) { return (idx==0) ? gm_True:gm_False; };
+d144 30
+d177 87
+d266 1
+a266 1
+LinkedList<T>::DeleteNode(ListIdx idx)
+d268 25
+a292 1
+  ListNode *node = (ListNode*) idx, *prevNode, *nextNode;
+a293 1
+  if (node==0 || IsEmpty()==gm_True) return;
+d295 16
+a310 2
+  prevNode = node->prev;
+  nextNode = node->next;
+d312 5
+a316 4
+  if (prevNode!=0) prevNode->next = nextNode;
+  else head = nextNode;
+  if (nextNode!=0) nextNode->prev = prevNode;
+  else tail = prevNode;
+d318 8
+a325 2
+  delete node;
+  count--;
+d331 1
+a331 1
+LinkedList<T>::InsertAfter(ListIdx idx, T *record)
+d333 2
+a334 2
+  ListNode *node = (ListNode*) idx;
+  ListNode *newNode = new ListNode(record);
+d362 2
+a363 2
+ListIdx
+LinkedList<T>::Find(T *record)
+d365 1
+a365 1
+  ListIdx idx;
+d367 1
+a367 8
+  for (idx=Head(); IsDone(idx)==gm_False; idx = Next(idx)) {
+    if (Record(idx)==record) {
+      return idx;
+    }
+  }
+  
+  return 0;
+}
+d369 2
+d372 4
+a375 5
+template <class T>
+void
+LinkedList<T>::Remove(T *record)
+{
+  ListIdx idx;
+d377 2
+a378 17
+  for (idx=Head(); IsDone(idx)==gm_False; idx = Next(idx)) {
+    if (Record(idx)==record) {
+      DeleteNode(idx);
+      return;
+    }
+  }
+}
+
+
+template <class T>
+T*
+LinkedList<T>::RemoveFromHead()
+{
+  T* record;
+  record = Record(Head());
+  DeleteNode(Head());
+  return record;
+d384 1
+a384 1
+LinkedList<T>::DeleteAll()
+d386 1
+a386 1
+  while (IsEmpty()==gm_False) DeleteNode(Head());
+a387 1
+
+@
+
+
+1.4
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d24 1
+d27 1
+a27 1
+  LinkedList() : head(0), tail(0) { };
+d30 2
+a31 1
+  gm_Bool    IsEmpty() { return (head==0 && tail==0) ? gm_True : gm_False; }
+d35 3
+a37 3
+  gm_Bool    InsertAfter(ListIdx idx, T *record); 
+  gm_Bool    InsertAtHead(T *record) { return InsertAfter(0, record); };
+  gm_Bool    InsertAtTail(T *record) { return InsertAfter(Tail(), record); };
+d69 1
+d100 1
+@
+
+
+1.3
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d76 1
+a76 1
+  if (newNode==0) gm_BoolErrorReturn(errOutOfMemory);
+d97 1
+a97 1
+  gm_BoolErrorReturn(success);
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d29 1
+a29 1
+  Bool    IsEmpty() { return (head==0 && tail==0) ? TRUE : FALSE; }
+d33 3
+a35 3
+  Bool    InsertAfter(ListIdx idx, T *record); 
+  Bool    InsertAtHead(T *record) { return InsertAfter(0, record); };
+  Bool    InsertAtTail(T *record) { return InsertAfter(Tail(), record); };
+d45 1
+a45 1
+  Bool    IsDone(ListIdx idx) { return (idx==0) ? TRUE:FALSE; };
+d56 1
+a56 1
+  if (node==0 || IsEmpty()==TRUE) return;
+d71 1
+a71 1
+Bool
+d76 1
+a76 1
+  if (newNode==0) BoolErrorReturn(errOutOfMemory);
+d97 1
+a97 1
+  BoolErrorReturn(success);
+d107 1
+a107 1
+  for (idx=Head(); IsDone(idx)==FALSE; idx = Next(idx)) {
+d123 1
+a123 1
+  for (idx=Head(); IsDone(idx)==FALSE; idx = Next(idx)) {
+d147 1
+a147 1
+  while (IsEmpty()==FALSE) DeleteNode(Head());
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d35 1
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

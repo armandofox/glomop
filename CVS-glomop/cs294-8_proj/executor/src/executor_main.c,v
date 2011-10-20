@@ -1,0 +1,479 @@
+head	1.10;
+access;
+symbols
+	executor:1.1.1.1
+	executor:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	97.12.15.08.58.53;	author randit;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.12.15.08.32.36;	author randit;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.12.15.00.56.14;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.12.15.00.36.34;	author randit;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.12.13.01.12.09;	author abrown;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.12.09.06.26.04;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.12.08.11.35.10;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.08.02.24.07;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.11.27.04.31.41;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Change the default port to 5005 instead of 5004 because 5004 was having some kind of trouble and the executor couldn't spawn the listening thread. When I changed the default to 5005, it worked fine as a default and also as a command line argument!
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+
+#include "config_cs294.h"
+#include "pid_cookie_table.h"
+#include "thr_queue.h"
+#include "http_html_parse.h"
+#include "backend.h"
+
+#include "commands.h"
+
+/* The port that the executor starts up on */
+int executor_port;               
+
+
+void executor_initialize(int port);
+void executor_shutdown(int sig);
+void *connection_function(task_t *t);
+
+int recov_function(pid_t p)
+{
+  int res;
+
+  DEBUG_LOG("Recovering pid %ld\n", p, NULL, NULL, NULL);
+  res = backend_reattach(p);
+
+  if ((res == BACKEND_EXISTS) || (res == BACKEND_SUCCESS))
+    return RECOV_SUCCESS;
+  else
+    return RECOV_UNKNOWN_PID;
+}
+
+int main(int argc, char **argv)
+{
+  int retval, rv1, rv2, rv3;
+  pid_t p,q;
+  
+  /* Set up the port number */
+  int c;
+  extern char *optarg;
+  extern int optind;
+  char *port_ascii = "5005";
+  int errflg = 0;
+  
+  while ((c = getopt(argc, argv, "p:")) != EOF) {
+    switch (c) {
+    case 'p':
+      port_ascii = optarg;
+      break;
+    case '?':
+      errflg++;
+    }
+  }
+  if (errflg) {
+    (void)fprintf(stderr,
+		  "usage: executor -p <port number>\n");
+    exit (-1);
+  }
+  
+  if (port_ascii == NULL) {
+    (void)fprintf(stderr,
+		  "usage: executor -p <port number>\n");
+    exit (-1);
+  }
+  executor_port = atoi(port_ascii);
+
+/*   if (sscanf(port_ascii, "%d", &executor_port) != 1){
+   (void) fprintf(stderr, "Aaaauuugh - port number incorrect %s\n", port_ascii);   
+    exit (-1);
+  } */
+  backend_initialize();
+  executor_initialize(executor_port);
+
+  while(1)
+    sleep(10000);
+
+  /*UNREACHED*/
+  return 0;
+}
+
+void executor_shutdown(int sig)
+{
+  int retval;
+
+  fprintf(stderr, "executor_shutdown called\n");
+  retval = close_db();
+  if (retval != PCT_OK) {
+    fprintf(stderr, "Aaaauuugh - close_db. %d\n", retval);
+    exit(-1);
+  }
+}
+
+void executor_initialize(int port)
+{
+  int retval;
+
+  /* Initialize the database */
+  retval = initialize_db("test.db", recov_function);
+  if (retval != PCT_OK) {
+    fprintf(stderr, "Aaaauuugh - initialize_db. %d\n", retval);
+    exit(-1);
+  }
+
+  /* Initialize the thread subsystem */
+  fprintf(stderr, "Spawning worker threads\n");
+  make_threads(EXECUTOR_NUM_THREADS);
+  retval = spawn_listening_thread(port, (ThrFuncPtr) connection_function);
+  if (retval != 0) {
+    fprintf(stderr, "Couldn't spawn listening thread!\n");
+    exit(-1);
+  }
+}
+
+void *connection_function(task_t *t)
+{
+  int incoming_request_fd = (int) TASK_DATA(t);
+  char *header = NULL, *leftover = NULL;
+  char *cookie, *command;
+  int  hdrlen, lftlen, res;
+  int method, url_len, content_len, success;
+  char *url = NULL;
+  command_binding *nextbinding;
+
+  extern command_binding bindings[];
+
+  /* Let's read in the HTTP headers and data */
+
+  res = parse_http_header(incoming_request_fd,
+			  &header, &hdrlen,
+			  &leftover, &lftlen);
+
+  if (res != PARSE_OK) {
+    DEBUG_LOG("parse_http_header failed\n", NULL, NULL, NULL, NULL);
+    goto FAILED;
+  }
+
+  res = scan_through_header(header, hdrlen,
+			    &method, &url, &url_len, &content_len);
+
+  if (res != PARSE_OK) {
+    DEBUG_LOG("scan_through_header failed\n", NULL, NULL, NULL, NULL);
+    if (url != NULL)
+      DEBUG_LOG("Parse failed but URL is not null...\n", NULL, NULL, NULL,
+		NULL);
+      goto FAILED;
+  }
+
+  if (content_len != -1 ) {
+    if (content_len < lftlen)
+      lftlen = content_len;
+  }
+
+  if ((method == HEADER_POST) && (lftlen != content_len)) {
+    res = get_rest_of_data(incoming_request_fd, &leftover, 
+			   &lftlen, (content_len-lftlen));
+    if (res == PARSE_FAIL) {
+      DEBUG_LOG("get_rest_of_data failed\n", NULL, NULL, NULL, NULL);
+      goto FAILED;
+    }
+  }
+  
+  res = parse_URL(url, &cookie, &command);
+  if (res != PARSE_OK) {
+      DEBUG_LOG("parse_URL failed\n", NULL, NULL, NULL,
+		NULL);
+      goto FAILED;
+  }
+
+  /* Now let's figure out what command this is, and do stuff with it */
+  nextbinding = &(bindings[0]);
+  success = 0;
+  while (success == 0) {
+
+    if (nextbinding->f == NULL)
+      break;
+
+    if (strcmp(nextbinding->command_string, command) == 0) {
+      /* We have a match on the function name - call it */
+      (*(nextbinding->f))(incoming_request_fd,
+		       cookie,
+		       leftover,
+		       lftlen);
+      success = 1;
+      break;
+    }
+    nextbinding += 1;
+  }
+
+  if (success) {
+    /* Don't do anything, because the function itself will have returned
+       data */
+  } else {
+    /* We need to squirt back some error message about an unknown function. */
+
+    command_unknown_function(incoming_request_fd, command);
+  }
+
+FAILED:
+
+  if (url != NULL) {
+    free(url);
+    url = NULL;
+  }
+  if (leftover != NULL) {
+    free(leftover);
+    leftover = NULL;
+  }
+  if (header != NULL) {
+    free(header);
+    header = NULL;
+  }
+
+  shutdown(incoming_request_fd);
+  close(incoming_request_fd);
+  return (void *) 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+@
+
+
+1.9
+log
+@So that the executor would run even if the user doesn't give a port number in the command line, the port_ascii variable was initialized to the ASCII string = "5004", which will be the default port number.
+@
+text
+@d42 1
+a42 1
+  char *port_ascii = "5004";
+@
+
+
+1.8
+log
+@fixed up port number bug on job_list
+@
+text
+@d42 1
+a42 1
+  char *port_ascii = NULL;
+@
+
+
+1.7
+log
+@Cookie now must be a 16 byte Hexadecimal ASCII encoded string.
+Port number is a command line argument: ./executor -p 5004
+Will truncate stderr and stdout if use same COOKIE for a subsequent job.
+@
+text
+@d12 4
+a38 1
+  int port;               
+d42 1
+a42 1
+  char *port_ascii;
+d60 8
+a67 1
+  if (sscanf(port_ascii, "%d", &port) != 1){
+d70 1
+a70 1
+  }
+d72 1
+a72 1
+  executor_initialize(port);
+@
+
+
+1.6
+log
+@Duh, executor_initialize() calls the backend. So call
+backend_initialize() first!
+@
+text
+@d12 1
+a12 1
+void executor_initialize(void);
+d33 28
+a60 1
+
+d62 1
+a62 1
+  executor_initialize();
+d83 1
+a83 1
+void executor_initialize(void)
+d97 1
+a97 1
+  retval = spawn_listening_thread(5004, (ThrFuncPtr) connection_function);
+d207 11
+@
+
+
+1.5
+log
+@Everything seems to work!  (sorta)
+@
+text
+@d34 1
+a35 1
+  backend_initialize();
+@
+
+
+1.4
+log
+@ungodly amount of changes
+@
+text
+@d70 1
+a70 1
+  retval = spawn_listening_thread(5000, (ThrFuncPtr) connection_function);
+@
+
+
+1.3
+log
+@Much progress made in parsing and dispatching of commands.
+@
+text
+@d8 1
+d18 6
+a23 2
+  fprintf(stderr, "pid is %ld\n", p);
+  if (p % 2 == 1)
+d35 1
+a35 6
+  rv1 = write_pair_to_db("test1234", 1);
+  rv1 = write_pair_to_db("test1235", 154433);
+  rv2 = read_pair_from_db("test1234", &p);
+  rv3 = read_pair_from_db("testfooo", &q);
+  fprintf(stderr, "rv1 %d rv2 %d p %ld rv3 %d q %ld\n",
+	  rv1, rv2, p, rv3, q);
+d111 4
+a114 2
+  if (content_len < lftlen)
+    lftlen = content_len;
+d142 1
+a142 1
+      (nextbinding->f)(incoming_request_fd,
+a159 3
+
+  /* And, finally, return our response */
+  write(incoming_request_fd, "Bye!\n", 5);
+@
+
+
+1.2
+log
+@Pulled over the thread worker pool code from transend.  Now we can
+telnet to the executor and have a worker thread dispatched for us!
+@
+text
+@d7 3
+d40 1
+d80 75
+d156 4
+a159 4
+  fprintf(stderr, "Incoming connection!!!\n");
+  sleep(10);
+  write(incoming_request_fd, "Hi!\n", 4);
+  sleep(10);
+d161 17
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+d6 5
+d26 1
+a26 6
+  retval = initialize_db("test.db", recov_function);
+  if (retval != PCT_OK) {
+    fprintf(stderr, "Aaaauuugh - initialize_db. %d\n", retval);
+    exit(-1);
+  }
+
+d34 11
+d50 34
+a83 1
+  return 0;
+@
+
+
+1.1.1.1
+log
+@First cut at executor -we've implemented the persistent cookie/pid
+table.
+@
+text
+@@

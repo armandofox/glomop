@@ -1,0 +1,1191 @@
+head	1.18;
+access;
+symbols
+	prewink:1.15
+	stable:1.10
+	release:1.3
+	current:1.18;
+locks; strict;
+comment	@# @;
+
+
+1.18
+date	96.08.23.19.35.57;	author gribble;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	96.07.26.20.30.53;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	96.07.07.00.03.19;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	96.06.23.01.33.05;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	96.06.16.01.41.29;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.06.15.02.39.03;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.06.15.01.49.14;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.06.14.23.53.50;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.14.06.39.25;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.13.22.33.51;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.13.09.15.29;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.12.22.16.27;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.11.02.17.24;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.10.22.50.20;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.07.00.33.47;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.04.01.25.57;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.03.19.46.15;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.25.02.45.56;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  doc.pl - document abstraction
+#  $Id: doc.pl,v 1.5 96/08/22 18:37:16 glomop Exp $
+#
+
+=head1 NAME
+
+doc - GloMop document abstraction
+
+=head1 SYNOPSIS
+
+  use LWP;      
+  require "util.pl";
+  require "doc.pl";
+
+  # Constructors/Class methods:
+
+  $d = new doc ($loc,$max,$id);
+  $htype_subr_ref = &doc::htype_method($pkg, $meth);
+
+  # Instance methods: these return true for success, undef for failure.
+  # Check $d->err for the error message on failure.
+
+  $result = $d->fetch();
+  $result = $d->segment();
+  $result = $d->send_chunks(@@chunk_indices);
+
+  # Instance variables: to set value, pass the value to the instance variable
+  # access method.  The instance variable "err" is read-only, and is set to the
+  # error message of the last failed invocation on this document; you can check
+  # it if any of the instance methods return failure.
+
+  @@chunklist = $d->chunks;
+  $nchunks = $d->totalchunks;
+  $chunks_sent_so_far = $d->sentchunks;
+  $loc_url = $d->loc;
+  $max_preload = $d->max;
+  $htype = $d->htype;
+  $http_resp_object = $d->resp;
+  $mimetype = $d->mimetype;
+  $prefers = $d->prefers;
+
+  Miscellany:
+
+  ($refine_path, $refine_prefs) = $url->refine_info();
+
+=head1 DESCRIPTION
+
+Implements the GloMop document object.  Each document object encapsulates
+state about the document itself and about what parts of the document have been
+sent to the client so far.
+
+=cut
+
+use LWP;
+require "util.pl";
+package doc;
+
+%Htypes = ();
+%Packages = ();
+
+# Immediate initialization
+if (1) {
+    $doc::UA = new LWP::UserAgent;
+
+    # Attempt to read type information
+    open(CFG, &util::configfile("gmproxy.types"))
+        or die "$0: cannot open gmproxy.types ($!), exiting immediately";
+    while (<CFG>) {
+        chomp;
+        next if /^#/;
+        next unless m!^(\S+/\S+)\s+(\S+)\s*$!;
+        my ($type,$pkg) = ($1,$2);
+
+	# bind the mimetype to htype (htype is same as pkg)
+	&mimetype_htype_bind($type,$pkg);
+    }
+    close CFG;
+    &util::instvars( qw( doc totalchunks sentchunks loc max id htype resp
+                        filename err mimetype prefers ));
+}
+
+=head1 CONSTRUCTORS/CLASS METHODS
+
+=over 3
+
+=item new doc ($loc,$max,$id)
+
+Return new doc object with URL $loc, $max preload chunks,
+client-side ID $id.  May fetch some or all of doc as a side effect.  
+
+=item $call_to_htype_func = &{&doc::htype_method($htype, $meth)}(@@args);
+
+If a package exists that supports the parsing of high-level type $htype, and
+that package exports a method called $meth, a reference (actually a string, for
+now) to that method is returned.  Undef is returned if no such package exists,
+or if it doesn't export the given method.
+
+=item &doc::mimetype_htype_bind($mimetype,$htype);
+
+Bind a mimetype to a high-level document htype.  This function will determine
+which segmentation function is called to hack up a chunk of a given
+mimetype.
+
+=back
+
+=cut
+
+sub new {
+    my $class = shift;
+
+    my ($docloc,$max,$docid) = @@_;
+    my $self = bless {
+        "loc" => $docloc,
+        "max" => $max,
+        "id" => $docid,
+        "chunks" => [],
+        "err" => "",
+	"mimetype" => undef,
+    };
+    return $self;
+}
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $d->serve()
+
+Continue fetching/segmenting document.  Used for asynchronous segmenters.
+Still under construction.
+
+=item $d->fetch($client)
+
+Try to get the document object using the LWP::UserAgent, ascertain its
+type, segment it, and store the pieces.  Currently a blocking (synchronous)
+call; will soon be asynchronous.  $client is the client object representing the
+client that will receive the content.  Returns undef if fetch fails; $d->err
+will contain the error message.  If success, returns true, and $d->htype
+will contain the high-level type of the document.
+
+=cut
+
+sub URI::URL::refine_info {
+    my $self = shift;
+
+    my $sp = $self->path;
+    &util::debug("doc", "in refineinfo - path $sp");
+    return ($self->path =~ m!^(\.*/\S+)/([^/]+)$!
+            ? ($1,$2)
+            : ());
+}            
+    
+
+sub fetch {
+    my $self = shift;
+    my ($refine_path,$prefs);
+
+    &Mon::doc_add($self->id, $self->max, $self->loc);
+    &Mon::doc_status($self->id, "Fetching");
+    
+    # special case: if the filename is a file: URL corresponding to a
+    # refinement,the file already exists and should be immortal,so use it.
+    
+    my $url = new URI::URL $self->loc;
+    my $scheming = $url->scheme;
+    my ($rp, $pr) = $url->refine_info;
+    &util::debug("doc", "have scheme '$scheming', rp '$rp', pr '$pr'");
+    if ($url->scheme eq 'refine'
+        && (($refine_path,$prefs) = $url->refine_info)) {
+        $self->filename($refine_path);
+	$self->prefers($prefs);
+        $self->resp(new HTTP::Response "200","Refinement OK");
+	&util::debug("doc", "In refine, resp is $self->resp->is_success");
+	&util::debug("doc", "filename is $self->filename, prefers is $self->prefers");
+    } else {
+        $self->filename( &util::mkimmortal );
+        my $req = new HTTP::Request "GET", $self->loc;
+	$self->prefers(undef);
+        $self->resp( $doc::UA->request($req, $self->filename) );
+	&util::debug("doc", "Not in refine!!! scheme is $scheming");
+    }
+    # return success only if fetch succeeded *and* document's htype could be
+    # determined.
+    my $res = $self->resp->is_success;
+    if ($res) {
+        unless ($res &&= $self->htype($self->determine_htype($refine_path))) {
+            $self->err("Can't determine document htype");
+        }
+    } else {
+        # doc couldn't be fetched using LWP protocols
+        &Mon::doc_status($self->id,
+                         sprintf("FAILED (%s %s)",
+                                 $self->resp->code, $self->resp->message));
+        $self->err("Fetch failed: " .
+                   $self->resp->code . " " .  $self->resp->message);
+        unlink $self->{filename};
+    }
+    return $res;
+}
+
+=item $result = $d->segment
+
+Segments the document according to its high-level type, and leaves the list of
+chunks in $d->chunks.  Sets $d->err and returns undef if an error occurs,
+otherwise returns true. 
+
+Currently this call is synchronous, but it will soon be asynchronous.
+
+=cut
+    
+sub segment {
+    my $self = shift;
+    my $client = shift;
+    my $prefs = shift;
+    my $result = undef;
+    
+    # attempt to ascertain type
+    $self->{htype} ||= $self->determine_htype($self->filename);
+    # attempt to segment
+    if ($self->htype) {
+        my $htype_func = $self->htype . "::segment";
+        my @@chunks;
+        if ((@@chunks = &$htype_func($self,$client, $prefs)) == 1) {
+            # Error during segmenting
+            &Mon::doc_info($self->id, "Seg error: " . $chunks[0]);
+            # BUG::should close doc here
+            $self->err("Chunking error: $chunks[0]");
+        } else {
+            $result = 1;
+            $self->chunks(@@chunks);
+            $self->{"totalchunks"} = scalar @@chunks;
+            $self->{"sentchunks"} = 0;
+            &Mon::doc_info($self->id, $self->htype, $self->totalchunks,
+                           $self->sentchunks);
+        }
+    } else {
+        &Mon::doc_info($self->{id}, "Bad htype");
+        $self->err("Bad htype");
+    }
+    $result;
+}
+
+=item $d->send_chunks(@@which)
+    
+Given a list of chunk indices, sends those chunks to the client.  Returns undef
+if error, else true.  Indices corresponding to nonexistent chunks are ignored.
+Note that the TOC is just the chunk whose index is 0; it must be explicitly
+included in the list of chunks to send.
+
+=cut
+
+sub send_chunks {
+    my $self = shift;
+    my @@chunks = $self->chunks;
+    foreach $ch (@@_) {
+        &Msg::send_chunk(0, &Msg::OP_CHUNK, $self->id, $ch,
+                         $chunks[$ch]->packed)
+            if defined $chunks[$ch];
+    }
+    1;
+}
+
+=back
+
+=head1 INSTANCE VARIABLES
+
+You can set an instance variable's value by passing the value to the instance
+variable accessor function.
+
+=over 3
+
+=item @@chunklist = $d->chunks
+
+Returns a linear array of chunks, including the TOC as element zero.  Each
+array element is a L<chunk(3)> object.
+
+=cut
+
+sub chunks {
+    my $self = shift;
+    my @@args = @@_;
+    $self->{"chunks"} = \@@args if $#args > -1;
+    return @@{$self->{"chunks"}};
+}
+
+=item $d->totalchunks
+
+Total number of chunks in document (integer) excluding the TOC.
+
+=item $d->sentchunks
+
+Number of chunks already queued for sending to client.  The chunks may be in
+the send queue, or may already have been sent.
+
+=item $d->loc
+
+Document locator, from constructor call.
+
+=item $d->max
+
+Maximum number of chunks to preload to client, from constructor call.
+
+=item $d->id
+
+Document ID (assigned by GloMop on client side), from call to constructor.
+
+=item $d->htype
+
+High-level type of the document (e.g. Image, WebPage, etc.) as a string.  The
+string is suitable for passing to, e.g., L<"htype_method">.  You should not set
+this variable; it's set automatically after the document is fetched, if
+possible.  The variable is only valid after the document L<fetch> has
+completed. 
+
+=item $d->resp
+
+HTTP response object associated with the document fetch operation; valid after
+that operation has completed.  This object is a L<URI::URL(3)> object.
+
+=item $d->prefers
+
+The refinement preferences, if this is a refine:// url.
+
+=back
+
+=head1 BUGS
+
+If fetch fails, the document should be closed and its associated state thrown
+away; currently this isn't done.
+
+=cut    
+
+###########################################################################
+#  doc::htype_method($htype,$meth)
+#
+#  If a package for $htype is loaded, return a subroutine reference to the
+#  specified method in that package, if any.  Otherwise, undef.
+###########################################################################
+
+sub htype_method {
+    my ($pkg,$meth) = @@_;
+    
+    if ($pkg = $Packages{$pkg}) {
+        return "${pkg}::$meth";
+    } else {
+        return undef;
+    }
+}
+
+#############################################################################
+#  doc::mimetype_htype_bind($mimetype,$htype)
+#  
+#  Bind a mimetype to a high-level document htype.  This function will
+#  determine which segmentation function is called to hack up a chunk
+#  of a given mimetype.
+###########################################################################
+
+sub mimetype_htype_bind {
+    my ($mimetype,$htype) = @@_;
+
+    # attempt to 'require' the package.
+    eval { require "tm/${htype}.pl" };
+    die "$0: cannot open package '$htype' " .
+	" to support type glob '$mimetype' ($@@), exiting immediately"
+	    if $@@;
+    # convert MIME type glob into something that can be used as a Perl
+    # regexp. 
+    my $ntype = $mimetype;
+    $ntype =~ s/\*/\\S+/g;
+    $Htypes{$ntype} = $Packages{$htype} = "doc::$htype";
+    &prefs::array_from_file($htype, "${htype}.prefs");
+    warn "doc: Package '$htype' to support type glob $mimetype\n";
+}
+
+###########################################################################
+#  doc->determine_htype
+#
+#  Determine the high-level type of a document, which is also the name of the
+#  package containing the segmentation function for the document.  Fill it in
+#  in the document's htype field, and return it.
+#
+#  RETURNS:
+#  undef if the htype of the document cannot be determined;
+#  otherwise the htype string.
+#
+#  SIDE EFFECTS:
+#  
+###########################################################################
+sub determine_htype {
+    my $self = shift;
+    my $filename = shift;
+    my $resp = $self->resp;
+    my $htype = undef;
+    
+    # first try MIME Content-type header
+
+    my $mime = $resp->header("Content-type");
+
+    # If no luck, try to determine by analyzing file (NOT the file extension;
+    # if that was obvious, the UserAgent would have figured it out)
+    
+    $mime = &util::mime_type_of_file($filename)
+        unless $mime;
+
+    return undef unless $mime;
+
+    $self->mimetype($mime);
+
+    my($typeregexp);
+    foreach $typeregexp (keys %Htypes) {
+        $htype = $Htypes{$typeregexp}, last
+            if ($mime =~ m!$typeregexp!i);
+    }
+    return $htype;
+}
+    
+
+sub DESTROY {
+    unlink $self->{filename} if $self->{filename};
+}
+
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+    
+1;
+@
+
+
+1.17
+log
+@segmgr renamed to chunk.  lots of changes including new html parser,
+rudimentary layout manager, beginnings of interface to ptm, modularized
+front-end vs back-end distiller components (but interfaces aren't really
+stabilized yet).
+@
+text
+@d1 5
+d40 2
+d67 1
+a67 1
+    open(CFG, "gmproxy.types")
+d74 3
+a76 12
+        # attempt to 'require' the package.
+        eval { require "tm/${pkg}.pl" };
+        die "$0: cannot open package '$pkg' " .
+            " to support type glob '$type' ($@@), exiting immediately"
+                if $@@;
+        # convert MIME type glob into something that can be used as a Perl
+        # regexp. 
+        my $ntype = $type;
+        $ntype =~ s/\*/\\S+/g;
+        $Htypes{$ntype} = $Packages{$pkg} = "doc::$pkg";
+        &prefs::array_from_file($pkg, "tm/${pkg}.prefs");
+        warn "doc: Package '$pkg' to support type glob $type\n";
+d80 1
+a80 1
+                        filename err ));
+d99 6
+d111 1
+d119 1
+d145 5
+a149 1
+    return (shift->path =~ m!^(/\S+)/([^/]+)$!
+d163 1
+a163 1
+    # refinement,the file already exists adn should be immortal,so use it.
+d166 3
+d172 1
+d174 2
+d179 1
+d181 1
+d187 1
+a187 1
+        unless ($res &&= $self->htype($self->determine_htype)) {
+d321 4
+d351 25
+d408 2
+d422 11
+@
+
+
+1.16
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@d16 2
+a17 1
+  # Instance methods:
+d20 2
+d24 3
+a26 1
+  # access method.
+d46 39
+d103 15
+d132 113
+a244 1
+client that will receive the content.
+d260 9
+a309 2
+
+
+a311 57
+use LWP;
+require "util.pl";
+package doc;
+
+%Htypes = ();
+%Packages = ();
+
+# Immediate initialization
+if (1) {
+    $UA = new LWP::UserAgent;
+
+    # Attempt to read type information
+    open(CFG, "gmproxy.types")
+        or die "$0: cannot open gmproxy.types ($!), exiting immediately";
+    while (<CFG>) {
+        chomp;
+        next if /^#/;
+        next unless m!^(\S+/\S+)\s+(\S+)\s*$!;
+        my ($type,$pkg) = ($1,$2);
+        # attempt to 'require' the package.
+        eval { require "tm/${pkg}.pl" };
+        die "$0: cannot open package '$pkg' " .
+            " to support type glob '$type' ($@@), exiting immediately"
+                if $@@;
+        # convert MIME type glob into something that can be used as a Perl
+        # regexp. 
+        my $ntype = $type;
+        $ntype =~ s/\*/\\S+/g;
+        $Htypes{$ntype} = $Packages{$pkg} = "doc::$pkg";
+        &prefs::array_from_file($pkg, "tm/${pkg}.prefs");
+        warn "doc: Package '$pkg' to support type glob $type\n";
+    }
+    close CFG;
+    &util::instvars( qw( doc totalchunks sentchunks loc max id htype resp
+                        filename err ));
+}
+
+sub chunks {
+    my $self = shift;
+    my @@args = @@_;
+    $self->{"chunks"} = \@@args if $#args > -1;
+    return @@{$self->{"chunks"}};
+}
+
+sub new {
+    my $class = shift;
+    my ($docloc,$max,$docid) = @@_;
+    my $self = bless {
+        "loc" => $docloc,
+        "max" => $max,
+        "id" => $docid,
+        "chunks" => [],
+        "err" => "",
+    };
+    return $self;
+}
+
+a325 98
+    }
+}
+
+###########################################################################
+#  doc->fetch
+#
+#  Given a document structure, fetch the actual document contents using the
+#  appropriate protocol, and call the appropriate htype segmenter to chunk it
+#  up.  The LWP UserAgent is responsible for handling the fetch;
+#  once the document is fetched, its htype is determined and the segmenting
+#  function is called.
+#
+#  RETURNS:
+#  undef if fetch fails; doc->err contains the error message.
+#  true if fetch succeeds; doc->htype contains the htype, and either doc->
+#
+###########################################################################
+
+sub URI::URL::refine_info {
+    return (shift->path =~ m!^(/\S+)/([^/]+)$!
+            ? ($1,$2)
+            : ());
+}            
+    
+
+sub fetch {
+    my $self = shift;
+    my $client = shift;
+    my ($refine_path,$prefs);
+
+    &Mon::doc_add($self->id, $self->max, $self->loc);
+    &Mon::doc_status($self->id, "Fetching");
+    
+    # special case: if the filename is a file: URL corresponding to a
+    # refinement,the file already exists adn should be immortal,so use it.
+    
+    my $url = new URI::URL $self->loc;
+    if ($url->scheme eq 'refine'
+        && (($refine_path,$prefs) = $url->refine_info)) {
+        $self->filename($refine_path);
+        $self->resp(new HTTP::Response "200","Refinement OK");
+    } else {
+        $self->filename( &util::mkimmortal );
+        my $req = new HTTP::Request "GET", $self->loc;
+        $self->resp( $UA->request($req, $self->filename) );
+    }
+    
+    if ($self->resp->is_success) {
+        # attempt to ascertain type
+        $self->{htype} = $self->determine_htype($self->filename);
+        # attempt to segment
+        if ($self->htype) {
+            my $htype_func = $self->htype . "::segment";
+            my @@chunks;
+            if ((@@chunks = &$htype_func($self,$client, $prefs)) == 1) {
+                # Error during segmenting
+                &Mon::doc_info($self->id, "Seg error: " . $chunks[0]);
+                # BUG::should close doc here
+                $self->err("Chunking error: $chunks[0]");
+                return undef;
+            } else {
+                $self->chunks(@@chunks);
+                $self->{"totalchunks"} = scalar @@chunks;
+                $self->{"sentchunks"} = 0;
+                &Mon::doc_info($self->id, $self->htype, $self->totalchunks,
+                               $self->sentchunks);
+            }
+        } else {
+            &Mon::doc_info($self->{id}, "Bad htype");
+        }
+        return 1;
+    } else {
+        # doc couldn't be fetched using LWP protocols
+        &Mon::doc_status($self->id,
+                         sprintf("FAILED (%s %s)",
+                                 $self->resp->code, $self->resp->message));
+        $self->err("Fetch failed: " .
+                   $self->resp->code . " " .  $self->resp_message);
+        unlink $self->{filename};
+        return undef;
+    }
+    die "fetch: Should never get here";
+}
+
+###########################################################################
+#  doc->send_chunks
+#
+#  Given list of chunk indices, send chunks to the client by packing them into
+#  message structures
+###########################################################################
+
+sub send_chunks {
+    my $self = shift;
+    my @@chunks = $self->chunks;
+    foreach $ch (@@_) {
+        &Msg::send_chunk(0, &Msg::OP_CHUNK, $self->id, $ch,
+                         $chunks[$ch]->packed)
+            if defined $chunks[$ch];
+@
+
+
+1.15
+log
+@Added extensive documentation in the form of embedded perlpod.
+@
+text
+@d47 2
+a48 2
+Return new doc object with URL loc, $max preload chunks,
+client-side ID $id.  May fetch some or all of doc as a side effect.
+d68 1
+a68 1
+=item $d->fetch()
+d72 2
+a73 1
+call; will soon be asynchronous.
+d232 1
+d259 1
+a259 2
+            if ((@@chunks = &$htype_func($self->id,$self->filename,
+                                        $prefs)) == 1) {
+d282 1
+a282 1
+                         "$self->resp->code $self->resp_message");
+@
+
+
+1.14
+log
+@minimal refinement seems to work, albeit bad management of ppm's and
+gifs results in lots of wasteful shell processes to determinme simple
+properties of the orig file. Lesson: need to keep properties with each
+file/chunk.
+@
+text
+@d1 131
+a131 25
+#
+#  Implement the GloMop "document" abstraction
+#
+#  Public Methods:
+#
+#  new($loc,$max,$id)
+#       Return new doc object with URL loc, $max preload chunks,
+#       client-side ID $id.  May fetch some or all of doc.
+#  serve()
+#       Continue fetching/segmenting document
+#  
+#  Private methods:
+#
+#  fetch()
+#       Try to get the document object using the LWP::UserAgent, ascertain its
+#       type, segment it, and store the pieces.
+#
+#  Instance vars (implemented as methods):
+#  
+#  totalchunks: total number of chunks in doc
+#  sentchunks: number of chunks queued for sending
+#  loc,max,id: from call to constructor
+#  htype: high-level type
+#  resp: HTTP response object
+#  
+a219 2
+#  BUG::This should really be 3 separate functions: fetch, determine_htype,
+#  segment (or at least 2 functions).
+a256 1
+            # BUG::should call segmenter with user prefs handle
+@
+
+
+1.13
+log
+@skeletal refinement is working, but D'OH!  it returns the specified
+chunk at the distilled size, not the original size! D'OH!
+@
+text
+@d118 7
+d127 1
+a127 1
+
+d136 3
+a138 3
+    if ($url->scheme eq 'file'
+        && (-r $url->path)) {
+        $self->filename($url->path);
+d154 2
+a155 1
+            if ((@@chunks = &$htype_func($self->id,$self->filename)) == 0) {
+@
+
+
+1.12
+log
+@Fixed 'bad htype' bug on every other fetch (lesson: don't do a 'return'
+or far jump out a 'while each()' loop!).  Fixed error behavior: was
+trying to set error field in self->resp instead of self (an
+HTTP::Headers object rather than a proxy object).  Still tbd: Image
+module does not call gifmunch if distillation isn't needed or would
+increase e2e latency. (Hook in place, but no fxnality yet.)
+@
+text
+@a120 2
+    my $req = new HTTP::Request "GET", $self->loc;
+    $self->filename( &util::mktemp );
+d125 14
+a138 1
+    $self->resp( $UA->request($req, $self->filename) );
+d141 1
+a141 1
+        $self->{htype} = $self->determine_htype();
+a143 1
+            &Mon::doc_status($self->id, "Segmenting");
+d210 1
+d217 7
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d208 3
+a210 3
+    my($typeregexp,$pkgname);
+    while  (($typeregexp,$pkgname) = each %Htypes) {
+        $htype = $pkgname, last
+@
+
+
+1.10
+log
+@prefs stuff more robust; falls back on defaults, read from .prefs file
+in each htype module. prefs sort-of-observed
+for target size in bytes (actually for latency, calculated backwards
+from network bandwidth), but ignores all others prefs right
+now. standalone gifmunch is used to do distillation.  network.pl will
+be where NCM calls get made; right now it returns static values.  also
+change to startup rendezvous for monitor; proxy PID is now attached to
+rendezvous file name, and passed as first (and only) arg to gmmon.
+@
+text
+@d159 1
+a159 1
+        $self->resp->err("Fetch failed: " .
+d201 2
+a202 1
+
+d206 1
+a206 1
+    return ($self->{htype} = undef) unless $mime;
+d208 1
+d210 2
+a211 3
+        if ($mime =~ m!$typeregexp!i) {
+            return ($self->{htype} = $pkgname);
+        }
+d213 1
+a213 2
+    # coudln't determine type from MIME header!
+    return $self->{htype} = undef;
+@
+
+
+1.9
+log
+@more dynamic-adaptation stuff that seems stable enough to checkin...
+@
+text
+@d56 1
+a56 1
+        &prefs::array($pkg);
+@
+
+
+1.8
+log
+@Defined a simple protocol in hsk.txt for setting session-level
+preferences for an htype, and implemented the message handler for it
+which sends the parsed prefs info to the set_prefs routine of the
+appropriate htype module.
+@
+text
+@d56 1
+@
+
+
+1.7
+log
+@Weird bug in accept.pl: the kerberos version number was not being
+converted from unsigned char to perl int after being extracted from the
+decrypted rcmd ticket; this resulted in a warning "Argument not numeric
+in entersub" when calling save_credentials; but mysteriously, also
+caused an error in UserAgent much later -- "undefined subroutine
+UserAgent::_need_proxy" while fetching a file: URL -- even though the
+fetch should succeed, and the subroutine is defined in a previously
+loaded file!  Hypothesis: the bad kerberos version number had some
+non-obvious effect on internal perl data structures because of stack
+overrun or similar badness when it was passed to the underlying kerberos
+call?  Ugh...
+@
+text
+@d31 3
+d55 1
+a55 1
+        $Htypes{$ntype} = "doc::$pkg";
+d82 10
+d93 7
+@
+
+
+1.6
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.
+@
+text
+@d57 1
+a57 1
+                        filename ));
+a59 5
+# sub new {
+#     my $self = shift;
+#     return $self;
+# }
+
+d75 1
+d80 17
+d120 2
+d132 1
+d138 2
+d141 1
+d143 1
+a143 1
+    return $self->resp->is_success;
+d147 1
+a147 1
+#  doc::send_chunks
+d164 1
+a164 1
+#  doc::determine_htype
+d169 7
+d184 1
+@
+
+
+1.5
+log
+@image segmenter successfuly calls pnmcut, but leaves chunks in ppm
+format for now
+@
+text
+@a26 1
+use Cwd;
+d67 3
+a69 1
+    return @@{$self->{chunks}};
+d88 1
+a88 1
+    $self->filename( &mktemp );
+d103 1
+a103 1
+            if ((@@chunks = &$htype_func($self->id,$filename)) == 0) {
+d108 1
+a108 1
+                $self->{"chunks"} = \@@chunks;
+d125 17
+@
+
+
+1.4
+log
+@Added utilities file (with debugging stuff and generalization of
+instance-variable access for various classes), and segment manager
+(provides generic segmentation services).  'tm' submodule will contain
+high-level document type (htype) "chunkers".  added close_doc message to
+hsk.txt.
+@
+text
+@a34 3
+    $Tmpname = 0;
+    $Wd = Cwd::cwd();
+    umask 077;
+a60 2
+sub mktemp { "$Wd/gm$$.$Tmpname" if ++$Tmpname }
+
+d100 13
+a112 3
+            $self->{"chunks"} = &$htype_func($filename);
+            &Mon::doc_info($self->htype, $self->totalchunks,
+                           $self->sentchunks);
+@
+
+
+1.3
+log
+@Semi-runnable state; allows auth handshake and OD (open doc) requests
+seem to work.
+@
+text
+@d4 22
+d27 3
+a30 2
+require LWP;
+use Cwd;
+d32 31
+a62 4
+$UA = new LWP::UserAgent;
+$Tmpname = 0;
+$Wd = cwd();
+umask 077;
+d71 5
+d79 11
+a89 3
+    my $self = bless { loc => $docloc, max => $max, id => $docid };
+    my $req = new HTTP::Request "GET", $self->{loc};
+    my $name = &mktemp;
+d91 5
+a95 2
+    &Mon::doc_add($self->{id}, $self->{max}, $self->{loc});
+    &Mon::doc_status($self->{id}, "Fetching");
+d97 14
+a110 3
+    my $res = $UA->request($req, $name);
+    if ($res->is_success) {
+        &Mon::doc_status($self->{id}, "Retrieved");
+d112 28
+a139 1
+        &Mon::doc_status($self->{id}, "FAILED");
+d141 2
+a142 1
+    1 while 1;
+d145 5
+d151 1
+@
+
+
+1.2
+log
+@rudiments of main loop working, with gm_conn object inheriting from
+gm_sock for handling open proxy connections
+@
+text
+@d6 1
+a6 1
+use LWP;
+a15 5
+sub new {
+    my $self = shift;
+    return $self;
+}
+
+d18 2
+a19 2
+#     my $req = new HTTP::Request "GET", $self->{loc};
+#     my $name = &mktemp;
+d21 9
+a29 2
+#     &Mon::doc_add($self->{id}, $self->{max}, $self->{loc});
+#     &Mon::doc_status($self->{id}, "Fetching");
+d31 8
+a38 8
+#     my $res = $UA->request($req, $name);
+#     if ($res->is_success) {
+#         &Mon::doc_status($self->{id}, "Retrieved");
+#     } else {
+#         &Mon::doc_status($self->{id}, "FAILED");
+#     }
+#     1 while 1;
+# }
+@
+
+
+1.1
+log
+@no longer a need for http transport mgr; using LWP perl module.
+completed multilanguage support for msgdef generation.  added messages
+for doc open and chunk xmission to hsk.txt.  added monitor calls for
+showing open documents.  modified testdrv to use as generic send/receive
+of any messags defined in hsk.txt.  began working on doc.pl document
+abstraction.
+@
+text
+@d18 7
+a24 2
+    my $req = new HTTP::Request "GET", $self->{loc};
+    my $name = &mktemp;
+d26 2
+a27 2
+    &Mon::doc_add($self->{id}, $self->{max}, $self->{loc});
+    &Mon::doc_status($self->{id}, "Fetching");
+d29 8
+a36 8
+    my $res = $UA->request($req, $name);
+    if ($res->is_success) {
+        &Mon::doc_status($self->{id}, "Retrieved");
+    } else {
+        &Mon::doc_status($self->{id}, "FAILED");
+    }
+    1 while 1;
+}
+@

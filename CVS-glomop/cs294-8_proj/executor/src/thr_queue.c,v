@@ -1,0 +1,486 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.12.09.06.26.05;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.08.02.24.07;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.11.27.05.22.00;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.27.04.31.42;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Everything seems to work!  (sorta)
+@
+text
+@/*
+ *  thr_queue.c
+ *  Cache of running threads that are spin-blocked waiting on a
+ *  condition.  When we need a new thread to do some work, we select one
+ *  by signaling its condition variable.
+ *
+ *  This code was lifted from the Transend implementation.
+ */
+
+#include "config_cs294.h"
+#include "thr_queue.h"
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <time.h>
+#include <errno.h>
+
+/* A socket that a thread listens on for incoming connections */
+static int listen_socket;
+static pthread_t thr_listen;
+static int newconn = 0;
+UINT32 n_execreqs = 1;
+
+static pthread_t        *threadids; /* array of thread id's */
+static pthread_t        threadid_mon;
+static task_t *         *task_queue;
+pthread_key_t           index_key;
+
+/*
+ *  Visible from other files
+ */
+int                     tasks_done;
+int                     nthreads;
+
+#define DEFAULT_CONDATTR (const pthread_condattr_t *)NULL
+#define DEFAULT_MTXATTR (const pthread_mutexattr_t *)NULL
+
+#define QUEUE_EMPTY() (qhead == qtail)
+#define QUEUE_FULL()  ((qtail+1) % nthreads == qhead)
+
+/*
+ *  Queue head and queue tail protected by mutex
+ */
+static pthread_mutex_t   mtx_queue;
+static pthread_cond_t    cond_queue;
+static int               qhead, qtail;
+
+/*
+ *  private forward declarations
+ */
+
+static void *   thread_go_proc(void *thrindex_cast_to_void);
+static void     thread_cleanup(void *dummy_arg);
+static void     thread_cleanup_sighnd(int sig);
+static task_t * get_task(int thrindex);
+static void *executor_listen_proc(void *arg);
+
+/*
+ *  make_threads
+ *  Args: none
+ *  Returns: 0 success, otherwise error code from errno.h
+ *  Description:
+ *    Create a condition variable, a bunch of threads, a task queue
+ *  (circular FIFO) protected by a mutex.
+ *  The dispatcher will add a task to the queue under mutex and signal
+ *  the queue's condition variable.  A thread will wake up and remove work
+ *  from the queue, and signal a different condition variable to put its
+ *  result on the result queue.
+ */
+
+int
+make_threads(int nth)
+{
+  int i;
+  pthread_attr_t default_thread_attr;
+
+  tasks_done = nth;
+  /*
+   *  Useful log info
+   */
+
+  nthreads = nth;
+#ifdef PTHREAD_THREADS_MAX
+  if (nthreads > PTHREAD_THREADS_MAX) {
+    DEBUG_LOG("Warning: num threads pinned to %d from %d\n",
+               PTHREAD_THREADS_MAX, nth, NULL, NULL);
+    nthreads = PTHREAD_THREADS_MAX;
+  }
+#endif /* ifdef PTHREAD_THREADS_MAX */
+
+  threadids = SAFEMALLOC(nthreads, pthread_t);
+  task_queue = SAFEMALLOC(nthreads, task_t *);
+
+  /*
+   *  create the queue.
+   *  Queue invariants:
+   *  - qhead is index of slot containing next task to be done
+   *  - qtail is index of slot beyond which there are no more tasks
+   *  - if qhead==qtail, there are no tasks to be done.
+   *  - if (qhead+1)%qsize==qtail, the queue is full; a task must be
+   *  removed before one can be added.
+   */
+
+  qhead = qtail = 0;
+
+  THR_OP("attr init", pthread_attr_init(&default_thread_attr));
+  THR_OP("attr set",
+         pthread_attr_setscope(&default_thread_attr, PTHREAD_SCOPE_SYSTEM));
+  THR_OP("condinit queue", pthread_cond_init(&cond_queue, DEFAULT_CONDATTR));
+  THR_OP("mtxinit queue", pthread_mutex_init(&mtx_queue, DEFAULT_MTXATTR));
+  THR_OP("index key", pthread_key_create(&index_key, NULL));
+
+  for (i=0; i < nthreads; i++) {
+    THR_OP("Thread create",
+           pthread_create(&threadids[i], &default_thread_attr,
+           thread_go_proc,
+           (void *)i));
+  }
+
+  DEBUG_LOG("Created %d threads\n", (void *)nthreads, NULL, NULL, NULL);
+  return THR_OK;
+}
+
+/*
+ *  thread_go_proc is the entry point for all threads.  A thread will
+ *  enter this routine, spin on a condition variable which is signaled
+ *  when there's work for the thread to do, wake up and do its work,
+ *  then reblock on the condition variable.  The arg is the index (0 to
+ *  nthreads-1) of this worker thread.
+ */
+
+static void *
+thread_go_proc(void *arg)
+{
+  int thrindex = (int)arg;
+  task_t *curr_task;
+
+  /* initialize the thread id for this thread */
+  pthread_setspecific(index_key, (void*)thrindex);
+					 
+#ifdef PTHREAD_CANCEL_ENABLE
+  THR_OP("make cancellable",
+         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL));
+#endif
+#ifdef PTHREAD_CANCEL_ASYNCHRONOUS
+  THR_OP("async cancellable",
+         pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL));
+#endif
+
+  (void)signal(SIGPIPE, SIG_IGN);
+  (void)signal(SIGTERM, thread_cleanup_sighnd);
+  while (1) {
+    
+    /* wait for a task to become available */
+    curr_task = get_task(thrindex);
+    DEBUG_LOG("Thread %d working on task %lu...\n",
+                  thrindex, TASK_ID(curr_task), NULL, NULL);
+
+    /* to work on a task, call its go proc. */
+
+    pthread_cleanup_push(thread_cleanup, TASK_DATA(curr_task));
+    CALL_TASK_GO_PROC(curr_task);
+    pthread_cleanup_pop(0);
+
+    /*
+     *  Done working, requeue ourselves after freeing task structure
+     */
+
+    release_task(curr_task);
+    DEBUG_LOG("Thread %d rejoining pool\n", thrindex, NULL, NULL, NULL);
+  }
+  /* should never get here */
+  /*NOTREACHED*/
+  return ((void *)0);
+}
+
+/*
+ *  thread_cleanup
+ *
+ *  Called when the proxy is killed or shutdown: each thread that is
+ *  working will try to shutdown its socket in an orderly way.  Note
+ *  that some of the shutdown's may be spurious, but who cares, we are
+ *  exiting anyway.  The arg is a socket filedescriptor number.
+ */
+
+void
+thread_cleanup_sighnd(int sig)
+{
+  extern void executor_shutdown(int sig);
+  thread_cleanup((void *)0);
+  executor_shutdown(sig);
+}
+
+void
+thread_cleanup(void *arg)
+{
+  if (arg) {
+    shutdown((int)arg,2);
+    close((int)arg);
+  }
+}
+
+/*
+ *  get_task
+ *  Under mutex, check the queue for work; if no work, sleep and wait
+ *  for dispatcher to signal condition variable indicating that there is
+ *  new work.
+ *  When work is found, move the qhead under mutex to dequeue the task,
+ *  and return the pointer to the new task structure.
+ */
+
+static task_t *
+get_task(int thrindex)
+{
+  task_t *task = NULL;
+
+  THR_OP("lock to check queue", pthread_mutex_lock(&mtx_queue));
+  tasks_done--;
+  while (QUEUE_EMPTY()) {
+    /* no work to do */
+    DEBUG_LOG("Thr %d Waiting for work\n", thrindex, NULL, NULL, NULL);
+    THR_OP("waiting for work", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_EMPTY());
+  tasks_done++;
+  task = task_queue[qhead++];
+  qhead %= nthreads;
+  /*
+   *  Signal condition variable in case other threads want to grab it,
+   *  or in case dispatcher is waiting for a queue slot.
+   */
+  THR_OP("signal queue", pthread_cond_signal(&cond_queue));
+  THR_OP("unlock queue", pthread_mutex_unlock(&mtx_queue));
+  assert(task != (task_t *)NULL);
+  task->thrindex = thrindex;
+  return(task);
+}
+
+/*
+ *  dispatch
+ *  Args: task ID
+ *  Returns: 0 success, otherwise errno
+ *  Thread-safe: yes
+ *  Description:
+ *    Put a new task in the work queue, and signal an available thread
+ *    to pick up the task.  
+ *  If no threads are available, wait for one to become available (it
+ *  will signal the condition variable protected by the same mutex that
+ *  protects the threads-available counter).
+ *    When the thread completes or exits, it will free the task structure.
+ */
+
+int
+dispatch(task_t *task_state)
+{
+  /*
+   *  Should periodically check the value of did_stall to determine how
+   *  many consecutive thread-dispatches had to wait for a thread to be
+   *  available; when it exceeds some threshold, spawn a new thread.
+   */
+
+  THR_OP("dispatcher lock queue", pthread_mutex_lock(&mtx_queue));
+  while (QUEUE_FULL()) {
+    /* no queue slots available! wait for a thread to complete */
+    DEBUG_LOG("dispatcher waiting for queue slot\n", NULL, NULL, NULL, NULL);
+    THR_OP("dispatcher wait for q", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_FULL());
+  assert(task_state != (task_t *)NULL);
+  /*
+   *  put the task in the queue and signal any idling threads
+   */
+
+  task_queue[qtail++] = task_state;
+  qtail %= nthreads;
+  
+  /* signal a thread - somebody will wake up to do the work. */
+  DEBUG_LOG("task %lu queued, signaling a thread...\n",
+                task_state->task_id, NULL, NULL, NULL);
+  THR_OP("signal wakeup", pthread_cond_signal(&cond_queue));
+  THR_OP("Unlock queue", pthread_mutex_unlock(&mtx_queue));
+  return THR_OK;
+}
+
+/* This function spawns a thread to handle incoming connections and dispatch
+   them to the dispatch function */
+int spawn_listening_thread(int port, ThrFuncPtr f)
+{
+  char portnum[8];
+  int i;
+  pthread_attr_t att;
+  struct sched_param sched;
+
+  /* Create the listening socket on port "port" */
+  sprintf(portnum, "%d", port);
+  listen_socket = slisten(portnum);
+  if (listen_socket < 1) {
+    /* couldn't open the listening socket */
+    DEBUG_LOG("Socket listen failed: %s\n", strerror(errno), NULL, NULL, NULL);
+    return THR_COULDNT_OPEN_LISTEN_PORT;
+  }
+  i = 1;
+  if (setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR,
+		 (const char *) &i, sizeof(int)) != 0) {
+    DEBUG_LOG("setsockopt SO_REUSEADDR: %s\n", strerror(errno), NULL, NULL,
+      NULL);
+  }
+  i = 0;
+  if (setsockopt(listen_socket, SOL_SOCKET, SO_KEEPALIVE, 
+		 (const char *)&i, sizeof(int)) != 0) {
+    DEBUG_LOG("setsockopt SO_KEEPALIVE: %s\n", strerror(errno), NULL, NULL,
+	      NULL);
+  }
+  DEBUG_LOG("(executor): listening on port %d\n", port, NULL, NULL, NULL);
+
+  /* Create the thread that listens for incoming connections */
+  THR_OP("Executor thread attrs init", pthread_attr_init(&att));
+  THR_OP("Executor set global scope", 
+	 pthread_attr_setscope(&att, PTHREAD_SCOPE_SYSTEM));
+  THR_OP("Executor get sched params",
+	 pthread_attr_getschedparam(&att, &sched));
+#ifdef _MIT_POSIX_THREADS
+  sched.prio += 0;   /* or whatever boost we decide */
+#else
+  sched.sched_priority += 0;  /* or whatever boost we decide */
+#endif
+  THR_OP("executor boost prio",
+	 pthread_attr_setschedparam(&att, &sched));
+
+  /* Go ahead and create the thread! */
+  THR_OP("Executor thread create",
+	 pthread_create(&thr_listen, (pthread_attr_t *) &att,
+			executor_listen_proc, (void *)f));
+  return THR_OK;
+}
+
+/* The thread dedicated to running this function spins on the listen_socket 
+   for incoming connections, and then dispatches a worker thread to run
+   the ThrFunc f */
+static void *executor_listen_proc(void *arg)
+{
+  ThrFuncPtr f = (ThrFuncPtr) arg;
+  task_t  *request;
+  
+  while (1) {
+    newconn = saccept(listen_socket);
+    if (newconn == -1) {
+      DEBUG_LOG("(executor): accept connection: %s", strerror(errno),
+		NULL, NULL, NULL);
+      continue;
+    }
+
+    /* We have a new connection! Dispatch a thread to it */
+    DEBUG_LOG("(executor): dispatching connection %d\n", n_execreqs,
+	      NULL, NULL, NULL);
+    new_task(&request);
+    SET_TASK_ID(request, n_execreqs);
+    n_execreqs++;
+    SET_TASK_GO_PROC(request, f);
+    SET_TASK_DATA(request, newconn);
+    assert(dispatch(request) == 0);
+  }
+}
+@
+
+
+1.3
+log
+@Much progress made in parsing and dispatching of commands.
+@
+text
+@d18 1
+a48 2
+
+extern int errno;
+@
+
+
+1.2
+log
+@Everything's committed?
+@
+text
+@d88 2
+a89 2
+    fprintf(stderr,"Warning: num threads pinned to %d from %d\n",
+               PTHREAD_THREADS_MAX, nth);
+d123 1
+a123 1
+  fprintf(stderr, "Created %d threads\n", (void *)nthreads);
+d159 2
+a160 2
+    fprintf(stderr, "Thread %d working on task %lu...\n",
+                  thrindex, TASK_ID(curr_task));
+d173 1
+a173 1
+    fprintf(stderr, "Thread %d rejoining pool\n", thrindex);
+d224 1
+a224 1
+    fprintf(stderr, "Thr %d Waiting for work\n", thrindex);
+d268 1
+a268 1
+    fprintf(stderr, "dispatcher waiting for queue slot\n");
+d281 2
+a282 2
+  fprintf(stderr, "task %lu queued, signaling a thread...\n",
+                task_state->task_id);
+d302 1
+a302 1
+    fprintf(stderr, "Socket listen failed: %s\n", strerror(errno));
+d308 2
+a309 1
+    fprintf(stderr, "setsockopt SO_REUSEADDR: %s\n", strerror(errno));
+d314 2
+a315 1
+    fprintf(stderr,"setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+d317 1
+a317 1
+  fprintf(stderr, "(executor): listening on port %d\n", port);
+d351 2
+a352 1
+      fprintf(stderr, "(executor): accept connection: %s", strerror(errno));
+d357 2
+a358 1
+    fprintf(stderr, "(executor): dispatching connection %d\n", n_execreqs);
+@
+
+
+1.1
+log
+@Pulled over the thread worker pool code from transend.  Now we can
+telnet to the executor and have a worker thread dispatched for us!
+@
+text
+@a171 9
+#if 0
+    if ((UINT32)(curr_task->task_result_ptr)) {
+      /* more work to be done....requeue for next stage */
+      dispatch(curr_task);
+    } else {
+      release_task(curr_task);
+      /*    curr_task->task_result_ptr = (void *)(curr_task->task_id); */
+    }
+#else
+a172 1
+#endif
+@

@@ -1,0 +1,326 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.08;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	MailClient
+#
+#	The simplest Magic Capª Package
+#
+#	General Magic Developer Technical Support
+#	Copyright © 1992-1994 General Magic, Inc.
+#	All rights reserved.
+#
+#
+#	Version:	MC19						February 22, 1994
+#
+#
+#	Changes to this file in version MC19:
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "MCindexicals.h"
+
+/* --------------------------------------------------------------------
+	Here's the empty main() routine that is needed for the linker.  Don't put any code here!
+*/
+
+main() {}
+
+/* your code goes here, don't forget the CURRENTCLASS */
+#undef CURRENTCLASS
+#define CURRENTCLASS FolderView
+
+/*********** FolderView code goes here ***************/
+
+Method void
+FolderView_AddMailStore(ObjectID self, ObjectID mStore)
+{
+   ObjectID  MSList;
+   Unsigned  theCount;
+   
+   /* given a new MS, add it to the end of the ListView. */
+   MSList = List(self);
+   AddLast(MSList, mStore);
+   theCount = Length(MSList);
+   updateInfoText(mStore, theCount);
+      
+   /* force self to redraw */
+   DirtyBounds(self);
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MailSceneAdmin
+
+Private void CleanUpHotMVB(ObjectID self);
+
+Method void
+MailSceneAdmin_NewMessage(ObjectID self)
+{
+   ObjectID newMS, newMVB, theHotFV;
+   Flags    theFlags;
+   Dot      ROdot;
+      
+   /* Create the new mailstore, add it to the FolderView */
+   theHotFV = HotFV(self);
+   newMS = CopyNear(iTemplateMS, iTemplateMS);
+   theFlags = MS_newMessage;
+   SetInfo_flags(newMS, theFlags);
+   AddMailStore(theHotFV, newMS);
+   
+   /* Create the new MVB, add it to the correct scene */
+   newMVB = createMVB(newMS);
+   SwitchContainer(newMVB, iMCMessageScene);
+   ROdot.h = -256.0*33.5;
+   ROdot.v = 0.0;
+   SetRelativeOrigin(newMVB, &ROdot);
+   
+   /* Update internal pointers, jump to scene */
+   SetHotMS(self, newMS);
+   SetHotMVB(self, newMVB);
+   GoTo(iMCMessageScene);
+}
+
+Method void
+MailSceneAdmin_OpenMessage(ObjectID self)
+{
+   Unsigned theSelRow, indexObj;
+   ObjectID theHotFV, selMS, newMVB, myList;
+   Dot      ROdot;
+   
+   /* Figure out which message is selected */
+   theHotFV = HotFV(self);
+   theSelRow = SelectedRow(theHotFV);
+   
+   if (theSelRow == (Unsigned) 0)
+   {
+      Honk();
+	  return;
+   }
+   
+   /* Great - now get that message's MS object */
+   indexObj = CellToIndex(theHotFV, (Unsigned) 0, theSelRow);
+   myList = List(theHotFV);
+   selMS = At(myList, indexObj);
+   
+   /* Create a MVB from the MS object */
+   newMVB = createMVB(selMS);
+   SwitchContainer(newMVB, iMCMessageScene);
+   ROdot.h = -256.0*33.5;
+   ROdot.v = 0.0;
+   SetRelativeOrigin(newMVB, &ROdot);
+   
+   /* Update internal pointers, jump to scene */
+   SetHotMS(self, selMS);
+   SetHotMVB(self, newMVB);
+   GoTo(iMCMessageScene);
+}
+
+Method void
+MailSceneAdmin_ReplyMessage(ObjectID self)
+{
+   /* Sic, but for now just does essentially a "new". */
+   Unsigned theSelRow, indexObj;
+   ObjectID newMS, newMVB, theHotFV, selMS, selMSSubj, newMSSubj, myList;
+   Dot      ROdot;
+   Flags    theFlags;
+      
+   /* Figure out which message is selected */
+   theHotFV = HotFV(self);
+   theSelRow = SelectedRow(theHotFV);
+   
+   if (theSelRow == (Unsigned) 0)
+   {
+      Honk();
+	  return;
+   }
+
+   /* Great - now get that message's MS object */
+   indexObj = CellToIndex(theHotFV, (Unsigned) 0, theSelRow);
+   myList = List(theHotFV);
+   selMS = At(myList, indexObj);
+   
+   /* Create the new mailstore, add it to the FolderView */
+   newMS = CopyNear(iTemplateMS, iTemplateMS);
+   theFlags = MS_newMessage;
+   SetInfo_flags(newMS, theFlags);
+   selMSSubj = Subject_t(selMS);
+   newMSSubj = Subject_t(newMS);
+   ReplaceTextWithLiteral(newMSSubj, "Re: ");
+   AppendText(newMSSubj, selMSSubj);
+   AddMailStore(theHotFV, newMS);
+   
+   /* Create the new MVB, add it to the correct scene */
+   newMVB = createMVB(newMS);
+   SwitchContainer(newMVB, iMCMessageScene);
+   ROdot.h = -256.0*33.5;
+   ROdot.v = 0.0;
+   SetRelativeOrigin(newMVB, &ROdot);
+   
+   /* Update internal pointers, jump to scene */
+   SetHotMS(self, newMS);
+   SetHotMVB(self, newMVB);
+   GoTo(iMCMessageScene);
+}
+
+Method void
+MailSceneAdmin_UpdateMessage(ObjectID self)
+{
+   /* Goes to the synchronization scene */
+   GoTo(iSyncScene);
+}
+
+Method void
+MailSceneAdmin_DeleteMessage(ObjectID self)
+{
+   /* mark the message for deletion */
+   Unsigned theSelRow, indexObj, theFlags;
+   ObjectID theHotFV, selMS, myList;
+   
+   /* Figure out which message is selected */
+   theHotFV = HotFV(self);
+   theSelRow = SelectedRow(theHotFV);
+   
+   if (theSelRow == (Unsigned) 0)
+   {
+      Honk();
+	  return;
+   }
+   
+   /* Great - now get that message's MS object */
+   indexObj = CellToIndex(theHotFV, (Unsigned) 0, theSelRow);
+   myList = List(theHotFV);
+   selMS = At(myList, indexObj);
+   
+   /* Set the flag */
+   theFlags = Info_flags(selMS);
+   if (theFlags & MS_beenDeleted)
+   {
+      theFlags = theFlags & (~MS_beenDeleted);
+	  theFlags = theFlags & (~MS_noteditable);
+   }
+   else
+      theFlags = theFlags | MS_beenDeleted | MS_noteditable;
+   SetInfo_flags(selMS, theFlags);
+   
+   /* Now update the text representation */
+   updateInfoText(selMS, indexObj);
+   DirtyContent(theHotFV);
+}
+
+Method void
+MailSceneAdmin_BackMessage(ObjectID self)
+{
+   /* the overriden CloseScene of the MSScene that is the superview of
+      the BackMessage button will take care of cleaning up the
+	  current MVB */
+
+   GoTo(iMCFolderScene);
+}
+
+Private void CleanUpHotMVB(ObjectID self)
+{
+   ObjectID thehotMVB;
+   
+   thehotMVB = HotMVB(self);
+   if (HasObject(thehotMVB) == false)
+      return;
+   
+   /* Aha!  Delete this sucker */
+   Destroy(thehotMVB);
+   SetHotMVB(self, nilObject);
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MSScene
+
+Method void
+MSScene_CloseScene(ObjectID self)
+{
+   /** This method gets called whenever the "Message" scene is
+       exited.  It is overriden to give us a chance to save any changes
+	   to the mail message into the correct MS object (which is accessed
+	   through the iMainAdmin administrator). **/
+
+   ObjectID thehotMVB, thehotMS, thehotFV;
+   
+   thehotMVB = HotMVB(iMainAdmin);
+   thehotMS = HotMS(iMainAdmin);
+   thehotFV = HotFV(iMainAdmin);
+      
+   if (HasObject(thehotMS) == true)
+   {
+      if (HasObject(thehotMVB) == true)
+	  {
+	     Flags  theMSflags;
+		 
+		 theMSflags = Info_flags(thehotMS);
+		 if (!((theMSflags & MS_noteditable) ||
+		       (theMSflags & MS_beenSent) ||
+			   (theMSflags & MS_wasReceived)) )
+	       extractMVB(thehotMS, thehotMVB);
+	  }
+   }
+   
+   CleanUpHotMVB(iMainAdmin);  /** to delete it if it exists **/
+   DirtyContent(thehotFV);
+   
+   /* And of course.... */
+   InheritedCloseScene(self);
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS SyncScene
+
+Method void
+SyncScene_CloseScene(ObjectID self)
+{
+   /** This method gets called whenever the "Update" scene is
+       exited.  It is overriden to give us a chance to save any changes **/
+   
+   /* And of course.... */
+   InheritedCloseScene(self);
+}
+
+#undef CURRENTCLASS  /* this goes at the end of the file */
+@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

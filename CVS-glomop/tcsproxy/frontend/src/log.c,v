@@ -1,0 +1,328 @@
+head	1.11;
+access;
+symbols
+	Yatin-final:1.11
+	Yatin:1.11.0.2
+	pre-yatin-merge:1.11
+	transend-beta2:1.7
+	fox-dev:1.7
+	frontend-ng:1.6
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.3
+	merged_preintegrate:1.2
+	heisenbug:1.2
+	PRE_INTEGRATION:1.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.11
+date	97.10.28.00.27.55;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.10.25.16.30.34;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.10.25.00.38.36;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.08.27.02.18.20;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.24.18.50.06;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.04.17.20.54.58;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.04.17.01.22.07;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.09.01.31.27;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.03.04.04.31.24;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.12.02.16.54;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.25.19;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.25.19;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.11
+log
+@some log fixen
+@
+text
+@/*
+ *  log.c
+ *  Error logging and debugging
+ */
+
+
+#include "debug.h"
+#include <stdarg.h>
+#include <stdio.h>
+
+static int debug_mask = DBG_ALL;
+
+void set_debug_mask(mask)
+     int mask;
+{}
+  
+#ifdef LOGGING
+
+#define LOG_CHANGE  (60*60*12)  /* seconds between logfile changes */
+
+static char logfilename[255];
+static char logfilegeneration = 0;
+static time_t log_started = 0;
+static FILE *logfile = NULL;
+
+char *
+init_logging(void)
+{
+  pid_t p = getpid();
+
+  sprintf(logfilename, "frontend.log.%lu.%d", (UINT32)p, logfilegeneration);
+  log_started = time(NULL);
+  
+  if ((logfile = fopen(logfilename, "w")) == NULL)
+    return NULL;
+  else {
+    /*    setbuf(logfile, NULL); */
+    logfilegeneration++;
+    MON_SEND_2(MON_LOGGING,"Next logfile is %s\n", logfilename);
+    return logfilename;
+  }
+}
+    
+void
+gm_log(char *msg)
+{
+  if (logfile) {
+    fprintf(logfile, "%s", msg);
+    if (msg[strlen(msg)-1] != '\n')
+      fprintf(logfile, "\n");
+  }
+  fflush(logfile);
+  if (time(NULL) - log_started >= LOG_CHANGE) {
+   if (fclose(logfile) == 0)
+      init_logging();           /* reopen with new generation number */
+  }
+}
+
+void
+log_close(void)
+{
+  if (logfile)
+    fclose(logfile);
+}
+
+#endif /* LOGGING */
+
+void _proxy_errlog(const char *file,const int line,char *str,...)
+{
+  va_list ap;
+  va_start(ap,str);
+  fprintf(stderr, "%s(%d): ", file, line);
+  vfprintf(stderr, str, ap);
+  fprintf(stderr, "\n");
+  va_end(ap);
+}
+
+void _proxy_debug(const char *file, const int line, int what, char *str, ...)
+{
+  va_list ap;
+  va_start(ap,str);
+  if (what & debug_mask) {
+    fprintf(stderr, "Dbg %s(%d): ", file, line);
+    vfprintf(stderr, str, ap);
+    fprintf(stderr, "\n");
+  }
+  va_end(ap);
+}
+      
+@
+
+
+1.10
+log
+@Logs need to be flushed all the time
+@
+text
+@d48 1
+a48 1
+    fprintf(logfile, msg);
+@
+
+
+1.9
+log
+@Logging now works!  yaaay.
+@
+text
+@d52 1
+@
+
+
+1.8
+log
+@logging fixed fix.
+@
+text
+@d17 1
+a17 1
+#ifdef INST
+d65 1
+a65 1
+#endif /* INST */
+@
+
+
+1.7
+log
+@debugging/monitoring function interface in frontend cleaned up.  change to xs/Makefile.PL.in to avoid spurious double initialization of stuff in libdist.a when clib.so was dynamically loaded.
+@
+text
+@d53 1
+a53 1
+    if (fclose(logfile) == 0)
+@
+
+
+1.6
+log
+@More changes..
+@
+text
+@d6 1
+d11 8
+a20 1
+static int debug_mask = DBG_ALL;
+a25 4
+void set_debug_mask(mask)
+     int mask;
+{}
+  
+d39 1
+a39 1
+    MON_LOG_MSG_2("Next logfile is %s\n", logfilename);
+d45 1
+a45 1
+gm_log(const char *fmt, ...)
+a46 3
+  va_list ap;
+  va_start(ap, fmt);
+
+d48 2
+a49 2
+    vfprintf(logfile, fmt, ap);
+    if (fmt[strlen(fmt)-1] != '\n')
+a51 1
+  va_end(ap);
+d64 2
+@
+
+
+1.5
+log
+@fixed byte-count bug in logging code
+@
+text
+@d28 1
+a34 1
+    log_started = time(NULL);
+@
+
+
+1.4
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d32 1
+@
+
+
+1.3
+log
+@got Makefile dependencies in order
+@
+text
+@d10 2
+d13 4
+d22 41
+@
+
+
+1.2
+log
+@End to end path works via dispatch.c, some error reporting still broken and some things still hardcoded that shouldn't be
+@
+text
+@d6 1
+a6 1
+#include <debug.h>
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a38 5
+void proxy_shutdown(void)
+{
+  fprintf(stderr,"Shutting down...\n");
+  exit(1);
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

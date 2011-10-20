@@ -1,0 +1,312 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	V1_1_2:1.1.1.1
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#
+#  This file contains the parser action callbacks to be used during HTML
+#  parsing and munging.  See the man page for html_parser(1) for details on how
+#  these are called.
+#  $Id: parser_actions.pl,v 1.7 1996/09/30 04:31:58 fox Exp $
+
+package html;
+use strict 'vars';
+
+#
+#  Setup: create a new parser object and establish pointers to callbacks
+#
+
+sub setup_parser {
+    my $html_text = shift;
+    my $url = shift;
+
+    # create parser.
+    my $prs = new html_parser($html_text,
+                              \&html::do_content,
+                              \&html::tag_begin_default,
+                              \&html::tag_end_default);
+
+    # add some variables of our own that aren't used by the parser internals.
+    $prs->{"url"} = $url;
+    # output toggle: used by tag_begin_omit/tag_end_omit
+
+    $prs->{"Squelch"} = 0;                  
+
+    # nonzero if currently inside an <A> construct; used by munge_img_tag,
+    # begin_anchor, end_anchor to prevent generating nested anchors.
+
+    $prs->{"InAnchor"} = 0;
+
+    # some booleans that tell us how well-formed the page is.  This information
+    # is used to determine where to insert the "link to prefs page" string.
+
+    $prs->{"HTML_has_html"} =
+        $prs->{"HTML_has_endtitle"} =
+            $prs->{"HTML_has_body"} = 0;
+
+    # where we accumulate the "new" HTML (i.e. what we'll send to client).
+
+    $prs->{"new_html"} = '';
+
+    # callbacks for specific tags
+
+    $prs->tag_begin("A", \&html::begin_anchor);
+    $prs->tag_end("A", \&html::end_anchor);
+
+    $prs->tag_begin("IMG", \&html::munge_img_tag);
+
+    $prs->tag_begin("BODY", \&html::begin_body);
+
+    # tags that we strip.
+    # only do these (aggressive) optimizations if user has explicitly unchecked
+    # the "more compatible HTML" box, because malformed pages may not have the
+    # right behavior.
+
+    my $do_nothing = sub {};
+    for (qw(script map area frameset applet param app frame)) {
+        $prs->tag_begin($_, $do_nothing);
+        $prs->tag_end($_, $do_nothing);
+    }
+
+    # TEMPORARY: break pages at H2's
+
+    $prs->tag_begin("H2", \&html::break_at_h)
+	if $html::Prefs{'s'} eq 'on';
+
+    $prs->tag_begin("END", \&html::done);
+
+    return $prs;
+}
+
+#===========================================================================
+#   here are the actual action routines....
+#===========================================================================
+
+sub break_at_h {
+    my($prs,$elt,$tagtext,$attribs_ref) = @@_;
+
+    # don't break at the very first H1, since it's likely to be very near the
+    # top of the page.
+
+    if (defined $prs->{"seen"}) {
+        $prs->{"seen"}++;
+        &main::debug('seg', "Breaking page after ..." .
+                     substr($prs->{"new_html"}, -10));
+        # this is NOT the first one that's been seen. Break page here.
+        $prs->html_new_page($prs->{"new_html"});
+        $prs->{"broke"} = 1;
+        $prs->{"new_html"} = $tagtext;
+    } else {
+        $prs->{"seen"} = 1;
+        $prs->{"new_html"} .= $tagtext;
+    }
+}
+
+#
+#  Action routine called when HTML parsing is done.  If we have done any
+#  segmenting of this page, then the first segment will already be on its way
+#  to the client, and we should just save all the content collected since the
+#  last segment boundary in a temporary segment file.  if we have NOT done any
+#  segmenting of this page, then we should send all content (ie the entire
+#  page) to the client.
+#
+
+sub done {
+    my ($prs) = shift;
+    if (defined $prs->{"broke"}) {
+        $prs->html_new_page($prs->{"new_html"}, 1);
+    } else {
+        $prs->send_html($prs->{"new_html"});
+    }
+}
+
+sub do_content {
+    my($prs,$text) = @@_;
+    $prs->{"new_html"} .= $text unless $prs->{"Squelch"};
+}
+
+sub warning {
+    my ($prs,$warn) = @@_;
+    &main::debug('parse', $warn);
+}
+
+sub begin_anchor {
+    my ($prs,$elt, $tagtext,$attribs_ref) = @@_;
+    # indicate we are inside an anchor, to prevent Pythia from inserting a
+    # refinement link as a nested anchor.  For convenience in case other
+    # callbacks care about the URL of the anchor we're in, set teh InAnchor
+    # variable to be the FULLY QUALIFIED URL of this link.  it's a bit tricky to
+    # do this...
+    my $abs_base = (new URI::URL $prs->{"url"})->abs;
+    my $anchor_url = new URI::URL $attribs_ref->{"href"},$abs_base;
+    $prs->{"InAnchor"} = $anchor_url->abs;
+    $prs->{"new_html"} .= $tagtext;
+}
+
+sub end_anchor {
+    my ($prs,$elt, $tagtext,$attribs_ref,$explicit) = @@_;
+    # note: $explicit indicates that the tag was explicitly closed rather than
+    # minimized. The parser provides this info but currently my implementation
+    # doesn't pass the info to the callback proc.  We assume all tags are
+    # closed explicitly, which should result in providing more correct html.
+    $prs->{"InAnchor"} = 0;
+    $prs->{"new_html"} .= "</$elt>" if $explicit;
+    for (@@{$prs->{"AnchorStack"}}) {
+        $prs->{"new_html"} .= " $_";
+    }
+    @@{$prs->{"AnchorStack"}} = ();
+}
+
+# Insert "Pythia promo" tag at beginning of body for each page.
+sub begin_body {
+    my ($prs,$elt, $tagtext,$attribs_ref) = @@_;
+    &html::remove_attribs($tagtext,
+                                qw(background bgcolor text link vlink alink));
+    $prs->{"new_html"} .= $tagtext;
+    $prs->{"HTML_has_body"} = 1;
+}
+
+# Insert refinement link to left of image tag.  Possibly remove some image tag
+# attributes, depending on user's pref profile.
+sub munge_img_tag {
+    my ($prs,$elt, $tagtext,$attribs_ref) = @@_;
+    my %attribs = %{$attribs_ref};
+
+    # if the user prefers "optimized layout", remove any "width=" or "height="
+    # attributes from the IMG tag.  (We should really be *replacing* them with
+    # correct values, but at this time we don't know what the values are.)
+
+    unless ($html::Prefs{'f'} eq 'on') {
+        &html::remove_attribs($tagtext, "width", "height");
+    }
+
+    # output the refinement link, UNLESS this appears to be a cgi-bin kind of
+    # thingy or it's an imagemap.
+    if  (($tagtext !~ m!/cgi(-bin)?/! )
+         && !defined($attribs{"ismap"})) {
+        my $i;
+        my $anchor = '';
+        my $src = &ismap_icon::make_refinable($attribs{"src"});
+        my $refineicon = &ismap_icon::refine_icon_url;
+        #
+        #  If we're not inside an anchor, use the image itself as the "full
+        # refine" link, and place 4 links after it for quadrants.  If we are
+        # inside an anchor, place 5 links: 4 for quadrants and 1 for full.
+        #
+        $anchor .= "<a href=\"$src\"><img ismap src=\"$refineicon\"></a>";
+        $i = 4;
+        # output the original IMG tag followed by the new one.
+        if ($prs->{"InAnchor"}) {
+            # we're inside a <a>...</a> construct.  They don't nest, so push
+            # this refinement tag onto the list of things to output *after* we
+            # have closed the </a>.
+            push(@@{$prs->{"AnchorStack"}}, $anchor);
+            $prs->{"new_html"} .= $tagtext;
+        } else {
+            # not inside an anchor: just add the refine tag
+            # $prs->{"new_html"} .= $tagtext . " " . $anchor;
+            # not inside an anchor, and image is not an imagemap:
+            # make the image itself *be* the "refine" button
+            $prs->{"new_html"} .= "$tagtext$anchor";
+        }
+    } elsif (defined ($attribs{"ismap"}) && $html::Prefs{'m'} eq 'i') {
+        # Omit the imagemap altogether.  Pass ALT text if possible.
+        $prs->{"new_html"} .= "[".$attribs{"alt"}."]"
+            if defined $attribs{"alt"};
+    } elsif (defined ($attribs{"ismap"})
+             && $html::Prefs{'m'} eq 's') {
+        # Scale server-side imagemap image.  (Prepare for coordinate
+        # xformation)
+        # Note that we had better be inside an anchor construct, where the target
+        # of the anchor is the program that will receive the click requests
+        # when the user clicks on the imagemap.
+        $prs->{"new_html"} .= &do_imgmap($prs->{"InAnchor"},$tagtext,%attribs);
+    } else {
+        # looks like a cgi-bin: just output the original tag.
+        # BUG::should still do conditional removal of attributes here.
+        $prs->{"new_html"} .= $tagtext;
+    }
+}
+
+#
+#  Given an imgmap tag and pre-parsed list of attribs, generate the new tag
+#  that should refer to the imagemap.  The new URL is generated by calling the
+#  "mapify" imgmap support function; any existing HEIGHT and WIDTH tags are
+#  removed (otherwise they would defeat distillation).
+#
+sub do_imgmap {
+    my ($anchor,$tagtext,%attribs) = @@_;
+    $attribs{"src"} = &imgmap::mapify($attribs{"src"},$anchor);
+    my @@res = ();
+    my ($key,$val);
+    while (($key,$val) = each %attribs) {
+        push(@@res, qq!$key="$val"!)
+            unless ($key =~ /width/i || $key =~ /height/i
+                    || $key =~ /usemap/i);
+    }
+    return '<IMG ' . join(' ',@@res) . '>';
+}
+
+sub tag_begin_default {
+    my($prs,$elt,$tagtext,$attribs_ref) = @@_;
+    if ($elt =~ /^html$/i) {
+        $prs->{"HTML_has_html"} = 1;
+    }
+    $prs->{"new_html"} .= $tagtext unless ($prs->{"Squelch"} > 0);
+}
+sub tag_end_default {
+    my($prs,$elt,$tagtext,$attribs_ref,$explicit) = @@_;
+    
+    if ($elt =~ /title$/) {
+        $prs->{"HTML_has_endtitle"} = 1;
+    }
+    $prs->{"new_html"} .= "</$elt>" if (($prs->{"Squelch"} == 0) && $explicit);
+}
+
+# begin and end callbacks for tags between which content is thrown away.  Just
+# keep a count of how many nested ignore's we are in.  When the count is
+# nonzero, we should ignore stuff; when zero, we should output stuff.
+
+sub tag_begin_omit { shift->{"Squelch"}++ }
+sub tag_end_omit { shift->{"Squelch"}-- }
+
+
+1;
+@
+
+
+1.1.1.1
+log
+@New, distribution version of Pythia with a real directory structure and
+real documentation
+@
+text
+@@

@@ -1,0 +1,585 @@
+head	1.2;
+access;
+symbols
+	Yatin-final:1.2
+	Yatin:1.2.0.2
+	pre-yatin-merge:1.2;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.11.06.02.10.32;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.05.22.00.00;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Added compression to text-to-doc conversion
+@
+text
+@/*
+ *  Turn plain text into Doc databases
+ *
+ *  Based on makedoc7.cpp (MakeDoc 0.7a, by Harold Bamford)
+ *
+ *  Ian Goldberg
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <netinet/in.h>
+#include "../include/ARGS.h" /* Definition of your argument types.. */
+#include "../include/md5.h"
+#include "distinterface.h"
+
+#define Message(x) MonitorClientSend(mon,"Distiller Errors",(x),"Log")
+
+MonitorClientID mon;
+
+DistillerStatus
+DistillerInit(C_DistillerType dType, int argc, const char * const *argv)
+{
+    mon = DistillerGetMonitorClientID();
+
+    Message("text2doc distiller started\n");
+
+    return distOk;
+}
+
+typedef unsigned char byte;
+typedef unsigned long DWORD;
+typedef unsigned short WORD;
+#define DISP_BITS 11
+#define COUNT_BITS 3
+
+// all numbers in these structs are big-endian, MAC format
+struct tDocHeader {
+	char sName[32];		// 32 bytes
+	DWORD dwFlagVersion;	// 36
+	DWORD dwTime1;		// 40
+	DWORD dwTime2;		// 44
+	DWORD dwTime3;		// 48
+	DWORD dwLastSync;	// 52
+	DWORD ofsSort;		// 56
+	DWORD ofsCatagories;	// 60
+	DWORD dwCreator;	// 64
+	DWORD dwType;		// 68
+	DWORD dwUnknown2;	// 72
+	DWORD dwUnknown3;	// 76
+	WORD  wNumRecs;		// 78
+};
+
+// Some compilers pad structures out to DWORD boundaries so using sizeof()
+// doesn't give the intended result.
+#define DOCHEADSZ 78
+
+struct tDocRecord0 {
+	WORD wVersion;		// 1=plain text, 2=compressed
+	WORD wSpare;
+	DWORD dwStoryLen;	// in bytes, when decompressed
+	WORD wNumRecs; 		// text records only; equals tDocHeader.wNumRecs-1
+	WORD wRecSize;		// usually 0x1000
+	DWORD dwSpare2;
+};
+
+// replacement for strstr() which deals with 0's in the data
+static byte* memfind(byte* t, int t_len, byte* m, int m_len)
+{
+	int i;
+
+	for (i = t_len - m_len + 1 ; i>0; i--, t++)
+		if (t[0]==m[0] && memcmp(t,m,m_len)==0)
+			return t;
+	return 0;
+}
+
+//
+// Issue()
+//
+// action: handle the details of writing a single
+//		character to the compressed stream
+//
+static void Issue(byte *buf, unsigned int *len, byte src, int *bSpace)
+{
+	int iDest = *len;
+	byte* dest = buf;
+
+	// if there is an outstanding space char, see if
+	// we can squeeze it in with an ASCII char
+	if (*bSpace)
+	{
+		if (src>=0x40 && src<=0x7F)
+			dest[iDest++] = src ^ 0x80;
+		else
+		{
+			// couldn't squeeze it in, so issue the space char by itself
+			// most chars go out simple, except the range 1...8,0x80...0xFF
+			dest[iDest++] = ' ';
+			if (src<0x80 && (src==0 || src>8) )
+				dest[iDest++] = src;
+			else
+				dest[iDest++] = 1, dest[iDest++] = src;
+		}
+		// knock down the space flag
+		*bSpace = 0;
+	}
+	else
+	{
+		// check for a space char
+		if (src==' ')
+			*bSpace = 1;
+		else
+		{
+			if (src<0x80 && (src==0 || src>8))
+				dest[iDest++] = src;
+			else
+				dest[iDest++] = 1, dest[iDest++] = src;
+
+		}
+	}
+	*len = iDest;
+}
+
+//
+// Compress
+//
+// params: 	none
+//
+// action:	takes the given buffer,
+//					and compresses
+//					the original data down into a second buffer
+//
+// comment:	This version make heavy use of walking pointers.
+//
+static void compressbuf(byte *buf, unsigned int len, byte **outbuf,
+    unsigned int *outlen)
+{
+	int i,k;
+	int bSpace = 0;
+
+	// run through the input buffer
+	byte* pBuffer;		// points to the input buffer
+	byte* pHit;		// points to a walking test hit; works upwards on successive matches
+	byte* pPrevHit;		// previous value of pHit
+	byte* pTestHead;	// current test string
+	byte* pTestTail;	// current walking pointer; one past the current test buffer
+	byte* pEnd;		// 1 past the end of the input buffer
+
+	pHit = pPrevHit = pTestHead = pBuffer = buf;
+	pTestTail = pTestHead+1;
+	pEnd = buf + len;
+
+	// make a dest buffer and reassign the local buffer
+	buf = DistillerMalloc(6000);
+	len = 0;
+
+	// loop, absorbing one more char from the input buffer on each pass
+	for (; pTestHead != pEnd; pTestTail++)
+	{
+		// establish where the scan can begin
+		if (pTestHead - pPrevHit > ((1<<DISP_BITS)-1))
+			pPrevHit = pTestHead - ((1<<DISP_BITS)-1);
+
+		// scan in the previous data for a match
+		pHit = memfind(pPrevHit, pTestTail - pPrevHit, pTestHead, pTestTail - pTestHead);
+
+		// on a mismatch or end of buffer, issued codes
+		if (pHit==0
+			|| pHit==pTestHead
+			|| pTestTail-pTestHead>(1<<COUNT_BITS)+2
+			|| pTestTail==pEnd)
+		{
+			// issued the codes
+			// first, check for short runs
+			if (pTestTail-pTestHead < 4)
+			{
+				Issue(buf, &len, pTestHead[0], &bSpace);
+				pTestHead++;
+			}
+			// for longer runs, issue a run-code
+			else
+			{
+				unsigned int dist, compound;
+
+				// issue space char if required
+				if (bSpace) {
+				    buf[len++] = ' ';
+				    bSpace = 0;
+				}
+
+				dist = pTestHead - pPrevHit;
+				compound = (dist << COUNT_BITS) + pTestTail-pTestHead - 4;
+
+				assert (dist<(1<<DISP_BITS));
+				assert (pTestTail-pTestHead-4<=7);
+
+				buf[len++] = 0x80 + (compound>>8);
+				buf[len++] = compound & 0xFF;
+
+				// and start again
+				pTestHead = pTestTail-1;
+			}
+			// start the search again
+			pPrevHit = pBuffer;
+		}
+		// got a match
+		else
+		{
+			pPrevHit = pHit;
+		}
+		// when we get to the end of the buffer, don't inc past the end
+		// this forces the residue chars out one at a time
+		if (pTestTail==pEnd) pTestTail--;
+	}
+
+	// clean up any dangling spaces
+	if (bSpace) buf[len++] = ' ';
+
+
+	// final scan to merge consecutive high chars together
+	for (i=k=0; i<len; i++,k++)
+	{
+		buf[k] = buf[i];
+		// skip the run-length codes
+		if (buf[k]>=0x80 && buf[k]<0xC0)
+			buf[++k] = buf[++i];
+		// if we hit a high char marker, look ahead for another
+		else if (buf[k]==1)
+		{
+			buf[k+1] = buf[i+1];
+			while (i+2<len && buf[i+2]==1 && buf[k]<8)
+			{
+				buf[k]++;
+				buf[k+buf[k]] = buf[i+3];
+				i+=2;
+			}
+			k += buf[k]; i++;
+		}
+	}
+
+	len = k;
+	*outbuf = buf;
+	*outlen = len;
+}
+
+/* Memory buffer routines */
+typedef struct {
+    byte *buf;
+    unsigned long pos;
+    unsigned long len;
+} MemBuf;
+
+static int bufread(MemBuf *b, byte *data, int amt)
+{
+    if (amt > b->len-b->pos) amt = b->len-b->pos;
+    memmove(data, b->buf+b->pos, amt);
+    b->pos += amt;
+    return amt;
+}
+
+static int bufwrite(MemBuf *b, byte *data, int amt)
+{
+    while (amt > b->len-b->pos) {
+	b->len = 2*(b->len+1);
+	b->buf = DistillerRealloc(b->buf, b->len);
+	assert(b->buf);
+    }
+    memmove(b->buf+b->pos, data, amt);
+    b->pos += amt;
+    return amt;
+}
+
+static void out_long(unsigned long d, MemBuf* b)
+{
+    unsigned long m = htonl(d);
+    bufwrite(b,(byte *)&m,4);
+}
+
+static void makedoc(byte *textptr, unsigned int textlen,
+    char *title, byte **docptr, unsigned int *doclen)
+{
+    struct tDocHeader head1;
+    struct tDocRecord0 rec0;
+    int recNum;
+    byte buf[6000];
+    MemBuf inbuf, outbuf;
+
+    DWORD storySize = textlen;
+
+    DWORD	x;
+    long	recSize = 4096;
+    DWORD		z,numRecs;
+    unsigned long index;
+    time_t now;
+    unsigned long pilot_now;
+
+    /* Set up the bufs */
+    inbuf.buf = textptr;
+    inbuf.pos = 0;
+    inbuf.len = textlen;
+
+    outbuf.buf = DistillerMalloc(8000);
+    outbuf.pos = 0;
+    outbuf.len = 8000;
+
+    /* Fill in the pdb header */
+    sprintf(head1.sName, "%.31s", title);
+    head1.sName[31] = 0;
+    head1.dwFlagVersion = 0;
+    now = time(NULL);
+    pilot_now = now + 0x7C25B080;
+	/* 0x7C25B080 == Seconds between 19040101 and 19700101 */
+    head1.dwTime1 = htonl(pilot_now);
+    head1.dwTime2 = htonl(pilot_now);
+    head1.dwTime3 = 0;
+    head1.dwLastSync = 0;
+    head1.ofsSort = 0;
+    head1.ofsCatagories = 0;
+    strncpy((char *)&head1.dwCreator, "TEXt", 4);
+    strncpy((char *)&head1.dwType, "REAd", 4);
+    head1.dwUnknown2 = 0;
+    head1.dwUnknown3 = 0;
+
+    z = (int) (storySize/(long) recSize);
+    if (((long) z * recSize) < storySize)
+	    z ++;
+
+    numRecs = z;
+    z ++;
+
+    /* the number of records to follow */
+    head1.wNumRecs = htons(z);
+
+    bufwrite(&outbuf, (byte *)&head1, DOCHEADSZ);
+
+    /* the pattern for attributes=dirty + unique_id=0x6f8000 */
+    index = 0x406F8000;
+
+    x = 0x50L + (long) z * 8;
+
+    /* start writing the record offsets */
+    out_long(x,&outbuf);
+    out_long(index,&outbuf);
+    x += 0x0010L;
+
+    index++;
+    z--;
+    while(z--) {
+	/* more record offsets */
+	out_long(x,&outbuf);
+	/* the attributes + ID's */
+	out_long(index++,&outbuf);
+	x += 0x1000L;
+    }
+    bufwrite(&outbuf, (byte *)"\x00", 2);
+
+
+    rec0.wVersion = htons(2); /* 1 for uncompressed */
+    rec0.wSpare = 0;
+    rec0.dwStoryLen = htonl(storySize);
+    rec0.wNumRecs = htons(numRecs);
+    rec0.wRecSize = htons(recSize);
+    rec0.dwSpare2 = 0;
+
+    bufwrite(&outbuf, (byte *)&rec0, sizeof(rec0));
+
+    for(recNum = 0; recNum < numRecs; ++recNum) {
+	byte *cbuf;
+	unsigned int buflen, cbuflen;
+	unsigned long pos = outbuf.pos;
+	outbuf.pos = 0x56+8*recNum;
+	out_long(pos, &outbuf);
+	outbuf.pos = pos;
+
+	buflen = bufread(&inbuf,buf,recSize);
+	if (buflen==0) break;
+
+	compressbuf(buf, buflen, &cbuf, &cbuflen);
+	bufwrite(&outbuf, cbuf, cbuflen);
+	DistillerFree(cbuf);
+    }
+
+    /* Extract the result */
+    *docptr = outbuf.buf;
+    *doclen = outbuf.pos;
+}
+
+static void uuenc16(char *out, unsigned char *in)
+{
+    static const unsigned char uuarray[65] =
+	{ "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-" };
+    unsigned char c0,c1,c2,c3;
+    int i;
+
+    for (i=0;i<15;i+=3) {
+	c0 = in[i] >> 2;
+	c1 = ((in[i] & 0x03) << 4) | (in[i+1] >> 4);
+	c2 = ((in[i+1] & 0x0f) << 2) | (in[i+2] >> 6);
+	c3 = (in[i+2] & 0x3f);
+
+	*(out++) = uuarray[c0];
+	*(out++) = uuarray[c1];
+	*(out++) = uuarray[c2];
+	*(out++) = uuarray[c3];
+    }
+    c0 = in[15] >> 2;
+    c1 = (in[15] & 0x03) << 4;
+    *(out++) = uuarray[c0];
+    *(out++) = uuarray[c1];
+    *(out++) = '\0';
+}
+
+#define HEADERS \
+    "200 HTTP/1.0 OK\r\nContent-Type: application/x-palmosdb\r\n\r\n"
+
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+              DistillerInput *din, DistillerOutput *dout)
+{
+    byte *docptr;
+    char title[32];
+    unsigned int doclen;
+    MD5_CTX md5;
+
+    if ( (strcasecmp(MimeType(din), "text/html"))
+       && (strcasecmp(MimeType(din), "text/plain")) ) {
+	Message("Bad input: not text/html or text/plain\n");
+	return distBadInput;
+    }
+
+    /* Form the title out of the MD5 of the content */
+    MD5Init(&md5);
+    MD5Update(&md5, DataPtr(din), DataLength(din));
+    MD5Final(&md5);
+    strcpy(title, "Doc id ");
+    uuenc16(title+7, md5.digest);
+    makedoc(DataPtr(din), DataLength(din), title, &docptr, &doclen);
+
+    /* Finish up */
+    SetMimeType(dout, "application/x-palmosdb");
+    SetDataLength(dout, doclen);
+    SetData(dout, docptr);
+    DataNeedsFree(dout, gm_True);
+    SetMetadata(dout, HEADERS);
+    SetMetadataLength(dout, strlen(HEADERS));
+    MetadataNeedsFree(dout, gm_False);
+
+    return distOk;
+}
+@
+
+
+1.1
+log
+@Added text-to-doc conversion
+@
+text
+@d26 1
+a26 1
+    Message("text2doc distiller started");
+a77 1
+#if 0
+d84 1
+a84 2
+unsigned
+tBuf::Issue(byte src, int& bSpace)
+d86 1
+a86 1
+	int iDest = len;
+d91 1
+a91 1
+	if (bSpace)
+d106 1
+a106 1
+		bSpace = 0;
+d112 1
+a112 1
+			bSpace = 1;
+d122 1
+a122 2
+	len = iDest;
+	return iDest;
+d136 2
+a137 1
+unsigned tBuf::Compress()
+d139 1
+a139 1
+	int i,j;
+a152 2
+//printf("pointers %x %x",pTestTail, pEnd);
+//printf("\nstart compression buf len=%d",len);
+d155 2
+a156 2
+	buf = new byte[6000];
+	len = 0;		// used to walk through the output buffer
+a160 1
+//printf("\npointers pTestHead %x pTestTail %x pTestHead[]=%x %x",pTestHead, pTestTail, pTestHead[0], pTestHead[1]);
+a167 5
+		if (pHit==0)
+			printf("!! bug source %x%x%x, dest %x%x%x, %d bytes",	pPrevHit[0],
+				pPrevHit[1],pPrevHit[2],pTestHead[0],
+	pTestHead[1],	pTestHead[2],	pTestTail-pTestHead);
+
+d178 1
+a178 2
+//printf("\nissue a char %x",pTestHead[0]);
+				Issue(pTestHead[0], bSpace);
+d184 2
+d187 4
+a190 1
+				if (bSpace) buf[len++] = ' ', bSpace = 0;
+d192 2
+a193 2
+				unsigned int dist = pTestHead - pPrevHit;
+				unsigned int compound = (dist << COUNT_BITS) + pTestTail-pTestHead - 4;
+d195 2
+a196 2
+if (dist>=(1<<DISP_BITS)) printf("\n!! error dist overflow");
+if (pTestTail-pTestHead-4>7) printf("\n!! error dist overflow");
+d200 1
+a200 2
+//printf("\nissuing code for sequence len %d <%c%c%c>",pTestTail-pTestHead-1,pTestHead[0],pTestHead[1],pTestHead[2]);
+//printf("\n          <%x%x>",pOut[-2],pOut[-1]);
+a211 1
+//printf("pointers %x %x %x",pTestHead, pTestTail, pPrevHit);
+a221 1
+	int k;
+a241 2
+	// delete original buffer
+	delete[] pBuffer;
+d243 2
+a244 2
+
+	return k;
+a245 1
+#endif
+d359 1
+a359 1
+    rec0.wVersion = htons(1); /* later 2 */
+d369 2
+a370 1
+	int buflen;
+d379 3
+a381 5
+	/*
+	if (bCompress)
+		buf.Compress();
+	*/
+	bufwrite(&outbuf, buf, buflen);
+d411 1
+d428 1
+a428 1
+	Message("Bad input: not text/html or text/plain");
+@

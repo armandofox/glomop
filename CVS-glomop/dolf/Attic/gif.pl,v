@@ -1,0 +1,200 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.03.03.16.24;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.53;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.53;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#
+#  Decision function that determines whether gif distillation is needed, and
+#  supplies parameters for distiller.
+#  $Id: gif.pl,v 1.1 1996/11/27 21:34:53 fox Exp fox $
+#
+package gif;
+
+#
+#  Arguments to gifmunch should be:  d x y c p b
+#  where:
+#  d>0: shrink image to occupy about d bytes, but no smaller than x*y pixels
+#  d==0: scale image to exactly x*y pixels
+#  d<0: leave image original size (only do color remapping); x,y ignored
+#  c=num of colors (negative means grayscale, 0 means same as original)
+#  p=fixed quantization palette as "rrggbbrrggbb..." (empty string means
+#       quantize by histogramming colors of original image)
+#  b=background color as "#rrggbb" for transparent gifs (empty string or string
+#       not beginning with '#' means no transparent)
+
+sub decide_distill
+{
+    my($resp) = shift @@_;                # http response from request
+    my(%prefs) = %{shift @@_};               # user prefs
+    my(%client) = %{shift @@_};              # client characteristics
+
+    my($data) = $resp->content;                # content, may be null
+    my $params;
+    my $len = ($data ? length($data) : $resp->content_length);
+
+    # get current bandwidth/latency; either from recent notification, or from
+    # default profile for this client.
+
+    my ($bw, $lat) = &advice::estimate_bandwidth_latency(\%prefs,\%client);
+
+    # if there is a default client profile for this device, and the profile
+    # includes a palette, pass the palette to gifmunch.  otherwise, just pass
+    # 'x', which gifmunch interprets to mean that it should generate a palette
+    # by making a histogram of the original image colors.
+
+    my $palette = $client{'p'} || "x";
+
+    # immediate hack: if this doesn't look like a GIF, just return it.
+
+    &main::log("*** gif: not a GIF!"),return undef
+        unless $resp->content =~ /^GIF8/;
+
+    # we pick a target size for gifmunch by taking the minimum of:
+    #  - the size implied by the client's current bandwidth and user-specified
+    #           latency for getting an inline image
+    #  - the maximum size bound for the client (for buffering, etc.)
+
+    my $target_size = (($prefs{'i'} * $bw) >> 3) || 1e6;
+
+    if (defined $client{"i"}
+        && $target_size > $client{"i"}) {
+        $target_size = $client{"i"};
+    }
+    
+    my $maxX = $client{"x"};
+    my $maxY = $client{"y"};                 # viewable area for browser
+    #     my $maxGrays = $client{"c"};
+    my $maxGrays = 1 << $prefs{"b"};
+
+    # $maxGrays = -$maxGrays if $client{"g"};
+    $maxGrays = -$maxGrays if $prefs{"c"} ne 'c';
+
+    # determine x,y dimensions of original image
+
+    my $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+    my $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+    my ($nx,$ny);
+
+    if ($len > $target_size) {
+        # larger than allowed byte size
+        my $minsize = 50;
+        my ($xminsize,$yminsize) = ($minsize,$minsize);
+        if ($ox > $oy) {
+            $xminsize = int($xminsize * $ox/$oy);
+        } else {
+            $yminsize = int($yminsize * $oy/$ox);
+        }
+        &main::debug('gif', $resp->request->url . ": min $xminsize,$yminsize");
+        $params = "$target_size $xminsize $yminsize $maxGrays $palette nopad";
+    } elsif ($oy > $maxY) {
+        # image is within byte size bounds, but is
+        # too tall: scale down (should still be below threshold byte size)
+        $ny = $maxY;
+        $nx = int($ox * $ny/$oy);
+        &main::debug('gif', $resp->request->url . ": scaling x,y to $nx,$ny");
+        $params = "0 $nx $ny $maxGrays $palette nopad";
+    } elsif ($ox > $maxX) {
+        # image is within byte size bounds, but is
+        # too wide: scale down (should still be below threshold byte size)
+        $nx = $maxX;
+        $ny = int($oy * $nx/$ox);
+        &main::debug('gif', $resp->request->url . ": scaling x,y to $nx,$ny");
+        $params = "0 $nx $ny $maxGrays $palette nopad";
+    } elsif ($maxGrays < 0) {
+        # keep size, but grayify
+        &main::debug('gif', $resp->request->url . ": grayifying only");
+        $params = "-1 $ox $oy $maxGrays $palette nopad";
+    }
+    &main::debug('gif', "Returning '$params'") if defined $params;
+    return $params;
+}
+
+sub refine {
+    my ($resp) = shift @@_;
+    my %prefs = %{shift @@_};
+    my %client = %{shift @@_};
+    my $reflevel = shift @@_;
+    my $data = $resp->content;
+    
+    my($x0,$y0,$x1,$y1);
+
+    # determine GIF boundaries...yucky
+    my $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+    my $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+
+    $reflevel = 0 if ($reflevel < 0 || $reflevel > 3);
+
+    # quadrants: 0=NW, 1=NE, 2=SW, 3=SE
+    $x0 = ($ox >> 1) * ($reflevel & 1);
+    $y0 = ($oy >> 1) * ($reflevel >> 1);
+    $x1 = $x0+($ox>>1);
+    $y1 = $y0+($oy>>1);
+
+    # HACK: we are clandestinely importing some symbols here.  The refinement
+    # operation should be separated out into another piece, as distillation
+    # currently is.
+
+    my $colors;
+    if ($prefs{'q'} =~ /b/) {
+        # refinement means "best for this device"
+        $colors = $client{"c"};
+        $colors = -$colors if $client{"g"};
+    } else {
+        $colors = '';
+    }
+    my $cmd = "%b/gifblock.%a $x0 $y0 $x1 $y1 $colors < %i";
+    &main::debug('gif', "Returning $cmd");
+    return $cmd;
+}
+
+1;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+#  $Id: gif.pl,v 1.7 1996/11/17 01:50:19 fox Exp $
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

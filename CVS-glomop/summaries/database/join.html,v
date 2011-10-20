@@ -1,0 +1,193 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.02.13.18.27.00;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.13.17.52.05;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Tweaked.
+@
+text
+@<html>
+<title>
+Join Processing
+</title>
+<body>
+<a href=index.html><i>Back to index</i></a>
+<h1>
+Join Processing in Database Systems with Large Main Memories
+</h1>
+<strong>
+Leonard D. Shapiro
+</strong>
+
+<P>
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Four join algorithms are presented and analyzed (sort-merge, simple
+hashing, GRACE hashing, hybrid hashing), and hybrid hashing is shown to
+dominate the others in performance in most situations, assuming a large
+enough memory (order of square root of smaller relation).
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> Four algorithms for &quot;equijoin&quot; are discussed:
+	  sort-merge (traditional), simple hashing, GRACE algorithm, and
+	  hybrid.  Hybrid is shown to dominate all others, even if virtual
+	  memory is used.  Assumptions: block size is full disk track, two
+	  relations used are R and S, memory is M, S is larger relation,
+	  and sizeof of M &gt;= sqrt(sizeof S).
+
+     <li> <b>sort-merge</b>:
+	  <ul>
+	       <li> Scan S and produce output runs (using heap) - each run
+		    will be 2M blocks long.  Do same for R.  Assume S is
+		    larger relation - there will be at most sqrt(sizeof S)
+		    runs of R and S total after this phase.
+
+	       <li> Allocate one block of memory for each run of R and S,
+		    merge runs of R and S concurrently, outputting tuples
+		    of (R,S) if the pair matches.
+
+	       <li> If M &lt; sqrt(sizeof S), then more than two merge
+		    phases will be needed, as won't be able to allocate one
+		    block for each run of R and S.
+	  </ul>
+
+     <li> <b>simple hashing</b>:
+	  <ul>
+	       <li> Choose a hash function h, and pick a set of hash values
+		    such that sizeof(M) tuples will hash into that set.
+		    Scan the smaller relation R, and if a tuple hashes into
+		    this set, insert the tuple into a hash table in memory,
+		    otherwise pass it over and write to disk.
+	       <li> Scan the larger relation S, and if the tuple hashes
+		    into the range, check the hash table of R in memory for
+		    a match, and if found, output, else pass over tuple and
+		    write it to disk.
+	       <li> Repeat these steps, using tuples that were passed over
+		    in the previous steps, until no passed over tuples are
+		    left.
+	  </ul>
+
+     <li> <b>GRACE</b>:
+	  <ul>
+	       <li> Choose hash function h and a partition of its hash
+		    values such that R is partitioned into sqrt(sizeof(R))
+		    subsets of approximately equal size.  Allocate
+		    sqrt(sizeof(R)) blocks of memory, each to be an output
+		    buffer for a subset of the partition of R.
+	       <li> Scan R; using h, hash each tuple and place it in the
+		    appropriate output buffer.  If output buffer fills,
+		    write it to disk.  Flush all buffers to disk when R is
+		    completely scanned.
+	       <li> Do similar scan for S.
+	       <li> For each set Ri in the partitions (1 &lt;=i&lt;=
+		    sqrt(R)), and the corresponding Si,
+		    <ul>
+			 <li> read Ri into memory and build hash table for
+			      it. (Will fit in memory as have assumed at
+			      least sqrt(R) memory.)
+			 <li> hash each tuple of Si, probe for match in
+			      hash table.  If match, output, otherwise
+			      discard the tuple.
+		    </ul>
+	       <li> Works because partitions both relations on the join
+		    key, so if a tuple in R and a tuple in S match, they
+		    are both sent to the same partition by the hash function.
+	  </ul>
+
+     <li> <b>hybrid</b>:
+	  <ul>
+	       <li> Like GRACE, except we set aside some memory and build
+		    the hash table for the 1st partition while the
+		    relations are being scanned.  This saves that partition
+		    from being written to and read from disk and extra time.
+	  </ul>
+
+     <li> Hybrid dominates all others, as shown by an analytic proof of the
+	  algorithms' costs, again assuming sizeof(M) at least sqrt(S) for
+	  sort-merge or sqrt(R) for hash-based algorithms, and assuming
+	  that the relations are large enough. Numerical simulations
+	  confirm the analytic results.
+
+     <li> We assumed that partitioning could be done perfectly, but this
+	  isn't necessarily so.  If a partition overflows, the solution is
+	  to repartition and write some passed over tuples to disk for a
+	  later pass.
+
+     <li> M can be virtual memory and not physical memory.  Need a
+	  &quot;hot-set&quot; for each algorithm - a set of pages that are
+	  locked down in physical memory - essentially the minimum working
+	  set size that the algorithm needs to not thrash.  Conclude that
+	  if page-aging (technique that replaces LRU page replacement
+	  policy, instead throwing out MRU) is possible, the sort-merge is
+	  unaffected by virtual memory, but performance of hybrid degrades
+	  to performance of GRACE.  GRACE dominates sort-merge in virtual
+	  memory, so hybrid still dominates sort-merge as well.
+
+     <li> Bit-filters can be used to speed up join (see Graefe paper).
+	  Also, semi-join can be used:  construct projection of R on
+	  joining attribute - p(R).   Join p(R) to S - result is semijoin.
+	  Then join this semijoin to R, and the result is equal to the join
+	  of R and S.
+</ul>
+
+<h2>Relevance</h2>
+
+Convincingly argues for the use of hash-based join processing in database
+systems.  Considering that physical memory is even more in abundance than
+when this paper was written, the arguments have probably gotten stronger
+over time, although I wonder how much data set size (measured in number of
+tuples) has grown relative to physical memory size growth.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> The simulations performed in the paper were simulations of the
+	  analytical formulae derived for the algorithms' performance, and
+	  not simulations or measurements of implementations of the
+	  algorithms.  This means any error or bogus assumption in the
+	  derivation of their analytic results would make the simulations
+	  bogus.  I'd prefer to see measurements of implementations.
+
+     <li> Although I believe that the assumption that sizeof(M) &gt;=
+	  sqrt(R) is reasonable, I'd like to see some data from &quot;real
+	  world&quot database installations to find out just how often
+	  this is really the case.
+</ul>
+
+<hr>
+<a href=index.html><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@Added Join Processing paper.
+@
+text
+@d14 3
+@

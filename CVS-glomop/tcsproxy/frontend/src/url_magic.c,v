@@ -1,0 +1,584 @@
+head	1.10;
+access;
+symbols
+	Yatin-final:1.10
+	Yatin:1.10.0.2
+	pre-yatin-merge:1.10
+	transend-beta2:1.9
+	fox-dev:1.9.8.1
+	frontend-ng:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	97.08.30.21.34.29;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.04.09.01.31.37;	author fox;	state Exp;
+branches
+	1.9.4.1
+	1.9.8.1;
+next	1.8;
+
+1.8
+date	97.03.31.20.34.36;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.25.22.55.35;	author aspolito;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.25.20.38.35;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.25.20.32.51;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.25.20.14.59;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.25.09.50.37;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.13.03.34.48;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.13.02.44.47;	author aspolito;	state Exp;
+branches;
+next	;
+
+1.9.4.1
+date	97.05.08.23.29.09;	author iang;	state Exp;
+branches;
+next	;
+
+1.9.8.1
+date	97.08.11.04.13.00;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  url_magic.c: magic urls that have arguments as part of the url
+ *  a magic url looks like http://machine/rest*^string^string^string^
+ *  where each string is of the form CId=Val where C is one of s i or f
+ *  (string argument, int argument, double argument) Id is the id of
+ *  the argument and Val is the value.
+ *  In order to handle forms and imagemaps the magic can occur before
+ *  a group of ? arguments.  So you could have 
+ *  http://machine/where*^mstring1^mstring2^?formarg1?formarg2 for instance.
+ */
+
+#include "config_tr.h"
+#include "userpref.h"
+#include "ARGS.h"
+#include "utils.h"
+#include "debug.h"
+#include "frontend.h"
+#include "distinterface.h"
+#include "url_magic.h"
+#include <string.h>
+
+/*
+ * returns true if the url is one with magic
+ * arguments and false otherwise
+ */
+gm_Bool is_magic(char * url) {
+  char * magic_start = NULL;
+  char * form_start = NULL;
+  int i;
+
+  /* 
+   * find the start of the forms part of the url, if non existant set to
+   * the end of the url 
+   */
+  form_start = strchr(url, '?');
+  if (form_start == NULL) {
+    form_start = url + strlen(url);
+  }
+  
+
+  /* find the first MAGIC_START char that lies before a ?*/
+  for (i = 0; i < form_start - url; i++) {
+    if (url[i] == MAGIC_START) {
+      magic_start = url + i;
+    }
+  }
+
+  if (magic_start) {
+    magic_start++;
+  } else {
+    return gm_False;
+  }
+  
+  /* now does this actually look like a magic url? */
+  if ((*magic_start == MAGIC_DELIM) && 
+      (url[form_start-url-1] == MAGIC_DELIM) && 
+      (magic_start != form_start-1)) {
+    return gm_True;
+  } else {
+    return gm_False;
+  }
+}
+
+/*
+ * Takes a normal URL url and and argumentlist.  It puts the new
+ * magicified url in murl with all of the arguments of the argumentlist
+ * being used to make the magic url
+ */
+
+gm_Bool to_magic(char * murl, char * url, ArgumentList *al) {
+  int i;
+  char * murl_pos;
+  char * form_start;
+  int error = 0; 
+  if (!al->nargs) {
+    strcpy(murl, url);
+    return gm_False;
+  }
+
+  form_start = strchr(url, '?');
+  if (form_start == NULL) {
+    form_start = url + strlen(url);
+  }
+  
+  strncpy(murl, url, form_start - url);
+  
+  murl_pos = murl + (form_start - url);
+
+  if (!is_magic(url)) {
+    *murl_pos = MAGIC_START;
+    murl_pos++;
+    *murl_pos = MAGIC_DELIM;
+    murl_pos++;
+  }
+    
+  for (i = 0; i < al->nargs; i++) {
+    switch (al->arg[i].type) {
+    case typeString:
+      murl_pos += sprintf(murl_pos, "s%lu=%s^", 
+			  ARG_ID(al->arg[i]), ARG_STRING(al->arg[i]));
+      break;
+    case typeInt:
+      murl_pos += sprintf(murl_pos, "i%lu=%lu^", 
+			  ARG_ID(al->arg[i]), ARG_INT(al->arg[i]));
+      break;
+    case typeDouble:
+      murl_pos += sprintf(murl_pos, "f%lu=%f^", 
+			  ARG_ID(al->arg[i]), ARG_DOUBLE(al->arg[i]));
+      break;
+    default:
+      error = 1;
+    }
+  }
+  
+  if (form_start != url+strlen(url)) {
+    strcpy(murl_pos, form_start);
+  }
+
+  if (error) return gm_False;
+  else return gm_True;
+}
+
+/*
+ * takes a magic url (murl) and adds its arguemnts to the arguemntlist given
+ * (including overwriting ones that are already in the argumentlist)
+ * in addition puts the non magic url in the buffer being pointed to
+ * by url.  Ugly scanner, should be fixed.
+ */
+gm_Bool from_magic(char * murl, char * url, ArgumentList *al) {
+  int i;
+  char * murl_pos;
+  char * url_pos;
+  char * murl_magicend; 
+  char * form_start;
+  int error = 0;
+  UINT32 id;
+  UINT32 intval;
+  double dblval;
+  char strval[MAX_ARG_STRING];
+  
+  if (!is_magic (murl)) {
+    strcpy(url, murl);
+    return gm_False;
+  }  
+
+  /* 
+   * find the start of the forms part of the url, if non existant set to
+   * the end of the url 
+   */
+  form_start = strchr(murl, '?');
+  if (form_start == NULL) {
+    form_start = murl + strlen(murl);
+  }
+
+
+  murl_magicend = form_start;
+  
+  murl_pos = strrchr(murl, MAGIC_START);
+  strncpy(url, murl, murl_pos-murl);
+  url_pos = murl_pos-murl + url;
+  murl_pos+= 2;
+
+  do {
+    switch (*murl_pos) {
+    case 's':
+      sscanf(murl_pos+1, "%lu=%[^^]", &id, strval);
+      break;
+    case 'i':
+      sscanf(murl_pos+1, "%lu=%lu", &id, &intval);
+      break;
+    case 'f':
+      sscanf(murl_pos+1, "%lu=%lf", &id, &dblval);
+      break;
+    default:
+      error = 1;
+      continue;
+    }
+    for (i = 0; i < al->nargs; i++) {
+      if (ARG_ID(al->arg[i]) == id) {
+	break;
+      }
+    } 
+    if (i != MAX_ARGS) {
+      if (i == al->nargs) al->nargs++;
+      switch (*murl_pos) {
+      case 's':
+	SET_ARG_STRING(al->arg[i], strval);
+	SET_ARG_ID(al->arg[i], id);
+	break;	
+      case 'i':
+	SET_ARG_INT(al->arg[i], intval);
+	SET_ARG_ID(al->arg[i], id);
+	break;
+      case 'f':
+	SET_ARG_DOUBLE(al->arg[i], dblval);
+	SET_ARG_ID(al->arg[i], id);
+	break;
+      }
+    } else {
+      error = 1;
+    }
+  } while ((murl_pos = strchr(murl_pos, MAGIC_DELIM)+1) 
+	   && (murl_pos < murl_magicend));
+  strcpy(url_pos, murl_pos);
+  if (error) return gm_False;
+  else return gm_True;
+}
+  
+
+
+@
+
+
+1.9
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d12 3
+a14 2
+#include "proxy.h"
+#include "ALLARGS.h"
+a15 2
+#include "thr_cntl.h"
+#include "userpref.h"
+d17 1
+a17 1
+#include "httpreq.h"
+@
+
+
+1.9.8.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d12 1
+a12 1
+#include "config_tr.h"
+d18 1
+a18 1
+#include "frontend.h"
+@
+
+
+1.9.4.1
+log
+@Type 1-style rewebber
+@
+text
+@a140 2
+  char * prefpw = NULL;
+  int seenpw = 0;
+a163 15
+  /* Find the prefs password, if any */
+  prefpw = NULL;
+  for (i=0; i<al->nargs; ++i) {
+    if (ARG_ID(al->arg[i]) == FRONT_PASSWD && al->arg[i].type == typeString) {
+        int pwlen = strlen(ARG_STRING(al->arg[i]));
+        if (pwlen > 0) {
+            prefpw = ALLOCA((pwlen+1));
+            strcpy(prefpw, ARG_STRING(al->arg[i]));
+            break;
+        }
+    }
+  }
+
+  seenpw = !prefpw;
+
+a185 9
+      /* If there's a password, no changes work untill we see it */
+      if (prefpw && !seenpw && *murl_pos == 's' && id == FRONT_PASSWD) {
+	if (!strcmp(prefpw, strval)) {
+	    seenpw = 1;
+	}
+      }
+      if (!seenpw || (*murl_pos == 's' && id == FRONT_PASSWD)) {
+	continue;
+      }
+@
+
+
+1.8
+log
+@fixed url magic to work with forms
+@
+text
+@d15 3
+@
+
+
+1.7
+log
+@change url_magic.c AGAIN, this time to use defines from url_magic.h
+MAGIC_START and MAGIC_DELIM.
+@
+text
+@d7 3
+d25 13
+a37 1
+  char * magic_start;
+d39 8
+a46 2
+  /* where should magic start with this url? */
+  if ((magic_start = strrchr(url, MAGIC_START)) != NULL) {
+d53 3
+a55 2
+  if ((*magic_start == MAGIC_DELIM) && (url[strlen(url)-1] == MAGIC_DELIM) && 
+      (magic_start != url + strlen(url)-1)) {
+d71 1
+d77 5
+d83 1
+a83 1
+  strcpy(murl, url);
+d85 2
+a86 1
+  murl_pos = murl+strlen(url);
+d112 5
+d132 1
+d144 11
+a154 1
+  murl_magicend = murl+strlen(murl);
+@
+
+
+1.6
+log
+@fixed logic bug caused if you try to magicify a mgic url
+@
+text
+@d3 1
+a3 1
+ *  a magic url looks like http://machine/rest#^string^string^string^
+d25 1
+a25 1
+  if ((magic_start = strrchr(url, '#')) != NULL) {
+d32 1
+a32 1
+  if ((*magic_start == '^') && (url[strlen(url)-1] == '^') && 
+d59 1
+a59 1
+    *murl_pos = '#';
+d61 1
+a61 1
+    *murl_pos = '^';
+d111 1
+a111 1
+  murl_pos = strrchr(murl, '#');
+d155 2
+a156 1
+  } while ((murl_pos = strchr(murl_pos, '^')+1) && (murl_pos < murl_magicend));
+@
+
+
+1.5
+log
+@fixed a bug that could make url_magic.c core the frontend.
+@
+text
+@d58 6
+a63 4
+  *murl_pos = '#';
+  murl_pos++;
+  *murl_pos = '^';
+  murl_pos++;
+@
+
+
+1.4
+log
+@OK, hopefully this is a format I can stick with.
+Using a question mark as a magic string sperator made netscape
+add the magic to the QUERY_STRING header which was bad
+@
+text
+@d32 2
+a33 1
+  if ((*magic_start == '^') && (url[strlen(url)] == '^')) {
+@
+
+
+1.3
+log
+@chages to httpgo to allow for FRONT_NO_DISTILL arg to work.
+Changes to magic to put magic at the END of urls so it wirks with
+reletive urls like those that would be found within a page.
+@
+text
+@d3 1
+a3 1
+ *  a magic url looks like http://machine/rest?^string^string^string^
+d25 1
+a25 1
+  if ((magic_start = strrchr(url, '?')) != NULL) {
+d32 1
+a32 1
+  if (*magic_start == '^') {
+d57 1
+a57 1
+  *murl_pos = '?';
+d108 1
+a108 1
+  murl_pos = strrchr(murl, '?');
+@
+
+
+1.2
+log
+@got rid of some warnings
+@
+text
+@d2 2
+a3 2
+ *  url_magic.c: magic urls that have arguments as port of the url
+ *  a magic url is of the form http:string:...:string://machine.name/file
+d22 1
+a22 2
+  /* first colon, first slash */
+  char *fc, *fs;
+d24 4
+a27 1
+  if (!(fc = strchr(url, ':'))) {
+d31 4
+a34 5
+  if (!(fs = strchr(url, '/'))) {
+    return gm_False;
+  }
+  
+  if ((fc + 1 == fs) || (*(fs-1) != ':')) {
+a35 2
+  } else {
+    return gm_True;
+d46 1
+a46 2
+  int i;  
+  char * url_pos;
+d53 9
+a61 5
+
+  url_pos = strchr(url, '/');  
+  strncpy(murl, url, url_pos-url);
+  murl_pos = url_pos-url+murl;
+
+d65 1
+a65 1
+      murl_pos += sprintf(murl_pos, "s%lu=%s:", 
+d69 1
+a69 1
+      murl_pos += sprintf(murl_pos, "i%lu=%lu:", 
+d73 1
+a73 1
+      murl_pos += sprintf(murl_pos, "f%lu=%f:", 
+a79 1
+  strcpy(murl_pos, url_pos);
+a99 2
+
+  murl_magicend = strchr(murl, '/');
+d105 2
+d108 1
+a108 1
+  murl_pos = strchr(murl, ':')+1;
+d111 1
+d116 1
+a116 1
+      sscanf(murl_pos+1, "%lu=%[^:/]", &id, strval);
+d152 1
+a152 1
+  } while ((murl_pos = strchr(murl_pos, ':')+1) && (murl_pos < murl_magicend));
+@
+
+
+1.1
+log
+@magic url handling functions
+@
+text
+@d22 2
+a23 1
+  char * c;
+d25 1
+a25 1
+  if ((c = strchr(url, ':')) && (*(c+1) == '/')) 
+d27 9
+a35 1
+  else
+d37 1
+d41 1
+a41 1
+ * takes a normal URL url and and argumentlist.  It puts the new
+d87 1
+a87 1
+ * by url.
+@

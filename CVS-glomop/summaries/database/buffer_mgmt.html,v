@@ -1,0 +1,201 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.02.25.16.56.01;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.25.16.53.33;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Added summary by credits.
+@
+text
+@<html>
+<title>
+Buffer Management Strategies
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+An Evaluation of Buffer Management Strategies for Relational Database
+Systems.
+</h1>
+<strong>
+Hong-Tai Chou and David J. DeWitt
+</strong>
+<P>
+<i>Summary by Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+A model of relational query behaviour (the <b>query locality set model</b>,
+or QLSM) is used to motivate a buffer management strategy called DBMIN;
+QLSM predicts future reference behaviour but separates this prediction from
+any particular buffer management algorithm.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li><B>&quot;Bad&quot; buffer mgmt algorithms</b>:
+	  <ul>
+	       <li> <i>Domain separation</i>: pages are classified into types,
+		    each of which is separately managed in its associated
+		    domain of buffers by LRU discipline.  Example type
+		    assignment: one domain to each non-leaf level of B-tree
+		    structure.  Limitation is that concept of domain is
+		    static, and relative importance of types is not
+		    considered.
+	       <li> <i>&quot;New&quot; algorithm</i>: buffer pool is
+		    subdivided and allocated on a per-relation basis.  Each
+		    active relation assigned a resident set that is
+		    initially empty, resident sets of relations are
+		    linked in a priority list.  MRU within each relation.
+		    Limitations:  why MRU all the time?  Why order
+		    rleations on priority list? Searching through list can
+		    be expensive.
+	       <li> <i>Hot Set</i>: a set of pages over which there is a
+		    looping behaviour is called hot set.  By plotting
+		    number of page faults vs. buffer size, observe
+		    discontinuities at &quot;hot points&quot;.  Each query
+		    is provided separate list of buffers managed by LRU
+		    discipline, number of buffers query is entitled is
+		    predicted by hot set model.  Limitations:  why LRU?
+		    MRU better in some situations; LRU will over-allocate
+		    memory.
+	  </ul>
+     <li> <B>Query Locality Set Model</B> (QLSM): relational database
+	  systems support a limited set of operations, and page reference
+	  patterns exhibited by these operations are regular and
+	  predictable. Database operation can be decomposed into a number
+	  of simple reference patterns:
+	  <ul>
+	       <li> Straight sequential (SS): one page frame is all that's
+		    required, as no page is ever revisited.
+	       <li> Clustered sequential (CS): records in a cluster set
+		    (records
+		    with same key value) should be kept in memory at same
+		    time if possible.
+	       <li> Looping sequential (LS): MRU.
+	       <li> Independent random (IR): similar to SS.
+	       <li> Clustered random (CR): similar to CS.
+	       <li> Straight hierarchical (SH): index traversed only once,
+		    one page frame all that's necessary.
+	       <li> Hierarchical with straight sequential (H/SS): index
+		    traversed once, followed by scan through leaves -
+		    similar to SS.
+	       <li> Hierarchical with clustered sequential (H/CS): similar
+		    to CS.
+	       <li> Looping hierarchical (LH): pages closer to the root are
+		    more likely to be accessed - access probability
+		    of <b>i</b>th level is inversely proportional to
+		    <b>i</b>th power of fan-out factor, so keep pages at an
+		    upper level in memory preferentially (root page only
+		    one worth keeping in memory for large fan-out).
+	  </ul>
+     <li><B>DBMIN</B>: buffers are allocated and managed on a per file
+	  instance basis.  (<i>A file instance seems to be a file opened by
+	  a query;  if multiple queries open the same file, this is
+	  multiple file instances.</i>)  Set of buffered pages associated
+	  with a file instance is its <b>locality set</b>.  Each localit
+	  set is managed separately by a discipline selected according to
+	  the intended usage of the file instance.
+	  <ul>
+	       <li> If buffer contains a page that does not belong to any
+		    locality set, it is placed on global free list.
+	       <li> Pages in the buffer can belong to at most one locality
+		    set.  A file instance is considered the owner of all
+		    pages in its locality set.
+	       <li> To allow for data sharing among concurrent queries, all
+		    buffers in memory are also accessible through a global
+		    buffer table.
+	       <li> Algorithm:  when page requested by a query, search is
+		    made to global table, followed by an adjustment to
+		    associated locality set.  Three cases:
+		    <ol>
+			 <li> Page found in both global table and locality
+			      set: only usage statistics need to be updated
+			      as dictated by local replacement policy.
+			 <li> Page found in global table but not the
+			      file instance's locality set: if page has an
+			      owner,
+			      page is given to requesting query.
+			      Otherwise, page added to locality set of file
+			      instance.  If this exceeds file instance's
+			      maximum number of buffers allocated to it,
+			      a page is released according to local
+			      replacement policy.
+			 <li> Page is not in memory: it is brought in, then
+			      proceed as in case 2.
+		    </ol>
+	  </ul>
+     <li><B>Performance</B>: a hybrid trace/distribution driven simulation
+	  was used to compare DBMIN with random (RAND), FIFO, CLOCK, and
+	  working set (WS) algorithms.  Metric of comparison was throughput
+	  (average number of queries completed per second).
+	  <ul>
+	       <li> DBMIN wins in all cases, followed closely by HOT.
+		    CLOCK, WS, FIFO, and RAND don't do well at all.
+	       <li> Data sharing increases competitiveness of other
+		    algorithms, but DBMIN and HOT still win.  (Data sharing
+		    in three cases:   full, in which all queries access the
+		    same database, half, in which every two queries share a
+		    copy of the database, and none, in which every query
+		    has its own copy of the database.)
+	       <li> Load control (utilization of paging device is kept busy
+		    about half the time by descheduling thrashing queries)
+		    also made other algorithms more competitive, but there
+		    are well-known problems with load control.  (High
+		    overhead, responds only after bad situation arises,
+		    doesn't work well in environment with large number of
+		    transactions.)
+	  </ul>
+	  
+</ul>
+
+<h2>Relevance</h2>
+Minimization of I/Os is key, and buffer management strategies is critical
+for this task.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> Need to know intended usage of file instance so that a management
+	  algorithm and required number of buffers can be allocated.  Is it
+	  ever possible that intended usage cannot be predicted?
+     <li> What if there are multiple users, and required number of buffers
+	  for all concurrent queries cannot be satisfied?  Do you just
+	  delay some of the queries, or do you let all of them suffer?
+     <li> Each file instance is considered independently.  Is there some
+	  opportunity for optmization across file instances?  Surely there
+	  is locality across queries, or across file accesses within a
+	  query.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@Summary for buffer management strategy evaluation paper.
+@
+text
+@d14 2
+@

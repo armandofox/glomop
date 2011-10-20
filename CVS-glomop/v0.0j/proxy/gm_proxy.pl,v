@@ -1,0 +1,474 @@
+head	1.9;
+access;
+symbols
+	release:1.9
+	Release:1.4;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	95.10.25.04.41.18;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.10.25.03.00.13;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.20.05.53.38;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.19.22.23.46;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.10.18.22.12.44;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.18.05.20.16;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.18.03.08.58;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.17.01.14.16;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.16.23.12.05;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@in gm_mail.pl, where it checks for empty inbox: moving the "return"
+*outside* the scope of the 'if' block makes it work correctly; inside
+the scope of the 'if', it mysteriously returns "6" to the caller, even
+tho the value about to be returned is correct!  perl bug?
+@
+text
+@#!/usr/sww/bin/perl5 -w
+
+
+#  gm_proxy.pl
+#
+#  This file contains the code that starts the proxy on behalf of the user, and
+#  pulls in the other code (PSM's, etc.) necessary to conduct proxy
+#  transactions.
+#
+#  This file and the other code are loaded only after the user has
+#  authenticated herself and the forked copy of the proxy has done a setuid to
+#  that user.
+
+# BUG: socket should have essentially no buffering?
+
+package gm_proxy;
+
+#
+#  Constructor function is at end of this file, since it pulls in other files
+#  that require certain subroutines in this file to already be defined.
+#
+
+sub abort {
+    my($self, $msg) = @@_;
+    $msg = "Connection closed" unless $msg;
+    &aux'log("Aborting: $msg");
+    send_error $self $msg;
+    killsock $self->{Sock};
+}
+
+#######################################################################
+#  run: Handle an incoming proxy-connection request
+#
+#  Performs connect handshaking, waits for requests from client, processes them
+#  (fetch & distill), returns results to client on connection.
+#######################################################################
+
+sub run {
+    my($self) = shift;
+    local($sock) = $self->{Sock} || die "No sock";
+    local($request);
+
+    # $SIG{PIPE} = $SIG{INT} = abort;
+
+    &aux'log("running as $self->{UserName}, euid = $>, egid = $)\n");
+    $sock->writesock("+ok\n");
+
+    #
+    #  Wait for incoming requests from the client, and dispatch to the
+    #  appropriate handler.  The loop goes "forever" since readsock will
+    #  call signal_eof if the socket is abruptly closed.
+    #
+
+    while (! $sock->{EOF}) {
+        $_ = readsock $sock;
+        # Dispatch to a handler
+        &aux'log($_), $self->pgetdoc ($_), next if /^get/i;
+        &aux'log($_), $self->pputdoc ($_), next if /^put/i;
+        # &register_types, next if /^R$/;
+        close_conn $sock, last if /^q/i;
+        &aux'log("Unrecognized request '$_' from $self->{UserName}");
+    }
+    $self->cleanup;
+}
+
+sub cleanup {
+    my $self = shift;
+    my $modules = $self->{Modules};
+    #
+    #  Here after socket is closed
+    #
+    &aux'log("Connection from $self->{UserName} closed.");
+    #
+    #  Call shutdown funcs for all loaded modules.
+    #
+    for (($id, $objref) = each %$modules) {
+        eval '$objref->Shutdown($self)';
+        &aux'log("Warning: shutdown for id $id: $@@") if $@@;
+    }
+    #
+    #  Call cleanup func for auxiliary services.
+    #
+    &aux'cleanup;
+    return 1;
+}
+
+
+###########################################################################
+#  getdocloc:
+#  Collect document locator info from an incoming request.
+#
+#  Args: incoming "get" line from client
+#  Returns: a list: (docloc, types, maxchunks, reqID) if success
+#           the empty list if failure
+#  Assumptions: See top of file
+###########################################################################
+
+sub getdocloc {
+    my($self, $reqtext) = @@_;
+    my($sock) = $self->{Sock};
+    local(%req) = ();
+    local($attrib);
+    # According to bytestream protocol, format of DocLocator is a multiline
+    # request:
+    #   GET #docpath##protocol#
+    #   TYPES #t1#t2# ...
+    #   MAX max
+    #   ID id
+    #   END
+    #
+    #  Start by picking up all request lines, until END line.
+
+    $req{docloc} = $reqtext;
+    
+    ($attrib = $1) =~ tr/A-Z/a-z/, $req{$attrib} = $2, $reqtext .= " $_"
+        while (($_ = $sock->readsock()) =~ m/^(\S+)\s+(.*)$/);
+    &aux'log("WARNING: No END line for request, continuing: %req")
+        unless ($_ =~ /^end/i);
+
+    if (!defined $req{docloc}
+        || !defined $req{types}
+        || !defined $req{max}
+        || !defined $req{id}) {
+
+        local($", $,) = (',',',');          #'" 
+        &aux'log("Bad request: '$reqtext'");
+        return ();
+    } else {
+        return ($req{docloc},$req{types},$req{max},$req{id});
+    }
+}
+
+###########################################################################
+#  last_error
+#
+#  Return string corresponding to last error condition encountered
+###########################################################################
+
+sub last_error {
+    my $self = shift;
+
+    return ($self->{LastError} || "No error");
+}
+
+#######################################################################
+#  send_error
+#
+#  Send an error message to the client for a given request ID.  Use a request
+#  ID of 0 if none is supplied.
+###########################################################################
+
+sub send_error {
+    my($self,$reqid,$text) = @@_;
+    my($sock) = $self->{Sock};
+    
+    $reqid = '0' unless $reqid;
+    &aux'log("(Sending error [$reqid]: $text)");
+    $sock->writesock ("ERR $reqid $text");
+}
+
+###########################################################################
+#  login
+#
+#  Log the user in.  Sets env variables HOME, USER, LOGNAME, SHELL and PATH,
+#  then sources user's .login and .rc file(s).  Change to the user's home dir. 
+###########################################################################
+
+sub login {
+    my $self = shift;
+    my($name, $homedir, $sh) = (getpwnam($self->{UserName}))[0,7,8];
+
+    &aux'log("Warning: no such user as $self->{UserName}"), return 0
+        unless defined $name;
+
+    $main'ENV{HOME} = $homedir;
+    unless (-d $homedir && -r $homedir && chdir $homedir) {
+        &aux'log("Warning: user $name: no home directory $homedir");
+    }
+
+    $main'ENV{SHELL} = $sh;
+    &aux'log("Warning: user $name: can't run shell $sh")
+        unless (-r $sh && -x $sh);
+
+    $main'ENV{USER} = $main'ENV{LOGNAME} = $name;
+
+    &aux'log("Login OK for $name");
+    return 1;
+}
+
+###########################################################################
+#  new
+#  Constructs and returns a new proxy object
+###########################################################################
+
+sub new {
+    my($self, $username, $devname, $readhandle,
+       $writehandle, $config, $debug) = @@_;
+    my $sock;
+    my %cfg;
+    my %mod = ();
+    
+    # Blast environment just in case
+
+    foreach (keys(%ENV)) { delete $ENV{$_}; }
+    
+    #
+    #  Load other code
+    #
+    require 'gm_sock.pl' or $self->abort("ERR 0 couldn't load sock");
+    require 'gm_aux.pl' or $self->abort("ERR 0 couldn't load aux");
+    require 'gm_pgetdoc.pl' or  $self->abort( "ERR 0 couldn't load pgetdoc");
+    require 'gm_pputdoc.pl' or  $self->abort( "ERR 0 couldn't load pputdoc");
+    require 'gm_type.pl' or  $self->abort("ERR 0 couldn't load  type");
+    $self->abort("ERR 0 couldn't make socket")
+        unless ($sock = makesock gm_sock $readhandle, $writehandle);
+    #
+    #  read config file
+    #
+    %cfg = &aux'read_config($config)
+        or $self->abort("ERR 0 couldn't read config");
+    &aux'log("\007*** WARNING! *** $$ running insecurely!\n")
+        if $cfg{debugging} eq 'pythia';
+    $self =  bless { UserName => $username,
+                    DevName => $devname,
+                    Sock => $sock,
+                    Config => \%cfg,
+                     Modules => \%mod,
+                     Debug => $debug,
+                     LastError => ""
+                    };
+    #
+    #  set up INC path
+    #
+    push(@@INC, $cfg{home});
+    #
+    #  set up user's environment
+    #
+    login $self;
+    return $self;
+}
+
+###########################################################################
+#  Main entry point
+###########################################################################
+
+
+#  Instantiate and run a new proxy object.  Main loop returns when connection
+#  has been closed.
+#
+
+($username, $devname, $configfile, $debug) = @@ARGV;
+$debug = 0 unless $debug eq '-d';
+$main'Debug = $debug;                       # BUG this should go away.
+$proxy = new gm_proxy $username,$devname,"STDIN","STDOUT",$configfile,$debug;
+$proxy->run;
+exit 0;
+
+@
+
+
+1.8
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl5
+@
+
+
+1.7
+log
+@gifs seem to work.   empty inbox is now detected and returned as empty
+toc, rather than as an error
+@
+text
+@d13 2
+a14 1
+#
+d76 3
+a78 4
+    foreach (keys(%$modules)) {
+        local($modshutdown) = "${_}::${_}Shutdown";
+        eval '&$modshutdown($self)';
+        &aux'log("Warning: $modshutdown: $@@") if $@@;
+d80 4
+d221 2
+@
+
+
+1.6
+log
+@added last_error method, changed Exec to set error cond instead of
+sending error to client
+@
+text
+@d44 1
+a44 1
+    &aux'log("running as $self->{UserName}\n");
+@
+
+
+1.5
+log
+@gm_mail only reports new mail now
+@
+text
+@d129 12
+d198 4
+d222 2
+a223 1
+                     Debug => $debug
+@
+
+
+1.4
+log
+@Mail works again!
+@
+text
+@d62 6
+d72 8
+d83 1
+d184 1
+d205 2
+a206 1
+                    Debug => $debug
+@
+
+
+1.3
+log
+@auth and proxy now totally separate.
+@
+text
+@a13 7
+#  INVARIANTS/ASSUMPTIONS THAT MUST BE TRUE:
+#
+#  After the 'new' method has been called to instantiate a new copy of the
+#  proxy, the Sock variable will point to an open socket back to the client,
+#  and UserName and DevName will contain strings specifying the user's name and
+#  the user's device type respectively.
+#
+d45 1
+d131 29
+d165 2
+a166 1
+    my($self, $username, $devname, $readhandle, $writehandle, $config) = @@_;
+d185 1
+a185 1
+    return (bless { UserName => $username,
+d188 12
+a199 2
+                    Config => \%cfg
+                    });
+d211 4
+a214 2
+($username, $devname, $configfile) = @@ARGV;
+$proxy = new gm_proxy $username,$devname,"STDIN","STDOUT",$configfile;
+@
+
+
+1.2
+log
+@foo bar
+@
+text
+@d1 3
+a3 1
+#
+d142 24
+a165 11
+    my($self, $sock, $username, $devname) = @@_;
+    $self = { UserName => $username,
+              DevName => $devname,
+              Sock => $sock
+              };
+
+    bless $self;
+    require 'gm_pgetdoc.pl' ||  $self->abort( "ERR 0 couldn't load pgetdoc");
+    require 'gm_pputdoc.pl' ||  $self->abort( "ERR 0 couldn't load pputdoc");
+    require 'gm_type.pl' ||  $self->abort("ERR 0 couldn't load  type");
+    return $self;
+d169 12
+a181 1
+1;
+@
+
+
+1.1
+log
+@foo
+@
+text
+@d57 1
+a57 1
+    while (1) {
+d64 1
+a64 1
+        &aux'log("Unrecognized request '$_' from $UserName");
+d69 1
+a69 1
+    &aux'log("Connection from $UserName closed.");
+@

@@ -1,0 +1,944 @@
+head	1.17;
+access;
+symbols
+	Yatin-final:1.16.2.1
+	Yatin:1.16.0.2
+	pre-yatin-merge:1.16
+	transend-beta2:1.14
+	fox-dev:1.14
+	ptm-ng:1.14
+	transend-beta-latest:1.14
+	Aggregators:1.14
+	NoAggregators:1.14
+	iang:1.14.0.2
+	transend-beta:1.13.0.2
+	SOSP:1.13
+	stable_ptm:1.10
+	merged_preintegrate:1.6
+	heisenbug:1.6
+	PRE_INTEGRATION:1.6;
+locks; strict;
+comment	@ * @;
+
+
+1.17
+date	98.01.16.22.16.10;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.09.18.22.45.16;	author yatin;	state Exp;
+branches
+	1.16.2.1;
+next	1.15;
+
+1.15
+date	97.09.15.03.09.29;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.28.18.46.35;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.03.06.02.49.09;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.26.04.14.45;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.17.03.01.00;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.05.21.59.33;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.05.20.20.47;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.29.06.00.48;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.04.09.55.32;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.05;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.05;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.00.42.23;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.41;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.24;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.44.09;	author yatin;	state Exp;
+branches;
+next	;
+
+1.16.2.1
+date	97.12.01.22.19.28;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __CACHENET_H__
+#define __CACHENET_H__
+
+
+#include "communication.h"
+#include "packet.h"
+#include "reqrep.h"
+#include "garbage.h"
+#include "threads.h"
+
+
+class CachedDistiller;
+
+
+class MultipleUsersSocket : public TcpSocket {
+public:
+  MultipleUsersSocket(int sID=0, gm_Bool closeSocketFlag=gm_True) 
+    : TcpSocket(sID, closeSocketFlag), readMutex("*-mu-rsck"),
+    writeMutex("*-mu-wsck") { };
+  ~MultipleUsersSocket() {
+    /* // grab the mutex so that you can ensure no one else is using the
+    // socket
+    writeMutex.Lock();
+    readMutex.Lock();*/
+  }
+
+  virtual gm_Bool Write(gm_Packet *packet);
+  virtual gm_Bool Read (gm_Packet *packet);
+
+private:
+  Mutex readMutex;
+  Mutex writeMutex;
+};
+
+
+/*class ThreadedSocket : public MultipleUsersSocket, public GarbageCollectedObject {
+public:
+  ThreadedSocket(EventSystem *evs_) : evs(evs_)  { };
+  ~ThreadedSocket() { };
+
+  gm_Bool Connect(const char* host, Port port, gm_Bool useIPAddrOnly=gm_True){
+    if (MultipleUsersSocket::Connect(host, port, useIPAddrOnly)==gm_False)
+      return gm_False;
+    return ForkThread();
+  }
+protected:
+  gm_Bool ForkThread() { return thread.Fork(ForkHelper, (void*)this); }
+
+  void ThreadMain();
+  static void *ForkHelper(void *this_) {
+    ((ThreadedSocket*)this_)->ThreadMain();
+    return 0;
+  }
+private:
+  Thread thread;
+  EventSystem *evs;
+};*/
+
+
+class ThreadedSocket : public GarbageCollectedObject {
+public:
+  ThreadedSocket(EventSystem *evs_, char *name_) : evs(evs_), name(name_) { };
+  ~ThreadedSocket() { };
+
+  gm_Bool ForkThread() { return thread.Fork(ForkHelper, (void*)this); }
+
+protected:
+  void ThreadMain();
+  static void *ForkHelper(void *this_) {
+    ((ThreadedSocket*)this_)->ThreadMain();
+    return 0;
+  }
+
+  virtual int getID()=0;
+  virtual gm_Bool EvSelect(EventSystem *evs)=0;
+
+private:
+  Thread thread;
+  EventSystem *evs;
+  const char *name;
+};
+
+
+class FE_PTMConnection : public ThreadedSocket, public MultipleUsersSocket, 
+		      public gm_PacketHandler {
+public:
+  FE_PTMConnection(EventSystem *evs)
+    : ThreadedSocket(evs, "FE_PTMConnection") { 
+      Mutex::Log_("created new FE_PTMConnection", "", (Mutex*)this);
+  };
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+
+  gm_Bool Connect(const char* host, Port port, gm_Bool useIPAddrOnly=gm_True){
+    if (MultipleUsersSocket::Connect(host, port, useIPAddrOnly)==gm_False)
+      return gm_False;
+    return ForkThread();
+  }
+protected:
+  int getID() { return MultipleUsersSocket::getID(); };
+  gm_Bool EvSelect(EventSystem *evs) {return gm_PacketHandler::EvSelect(evs);};
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return Read(packet); };
+  void ErrorOutput(const char *string) { gm_Log(string); };
+};
+
+
+class SharedBus : public ThreadedSocket, public gm_CoordinationBus, 
+		  public gm_PacketHandler {
+public:
+  SharedBus(EventSystem *evs, const char *ipAddress, Port port, int ttl) 
+    : ThreadedSocket(evs, "SharedBus"), 
+      gm_CoordinationBus(ipAddress, port, ttl, gm_True, gm_True), 
+    gm_PacketHandler() { 
+      ForkThread();
+  };
+
+protected:
+  int getID() { return getListener()->getID(); };
+  gm_Bool EvSelect(EventSystem *evs) {return gm_PacketHandler::EvSelect(evs);};
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return getListener()->Read(packet);};
+  void ErrorOutput(const char *string) { gm_Log(string); };
+};
+
+
+class DistillerRequest;
+
+class DistillerConnection : public ThreadedSocket, public MultipleUsersSocket,
+			    public gm_PacketHandler {
+public:
+  DistillerConnection(CachedDistiller *distiller_);
+  ~DistillerConnection();
+
+  gm_Bool Connect(const char* host, Port port, gm_Bool useIPAddrOnly=gm_True){
+    if (MultipleUsersSocket::Connect(host, port, useIPAddrOnly)==gm_False)
+      return gm_False;
+    return ForkThread();
+  }
+  /*gm_Bool AddRequest(DistillerRequest *request)
+  {
+    gm_Bool returnValue;
+    //mutex.Lock();
+    returnValue = pendingRequests.InsertAtHead(request);
+    //mutex.Unlock();
+    return returnValue;
+  }
+  void RemoveRequest(DistillerRequest *request)
+  {
+    //mutex.Lock();
+    pendingRequests.Remove(request);
+    //mutex.Unlock();
+  }
+  void RemoveAllRequests();*/
+
+protected:
+  int getID() { return MultipleUsersSocket::getID(); };
+  gm_Bool EvSelect(EventSystem *evs) {return gm_PacketHandler::EvSelect(evs);};
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { 
+    gm_Bool returnValue;
+    IncrReference();
+    returnValue = Read(packet);
+    DecrReference();
+    return returnValue;
+  };
+  void ErrorOutput(const char *string) { gm_Log(string); };  
+
+private:
+  CachedDistiller *distiller;
+  //LockingList<DistillerRequest> pendingRequests;
+};
+
+
+struct DistillerReply {
+  DistillerReply() : output(), status(distOk) { }
+
+  DistillerOutput output;
+  DistillerStatus status;
+};
+
+
+class DistillerRequest : public RequestReply {
+public:
+  DistillerRequest(CachedDistiller *dist);
+  // the Send method is invoked after the distMutex is *UNLOCKED*
+  gm_Bool Send(DistillerConnection *connection, Argument *args, 
+		      int numberOfArgs, DistillerInput *input);
+  gm_Bool Wait(struct timeval *tv);
+  gm_Bool SendAndWait(DistillerConnection *connection, Argument *args, 
+		      int numberOfArgs, DistillerInput *input);
+  void Destroy(void);
+  void EvDistillerConnectionBroken();
+
+  DistillerOutput *getOutput() { return &reply.output; };
+  DistillerStatus getStatus()  { return reply.status;  };
+protected:
+  gm_Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args);
+  gm_Bool EvTimer(RequestReplyEventSystem *evs);
+
+private:
+  CachedDistiller *dist; // this distiller already has its ref count set
+  DistillerReply  reply;
+  gm_Bool         stopWaiting;
+  Mutex           mutex;
+  Condition       condition;
+};
+
+
+class DistillerInfoHandler {
+public:
+  DistillerInfoHandler() : streamPtr(0), idx(0), numberOfDistillers(0),
+    completeUpdate(gm_False) { };
+  gm_Bool Handle(IStream &istream, gm_Bool completeUpdate);
+  gm_Bool getNext(BasicDistiller *record);
+  gm_Bool IsCompleteUpdate() { return completeUpdate; };
+private:
+  IStream *streamPtr;
+  UINT32  idx, numberOfDistillers;
+  gm_Bool completeUpdate;
+};
+
+
+
+#endif // __CACHENET_H__
+
+@
+
+
+1.16
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d189 4
+d195 1
+a200 4
+  gm_Bool Send(DistillerConnection *connection, Argument *args, 
+	       int numberOfArgs, DistillerInput *input);
+  // the Send method is invoked after the distMutex is *UNLOCKED*
+
+d207 1
+a207 1
+  gm_Bool         replyReceived;
+@
+
+
+1.16.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@a188 4
+  // the Send method is invoked after the distMutex is *UNLOCKED*
+  gm_Bool Send(DistillerConnection *connection, Argument *args, 
+		      int numberOfArgs, DistillerInput *input);
+  gm_Bool Wait(struct timeval *tv);
+a190 1
+  void Destroy(void);
+d196 4
+d206 1
+a206 1
+  gm_Bool         stopWaiting;
+@
+
+
+1.15
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d27 2
+a28 2
+  virtual gm_Bool Write(Packet *packet);
+  virtual gm_Bool Read (Packet *packet);
+d85 1
+a85 1
+		      public PacketHandler {
+d100 2
+a101 2
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d103 1
+a103 1
+  gm_Bool ReadPacket(Packet *packet) { return Read(packet); };
+d108 2
+a109 2
+class SharedBus : public ThreadedSocket, public CoordinationBus, 
+		  public PacketHandler {
+d113 2
+a114 2
+      CoordinationBus(ipAddress, port, ttl, gm_True, gm_True), 
+    PacketHandler() { 
+d120 2
+a121 2
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d123 1
+a123 1
+  gm_Bool ReadPacket(Packet *packet) { return getListener()->Read(packet);};
+d131 1
+a131 1
+			    public PacketHandler {
+d159 1
+a159 1
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs);};
+d161 1
+a161 1
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d163 1
+a163 1
+  gm_Bool ReadPacket(Packet *packet) { 
+@
+
+
+1.14
+log
+@Added the DistillerBuffer data structure to provide a more elegant way of
+freeing buffers between the library and the main program
+@
+text
+@d84 1
+a84 1
+class PTMConnection : public ThreadedSocket, public MultipleUsersSocket, 
+d87 3
+a89 3
+  PTMConnection(EventSystem *evs)
+    : ThreadedSocket(evs, "PTMConnection") { 
+      Mutex::Log_("created new PTMConnection", "", (Mutex*)this);
+@
+
+
+1.13
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d179 1
+a179 6
+  DistillerReply() {
+    output.data = 0;
+    output.length = 0;
+    strcpy(output.mimeType, "");
+    status = distOk;
+  };
+@
+
+
+1.12
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d62 1
+a62 1
+  ThreadedSocket(EventSystem *evs_) : evs(evs_) { };
+d80 1
+d88 1
+a88 1
+    : ThreadedSocket(evs) { 
+d112 1
+a112 1
+    : ThreadedSocket(evs), 
+d219 3
+a221 2
+  DistillerInfoHandler() : streamPtr(0), idx(0), numberOfDistillers(0) { };
+  gm_Bool Handle(IStream &istream);
+d223 1
+a223 1
+
+d227 1
+@
+
+
+1.11
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d8 2
+d18 2
+a19 1
+    : TcpSocket(sID, closeSocketFlag) { };
+d21 1
+a21 1
+    // grab the mutex so that you can ensure no one else is using the
+d23 2
+a24 1
+    mutex.Lock();
+d27 2
+a28 2
+  virtual gm_Bool Write(char *data, int size);
+  virtual int     Read (char *data, int size);
+d31 2
+a32 1
+  Mutex mutex;
+d36 1
+a36 1
+class PTMConnection : public MultipleUsersSocket, public PacketHandler {
+d38 52
+d91 6
+d98 1
+d102 1
+a102 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d107 2
+a108 1
+class SharedBus : public CoordinationBus, public PacketHandler {
+d110 6
+a115 3
+  SharedBus(const char *ipAddress, Port port, int ttl) 
+    : CoordinationBus(ipAddress, port, ttl, gm_True, gm_True), 
+    PacketHandler() { };
+d118 1
+d122 1
+a122 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(getListener());};
+d129 2
+a130 1
+class DistillerConnection : public MultipleUsersSocket, public PacketHandler{
+d132 2
+a133 2
+  DistillerConnection(CachedDistiller *distiller_) : MultipleUsersSocket(),
+    PacketHandler(), distiller(distiller_) { };
+d135 5
+d157 2
+a158 1
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+d162 7
+a168 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d193 2
+a194 1
+  gm_Bool SendAndWait(Argument *args, int numberOfArgs, DistillerInput *input);
+d200 3
+a202 1
+  gm_Bool Send(Argument *args, int numberOfArgs, DistillerInput *input);
+d210 2
+a211 2
+
+  //Mutex           mutex;
+@
+
+
+1.10
+log
+@Forgot to remove minor bugs before previous commit
+@
+text
+@d17 5
+d26 1
+a26 1
+protected:
+d65 1
+a65 1
+  gm_Bool AddRequest(DistillerRequest *request)
+d68 1
+a68 1
+    mutex.Lock();
+d70 1
+a70 1
+    mutex.Unlock();
+d75 1
+a75 1
+    mutex.Lock();
+d77 1
+a77 1
+    mutex.Unlock();
+d79 1
+a79 1
+  void RemoveAllRequests();
+d89 1
+d91 1
+a91 1
+  LinkedList<DistillerRequest> pendingRequests;
+d110 1
+a110 1
+  DistillerRequest(DistillerConnection *c);
+d122 3
+a124 2
+  DistillerConnection *connection;
+  DistillerReply      reply;
+d126 2
+a127 2
+  Mutex               mutex;
+  Condition           condition;
+d129 13
+@
+
+
+1.9
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d74 1
+a74 10
+  void RemoveAllRequests()
+  {
+    DistillerRequest *request;
+    mutex.Lock();
+    while (pendingRequests.IsEmpty()==gm_False) {
+      request = pendingRequests.RemoveFromHead();
+      request->EvDistillerConnectionBroken();
+    }
+    mutex.Unlock();
+  }
+@
+
+
+1.8
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d74 10
+@
+
+
+1.7
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@a84 11
+  struct Buffer {
+    Buffer() : isFull(gm_False) { };
+    gm_Bool IsFull() { return isFull; };
+    void SetFull(gm_Bool flag) { isFull = flag; };
+
+    DistillerStatus status;
+    UINT32 requestReplyID;
+  protected:
+    gm_Bool isFull;
+  };
+  Buffer status; // buffers status packet until the reply packet arrives
+d89 8
+a96 3
+  DistillerReply() : data(0), dataLength(0), status(distOk) { };
+  void            *data;
+  UINT32          dataLength;
+d104 1
+a104 2
+  gm_Bool SendAndWait(Argument *args, int numberOfArgs, 
+		   void *data, UINT32 dataLength);
+d107 2
+a108 3
+  void            *getReply()      { return reply.data;       };
+  UINT32          getReplyLength() { return reply.dataLength; };
+  DistillerStatus getReplyStatus() { return reply.status;     };
+d110 1
+a110 2
+  gm_Bool SendArguments(Argument *args, int numberOfArgs);
+  gm_Bool SendData(void *data, UINT32 dataLength);
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d10 4
+a13 1
+class MultipleWritersSocket : public TcpSocket {
+d15 1
+a15 1
+  MultipleWritersSocket(int sID=0, gm_Bool closeSocketFlag=gm_True) 
+d19 1
+d26 3
+a28 1
+class PTMConnection : public MultipleWritersSocket, public PacketHandler {
+a30 1
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+d34 1
+a34 1
+  void ErrorOutput(const char *string) { LOG(string); };
+d48 2
+a49 2
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(getListener()); };
+  void ErrorOutput(const char *string) { LOG(string); };
+a52 14
+/*class Listener : public MulticastSocket, public PacketHandler {
+public:
+  Listener(RemoteID &multicast) : MulticastSocket(), PacketHandler()
+  { if (CreateListener(multicast.ipAddress, multicast.port)==gm_False) return; };
+
+protected:
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+  void ErrorOutput(char *string) { LOG(string); };
+};*/
+
+
+d55 1
+a55 1
+class DistillerConnection : public MultipleWritersSocket, public PacketHandler{
+d57 3
+d81 1
+a81 1
+  void ErrorOutput(const char *string) { LOG(string); };  
+d83 1
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d12 1
+a12 1
+  MultipleWritersSocket(int sID=0, Bool closeSocketFlag=TRUE) 
+d15 1
+a15 1
+  virtual Bool Write(char *data, int size);
+d24 3
+a26 3
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvConnectionBroken(EventSystem *evs);
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d28 1
+a28 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d36 1
+a36 1
+    : CoordinationBus(ipAddress, port, ttl, TRUE, TRUE), 
+d40 2
+a41 2
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d43 1
+a43 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(getListener()); };
+d51 1
+a51 1
+  { if (CreateListener(multicast.ipAddress, multicast.port)==FALSE) return; };
+d54 2
+a55 2
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d57 1
+a57 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d66 1
+a66 1
+  Bool AddRequest(DistillerRequest *request)
+d68 1
+a68 1
+    Bool returnValue;
+d82 3
+a84 3
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvConnectionBroken(EventSystem *evs);
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d86 1
+a86 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d91 3
+a93 3
+    Buffer() : isFull(FALSE) { };
+    Bool IsFull() { return isFull; };
+    void SetFull(Bool flag) { isFull = flag; };
+d98 1
+a98 1
+    Bool isFull;
+d115 1
+a115 1
+  Bool SendAndWait(Argument *args, int numberOfArgs, 
+d123 2
+a124 2
+  Bool SendArguments(Argument *args, int numberOfArgs);
+  Bool SendData(void *data, UINT32 dataLength);
+d126 2
+a127 2
+  Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args);
+  Bool EvTimer(RequestReplyEventSystem *evs);
+@
+
+
+1.4
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d29 1
+a29 1
+  void ErrorOutput(char *string) { LOG(string); };
+d35 2
+a36 2
+  SharedBus(RemoteID &multicast, int ttl) 
+    : CoordinationBus(multicast.ipAddress, multicast.port, ttl, TRUE, TRUE), 
+d44 1
+a44 1
+  void ErrorOutput(char *string) { LOG(string); };
+d87 1
+a87 1
+  void ErrorOutput(char *string) { LOG(string); };  
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d33 16
+a48 1
+class Listener : public MulticastSocket, public PacketHandler {
+d59 1
+a59 1
+};
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d7 1
+d26 1
+d40 1
+d44 75
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d9 9
+a17 1
+class PTMConnection : public TcpSocket {
+d21 4
+a24 4
+class Listener : public MulticastSocket {
+public:
+  Listener(char *ip, Port port) : MulticastSocket() 
+  { if (CreateListener(ip, port)==FALSE) return; };
+d26 2
+a27 2
+protected:
+  Bool EvSelect(EventSystem *evs);
+d31 5
+a35 1
+class CMPacketHandler : public PacketHandler {
+d37 4
+a40 2
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet, 
+			CommunicationObject *object);
+d42 1
+@

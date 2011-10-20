@@ -1,0 +1,428 @@
+head	1.10;
+access;
+symbols
+	Yatin-final:1.10
+	Yatin:1.10.0.2
+	pre-yatin-merge:1.10
+	transend-beta2:1.10
+	fox-dev:1.10
+	ptm-ng:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.8
+	stable_ptm:1.6
+	merged_preintegrate:1.5
+	heisenbug:1.5
+	PRE_INTEGRATION:1.5
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	97.07.21.21.30.18;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.04.17.02.42.39;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.26.04.14.50;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.17.03.01.04;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.04.09.55.34;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.08;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.08.12.09;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.44;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.32;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Changes to monitor to do unicast and multicast listening properly
+Modified distiller database so that everything after "--" is assumed to
+be command line args to the distiller
+@
+text
+@#ifndef __ERROR_H__
+#define __ERROR_H__
+
+
+enum Errors {
+  success=0,
+  errNoErrorObject,
+  errThreadError,
+  errOutOfMemory,
+  errBufferOverflow,
+  errNULLPointer,
+  errDuplicateIndexEntry,
+
+  errIPAddressError,
+
+  errSocketCreationError, 
+  errSocketBindError, 
+  errSocketListenError, 
+  errSocketConnectError, 
+  errSocketReadError,
+  errSocketEOF, 
+  errSocketWriteError, 
+  errSocketReadNothingAvailable, 
+  errSocketReadNotEnoughData,
+  errSocketTimeout,
+
+  errTcpAddressError, 
+  errUdpAddressError, 
+  errMcastAddressError,
+  errMcastTTLError,
+  errMcastAddMembershipError,
+
+  errEvSysCreationError,
+  errEvSysPostError,
+  errEvSysSendError,
+  errEvSysGetError,
+  errEvSysInvalidEvent,
+
+  errTooLargeDatagram,
+  errInvalidMagicKey,
+  errChecksumError,
+  errInvalidPacketType,
+  errFormattingError,
+  errOutOfContextPacket,
+
+  errCouldNotLaunch,
+  errFileOpenError,
+
+  errGenericError
+};
+
+
+
+#ifndef __cplusplus
+typedef enum Errors Errors;
+#else
+
+class Error {
+public:
+  Error() : status(success), threadStatus(0), filename(0), lineNo(0) { };
+  void Set(int status_, char *filename_, int lineNo_) {
+    status   = status_;
+    threadStatus = 0;
+    filename = filename_;
+    lineNo   = lineNo_;
+  }
+
+  void Set(int status_, int threadStatus_, char *filename_,int lineNo_) {
+    status       = status_;
+    threadStatus = threadStatus_;
+    filename     = filename_;
+    lineNo       = lineNo_;
+  }
+  
+  void Print_();
+
+  static void Initialize();
+  static void Destroy(void *value);
+  static Error *get();
+  static int getStatus() {
+    Error *error = get();
+    if (error!=0) return error->status;
+    else return errNoErrorObject;
+  }
+
+  static int getThreadStatus() {
+    Error *error = get();
+    if (error!=0) return error->threadStatus;
+    else return -1;
+  }
+
+  static char *getFilename() {
+    Error *error = get();
+    if (error!=0) return error->filename;
+    else return "<unknown>";
+  }
+
+  static int getLineNo() {
+    Error *error = get();
+    if (error!=0) return error->lineNo;
+    else return 0;
+  }
+
+  static int ThreadError_(int threadStatus_, char *filename_, int lineNo_) {
+    if (threadStatus_!=0) {
+      Error *error = Error::get();
+      if (error!=0) error->Set(errThreadError,threadStatus_,filename_,lineNo_);
+    }
+    return threadStatus_;
+  }
+
+  static void SetStatus(int status_) {
+    Error *error = Error::get();
+    if (error!=0) error->Set(status_, "", 0);
+  }
+
+  static void Print();
+
+protected:
+  int   status, threadStatus;
+  char* filename;
+  int   lineNo;
+};
+
+
+void gm_Abort(char *message);
+
+#define Return(returnValue, errorStatus) \
+{ \
+  Error *error = Error::get(); \
+  if (error!=0) error->Set(errorStatus, __FILE__, __LINE__); \
+  return returnValue; \
+}
+
+
+#define VoidReturn(errorStatus)  \
+{ \
+  Error *error = Error::get(); \
+  if (error!=0) error->Set(errorStatus, __FILE__, __LINE__); \
+  return; \
+}
+
+
+#define ThreadError(func) Error::ThreadError_(func, __FILE__, __LINE__)
+
+
+#endif  /* __cplusplus */
+
+
+#endif /* __ERROR_H__ */
+@
+
+
+1.9
+log
+@added Options_Delete and included error.h
+@
+text
+@d28 1
+a28 2
+  errTcpProtocolNameError, 
+
+@
+
+
+1.8
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d54 5
+d146 4
+@
+
+
+1.7
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d25 1
+@
+
+
+1.6
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d11 1
+d21 1
+a21 1
+  errSocketReadEOF, 
+d121 1
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d7 1
+d52 66
+a117 2
+extern void SetError__(int, char*, int);
+extern int  SetThreadError__(int, char*, int);
+a119 2
+#define SetGlobalError(errorCode) SetError__(errorCode, __FILE__, __LINE__)
+#define ThreadError(func)   SetThreadError__(func, __FILE__, __LINE__)
+d121 1
+a121 1
+#define gm_BoolErrorReturn(errorCode) \
+d123 3
+a125 3
+  SetError__(errorCode, __FILE__, __LINE__); \
+  if (errorCode==success) return gm_True; \
+  else return gm_False; \
+a126 1
+				  
+d128 2
+a129 1
+#define VoidErrorReturn(errorCode) \
+d131 2
+a132 1
+  SetError__(errorCode, __FILE__, __LINE__); \
+d137 1
+a137 22
+#define ErrorReturn(errorCode, returnValue) \
+{ \
+  SetError__(errorCode, __FILE__, __LINE__); \
+  return returnValue; \
+}
+
+
+#define GlobalErrorCode error.globalErrorCode
+#define ThreadErrorCode error.threadErrorCode
+#define ErrorFilename   error.filename
+#define ErrorLineNo     error.lineNo
+
+
+struct Error {
+  int  globalErrorCode;		// user-defined error codes
+  int  threadErrorCode;		// error codes returned by the p-thread library
+  char *filename;
+  int  lineNo;
+};
+
+extern struct Error error;
+
+@
+
+
+1.4
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d58 1
+a58 1
+#define BoolErrorReturn(errorCode) \
+d61 2
+a62 2
+  if (errorCode==success) return TRUE; \
+  else return FALSE; \
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d45 1
+a45 1
+  errLaunchDBCreationError,
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d39 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d9 1
+d40 7
+a46 2
+  errInvalidPacketFormat,
+  errOutOfContextPacket
+d50 2
+a51 2
+extern void SetError(int, char*, int);
+extern int  SetThreadError(int, char*, int);
+d54 2
+a55 2
+#define SetGlobalError(errorCode) SetError(errorCode, __FILE__, __LINE__)
+#define ThreadError(func)   SetThreadError(func, __FILE__, __LINE__)
+d59 1
+a59 1
+  SetError(errorCode, __FILE__, __LINE__); \
+d67 1
+a67 1
+  SetError(errorCode, __FILE__, __LINE__); \
+d74 1
+a74 1
+  SetError(errorCode, __FILE__, __LINE__); \
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

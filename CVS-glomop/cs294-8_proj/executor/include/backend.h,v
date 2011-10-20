@@ -1,0 +1,708 @@
+head	1.8;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	97.12.13.01.44.06;	author abrown;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.12.06.02.11.50;	author abrown;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.12.03.01.51.01;	author abrown;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.12.02.22.46.59;	author abrown;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.12.02.21.56.38;	author abrown;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.02.01.00.29;	author abrown;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.01.23.46.03;	author abrown;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.12.01.23.44.29;	author abrown;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@New implementation of backend that tracks child processes. Many bugs fixed.
+Many bugs probably introduced.
+
+Only restrictions on jobs now is that they not setuid and that they
+not mess with /proc or ptrace.
+
+Some bogons in CPU accounting remain.
+@
+text
+@/* $Id: backend.h,v 1.7 1997/12/06 02:11:50 abrown Exp $
+ *
+ * Header file for executor back-end. 
+ *
+ * Declares the needed prototypes and constants for interfacing with the
+ * executor back-end.
+ *
+ * Copyright (c) 1997 The Regents of the University of California.
+ * All Rights Reserved.
+ *
+ * Author: Aaron Brown <abrown@@cs.berkeley.edu>
+ *
+ * $Log: backend.h,v $
+ * Revision 1.7  1997/12/06 02:11:50  abrown
+ * Add some code stolen from top to make backend_query_nodestatus
+ * work. There's one glitch, in that the CPU utilization is for the
+ * last second of CPU; a background thread should accumulate this over
+ * longer time periods.
+ *
+ * Revision 1.6  1997/12/03 01:51:01  abrown
+ * First-cut implementation of backend. Not tested much. backend_exec() is known
+ * to work; the rest of the functions may or may not.
+ *
+ * Child process following not yet implemented, but CPU accounting is.
+ *
+ * Revision 1.5  1997/12/02 22:46:59  abrown
+ * Fix some typos and comment bugs. Make it compile.
+ *
+ * Add shell parameter to backend_signal()
+ *
+ * Revision 1.4  1997/12/02 21:56:38  abrown
+ * Declare and document the interface to the executor back-end.
+ *
+ * Revision 1.3  1997/12/02 01:00:29  abrown
+ * Enhance backend_exec to find the first child forked by the shell, and to
+ * return that as the process ID to the caller.
+ *
+ * Revision 1.2  1997/12/01 23:46:03  abrown
+ * Fix typo in function name (it *should* be backend_exec).
+ *
+ * Revision 1.1  1997/12/01 23:44:29  abrown
+ * Initial implementation of a piece of the executor backend
+ * (backend_exec()). This is almost a stub version for now.
+ *
+ */
+
+#ifndef _BACKEND_H_
+#define _BACKEND_H_
+
+#include <sys/types.h>
+
+/**
+ ** CONSTANTS 
+ **/
+
+/* Frequency of monitoring by backend (seconds) */
+#define BACKEND_MONITORINTERVAL 15
+
+/* Size of hash table for internal job monitoring */
+#define BACKEND_JOBTABLESIZE 1024
+
+/* for do_exec() */
+#ifndef _PATH_BSHELL
+#define _PATH_BSHELL "/bin/sh"
+#endif
+#define PROCBASE "/proc/"
+
+/* Return values from backend calls */
+#define BACKEND_SUCCESS		0
+#define BACKEND_FAIL		1      /* NOTE: ANY FUNCTION CAN RETURN THIS */
+#define BACKEND_NOTFOUND 	2
+#define BACKEND_EXISTS		3
+#define BACKEND_NOTZOMBIE	4
+#define BACKEND_INVALIDSIGNAL	5
+
+/* Process states */
+#define BACKEND_STATE_RUNNING	18	/* Do not change this ordering!! */
+#define BACKEND_STATE_SUSPENDED 17
+#define BACKEND_STATE_ZOMBIE    16
+#define BACKEND_STATE_UNKNOWN   19
+
+/**
+ ** INTERAL CONTROL FUNCTIONS
+ **/
+
+/**
+ ** backend_initialize(): initialize the executor back-end subsystem
+ **
+ * This function should be called before any other back-end functions.
+ * It allows the back-end to set up the internal state necessary to
+ * track jobs. It may cause the creation of a new thread, and thus should
+ * only be called once.
+ *
+ * Parameters: none.
+ *
+ * Return value: BACKEND_SUCCESS or BACKEND_FAIL
+ *
+ * Side effects: enables the back-end to accept further commands.
+ *		 NOT idempotent.
+ *
+ * This function is not reentrant, and should only be called once.
+ */
+int backend_initialize(void);
+
+/**
+ ** backend_reattach(pid): attempt to reattach monitoring to specified pid
+ **
+ * This function is used for crash recovery. It attempts to find a running
+ * process with process id pid, and reattaches the monitoring machinery to 
+ * that process and any children that can be found.
+ *
+ * This function is not guaranteed to find all the children, and thus only
+ * provides partial recovery in the face of malicious jobs.
+ *
+ * Parameters: 
+ *	pid_t pid	-- Process ID to reattach
+ *
+ * Return value: 
+ *	BACKEND_NOTFOUND if the PID doesn't exist
+ *	BACKEND_EXISTS   if the PID is already being monitored
+ *	BACKEND_SUCCESS  if the PID was found and reattached
+ *
+ * Side effects: reenables monitoring and control functions for the desired job
+ *
+ * This function is reentrant on different PIDs, although overlapping 
+ * invocations may be serialized.
+ */
+int backend_reattach(pid_t pid);
+
+/**
+ ** backend_reap(pid): reap specified pid and stop tracking it
+ **
+ * This function reaps a job which has been killed or exited (and is 
+ * a zombie process as a result). It also stops tracking the job,
+ * its status, and its resource utilization. It should be called only
+ * when there is no more interest in the specified pid. If this function
+ * is never called for a certain job, then that job will remain as a 
+ * zombie process, and the process table will fill up.
+ *
+ * The process must be in the zombie state for this function to succeed.
+ *
+ * Parameters:
+ *	pid_t pid	-- Process ID to reap
+ *
+ * Return value: 
+ *	BACKEND_NOTZOMBIE if the process exists but is not zombie
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_SUCCESS   if the PID was successfully reaped
+ *
+ * Side effects: disables future monitoring of the desired job; reaps job
+ *
+ * This function is reentrant on different PIDs, although overlapping 
+ * invocations may be serialized.
+ */
+int backend_reap(pid_t pid);
+
+
+/**
+ ** PROCESS CONTROL FUNCTIONS
+ **/
+
+/**
+ ** backend_exec(command, *pid, stdout_fd, stderr_fd): start execution of job 
+ **
+ * The job is specified as an arbitrary command-line string that is passed
+ * to "/bin/sh -c". This allows arbitrary pipelines or output redirection,
+ * etc.
+ *
+ * If stdout_fd is non-zero, the subshell's standard output is redirected
+ * to the file descriptor specified by stdout_fd (note that this is the
+ * _shell's_ stdout, so it will only contain job output if the command-line
+ * string to start the job does not contain output redirection). Similarly,
+ * if stderr_fd is non-zero, the subshell's standard error is redirected to
+ * the stderr_fd file.
+ *
+ * Parameters:
+ *	char  *commandline	-- command line string that starts the job
+ *	pid_t *pid		-- pointer where job's process ID will be put
+ *	int    stdout_fd	-- file descriptor where stdout will be sent
+ *	int    stderr_fd	-- file descriptor where stderr will be sent
+ *
+ * Return value: either BACKEND_SUCCESS or BACKEND_FAIL
+ *
+ * Side effects: starts the job specified by commandline in the background,
+ *		 and may cause the job's children to be traced
+ *
+ * This function is reentrant, but execution of multiple overlapping
+ * invocations may be serialized.
+ */
+int backend_exec(char *commandline, pid_t *pid, int stdout_fd, int stderr_fd);
+
+/**
+ ** backend_suspend(pid): suspend a job
+ **
+ * This function suspends the job specified by PID, by sending it
+ * a SIGSTOP. It also sends a SIGSTOP to every child of the job, if child
+ * tracking is implemented.
+ * 
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_SUCCESS   if the signal was sent successfully (note: this
+ *			  does not imply that the signal was handled and
+ *			  the process is sleeping!)
+ *
+ * Side effects: a SIGSTOP is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_suspend(pid_t pid);
+
+/**
+ ** backend_resume(pid): resume a job
+ **
+ * This function resumes the job specified by PID, by sending it
+ * a SIGCONT. It also sends a SIGCONT to every child of the job, if child
+ * tracking is implemented.
+ * 
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_SUCCESS   if the signal was sent successfully (note: this
+ *			  does not imply that the signal was handled and
+ *			  the process is now running!)
+ *
+ * Side effects: a SIGCONT is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_resume(pid_t pid);
+
+/**
+ ** backend_kill(pid): kills a job
+ **
+ * This function kills the job specified by PID, by sending it
+ * a SIGKILL. It first sends a SIGKILL to every known child of the job, 
+ * if child tracking is implemented.
+ * 
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_FAIL      if the PID won't die (SIGKILL fails)
+ *	BACKEND_SUCCESS   if the signal was sent successfully (note: this
+ *			  does not imply that the signal was handled and
+ *			  the process is killed!)
+ *
+ * Side effects: a SIGKILL is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_kill(pid_t pid);
+
+/**
+ ** backend_checkpoint(pid): requests a checkpoint from a job
+ **
+ * This function requests a checkpoint from the job specified by PID, 
+ * by sending it a SIGUSR1. It also sends a SIGUSR1 to every known child 
+ * of the job, if child tracking is implemented.
+ * 
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_SUCCESS   if the signal was sent successfully (note: this
+ *			  does not imply that the signal was handled and
+ *			  the checkpoint was successful!)
+ *
+ * Side effects: a SIGUSR1 is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_checkpoint(pid_t pid);
+
+/**
+ ** backend_usersignal(pid): requests job-defined behavior from a job
+ **
+ * This function requests user-defined actions from the job specified by PID, 
+ * by sending it a SIGUSR2. It also sends a SIGUSR2 to every known child 
+ * of the job, if child tracking is implemented.
+ * 
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND  if the PID doesn't exist
+ *	BACKEND_SUCCESS   if the signal was sent successfully (note: this
+ *			  does not imply that the signal was handled
+ *			  succesfully!)
+ *
+ * Side effects: a SIGUSR2 is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_usersignal(pid_t pid);
+
+/**
+ ** backend_signal(pid, sig, shell): send a signal to a job
+ **
+ * This function sends any signal to the job. It attempts to send the
+ * signal to every known child of the job, if child tracking is implemented.
+ * 
+ * The shell parameter allows the caller to control whether or not the
+ * signal is sent to the shell which was used to invoke the job.
+ *
+ * Paremeters:
+ *	pid_t pid	-- Process ID to suspend
+ *	int sig		-- Signal to send
+ *	int shell	-- 1 if the signal should be sent to the shell
+ *			   under which the job is running first, 2 if 
+ *			   the signal should be sent to the shell last, 
+ *			   0 if the shell shouldn't be signaled
+ *
+ * Return value:
+ *	BACKEND_NOTFOUND       if the PID doesn't exist
+ *	BACKEND_INVALIDSIGNAL  if the requested signal is not recognized by 
+ *			       the OS
+ *	BACKEND_SUCCESS        if the signal was sent successfully (note: this
+ *			       does not imply that the signal was handled
+ *			       succesfully!)
+ *
+ * Side effects: a signal of type sig is sent to the job and its known children
+ *
+ * This function is reentrant.
+ */
+int backend_signal(pid_t pid, int sig, int shell);
+
+
+/**
+ ** PROCESS STATUS QUERYING FUNCTIONS
+ **/
+
+/**
+ ** backend_query_cputime(...): query CPU time used by a job
+ **
+ * This function returns the CPU resource utilization of a job (specified
+ * by process ID). CPU utilization is broken down into user time, 
+ * system time, wall-clock time, and cycles. Note that cycles will not
+ * be available in this implementation (0 is returned instead).
+ *
+ * Any of the user/sys/wall/cycles pointers may be NULL; in this case,
+ * that data is not computed or returned.
+ *
+ * Parameters:
+ *	pid_t  pid	-- Process ID to query
+ *	<all other parameters are used as return values only>
+ *
+ * Return values:
+ *	<func. return>	 -- BACKEND_NOTFOUND (pid invalid) or BACKEND_SUCCESS
+ *	float *user	 -- amount of user CPU time consumed by job, in seconds
+ *	float *sys	 -- amount of system CPU time consumed by job (seconds)
+ *	float *wall	 -- amount of wall-clock time consumed by job (seconds)
+ *	uint64_t *ucycles -- number of user CPU cycles consumed by job
+ *	uint64_t *scycles -- number of system CPU cycles consumed by job
+ *
+ *   Note: for zombie processes, only user time is valid. Wall clock time
+ *	   is returned, but is just equal to the difference between the
+ * 	   current time and the process start time.
+ *
+ * Side effects: none.
+ *
+ * This function is reentrant, although overlapping calls will be serialized.
+ */
+int backend_query_cputime(pid_t pid, float *user, float *sys, float *wall,
+			  uint64_t *ucycles, uint64_t *scycles);
+
+/**
+ ** backend_query_memusage(...): query memory utilization of a job
+ **
+ * This function returns the memory utilization of a job (specified
+ * by process ID). Memory utilization is broken down into total process
+ * size (in KB) and resident set size (also in KB).
+ *
+ * Any of the totalKB/residentKB pointers may be NULL; in this case,
+ * that data is not computed or returned.
+ *
+ * Parameters:
+ *	pid_t  pid	-- Process ID to query
+ *	<all other parameters are used as return values only>
+ *
+ * Return values:
+ *	<func. return>	 -- BACKEND_NOTFOUND (pid invalid) or BACKEND_SUCCESS
+ *	int *totalKB	 -- Kilobytes used by process
+ *	int *residentKB	 -- Size of process's resident set, in KB
+ *
+ * Side effects: none.
+ *
+ * This function is reentrant, although overlapping calls will be serialized.
+ */
+int backend_query_memusage(pid_t pid, int *totalKB, int *residentKB);
+
+/**
+ ** backend_query_filespace(...): query disk-space utilization of a job
+ **
+ * This function returns the disk-space utilization of a job (specified
+ * by process ID), reported in number of bytes used. 
+ *
+ * Parameters:
+ *	pid_t  pid	-- Process ID to query
+ *	<all other parameters are used as return values only>
+ *
+ * Return values:
+ *	<func. return>	     -- BACKEND_NOTFOUND (pid invalid)
+ *				BACKEND_SUCCESS
+ *	uint64_t *bytesused  -- Bytes of disk space used by job
+ *
+ * Side effects: none.
+ *
+ * This function is reentrant, although overlapping calls will be serialized.
+ *
+ * NOTE: THIS FUNCTION IS NOT YET IMPLEMENTED; IT WILL RETURN 0.
+ */
+int backend_query_filespace(pid_t pid, uint64_t *bytesused);
+
+/**
+ ** backend_query_status(pid, *state, *exitval): query status of a job
+ **
+ * This function queries the status of a job. The status consists of
+ * the run state of the job (running/suspended/zombie) and, in the case
+ * of a zombie, the exit value.
+ *
+ * The exitval pointer may be NULL, but the state pointer is required to
+ * point to a valid memory location.
+ *
+ * Parameters:
+ *	pid_t  pid	-- Process ID to query
+ *	<all other parameters are used as return values only>
+ *
+ * Return values:
+ *	<func. return>	-- BACKEND_NOTFOUND (pid invalid) or BACKEND_SUCCESS
+ *	int *state      -- one of: BACKEND_STATE_RUNNING
+ *				   BACKEND_STATE_SUSPENDED
+ *				   BACKEND_STATE_ZOMBIE
+ *			           BACKEND_STATE_UNKNOWN
+ *
+ *	int *waitstat	-- the wait status. The actual return 
+ *			   value (in the case of a process that calls _exit())
+ *			   or terminating signal can be found by using the
+ *			   macros described in wstat(5).
+ *
+ * Side effects: none.
+ *
+ * This function is reentrant, although overlapping calls will be serialized.
+ */
+int backend_query_status(pid_t pid, int *state, int *waitstat);
+
+
+/**
+ ** NOTE STATUS QUERYING FUNCTIONS
+ **/
+
+/** 
+ ** backend_query_nodestatus(...): query current state of this node
+ **
+ * This function returns the load status of the current node. Load status
+ * includes the 1/5/15 minute load averages, the percentage of CPU currently
+ * being used, and the percentage of virtual memory used.
+ *
+ * Parameters:
+ *	<all parameters are used as return values only>
+ *
+ * Return values:
+ *	<func. return>  -- BACKEND_SUCCESS or BACKEND_FAIL
+ *	float *loadavg	-- a floating point array of size 3 that will be
+ *			   filled in such that:
+ *				loadavg[0] == 1-minute load average
+ *				loadavg[1] == 5-minute load average
+ *				loadavg[2] == 15-minute load average
+ *	float *cpu_pct	-- the percentage of CPU currently being used (0-100.0)
+ *	float *mem_pct	-- the percentage of memory currently used (0-100.0)
+ *	float *swap_pct	-- the percentage of swap currently used (0-100.0)
+ *
+ * Side effects: none.
+ *
+ * This function is reentrant.
+ */
+int backend_query_nodestatus(float *loadavg, float *cpu_pct, float *mem_pct,
+			     float *swap_pct);
+
+#endif /* _BACKEND_H */
+@
+
+
+1.7
+log
+@Add some code stolen from top to make backend_query_nodestatus
+work. There's one glitch, in that the CPU utilization is for the
+last second of CPU; a background thread should accumulate this over
+longer time periods.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.6 1997/12/03 01:51:01 abrown Exp $
+d14 6
+d56 6
+d77 1
+a77 1
+#define BACKEND_STATE_RUNNING	16
+d79 1
+a79 1
+#define BACKEND_STATE_ZOMBIE    18
+d248 1
+d316 3
+a318 1
+ *			   under which the job is running, else 0
+@
+
+
+1.6
+log
+@First-cut implementation of backend. Not tested much. backend_exec() is known
+to work; the rest of the functions may or may not.
+
+Child process following not yet implemented, but CPU accounting is.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.5 1997/12/02 22:46:59 abrown Exp $
+d14 6
+d462 1
+d468 2
+a469 1
+int backend_query_nodestatus(float *loadavg, float *cpu_pct, float *mem_pct);
+@
+
+
+1.5
+log
+@Fix some typos and comment bugs. Make it compile.
+
+Add shell parameter to backend_signal()
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.4 1997/12/02 21:56:38 abrown Exp $
+d14 5
+d52 1
+a52 1
+#define BACKEND_FAIL		1
+d58 6
+d341 4
+d419 1
+d421 4
+a424 1
+ *	int *exitval	-- the exit code of the job, if zombie. Else 0.
+d430 1
+a430 1
+int backend_query_status(pid_t pid, int *state, int *exitval);
+@
+
+
+1.4
+log
+@Declare and document the interface to the executor back-end.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.3 1997/12/02 01:00:29 abrown Exp $
+d14 3
+d274 1
+a274 1
+ ** backend_signal(pid, sig): send a signal to a job
+d279 3
+d284 3
+a286 1
+ *	int sign	-- Signal to send
+d300 1
+a300 1
+int backend_signal(pid_t pid, int sig);
+d437 5
+@
+
+
+1.3
+log
+@Enhance backend_exec to find the first child forked by the shell, and to
+return that as the process ID to the caller.
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.2 1997/12/01 23:46:03 abrown Exp $
+d14 4
+d42 7
+a48 2
+#define EXEC_SUCCESS	0
+#define EXEC_FAIL	1
+d51 1
+a51 1
+ ** FUNCTIONS
+d54 36
+a89 2
+/*
+ * backend_exec(): start execution of a job 
+d91 42
+d150 1
+a150 1
+ * Return value: either EXEC_SUCCESS or EXEC_FAIL
+d160 87
+d248 182
+@
+
+
+1.2
+log
+@Fix typo in function name (it *should* be backend_exec).
+@
+text
+@d1 1
+a1 1
+/* $Id: backend.h,v 1.1 1997/12/01 23:44:29 abrown Exp $
+d14 3
+d36 2
+@
+
+
+1.1
+log
+@Initial implementation of a piece of the executor backend
+(backend_exec()). This is almost a stub version for now.
+@
+text
+@d1 1
+a1 1
+/* $Id$
+d13 5
+a17 1
+ * $Log$
+d41 1
+a41 1
+ * do_exec: start execution of a job 
+d68 1
+a68 1
+int do_exec(char *commandline, pid_t *pid, int stdout_fd, int stderr_fd);
+@

@@ -1,0 +1,349 @@
+head	1.8;
+access;
+symbols
+	current:1.8
+	prewink:1.5
+	stable:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	96.08.23.19.35.56;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.07.26.20.30.51;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.07.07.00.03.18;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.23.01.33.03;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.15.01.49.13;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.14.07.39.56;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.14.06.48.12;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.13.09.15.27;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  commands.pl - message handlers
+# $Id: commands.pl,v 1.6 96/08/22 18:37:09 glomop Exp $
+#
+ 
+=head1 NAME
+
+commands - handlers for client commands that arrive via messages
+
+=head1 SYNOPSIS
+
+ require "commands.pl";
+ &proxy::init_handlers;
+
+=head1 DESCRIPTION
+
+Each function in this file is a handler that is called on receipt of a
+particular GloMop message from the client.  (The messages are defined in
+hsk.txt.)   A handler receives I<n>+1 arguments: the proxy object itself (for
+accessing proxy methods and instance variables), and the I<n> components of the
+body of the received message, the first of which will usually be the two-letter
+command (e.g. "OD" for open document).
+
+Each subroutine should do whatever is necessary to handle the message in a
+non-blocking way, and then return.  Return values from the functions are
+ignored, since errors in processing the command should be handled by exchanging
+the appropriate messages with the client.
+
+The function L</"init_handlers"> maps two-letter command names to message
+handler subroutine names, e.g. the mapping "OD" => "open_doc" means that the
+function L</"proxy::handle_open_doc"> will be called when a message beginning
+with the token "OD" is received.
+
+Look through the source to get an idea of how commands can be handled.
+
+=head1 BUGS
+
+Currently the mapping of message types (initial token value) to handler names
+is done statically, in a hash table set up by L</"init_handlers">.  It should
+really come from a config file.
+
+=cut
+
+#  Commands the proxy can handle
+#
+
+package proxy;
+
+# The following hash defines the handlers for different message types.  Each
+# value is used to create a subroutine name for receiving the message by
+# prepending "receive_" and a handler for the message by prepending "handle_".
+# E.g. for OP_OPEN_DOC, call receive_open_doc to receive/parse the message, and
+# then call handle_open_doc with the parsed arguments to handle the call.
+
+sub init_handlers {
+    %proxy::MsgHandlers =
+    (&Msg::OP_OPEN_DOC => "open_doc",
+     &Msg::OP_CLOSE_DOC => "close_doc",
+     &Msg::OP_SET_PREFS => "set_prefs",
+     &Msg::OP_SET_CLIENTTYPE => "set_clienttype",
+     &Msg::OP_SET_HTYPEBINDING => "set_htypebinding",
+     );
+}
+
+sub handle_open_doc {
+    my($proxy,$msgtype,$docloc,$max,$docid) = @@_;
+    # Create new document object for the document to be opened.
+    my $doc = "doc"->new($docloc,$max,$docid);
+    # Fetch and segment document
+    unless ($doc->fetch()) {
+        &Msg::send_op_failed(0, &Msg::OP_FAIL, $docid, $doc->err);
+        return;
+    }
+    $doc->segment($proxy->client, $doc->prefers);
+    # Send chunks to client, up to threshold
+    $doc->send_chunks(0..$max-1);
+    # Add document to the list of open documents
+    $proxy->add_doc($doc, $doc->{conn});
+    #
+    # The document object encapsulates a connection object that represents
+    # the filehandle on which the document is being received.  Put it on
+    # the queue of filehandles to look at.
+    #
+    return;
+}
+
+sub handle_close_doc {
+    my($proxy,$msgtype,$docid) = @@_;
+
+    if ($proxy->delete_doc($docid)) {
+        &Mon::status("Close ID $docid");
+        &Mon::doc_delete($docid);
+    } else {
+        # Document isn't known to be open
+        &Mon::status("Close ID $docid: no such document?");
+        &Msg::send_op_failed(0, &Msg::OP_FAIL, $docid,
+                             "Nothing known about DocID $docid");
+    }
+}
+
+sub handle_set_clienttype {
+    my($proxy,$msgtype,$ctype) = @@_;
+
+    $proxy->set_c_device($ctype);
+}
+sub handle_set_prefs {
+    my ($proxy,$msgtype,$htype,$preflist) = @@_;
+    my @@prefs = split(/,/ , $preflist);
+    my $meth;
+    if ($meth = &doc::htype_method($htype, "set_prefs")) {
+        # BUG::the check for package existence should be different...or can be
+        # left out, since the prefs module is robust to that condition.
+        # create the two hashes to pass to the method
+        for (@@prefs) {
+            if (/^(\S+)=([^:]*):(.*)$/) {
+                &prefs::set($htype, $1, $2, $3);
+            } else {
+                &Mon::status("Set_prefs($htype): bad pref '$_'");
+                &Msg::send_op_failed(0, &Msg::OP_FAIL, 0,
+                                     "Bad term '$_' in prefs list");
+                return;
+            }
+        }
+        &Mon::status("Set_prefs($htype): " . (scalar @@prefs) . " terms");
+    } else {
+        # No such htype supported
+        &Mon::status("Set_prefs: no such module '$htype'");
+        &Msg::send_op_failed(0, &Msg::OP_FAIL, 0, "No such module '$htype'");
+    }
+}
+
+sub handle_set_htypebinding {
+    my ($proxy,$msgtype,$new_mimetype,$new_htype) = @@_;
+
+    warn("Setting binding ($new_mimetype, $new_htype)\n");
+    &doc::mimetype_htype_bind($new_mimetype,$new_htype);
+}
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+1;
+@
+
+
+1.7
+log
+@segmgr renamed to chunk.  lots of changes including new html parser,
+rudimentary layout manager, beginnings of interface to ptm, modularized
+front-end vs back-end distiller components (but interfaces aren't really
+stabilized yet).
+@
+text
+@d1 5
+d60 2
+d74 1
+a74 1
+    $doc->segment($proxy->client);
+d101 5
+d131 17
+@
+
+
+1.6
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@d63 1
+a63 1
+    unless ($doc->fetch($proxy->client)) {
+d67 1
+@
+
+
+1.5
+log
+@Added extensive documentation in the form of embedded perlpod.
+@
+text
+@d61 1
+a61 1
+    my $doc = "doc"->new( $docloc,$max,$docid);
+d63 1
+a63 1
+    unless ($doc->fetch) {
+@
+
+
+1.4
+log
+@Fixed 'bad htype' bug on every other fetch (lesson: don't do a 'return'
+or far jump out a 'while each()' loop!).  Fixed error behavior: was
+trying to set error field in self->resp instead of self (an
+HTTP::Headers object rather than a proxy object).  Still tbd: Image
+module does not call gifmunch if distillation isn't needed or would
+increase e2e latency. (Hook in place, but no fxnality yet.)
+@
+text
+@d1 38
+a38 1
+#
+d81 5
+a85 7
+    my $ndx = 0;
+    my @@docs = @@{$proxy->{Docs}};
+    for (@@docs) {
+        last if ($_->id == $docid);
+        $ndx++;
+    }
+    if ($ndx > $#docs) {
+a89 1
+        return;
+a90 4
+    # delete it
+    splice(@@{$proxy->{Docs}}, $ndx, 1);
+    &Mon::status("Close ID $docid");
+    &Mon::doc_delete($docid);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d33 1
+a33 1
+    push(@@{$proxy->{Docs}}, $doc);
+a38 1
+    push(@@{$proxy->{Connections}}, $doc->{conn});
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d16 1
+d22 1
+a22 1
+    my($msgtype,$docloc,$max,$docid) = @@_;
+d33 1
+a33 1
+    push(@@{$self->{Docs}}, $doc);
+d39 1
+a39 1
+    push(@@{$self->{Connections}}, $doc->{conn});
+d43 21
+d65 1
+a65 1
+    my ($msgtype,$htype,$preflist) = @@_;
+@
+
+
+1.1
+log
+@Defined a simple protocol in hsk.txt for setting session-level
+preferences for an htype, and implemented the message handler for it
+which sends the parsed prefs info to the set_prefs routine of the
+appropriate htype module.
+@
+text
+@d47 2
+a49 1
+        my (%h1,%h2);
+d51 2
+a52 3
+            if (/^(\S+)=([^:]+):(.*)$/) {
+                $h1{$1} = $2;
+                $h2{$1} = $3;
+a59 2
+        # OK, call the set_prefs func
+        &{$meth}(\%h1, \%h2);
+@

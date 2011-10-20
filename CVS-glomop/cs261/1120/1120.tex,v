@@ -1,0 +1,473 @@
+head	1.4;
+access;
+symbols;
+locks; strict;
+comment	@% @;
+
+
+1.4
+date	98.11.21.20.26.22;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.20.02.38.20;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.20.01.56.25;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.19.03.58.21;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@\documentclass{slides}
+\usepackage{times}
+\usepackage{landscape}
+\raggedright
+\addtolength{\textheight}{1in}
+\addtolength{\topmargin}{-1.3in}
+\addtolength{\textwidth}{1in}
+\pagestyle{plain}
+\newcommand\dolengths{ %
+\setlength{\topsep}{0in}
+\setlength{\parsep}{0in}
+\setlength{\parskip}{.1in}
+\setlength{\itemsep}{0in}
+}
+\newcommand\bi{\begin{itemize}}
+\newcommand\ei{\end{itemize}}
+\newcommand\vf{\vspace*{\fill}}
+\newcommand\bs[1]{\begin{slide}{} \centerline{\Large \bf #1} \vf}
+\newcommand\es{\vf \end{slide}}
+\begin{document}
+
+\dolengths
+\begin{slide}{}
+{
+\Large
+\begin{center}
+Cryptographic protocols:\\
+design and analysis
+\end{center}
+}
+\vskip 2in
+
+\begin{center}
+David Wagner \\
+{\em University of California, Berkeley}
+\end{center}
+\end{slide}
+
+\bs{Notation}
+$A,B,S$: legitimate parties.  (Short for: Alice, Bob, server.)
+\vf
+
+$A\to B: x$ means the message $x$ sent by party $A$ to party $B$.\\
+(Note that $B$ can't tell the difference between 
+$A\to B: x$ and $M\to B: x$, so messages should include the sender's name
+if the recipient needs to know it.)
+\vf
+
+$1. A\to B: x$ means the protocol designer intended this message
+to be the first in a series of several.\\
+(But there is no guarantee that $A$, the network, or the adversary
+will behave as intended.)
+\es
+
+\bs{Notation}
+$k$ is a key; $k^{-1}$ is its inverse.\\
+For symmetric cryptosystems, $k = k^{-1}$;
+for public-key cryptosystems, $k$ is the public key and $k^{-1}$
+the corresponding private key.
+\vf
+
+$\{x\}_k$ means $x$ encrypted under $k$.
+\vf
+
+$[x]_{k^{-1}}$ means $x$ signed under $k^{-1}$.\\
+(Conventionally one writes $\{x\}_{k^{-1}}$, although this notation
+is probably a poor choice.)
+\vf
+
+$T_A$ is a timestamp chosen by $A$.\\
+$N_A$ is an unpredictable random nonce (a ``challenge'') chosen by $A$.
+\es
+
+\bs{Who's awake?}
+What does the following notation mean?
+\[\begin{array}{lll}
+1. &A\to B: &\{A,[K_{AB},A,B]_{K_A^{-1}}\}_{K_B} \\
+2. &B\to A: &\{\mbox{message}\}_{K_{AB}} \\
+\end{array}\]
+\es
+
+\bs{Warmup}
+Establishing a secure channel with a challenge-response protocol:
+\[\begin{array}{lll}
+1. &A\to B: &A\\
+2. &B\to A: &N_B\\
+3. &A\to B: &[N_B]_{K_A^{-1}}\\
+4. &A\to B: &\{\mbox{message}\}_{K_B}\\
+5. &A\to B: &\{\mbox{message}'\}_{K_B}\\
+\ldots
+\end{array}\]
+Can you spot the flaw?
+\es
+
+
+\bs{Denning-Sacco \#1}
+Key exchange with the aid of an online certification server $S$.
+\[\begin{array}{lll}
+1. &A\to S: &A,B \\
+2. &S\to A: &\mbox{cert}_A,\mbox{cert}_B \\
+3. &A\to B: &\mbox{cert}_A,\mbox{cert}_B,
+	\{[K_{AB},T_A]_{K_A^{-1}}\}_{K_B} \\
+\end{array}\]
+Can you spot the flaw?
+\es
+
+\bs{Breaking Denning-Sacco \#1}
+Look closely:
+\[\begin{array}{lll}
+3. &A\to B: &\mbox{cert}_A,\mbox{cert}_B,
+	\{[K_{AB},T_A]_{K_A^{-1}}\}_{K_B} \\
+\end{array}\]
+The key $K_{AB}$ isn't bound to the names of the endpoints $A,B$.
+\vf
+
+Therefore, $B$ can extract the quantity $[K_{AB},T_A]_{K_A^{-1}}$
+and use it to spoof $A$ in a new connection to $C$, like this:
+\[\begin{array}{lll}
+3'. &B\to C: &\mbox{cert}_A,\mbox{cert}_C,
+	\{[K_{AB},T_A]_{K_A^{-1}}\}_{K_C} \\
+\end{array}\]
+As a result, $C$ mistakenly concludes he is speaking with $A$.
+\vf
+
+{\bf Moral: Be explicit.  Bind all names, and all other relevant context,
+to every message.}
+\vf
+
+\hfill {\small Credits: Abadi and Needham.}
+\es
+
+\bs{Early SSL}
+Key exchange with mutual authentication:
+\[\begin{array}{lll}
+1. &A\to B: &\{K_{AB}\}_{K_B}\\
+2. &B\to A: &\{N_B\}_{K_{AB}}\\
+3. &A\to B: &\{\mbox{cert}_A,[N_B]_{K_A^{-1}}\}_{K_{AB}}\\
+\end{array}\]
+Can you spot the flaw?
+\es
+
+\bs{Breaking early SSL}
+%\[\begin{array}{lll}
+%1. &A\to B: &\{K_{AB}\}_{K_B}\\
+%2. &B\to A: &\{N_B\}_{K_{AB}}\\
+%3. &A\to B: &\{\mbox{cert}_A,[N_B]_{K_A^{-1}}\}_{K_{AB}}\\
+%\end{array}\]
+%Note that $A$ will sign {\em anything} with his private key.
+%\vf
+%
+$B$ can spoof $A$ in a new connection with $C$.
+\begin{quote}
+$\begin{array}{lll}
+1'. &B\to C: &\{K_{BC}\}_{K_C}\\
+2'. &C\to A: &\{N_C\}_{K_{BC}}\\
+\end{array}$
+\end{quote}
+When $C$ challenges $B$ with nonce $N_C$, Bob sends $N_B=N_C$
+back to $A$ and uses her as an oracle.
+\begin{quote}
+\qquad$\begin{array}{llll}
+\qquad &1. &A\to B: &\{K_{AB}\}_{K_B}\\
+\qquad &2. &B\to A: &\{N_C\}_{K_{AB}}\\
+\qquad &3. &A\to B: &\{\mbox{cert}_A,[N_C]_{K_A^{-1}}\}_{K_{AB}}\\
+\end{array}$
+\end{quote}
+$A$ will sign {\em anything}, so $B$ extracts $[N_C]_{K_A^{-1}}$ and he's in:
+\begin{quote}
+$\begin{array}{lll}
+3'. &B\to C: &\{\mbox{cert}_A,[N_C]_{K_A^{-1}}\}_{K_{AB}}\\
+\end{array}$
+\end{quote}
+Fix: replace $[N_B]_{K_A^{-1}}$ with $[A,B,N_A,N_B]_{K_A^{-1}}$.
+\vf
+
+\hfill {\small Credits: Abadi and Needham.}
+\es
+
+\bs{Early SSL lessons}
+\vf
+{\bf Moral: Don't let yourself be used as a signing oracle.
+Add your own randomness---and bind names---before signing.}
+\vf
+\es
+
+\bs{GSM challenge-response}
+$A$ is cellphone handset, $B$ is a base station.
+\[\begin{array}{lll}
+1. &B\to A: &N_B\\
+2. &A\to B: &[N_B]_{K_A^{-1}}, \{\mbox{data}\}_{k}\\
+\end{array}\]
+where $k = f(K_A,N_B)$ is the voice privacy key.
+\vf
+
+Can you spot the weakness?
+\es
+
+
+\bs{X.509 standard \#1}
+Sending a signed, encrypted message to $B$:
+\[\begin{array}{lll}
+1. &A\to B: &A,[T_A,B,\{\mbox{message}\}_{K_B}]_{K_A^{-1}}\\
+\end{array}\]
+Can you spot the flaw?
+\es
+
+\bs{Breaking X.509 standard \#1}
+\[\begin{array}{lll}
+1. &A\to B: &A,[T_A,B,\{\mbox{message}\}_{K_B}]_{K_A^{-1}}\\
+\end{array}\]
+There's no reason to believe the sender was ever aware of the contents
+of the message.
+\vf
+
+Example: Proving yourself by sending a password.
+Attacker $C$ intercepts (1) above,
+extracts $\{\mbox{password}\}_{K_B}$, and sends
+\[\begin{array}{lll}
+1. &C\to B: &C,[T_C,B,\{\mbox{password}\}_{K_B}]_{K_C^{-1}}\\
+\end{array}\]
+Now $C$ is in, without needing to know the password.
+\vf
+
+Example: Secure auctions.  This attack provides
+an easy way for $C$ to send in a copy of $A$'s bid under his own name,
+without needing to know what $A$'s bid was.
+\vf
+
+{\bf Moral: sign before encrypting.}
+\vf
+
+\hfill {\small Credits: Abadi and Needham.}
+\es
+
+\bs{TMN}
+Pop quiz.  Watch carefully.
+\vf
+
+$A,B$ establish a shared key $k_B$ using the help of a fast server $S$:
+\[\begin{array}{lll}
+1. &A\to S: &\{k_A\}_{K_S}\\
+2. &B\to S: &\{k_B\}_{K_S}\\
+3. &S\to A: &k_A \oplus k_B\\
+\end{array}\]
+$A$ recovers $k_B$ as $k_A \oplus (k_A \oplus k_B)$.
+\vf
+
+Can you spot the flaw?
+\es
+
+
+\bs{Breaking TMN}
+Let's play spot the oracle!
+\vf
+
+The attack: $C,D$ conspire to recover $k_B$:
+\[\begin{array}{lll}
+1'. &C\to S: &\{k_B\}_{K_S}\\
+2'. &D\to S: &\{k_D\}_{K_S}\\
+3'. &S\to C: &k_B \oplus k_D\\
+\end{array}\]
+Now $C,D$ can recover $k_B$.
+\vf
+
+\hfill {\small Credits: Simmons.}
+\es
+
+\bs{Goss railway protocol}
+$A$ and $B$ establish an authenticated shared key $k_{A,B} = r_A \oplus r_B$:
+\[\begin{array}{lll}
+1. &A\to B: &A,\{r_A\}_{K_B}\\
+2. &B\to A: &B,\{r_B\}_{K_A}\\
+\end{array}\]
+\vf
+
+Do you see the subtle weakness?
+\es
+
+
+\bs{Attacks on Goss}
+In class, I thought there were bugs in the following slide,
+which describes an attack on the Goss railway protocol.
+\vf
+
+Upon more reflection, I now think I was wrong; I think my
+written description was completely correct, though I didn't
+show it to you in class.
+(On the other hand, I could just be thoroughly confused.
+This just underscores my point that these things are not at
+all easy to get right.)
+\es
+
+\bs{Triangle attacks on Goss}
+If session keys sometimes leak, the system breaks.
+\vf
+
+$C$ can recover $r_A$ from $\{r_A\}_{K_B}$ by opening
+a session to $B$ and replaying $A$'s encrypted contribution to the key:
+\[\begin{array}{lll}
+1. &C\to B: &C,\{r_A\}_{K_B}\\
+2. &B\to C: &B,\{r'_B\}_{K_C}\\
+\end{array}\]
+If $C$ can learn $k_{B,C}$, he can compute $r_A = k_{B,C} \oplus r'_B$.
+\vf
+
+Play the same games with $A$ to learn $r_B$;
+you get $k_{A,B}$.
+\vf
+
+\hfill {\small Credits: Burmester.}
+\es
+
+\bs{Implementing protocols}
+{\bf Explicitness} is powerful (and cheap).
+\vf
+
+The mathematical notation
+\[\begin{array}{lll}
+1. &B\to A: &N_B\\
+2. &A\to B: &\{N_B,K_{A,B}\}_{K_A}\\
+\end{array}\]
+should probably be implemented in practice as
+\begin{quote}
+$1.\,\, B\to A:\,$ Message 1 from $B$ to $A$ of GSM protocol v1.0 is a challenge $N_B$.\\
+$2.\,\, A\to B:\,$ $\{$Message 2 from $A$ to $B$ of GSM protocol v1.0 is
+a response to the challenge $N_B$; and $A$ asserts that the fresh session key
+$K_{A,B}$ is good for communication between $A$ and $B$ on the session
+where $N_B$ was seen.$\}_{K_A}$\\
+\end{quote}
+(Can you see why each of the elements above are there?)
+\es
+
+\bs{Implementing protocols}
+Any value received as cleartext should be treated as
+untrustworthy: you may use it as a {\bf hint} for performance,
+but don't depend on it for security.
+\vf
+
+{\bf Minimize state}; each message should be self-explanatory.
+\vf
+
+{\bf Hash everything}.
+Each message should include the (signed?)
+hash of all previous messages in the interaction.
+This makes cut-and-paste attacks harder.
+\vf
+
+{\bf Measure twice, cut once}.
+%\vf
+%
+%{\bf Hire a cryptographer}.
+\es
+
+
+
+\end{document}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d167 1
+a167 1
+$A$ will sign {\em anything}, so $C$ extracts $[N_C]_{K_A^{-1}}$ and he's in:
+d279 13
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d127 3
+d176 5
+d183 1
+d186 13
+a229 9
+\es
+
+\bs{GSM challenge-response}
+$A$ is cellphone handset, $B$ is a base station.
+\[\begin{array}{lll}
+1. &B\to A: &N_B\\
+2. &A\to B: &[N_B]_{K_A^{-1}}, \{\mbox{data}\}_{k}\\
+\end{array}\]
+where $k = f(K_A,N_B)$ is the voice privacy key.
+d232 1
+a232 1
+Can you spot the weakness?
+d253 1
+a253 1
+Spot the oracle!
+d263 3
+d285 1
+a285 1
+a session to $B$ and re-using $A$'s random value:
+d290 1
+a290 1
+If $k_{B,C}$ leaks, then $C$ can compute $r_A = k_{B,C} \oplus r'_B$.
+d295 3
+d307 1
+a307 1
+2. &A\to B: &\{N_B\}_{K_A}\\
+d313 3
+a315 1
+a response to the challenge $N_B$.$\}_{K_A}$\\
+a317 5
+\vf
+
+If you view all cleartext values as untrustworthy {\bf hints} intended
+for performance and take care to check all such hints against
+signed values etc., you will go a long way.
+d321 5
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d50 3
+a52 3
+to be sent first by $A$.\\
+(But there is no guarantee that $A$
+will do so, or that the network (or attacker) won't reorder messages, etc.)
+d74 2
+a75 2
+\bs{Notation}
+Pop quiz: What does the following notation mean?
+d250 29
+@

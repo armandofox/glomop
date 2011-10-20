@@ -1,0 +1,375 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include "md5.h"
+#include "idea.h"
+
+typedef unsigned long long u64;
+typedef unsigned long u32;
+
+#define MD5SALT     "p6s|U_p@@83s"
+#define MD5SALTLEN   11
+uint16   ideakey[8] = {0x4526, 0x8743, 0x3341, 0x9932,
+		       0x7865, 0x2093, 0x1996, 0x2321};
+u64      iv = 0x41334938;
+idea_key en_key, de_key;
+unsigned long size;
+
+static char asc[256][20];
+static int asclen[256];
+
+char *stream_ntoa(unsigned long addr);
+void  md5_plus_salt_text(char *text, char *buf);
+int   do_idea_encrypt(unsigned char *text, unsigned char *buf, int inlen);
+void  do_idea_decrypt(unsigned char *text, unsigned char *buf, int inlen);
+void  do_read_or_die(int fd, char *buf, size_t length);
+void  asc_init(void);
+
+void do_encrypt_stuff(void);
+void do_decrypt_stuff(void);
+
+int main(int argc, char **argv)
+{
+
+  if (argc != 1) {
+    fprintf(stderr, "Usage: http < stdin > stdout\n", argv[0]);
+    exit(1);
+  }
+
+  asc_init();
+
+  if (strcmp(argv[0] + (strlen(argv[0]) - 4), "http") == 0)
+    do_encrypt_stuff();
+  else if (strcmp(argv[0] + (strlen(argv[0]) - 6) , "httpde") == 0)
+    do_decrypt_stuff();
+  else {
+    fprintf(stderr, "Usage: http < stdin > stdout\n", argv[0]);
+    exit(1);
+  }
+
+  exit(0);
+}
+
+void do_encrypt_stuff(void)
+{
+  /* Each input line contains the following:
+     (long)           source_seconds
+     (long)           source_microseconds
+     (unsigned long)  source_address
+     (unsigned short) source_port
+     (unsigned long)  destination_address
+     (unsigned short) destination_port
+     (int)            url_len
+     (char[url_len])  url
+     (int)            mimetype_len
+     (char[url_len])  mimetype
+     (long)           destination_seconds
+     (long)           destination_microseconds
+     (unsigned)       response_headerlength
+     (unsigned)       response_datalength
+     (long)           final_seconds
+     (long)           final_microseconds
+     (char)           client_pragmas
+     (long)           client_if_modified_seconds
+     (char)           server_pragmas
+     (long)           server_expires_seconds
+     (long)           server_last_modified_seconds
+   */
+    long source_seconds;
+    long source_microseconds;
+    unsigned long source_address;
+    unsigned short source_port;
+    unsigned long destination_address;
+    unsigned destination_port;
+    int      mimetype_len, url_len, i, real_url_len;
+    unsigned char *url = NULL, mimetype[100], *dta, *tmpo;
+    int      cur_url_len = 0, sl, dl;
+    long destination_seconds;
+    long destination_microseconds;
+    unsigned response_headerlength;
+    unsigned response_datalength;
+    long final_seconds;
+    long final_microseconds;
+    long client_if_modified_seconds, server_expires_seconds,
+      server_last_modified_seconds;
+    unsigned char     source_address_data[1024], dest_address_data[1024];
+    unsigned char     outbuf[1024];
+    unsigned char     cryptbuf[4096], cryptbuf2[4096];
+    unsigned char     client_pragmas, server_pragmas;
+
+  while(1) {
+    do_read_or_die(0, (char *) &source_seconds, sizeof(long));
+    do_read_or_die(0, (char *) &source_microseconds, sizeof(long));
+    do_read_or_die(0, (char *) &source_address, sizeof(unsigned long));
+    do_read_or_die(0, (char *) &source_port, sizeof(unsigned short));
+    do_read_or_die(0, (char *) &destination_address, sizeof(unsigned long));
+    do_read_or_die(0, (char *) &destination_port, sizeof(unsigned short));
+    do_read_or_die(0, (char *) &url_len, sizeof(int));
+
+    if (cur_url_len < url_len+9) {
+      void *tmp;
+
+      tmp = realloc(url, url_len+9);
+      cur_url_len = url_len+9;
+      if (tmp == NULL) {
+	fprintf(stderr, "out of memory!?\n");
+	exit(1);
+      }
+      url = (char *) tmp;
+    }
+    do_read_or_die(0, url, url_len);
+    *(url + (unsigned long int) url_len) = '\0';
+
+    do_read_or_die(0, (char *) &mimetype_len, sizeof(int));
+    do_read_or_die(0, mimetype, mimetype_len);
+    *(mimetype + (unsigned long int) mimetype_len) = '\0';
+
+
+    do_read_or_die(0, (char *) &destination_seconds, sizeof(long));
+    do_read_or_die(0, (char *) &destination_microseconds, sizeof(long));
+    do_read_or_die(0, (char *) &response_headerlength, sizeof(unsigned));
+    do_read_or_die(0, (char *) &response_datalength, sizeof(unsigned));
+    do_read_or_die(0, (char *) &final_seconds, sizeof(long));
+    do_read_or_die(0, (char *) &final_microseconds, sizeof(long));
+    do_read_or_die(0, (char *) &client_pragmas, sizeof(unsigned char));
+    do_read_or_die(0, (char *) &client_if_modified_seconds,
+		   sizeof(long));
+    do_read_or_die(0, (char *) &server_pragmas, sizeof(unsigned char));
+    do_read_or_die(0, (char *) &server_expires_seconds,
+		   sizeof(long));
+    do_read_or_die(0, (char *) &server_last_modified_seconds,
+		   sizeof(long));
+
+
+    /* Now we get ready to print stuff out */
+    /*    md5_plus_salt_text(stream_ntoa(source_address), 
+		       &source_address_data[0]);
+    md5_plus_salt_text(stream_ntoa(destination_address), 
+		       &dest_address_data[0]); */
+    sl = do_idea_encrypt((unsigned char *) &source_address,
+			 cryptbuf,
+			 sizeof(unsigned long));
+    dl = do_idea_encrypt((unsigned char *) &destination_address,
+			 cryptbuf2,
+			 sizeof(unsigned long));
+    sprintf(outbuf, "%ld:%ld %16Lx:%u %16Lx:%u ",
+	   source_seconds, source_microseconds,
+	    *((u64 *) cryptbuf),
+	   source_port,
+	    *((u64 *) cryptbuf2),
+	   destination_port);
+
+    write(1, outbuf, strlen(outbuf));
+
+    sprintf(outbuf, "%ld:%ld %u %u %ld:%ld %u %ld %u %ld %ld ",
+	   destination_seconds, destination_microseconds,
+	   response_headerlength,
+	   response_datalength,
+	   final_seconds, final_microseconds,
+	   client_pragmas, client_if_modified_seconds,
+	   server_pragmas, server_expires_seconds,
+	   server_last_modified_seconds);
+    write(1, outbuf, strlen(outbuf));
+
+    /*    dta = url;
+    for (i=0; i<url_len; i++, dta++) {
+      write(1, asc[*dta], asclen[*dta]);
+    } */
+
+    /* Now encrypt the URL plus at least 1 null-term */
+    sprintf(outbuf, "%d ", url_len);
+    write(1, outbuf, strlen(outbuf));
+    real_url_len = do_idea_encrypt(url, cryptbuf, url_len+1);    
+    tmpo = &(cryptbuf[0]);
+    for (i=0; i<real_url_len/8; i++) {
+      sprintf(outbuf, "%02x%02x%02x%02x%02x%02x%02x%02x",
+	      tmpo[0], tmpo[1], tmpo[2], tmpo[3], tmpo[4],
+	      tmpo[5], tmpo[6], tmpo[7]);
+      tmpo += 8;
+      write(1, outbuf, strlen(outbuf));
+    }
+
+    /* Write out the mimetype. */
+    sprintf(outbuf, " %d %s", mimetype_len, mimetype);
+    write(1, outbuf, strlen(outbuf));
+    sprintf(outbuf, "\n");
+    write(1, outbuf, strlen(outbuf));
+  }
+}
+
+void do_decrypt_stuff(void)
+{
+  fprintf(stderr, "decryption not possible.\n");
+}
+
+char *stream_ntoa(unsigned long addr)
+{
+    static char buf[100];
+    sprintf(buf, "%lu.%lu.%lu.%lu",
+        (addr >> 24),
+        (addr >> 16) % 256,
+        (addr >> 8) % 256,
+        (addr) % 256);
+    return buf;
+}
+
+void  do_read_or_die(int fd, char *buf, size_t length)
+{
+  int sofar = 0, next;
+
+  while (1) {
+    next = read(fd, buf + (unsigned long int) sofar, length-sofar);
+    if (next <= 0) {
+      fprintf(stderr, "read returned error with %d\n", length-sofar);
+      exit(1);
+    }
+    sofar += next;
+    if (sofar >= length)
+      break;
+  }
+}
+
+void  md5_plus_salt_text(char *text, char *buf)
+{
+  MD5_CTX mdcontext;
+
+  MD5Init(&mdcontext);
+  MD5Update(&mdcontext, MD5SALT, MD5SALTLEN);
+  MD5Update(&mdcontext, text, strlen(text));
+  MD5Final(&mdcontext);
+  
+  memcpy((void *) buf, (const void *) &(mdcontext.buf[0]), 
+	 4*sizeof(unsigned int));
+}
+
+void  asc_init(void)
+{
+    int i;
+
+    for(i=128;i<=255;++i)
+    {
+        sprintf(asc[i], "\x03%02x", i);
+        asclen[i] = 3;
+    }
+    for(i=0;i<=31;++i)
+    {
+        sprintf(asc[i], "\x03^%c", i+64);
+        asclen[i] = 3;
+    }
+    for(i=32;i<=126;++i)
+    {
+        sprintf(asc[i], "%c", i);
+        asclen[i] = 1;
+    }
+    strcpy(asc[10], "\n"); asclen[10] = 1;
+    strcpy(asc[13], "\x03\\r");
+    strcpy(asc[27], "\x03\\e");
+    strcpy(asc[8], "\x03\\b");
+    strcpy(asc[7], "\x03\\a");
+    strcpy(asc[9], "\x03\\t");
+    strcpy(asc[12], "\x03\\f");
+    strcpy(asc[127], "\x03^?");
+}
+
+int do_idea_encrypt(unsigned char *text, unsigned char *buf, int inlen)
+{
+    int      padded_url_len, i;
+    unsigned char  *tmpo;
+
+    iv = 0x12345678;
+    en_key_idea(ideakey, en_key);
+    de_key_idea(en_key, de_key);
+
+    memcpy(buf, text, inlen);
+    tmpo = buf;
+
+    /* Now encrypt the URL */
+    if (inlen % 8 != 0) {
+      padded_url_len = 8 - (inlen % 8);
+      tmpo = &(buf[inlen]);
+      for (i=0; i<padded_url_len; i++) {
+	*tmpo = '\0';
+	tmpo++;
+      }
+      padded_url_len = inlen+padded_url_len;
+    } else {
+      padded_url_len = inlen;
+    }
+
+    size = padded_url_len / 8;
+    tmpo = buf;
+    while (size) {
+      *(u64 *)tmpo ^= iv;
+      idea_encrypt_block(en_key, tmpo, tmpo, 8);
+      iv = *(u64 *) tmpo;
+      tmpo += 8;
+      size--;
+    }
+    tmpo = buf;
+    return padded_url_len;
+}
+
+void  do_idea_decrypt(unsigned char *text, unsigned char *buf, int inlen)
+{
+    int      padded_url_len, i;
+    unsigned char  *tmpo;
+
+    iv = 0x12345678;
+    en_key_idea(ideakey, en_key);
+    de_key_idea(en_key, de_key);
+
+    memcpy(buf, text, inlen);
+
+    /* Now decrypt the URL */
+    size = inlen / 8;
+    tmpo = buf;
+    while (size) {
+      u64 tmp = *(u64 *)tmpo;
+      idea_encrypt_block(de_key, tmpo, tmpo, 8);
+      *(u64 *)tmpo ^= iv;
+      iv = tmp;
+      tmpo += 8;
+      size--;
+    }
+    tmpo = buf;
+}
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

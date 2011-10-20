@@ -1,0 +1,181 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.05.06.17.36.20;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Added fast_mining summary.
+@
+text
+@<html>
+<title>
+Fast Algorithms for Mining Association Rules
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Fast Algorithms for Mining Association Rules
+</h1>
+<strong>
+Rakesh Agrawal and Ramakrishnan Srikant
+</strong>
+
+<p><b>One-line summary:</b>
+Two new algorithms for discovering association rules between items in
+large databases of sales transactions are presented;  empirical evidence
+proves that these algorithms outperform other known algorithms by factors
+of 3 to 10, and that scale linearly with database size.
+</p>
+
+<h2>Relevance</h2>
+Data mining is a hot topic, very popular in industry and now in research.
+This algorithm apparently will speed up the process of discovering
+association rules - in case you want to know how many people that buy
+toothpaste also buy suntan lotion at the same time, this is the algorithm
+to use.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> No explicit details on number of I/Os, memory requirements, CPU
+	  requirements, temporary storage requirements, etc. are given for
+	  this (or any of the competing) algorithms.
+     <li> Their synthetic workload has a decent amount of thought put in
+	  it, but who knows how realistic it really is?
+     <li> Scaling only done up to a database of size 10,000,000.  Not at
+	  all realistic:  databases tend to be much, much larger for
+	  interesting problems.
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> <b>Association Rules</B>:
+	  <ul>
+	       <li> Given a set of items <code>I = {i<sub>1</sub>,
+		    i<sub>2</sub>, ..., i<sub>m</sub>}</code>, a set
+		    of transactions <code>D</code> where each transaction
+		    is a set of items <code>T subset I</code>, we say:
+	       <li> <code>T contains X if X subset T</code>.
+	       <li> <code>X =&gt; Y</code> is an implication where
+		    <code>X strictsubset I, y strictsubset
+		    I, and X intersect Y = empty</code>
+	       <li> We say that the rule <code>X =&gt; Y</code> holds in
+		    the transaction set <code>D</code> with confidence c if
+		    c% of transactions in <code>D</code> that contain
+		    <code>X</code> also contain <code>Y</code>.
+	       <li> The rule <code>X =&gt; Y</code> has support s in the
+		    transaction set <code>D</code> if s% of transactions in
+		    D contain <code>X union Y</code>.
+	  </ul>
+     <li> Problem at hand:  mine all association rules that have support
+	  and confidence greater than some user-specified minimum support
+	  and confidence out of database D.  Way to decompose problem into
+	  two subproblems:
+	  <ol>
+	       <li> Find all sets of items (<i>itemsets</i>) that have
+		    transaction support above minimum support.  The
+		    <i>support</i> for an itemset is the number of
+		    transactions that contain the itemset.  Itemsets with
+		    minimum support are called large itemsets.  An itemset
+		    of size k is a k-itemset.
+	       <li> Use the large itemsets to generate the desired rules.
+		    Easy algorithm: for every subset a, output rule of form
+		    <code>a =&gt; (l-a)</code> if the ration of support(l)
+		    to support(a) is at least the specified minimum
+		    confidence.
+	  </ol>
+	  The authors claim subproblem 2 is easy, and concentrate on
+	  subproblem 1.
+     <li> Some notation:
+	  <ul>
+	       <li> L<sub>k</sub>: Set of large k-itemsets (i.e. those with
+		    minimum support).  Each member of set has an itemset
+		    and a support count.
+	       <li> C<sub>k</sub>: Set of candidate k-itemsets (potentially
+		    large).  Has itemset and support count.
+	       <li> Cbar<sub>k</sub>: Set of candidate k-itemsets with TIDs
+		    of generating transactions kept associated with
+		    candidates.
+	  </ul>
+     <li> <b>Apriori</b> algorithm:
+	  <ul>
+	       <li> First pass: counts item occurrences to determine the
+		    large 1-itemsets.
+	       <li> 2nd and subsequent passes:<BR>
+		    for (k=2; L<sub>k-1</sub> not empty; k++)
+		    <ul>
+			 <li> C<sub>k</sub> = apriori-gen(L<sub>k-1</sub>);
+			       // (New candidates)
+			 <li> forall transactions <code>t in D</code> do
+			      <ul>
+				   <li> C<sub>t</sub> =
+					subset(C<sub>k</sub>,t)  //
+					(Candidates contained in t)
+				   <li> forall candidates <code>c in
+					C<sub>t</sub></code> do
+					<ul>
+					     <li> c.count++
+					</ul>
+			      </ul>
+			 <li> L<sub>k</sub> = {c in C<sub>k</sub> | c.count
+			      &gt;= minsupport }
+		    </ul>
+	       <li> Answer = Union<sub>k</sub>(L<sub>k</sub>)
+	  </ul>
+	  <P>
+	  In other words, apriori starts with a seed set of itemsets found
+	  to be large in the previous pass, and uses it to generate new
+	  potentially large itemsets (called candidate itemsets).  The
+	  actual support for these candidates is counted during the pass
+	  over the data, and non-large candidates are thrown out.
+	  <P>
+	  The magic of apriori is in how candidates are generated and
+	  counted.  In other algos (AIS and SETM), candidates are generated
+	  on-the-fly during the pass as data is read, i.e. the set of
+	  itemsets found large in the previous pass and which are present
+	  in the transaction are extended with other items in the
+	  transaction to generate new candidates.  In apriori,
+	  candidate itemsets to be counted are generated using only
+	  itemsets found large in the previous pass, without
+	  considering the transaction that is in the database.
+     <li> <b>apriori-gen</b> is the function that performs this magic.  It
+	  accepts the set of all large (k-1)-itemsets L<sub>k-1</sub>, and
+	  returns a superset
+	  of the set of all large k-itemsets.  First, it performs a
+	  join of L<sub>k-1</sub> to itself to generate C<sub>k</sub>, and
+	  then prunes all itemsets from C<sub>k</sub> such that some
+	  (k-1)-subset of that itemset is not in L<sub>k-1</sub>.
+     <li> Apriori-tid:  instead of doing a run over the database for
+	  counting support after the first pass, store
+	  the TID along with the set of potentially large
+	  k-itemsets present in the transaction with id TID in table
+	  Cbar<sub>k</sub>.
+     <li> Performance: Apriori and apriori-tid beat out all competitors
+	  based on a synthetic workload.
+	  Apriori is better for the first few passes (because
+	  Cbar<sub>k</sub> is large), but apriori-tid is better for
+	  subsequent passes (because Cbar<sub>k</sub> tends to shrink to
+	  much smaller than the size of the original database).  Thus, you
+	  should use a hybrid: apriori to start, apriori-tid later on.
+
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

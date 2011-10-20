@@ -1,0 +1,468 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.2
+	pre-yatin-merge:1.6
+	transend-beta2:1.5
+	fox-dev:1.5
+	transend-beta-latest:1.2
+	perl_dir-ng:1.2
+	Aggregators:1.2
+	NoAggregators:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	97.09.06.01.08.50;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.24.23.37.16;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.24.03.19.00;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.26.19.13.19;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.15.20.45.19;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.15.09.01.14;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@#
+#  A distiller that converts keywords identified by arg id 9000 to be
+#  red.
+#
+
+use clib;
+use TACCutils;
+use Date::Manip;
+use LWP;
+
+sub DistillerInit {
+    $inktomi_url = "http://www.hotbot.com/";
+    $inktomi_search_headers = "Referer: http://www.inktomi.com/ProdPart.html\r\nUser-Agent: Mozilla/3.0 (X11; U; Linux 2.0.27 i586)\r\nHost: www.hotbot.com\r\nAccept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*\r\nCookie: ink=IU02Zq0NEA43060456B9DD108FB69E86528E07AA\r\nContent-type: application/x-www-form-urlencoded\r\nContent-length: ";
+    $inktomi_pre = "_v=2&MT=";
+    $inktomi_post = "&act.search.x=46&act.search.y=7\r\n";
+
+    $altavista_url =
+	"http://altavista.digital.com/cgi-bin/query?pg=q&what=web&q=";
+
+    $lycos_url =
+	"http://www.lycos.com/cgi-bin/pursuit?cat=lycos&query=";
+
+    $infoseek_url =
+	"http://www.infoseek.com/Titles?qt=";
+
+    $return_headers = "HTTP/1.0 200 OK\r\nServer: Aggregators-R-us\r\nContent-type: text/html\r\nContent-length: ";
+
+    $error_message = "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2//EN\">\r\n<html><head><TITLE>Error!</TITLE></head><body bgcolor=#FFEFEF><h1>Error during POST</h1>I'm sorry, you experienced a POST error while visiting a search engine.  Have a cucumber sandwidth;  it will make you feel better.</body></html>\n";
+    $error_headers = $return_headers . length($error_message) . "\r\n\r\n";
+    return 0;
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @@_;
+    my $retdata = "";
+    my %hdrs_obj;
+    my $encoded;
+
+    %hdrs_obj = &make_cgi_args($headers);
+    $qargs = &unescape($hdrs_obj{'q'});
+    $encoded = new URI::URL '';
+    $encoded->query_form("q"=>"$qargs");
+    $searchword = substr($encoded->as_string, 3);
+
+    $numret = &unescape($hdrs_obj{'num'}) || 3;
+
+    for ($i=1; $i<=5; $i++) {
+	$sel[$i] = "<OPTION VALUE=\"$i\"";
+	if ($i == $numret) {
+	    $sel[$i] .= " SELECTED";
+	}
+	$sel[$i] .= ">$i";
+    }
+    $sel[10] = "<OPTION VALUE=\"10\"";
+    if ($numret == 10) {
+	$sel[10] .= " SELECTED";
+    }
+    $sel[10] .= ">10";
+    
+    $retdata = "<HTML><HEAD><TITLE>Metasearch Results</TITLE></HEAD><BODY bgcolor=\"#FFFFFF\">\n";
+    $retdata .= "<table><tr valign=\"middle\"><td><img align=left src=\"http://transend.cs.berkeley.edu/tlogo_mini.gif\" WIDTH=80 HEIGHT=81></td>";
+    $retdata .= "<td><H2><a href=\"http://transend.cs.berkeley.edu\">";
+    $retdata .= "TranSend</a> MetaSearch Results</H2></td></tr></table><BR clear=\"both\">\n";
+    $retdata .= "<FORM METHOD=\"GET\" ACTION=\"http://www.CS.Berkeley.EDU/agg/metasearch/\">\n";
+    $retdata .= "<TABLE cellpadding=\"0\" cellspacing=\"0\">\n<TR>\n<TD>Search for the following words:</TD>\n</tr><tr>\n";
+    $retdata .= "<TD><input name=\"q\" size=\"55\" maxlength=\"800\" VALUE=\"$qargs\"></td>\n";
+    $retdata .= "<TD valign=\"middle\"><input type=\"submit\" VALUE=\"Submit\"></td>\n</tr><tr>\n";
+    $retdata .= "<td>Return <SELECT NAME=\"num\">$sel[1]$sel[2]$sel[3]$sel[4]$sel[5]$sel[10]</SELECT> hits from each site</td></tr></TABLE></FORM>";
+
+	
+    $retdata .= "<TABLE border>";
+
+    $retdata .= "<TR><TD align=center><B><a href=\"http://www.hotbot.com\">HotBot</a>:</B><BR><BR><img src=\"http://www.hotbot.com/images/logo.hb1.green.gif\" width=100></TD><TD><TABLE>\n";
+    $retdata .= &GetInktomi($searchword);
+    $retdata .= "\n</TABLE></TD></TR>\n";
+
+    $retdata .= "<TR><TD align=center><B><a href=\"http://altavista.digital.com\">AltaVista</a>:</B><BR><BR><img src=\"http://altavista.digital.com/av/pix/default/av-logo.gif\" width=100></TD><TD><TABLE>\n";
+    $retdata .= &GetAltaVista($searchword);
+    $retdata .= "\n</TABLE></TD></TR>\n";
+
+    $retdata .= "<TR><TD align=center><B><a href=\"http://www.lycos.com/\">Lycos</a>:</B><BR><BR><img src=\"http://www.lycos.com/assist/graphics/new-logo.gif\" width=100></TD><TD><TABLE>\n";
+    $retdata .= &GetLycos($searchword);
+    $retdata .= "\n</TABLE></TD></TR>\n";
+
+    $retdata .= "<TR><TD align=center><B><a href=\"http://www.infoseek.com/\">infoseek</a>:</B><BR><BR><img src=\"http://www.infoseek.com/images/large_circlei.gif\" width=50></TD><TD><TABLE>\n";
+    $retdata .= &GetInfoSeek($searchword);
+    $retdata .= "\n</TABLE></TD></TR>\n";
+    
+    $retdata .= "</TABLE></BODY></HTML>";
+
+    $retheaders = $return_headers . length($retdata) . "\r\n\r\n";
+    return($retdata, $retheaders, "text/html", 0);
+}
+
+### Pull stuff out of the Infoseek search engine
+
+sub GetInfoSeek {
+    my($searchwords) = @@_;
+    my $errorstr = "<B>infoseek blew chunks!</B>";
+    my $retdata = "";
+    my $tempret = "";
+
+    $fetchurl = $infoseek_url . $searchwords;
+    ($status,$headers,$data2) = &Clib_Fetch($fetchurl, "");
+    if ($status != 0) {
+	return $errorstr . "<P>status code $status";
+    }
+
+    # throw away everything up to first <b>Sites</b>
+    $dlstring = index($data2, "<b>Sites</b> ");
+    if ($dlstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($data2, $dlstring+length("<b>Sites</b> "));
+
+    # throw away everything up to first <b><a href
+    $dlstring = index($remaining, "<b><a href");
+    if ($dlstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($remaining, $dlstring+3);
+
+    # start pulling out results; get top $numret, or bonk if earlier
+    for ($i=0; $i<$numret; $i++) {
+	$nextdt = index($remaining, "<b><a href");
+	if ($nextdt == -1) {
+	    goto INFDONELOOP;
+	}
+	$tempret .= "<B>" . ($i+1) . " " . substr($remaining, 0, $nextdt);
+	$remaining = substr($remaining, $nextdt+3);
+    }
+  INFDONELOOP:
+    $retdata = $tempret;
+    if ($retdata eq "") {
+	return $errorstr;
+    }
+    return $retdata;
+}
+
+### Pull stuff out of the Lycos search engine
+
+sub GetLycos {
+    my($searchwords) = @@_;
+    my $errorstr = "<B>Lycos blew chunks!</B>";
+    my $retdata = "";
+    my $tempret = "";
+
+    $fetchurl = $lycos_url . $searchwords;
+    ($status,$headers,$data2) = &Clib_Fetch($fetchurl, "");
+    if ($status != 0) {
+	return $errorstr . "<P>status code $status";
+    }
+
+    # throw away everything up to first <!---- START CONTENT---->
+    $dlstring = index($data2, "<!---- START CONTENT---->");
+    if ($dlstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($data2, $dlstring+length("<!---- START CONTENT---->"));
+
+    # throw away everything up to first <P>
+    $dlstring = index($data2, "<P>");
+    if ($dlstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($data2, $dlstring+length("<P>")+1);
+
+    # start pulling out results; get top $numret, or bonk if earlier
+    for ($i=0; $i<$numret; $i++) {
+	$nextdt = index($remaining, "</font><p>");
+	if ($nextdt == -1) {
+	    goto LYCDONELOOP;
+	}
+	$tempret .= substr($remaining, 0, $nextdt+10);
+	$remaining = substr($remaining, $nextdt+11);
+    }
+  LYCDONELOOP:
+    $retdata = $tempret;
+    if ($retdata eq "") {
+	return $errorstr;
+    }
+    return $retdata;
+}
+
+### Pull stuff out of the altavista search engine
+
+sub GetAltaVista {
+    my($searchwords) = @@_;
+    my $errorstr = "<B>AltaVista blew chunks!</B>";
+    my $retdata = "";
+    my $tempret = "";
+
+    $fetchurl = $altavista_url . $searchwords;
+    ($status,$headers,$data2) = &Clib_Fetch($fetchurl, "");
+    if ($status != 0) {
+	return $errorstr . "<P>status code $status";
+    }
+
+    # throw away everything up to first <dl>
+    $dlstring = index($data2, "<dl>");
+    if ($dlstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($data2, $dlstring+9);
+
+    # start pulling out results; get top $numret, or bonk if earlier
+    for ($i=0; $i<$numret; $i++) {
+	$nextdt = index($remaining, "<P><dt>");
+	if ($nextdt == -1) {
+	    goto ALTDONELOOP;
+	}
+	$tempret .= "<dt><B> " . ($i + 1) . " </B>" . substr($remaining, 0, $nextdt-5) . "<p>\n";
+	$remaining = substr($remaining, $nextdt+7);
+    }
+  ALTDONELOOP:
+    $retdata = "<dl>" . $tempret . "</dl>\n";
+    return $retdata;
+}
+
+### Pull stuff out of the inktomi search engine
+
+sub GetInktomi {
+    my($searchwords) = @@_;
+    my $errorstr = "<B>Inktomi blew chunks!</B>";
+    my $retdata = "";
+
+    $searchdata = $inktomi_pre . $searchwords . $inktomi_post;
+    $searchdatalen = length($searchdata);
+    $client_headers = $inktomi_search_headers . $searchdatalen . "\r\n\r\n";
+    $url = $inktomi_url;
+
+    ($status,$headers,$data2) = &Clib_Post($url,$client_headers,
+					   $searchdata,$searchdatalen);
+
+    if ($status != 0) {
+	return $errorstr . "<P>status code $status";
+    }
+
+    # throw away everything before <!-- QUERY:
+    $commentstring = index($data2, "<!-- QUERY");
+    if ($commentstring == -1) {
+	return $errorstr;
+    }
+    $remaining = substr($data2, $commentstring);
+
+    # throw away first two tables
+    for ($i=0; $i<2; $i++) {
+	$tablestring = index($remaining, "</TABLE>");
+	if ($tablestring == -1) {
+	    return $errorstr;
+	}
+	$remaining = substr($remaining, $tablestring+9);
+    }
+
+    # do a replace to fix up relative inlines
+    $remaining =~ s!IMG\ SRC=\"!IMG\ SRC=\"http\://www\.hotbot\.com!ig;
+    # do another replace to fix up a little snafu in our parsing
+    $remaining =~ s!<TR\ ><TD\ ></TD></TR>!!ig;
+    
+    # now start pulling out results; get top $numret, or bonk if earlier
+    $retdata = "";
+
+    for ($i=0; $i<$numret; $i++) {
+	if (length($remaining) < 10) {
+	   goto INKDONELOOP;
+	}
+
+	# Go to next <TR ><TD >
+	$nextgrabstart = index($remaining, "<TR ><TD >");
+	if ($nextgrabstart == -1) {
+	    goto INKDONELOOP;
+	}
+	$remaining = substr($remaining, $nextgrabstart);
+	$nextgrabend = index($remaining, "</TD></TR>");
+	if ($nextgrabend == -1) {
+	    goto INKDONELOOP;
+	}
+	$adder = substr($remaining, 0,
+			$nextgrabend + 10);
+	$remaining = substr($remaining, $nextgrabend + 10);
+	
+	# Go to next <TR ><TD > again
+	$nextgrabstart = index($remaining, "<TR ><TD >");
+	if ($nextgrabstart == -1) {
+	    goto INKDONELOOP;
+	}
+	$remaining = substr($remaining, $nextgrabstart);
+	$nextgrabend = index($remaining, "</TD></TR>");
+	if ($nextgrabend == -1) {
+	    goto INKDONELOOP;
+	}
+	$adder2 = substr($remaining, 0,
+			$nextgrabend + 10);
+	$remaining = substr($remaining, $nextgrabend + 10);
+
+	$retdata .= $adder . $adder2 . "\n";
+
+    }
+  INKDONELOOP:
+    if ($retdata eq "") {
+	return $errorstr;
+    }
+    return $retdata;
+}
+
+1;
+
+@
+
+
+1.5
+log
+@More stuff has changed....cutthrough behaviour for large files is
+defined for the cache library.
+@
+text
+@a5 10
+BEGIN {
+    push(@@INC, qw(
+                  /home/tomorrow/b/grad/gribble/working/tcsproxy/xs/lib
+                  /home/fox/tcsproxy/xs/lib
+                  /home/fox/tcsproxy/xs/lib/
+                  /opt1/perl-5.003/lib/site_perl
+		/disks/barad-dur/now/pythia/release/lib/perl-5.002
+                  ));
+}
+
+@
+
+
+1.4
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d8 1
+d12 1
+@
+
+
+1.3
+log
+@Added SQUID!
+@
+text
+@d7 5
+a11 5
+  push(@@INC, qw(
+ /home/tomorrow/b/grad/gribble/Classes/268-286_proj/tcsproxy/xs/lib/perl-5.002/
+ /disks/barad-dur/now/pythia/release/lib/perl-5.002
+ /home/tomorrow/b/grad/gribble/working/tcsproxy/xs/lib/perl-5.002
+ ));
+d17 1
+a17 1
+use URI::URL;
+d72 1
+a72 1
+    $retdata .= "<FORM METHOD=\"GET\" ACTION=\"http://HTTP.CS.Berkeley.EDU/agg/metasearch/\">\n";
+@
+
+
+1.2
+log
+@Added Lycos and Infoseek
+@
+text
+@d10 1
+@
+
+
+1.1
+log
+@Metasearch!
+@
+text
+@d30 3
+d54 13
+d71 7
+d84 1
+a84 1
+    $retdata .= "<TR><TD align=center><B><a href=\"http://altavista.digital.com\">AltaVista</a>:<BR><BR><img src=\"http://altavista.digital.com/av/pix/default/av-logo.gif\" width=100></B></TD><TD><TABLE>\n";
+d88 1
+a88 1
+    $retdata .= "<TR><TD align=center><B><a href=\"http://www.lycos.com/\">Lycos</a>:<BR><BR><img src=\"http://www.lycos.com/assist/graphics/new-logo.gif\" width=100></B></TD><TD><TABLE>\n";
+d92 4
+d102 45
+d179 1
+a179 1
+	    goto ALTDONELOOP;
+d184 1
+a184 1
+  ALTDONELOOP:
+d186 3
+@

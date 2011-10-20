@@ -1,0 +1,1652 @@
+head	1.26;
+access;
+symbols
+	release:1.24
+	Release:1.15;
+locks; strict;
+comment	@# @;
+
+
+1.26
+date	95.11.13.04.55.07;	author fox;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	95.10.25.23.01.50;	author fox;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	95.10.25.05.25.51;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	95.10.25.04.57.20;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	95.10.25.04.54.17;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	95.10.25.04.41.15;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	95.10.25.03.00.10;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	95.10.20.05.53.37;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	95.10.20.00.48.15;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	95.10.18.22.12.40;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	95.10.18.21.53.49;	author dgourley;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.10.18.05.20.13;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.10.17.01.14.12;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.10.13.03.19.26;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.08.23.22.25.29;	author dgourley;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.08.19.05.05.02;	author dgourley;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.08.19.00.00.40;	author dgourley;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.08.18.23.01.41;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.08.18.21.45.22;	author dgourley;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.08.18.21.01.50;	author dgourley;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.08.18.20.21.26;	author dgourley;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.08.18.08.12.34;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.08.18.07.37.49;	author dgourley;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.08.18.00.39.47;	author dgourley;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.17.08.58.07;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.17.06.53.02;	author dgourley;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.26
+log
+@fixed bug: sorting was happening on msg pathnames, not msg nums
+@
+text
+@#
+# This package contains the gm interface for the mail type.
+#
+
+package gm_mail;
+
+# Static variables go here.  These are initialized one time only, when the
+# module is first loaded.  Per-document (instance) variables should be set up
+# in the hash table in the Init func.
+
+$MaxBytes =  40 * 1024;
+
+#
+# The init sub for the mail type.
+#
+sub Init {
+    my($self) = shift;
+    my($proxy) = shift;
+    my($status,$incresult,$path);
+    
+    $self = bless {
+        InboxIsEmpty => 0,
+        NumToSend => 0,
+        CurrentDocType => "",
+        Msgs => []
+        };
+
+    $proxy->Exec(0, "/usr/sww/bin/folder -create +gm_mail");
+    ($status,$incresult) = $proxy->Exec(0, "/usr/sww/bin/inc +gm_mail 2>&1");
+
+    if ($status == 0
+        && ($incresult !~ /no mail to inc/i)) {
+        $proxy->send_error( $proxy->last_error() );
+        return undef;
+    }
+
+    # We're allowed to send at most MaxBytes bytes to the ML, so determine how
+    # many messages we can send and still be able to do this.  First, chdir
+    # temporarily to the mail directory and glob the messages there.
+
+    ($status,$path) = $proxy->Exec(0, "/usr/sww/bin/mhpath +gm_mail 2>&1");
+
+    if ($status == 0) {
+        $proxy->send_error($proxy->last_error());
+        return undef;
+    }
+
+    #  Count messages till max size reached.
+    chop $path;
+    $path .= '/[0-9]*';
+    local(@@files) = glob $path;
+    local(@@filenos) = @@files;
+    grep(s![^/]*/!!, @@filenos);
+    local(@@msgnums) = sort {$a <=> $b} @@filenos;
+    local($size) = 0;
+    for ($i=0; $i < $#msgnums; $i++) {
+        $size += -s $msgnums[$i];
+        last if $size >= $MaxBytes;
+    }
+
+    $i--;
+    $i=1 if $i<1;
+    $self->{NumToSend} = $i;              # num of msgs to send this time
+    return $self;
+}
+
+#
+# This is the sub for a shut down call on this type.
+#
+sub Shutdown {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($curMsg) = 0;
+    local(@@msgs) = @@{$self->{Msgs}};
+    local($totalMsgs) = $#msgs + 1;
+
+    while($totalMsgs > 0) {
+	$proxy->Exec(0, "/usr/sww/bin/refile $msgs[$curMsg] -src +gm_mail +inbox");
+	
+	$curMsg++;
+	$totalMsgs--;
+    }
+    # $proxy->Exec(0, "/usr/sww/bin/rmf -nointeractive +gm_mail");
+    $proxy->Exec($reqId, "/usr/sww/bin/folder +inbox");
+    1;    
+}
+
+#
+# This sub routine takes a reqId and a sequence name as args and returns 
+# the table of contents in "ready to send" form. It also builds the 
+# msg-list(mapping between mh msg numbers and a linear 1...n sequence).
+#
+sub FetchTOC {
+    my($self) = shift;
+    my($proxy) = shift;
+    my($proxypath) = $proxy->{Config}->{home};
+    my($reqId, $seqName) = @@_;
+    my($scan, @@drtEntries);
+    my(@@result);
+    my(@@msgs);
+    my($stat,$dummy);
+    my($nmsgs) = $self->{NumToSend};
+    my(@@z);
+    
+    my($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum " .
+        "+gm_mail 2>&1";
+
+
+    @@z = $proxy->Exec($reqId, $cmd);
+    ($stat,$dummy) = @@z;
+
+    if ($stat==0) {
+        if ($dummy =~ /no messages/i) {
+            # empty inbox!
+            &aux'log("Empty inbox, returning empty TOC");
+            $self->{InboxIsEmpty} = 1;
+            @@z =  $proxy->PackageChunk($reqId, 0, 0, "", ());
+        } else {
+            # real live error
+            $proxy->send_error($reqId, "Fetching TOC: " .
+                               $proxy->last_error());
+            return (0, "scan error: $!");
+        }
+    }
+
+    return @@z if ($self->{InboxIsEmpty});
+
+    chop($dummy);
+    @@msgs = split(/\s+/, $dummy);
+
+    # Here if nonempty inbox.
+    #  Limit the number of messages to what we determined would fit on the ML.
+    #
+    $#msgs = $nmsgs - 1;
+
+    @@{$self->{Msgs}} = @@msgs;
+
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/scan first:$nmsgs +gm_mail");
+    $scan = $result[1];
+
+    if($result[0] == 0) {
+	send_error $proxy ($reqId,
+                           "gm_mailFetchTOC -- toc fetch aborted\n");
+        &aux'log("gm_mail::FetchTOC failed: " . $proxy->last_error());
+        return (0, "exec of scan failed, fetch aborted");
+    }
+
+    $#drtEntries = -1;		# Null for now.
+
+    return $proxy->PackageChunk($reqId, $nmsgs, 0, $scan, @@drtEntries);
+}
+
+#
+# This sub routine also takes a reqId as well as the chunk number(msg index 
+# for the mail type).
+#
+sub FetchChunk {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, $msgIndex) = @@_;
+    local(@@msgs) = @@{$self->{Msgs}};
+    local($actualIndex) = $msgs[($msgIndex - 1)];
+    local($multiPart, $multiPartType, $textType, $imageType, @@result);
+    local($drtEntry, $entry, $numParts, $curPart, @@drtEntries);
+    local(@@data);
+    local($proxypath) = $proxy->{Config}->{home};
+
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/mhn -list -nopause -noheaders $actualIndex +gm_mail");
+
+    # Figure out whether we have a multipart msg.
+    if($result[1] =~ 
+       /\s+\d+\s+multipart\/(mixed|alternative|digest|parallel)\s+\d+\s*\w*\s*\n/) {
+	$proxy->Debug("Msg $actualIndex -- Multipart msg detected\n");
+	
+	$multiPartType = $1;
+	$multiPart = 1;
+    } else {
+	$multiPart = 0;
+    }
+    
+    if($multiPart == 0) {	# We have a single type msg.
+	if($result[1] =~ /\s+\d+\s+text\/(plain)\s+\d+\s*\w*\s*\n/) {
+	    $proxy->Debug("Msg $actualIndex -- text type detected with subtype $1\n");
+	    
+	    $textType = $1;
+	    @@result = 
+		$proxy->Exec($reqId, 
+			 "/usr/sww/bin/mhn -form $proxypath/gm_mhl.format -moreproc cat -nopause +gm_mail $actualIndex");
+
+	    $#drtEntries = -1;
+	    # BUG: $self->{NumToSend}--;
+    
+	    $proxy->PackageChunk($reqId, $self->{NumToSend}, $msgIndex, $result[1], @@drtEntries); 
+	} elsif ($result[1] =~ /\s+\d+\s+image\/(gif)\s+\d+\s*\w*\s*\n/) {
+	    
+	} else {
+	    send_error $proxy ($reqId,"Unsupported MIME type encountered msg: $actualIndex\n");
+	    print "it died here: $result[1]";
+	}
+	
+    } else {                     # We have a multi part message to deal with.
+        open(LIST, "/usr/sww/bin/mhn -list -nopause -noheaders $actualIndex |") || die;
+        @@result = <LIST>;
+        $numParts = $#result;
+	$curPart = 1;
+
+	# Check to see if the first one is txt, if so package it.
+        if($result[1] =~ /\s+\d+\s+(text)\/(plain)\s+\d+\s*\w*\s*\n/) {
+	    $proxy->Debug("Msg $actualIndex -- text type detected with subtype $1\n");
+	    
+	    $textType = $1;
+	    @@data = $proxy->Exec($reqId,
+				  "/usr/sww/bin/mhn -form $proxypath/gm_mhl.format -moreproc cat -part 1 -nopause +gm_mail $actualIndex");
+	    # BUG: $self->{NumToSend}--;
+	    $curPart = 2;
+        } else {
+	    # This should fetch the header of the msg only, this is currently a
+	    # problem as I have not found a way to extract only the header.
+	    @@data =$proxy->Exec($reqId,
+                                "/usr/sww/bin/mhn -form ./header.format -moreproc cat -nopause +gm_mail $actualIndex|head -10");
+	}
+
+	# Loop thru the parts and add drt entries for each supported type in turn.
+	$entry = 0;
+	while($curPart <= $numParts) {
+	    $proxy->Debug("Processing a multipart MIME type\n");
+			   
+	    if($result[$curPart] =~ /\s+\d+\s+(image)\/(gif)\s+(\d+)\s+(\S*)\s*\n/) {
+		$proxy->Exec($reqId, "/usr/sww/bin/mhn -type image/gif -store +gm_mail");
+		$drtEntries[$entry] = "#$entry##$actualIndex.$curPart.gif##$2##2##$3##$4#";
+	    } else {
+		send_error $proxy ($reqId,"Unsupported MIME type encountered in msg $actualIndex\n");
+            }
+	    $curPart++;
+	    $entry++;
+        }
+	
+	$proxy->PackageChunk($reqId, $self->{NumToSend}, $msgIndex, $data[1], @@drtEntries); 
+    }
+}
+
+
+#
+# This sub is called when the toc of the doc that is being sent to the client 
+# has been recieved. The arguements are straightforward, the toc is expected 
+# to in a list of strings each string being an entry in the toc. For the mail
+# type it currently serves no purpose.
+#
+sub PutTOC { 
+    my($self) = shift;
+    my($proxy) = shift;
+    my($proxypath) = $proxy->{Config}->{home};
+    my($reqId, $pathName, $numChunks, @@toc) = @@_;
+    my($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum 2>&1";
+    $self->{CurrentDocType} = $pathName; 
+
+    if (0) {
+
+
+        ($status,$result) = $proxy->Exec($reqId, $cmd);
+        if ($status == 0) {
+            if ($result =~ /no messages/i) {
+
+            } else {
+                &aux'log("gm_mailPutTOC: " . $proxy->last_error());
+                return (0, "scan error: $!");
+            }
+        }
+        unless (open(MSGS, $tmpfile)) {
+            &aux'log("gm_mailPutTOC: file read error: $!");
+            unlink $tmpfile;
+            return (0, "read error: $!");
+        }
+        @@{$self->{Msgs}} = <MSGS>;
+        close MSGS;
+        unlink $tmpfile;
+    }
+    return 1;
+}
+
+#
+# This sub is called to handle a chunk received from the client. The chunk is 
+# in "raw" form, as it was when it came over the wire.
+#
+sub PutChunk {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, $chunkIndex, @@chunk) = @@_;
+    local($log, $draft, $numEntries, @@logEntries);
+    local($curEntry, $curEntryNum, $error, $actualNum);
+
+    if($self->{CurrentDocType} eq "log") {
+	$log = $chunk[3];
+
+	@@logEntries = split(/\n/, $log);
+	$numEntries = $#logEntries + 1;
+	$curEntryNum = 0;
+
+	while($curEntryNum < $numEntries) {
+	    $curEntry = $logEntries[$curEntryNum];
+	    $error = &ProcessLogEntry($self,$proxy,$reqId, $curEntry);
+
+	    if($error == 0) {
+		$actualNum = $curEntryNum + 1;
+		send_error $proxy ($reqId, 
+                                   "gm_mailPutChunk -- application of log entry $actualNum failed\n");
+            }
+
+	    $curEntryNum++;
+	}
+    } elsif ($self->{CurrentDocType} eq "draft") {
+	$draft = $chunk[3];
+	$error = &SendDraft($self,$proxy,$reqId, $draft);
+
+        if($error == 0) {
+            send_error $proxy ($reqId, 
+                                    "gm_mailPutChunk -- draft send failed\n");
+            return 0;
+        }	    
+    } else {                                # unrecognized type
+        send_error $proxy ($reqId,
+                           "Unrecognized mail doc type: $self->{CurrentDocType}");
+    }
+    return 1;
+}
+
+#
+# This sub is called to notify the mail tsm that all chunks have been 
+# received and sent to us.
+#
+sub AllDone {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId) = @@_;
+    return 1;				# Groovy
+}				
+
+#
+# This sub is called to notify the sub that an error has occured, it gets 
+# the id and the chunks that were not recieved. The sub then decides if the 
+# missing chunks matter to the overall document and return 1 or 0. A list 
+# describing what is wrong is also returned.
+#
+sub Incomplete {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, @@missingChunks) = @@_;
+    return 1;
+}
+
+
+
+##############################################################################
+# Below are mail type specific subs
+##############################################################################
+
+#
+# This sub is passed a change log entry. For the current version, these events
+# should only encompass rmm events. I therefore assume the format rmm msgNum,
+# tho this could easily be different.
+#
+sub ProcessLogEntry {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, $logEntry) = @@_;
+    local($toDelete, $error, @@result);
+
+    if($logEntry =~ /r\s+(\d+)/i) {
+	$toDelete = $1;
+    } else {
+	send_error $proxy ($reqId, 
+                           "gm_mailProcessLogEntry -- invalid change log entry\n");
+        return 0;
+    }
+	
+    # WARNING: This assumes messages are in gm_mail folder!
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/rmm +gm_mail $msgs[($toDelete - 1)]"); 
+    $error = $result[0];
+    if($error == 0) {
+        send_error $proxy ($reqId, 
+                           "gm_mailProcessLogEntry -- failed to update state via log entry $logEntry\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+#
+# This sub takes a draft to be sent. The current implementation of this 
+# function is grossly inefficient, it should later be changed to send all 
+# the drafts at once so as to cut down on the number of folder creations and 
+# deletions that occur, etc.
+#
+sub SendDraft {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, $draft) = @@_;
+    local($path, $error, @@result);
+
+    # Folder creation is not really needed, but if gives an easy way to 
+    # determine the path to the users draft and makes it easier to later 
+    # output all the drafts first.
+    $proxy->Exec($reqId, "/usr/sww/bin/folder -create +gm-drafts");
+
+    @@result =  $proxy->Exec($reqId, "/usr/sww/bin/mhpath +gm-drafts");
+    $path = $result[1];
+    chop $path;
+
+    # NEEDS: Some lvl of error checking here to make sure that the file was 
+    # actually created.
+    open(CURDRAFT, ">$path/draft");
+    print CURDRAFT $draft;
+    close CURDRAFT;
+
+    # We might want to write them all out at once at some point
+    @@error = $proxy->Exec($reqId, "/usr/sww/bin/send -draftmessage $path/draft");
+
+    if($error[0] == 0) {
+	send_error $proxy ($reqId, 
+                           "gm_mailSendDraft -- mh send failed\n");
+        return 0;
+    }
+
+    $proxy->Exec($reqId, "/usr/sww/bin/rmf -nointeractive +gm-drafts");
+    $proxy->Exec($reqId, "/usr/sww/bin/folder +inbox");
+    return 1;
+}
+
+
+1;
+
+@
+
+
+1.25
+log
+@cleaned up some other stuff.  socket stuff is nicer now.
+@
+text
+@d52 3
+a54 1
+    local(@@msgnums) = sort {$a <=> $b} @@files;
+@
+
+
+1.24
+log
+@mail is fixed now, finally
+@
+text
+@d299 1
+a299 1
+	    $error = &ProcessLogEntry($self,proxy,$reqId, $curEntry);
+@
+
+
+1.23
+log
+@foo
+@
+text
+@a12 7
+sub StubImageContentNotify {
+    my($self) = shift;
+    my($proxy) = shift;
+    local($reqId, $path, $proto, $size) = @@_;
+    $proxy->Debug("Mail type image content notified\n");
+}
+
+d24 1
+d251 5
+a256 2
+    local($reqId, $pathName, $numChunks, @@toc) = @@_;
+    local($tmpfile) = &aux'tempfile();
+d258 3
+a260 1
+    $currentDocType = $pathName; 
+d262 12
+a273 8
+    local($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum > $tmpfile";
+    if (system($cmd)) {
+        &aux'log("gm_mailPutTOC: $! during `$cmd'");
+        unlink $tmpfile;
+        return (0, "scan error: $!");
+    }
+    unless (open(MSGS, $tmpfile)) {
+        &aux'log("gm_mailPutTOC: file read error: $!");
+a274 1
+        return (0, "read error: $!");
+a275 3
+    @@{$self->{Msgs}} = <MSGS>;
+    close MSGS;
+    unlink $tmpfile;
+d290 1
+a290 1
+    if($currentDocType eq "log") {
+d299 1
+a299 1
+	    $error = &ProcessLogEntry($proxy,$reqId, $curEntry);
+d309 1
+a309 1
+    } elsif ($currentDocType eq "draft") {
+d311 1
+a311 1
+	$error = &SendDraft($proxy,$reqId, $draft);
+d320 1
+a320 1
+                           "Unrecognized mail doc type: $currentDocType");
+@
+
+
+1.22
+log
+@INSTALL now removes security hole (debuggin) in glomop.cf.  gm_mail is
+now conservative about determining how many msgs to send over.
+@
+text
+@d116 12
+a127 10
+    if ($stat==0 && $dummy =~ /no messages/i) {
+        # empty inbox!
+        &aux'log("Empty inbox, returning empty TOC");
+        $self->{InboxIsEmpty} = 1;
+        @@z =  $proxy->PackageChunk($reqId, 0, 0, "", ());
+    } elsif ($stat == 0) {
+        # real live error
+        $proxy->send_error($reqId, "Fetching TOC: " .
+                           $proxy->last_error());
+        return (0, "scan error: $!");
+@
+
+
+1.21
+log
+@in gm_mail.pl, where it checks for empty inbox: moving the "return"
+*outside* the scope of the 'if' block makes it work correctly; inside
+the scope of the 'if', it mysteriously returns "6" to the caller, even
+tho the value about to be returned is correct!  perl bug?
+@
+text
+@d65 2
+a66 1
+    $i += 1 unless $i;
+@
+
+
+1.20
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d11 1
+a11 1
+$MaxBytes = 40 * 1024;
+d27 1
+a27 1
+
+d100 10
+a109 6
+    local($reqId, $seqName) = @@_;
+    local($scan, @@drtEntries);
+    local(@@result);
+    local(@@msgs);
+    local($stat,$dummy);
+    local($nmsgs) = $self->{NumToSend};
+d112 2
+a113 1
+    local($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum +gm_mail";
+d115 9
+a123 4
+    ($stat,$dummy) = $proxy->Exec($reqId, $cmd);
+
+    if ($stat==0) {
+        $proxy->send_error($reqId, "Fetching TOC: " . $proxy->last_error());
+d127 2
+d131 1
+a131 5
+    if ($#msgs < 0) {
+        # empty inbox!
+        $self->{InboxIsEmpty} = 0;
+        return ($proxy->PackageChunk($reqId, 0, 0, "", ()));
+    }
+a135 1
+    foreach (@@msgs) {chop;}
+@
+
+
+1.19
+log
+@gifs seem to work.   empty inbox is now detected and returned as empty
+toc, rather than as an error
+@
+text
+@a0 2
+#!/usr/sww/bin/perl
+
+d7 5
+a11 1
+$InboxIsEmpty = 0;
+d13 2
+a14 1
+sub gm_StubImageContentNotify {
+d23 2
+a24 1
+sub gm_mailInit {
+d26 8
+a33 2
+    my($status,$incresult);
+    
+d37 26
+a62 7
+    $InboxIsEmpty = 0;
+    if ($status == 0) {                     # error?
+        if ($incresult =~ /no mail to inc/i) {
+            $InboxIsEmpty = 1;
+        } else {
+            $proxy->send_error( $proxy->last_error() );
+        }
+d64 4
+a67 1
+    1;
+d73 2
+a74 1
+sub gm_mailShutdown {
+d77 1
+d96 2
+a97 1
+sub gm_mailFetchTOC {
+d103 4
+d108 1
+a108 8
+    if ($InboxIsEmpty) {
+        $InboxIsEmpty = 0;
+        return ($proxy->PackageChunk($reqId, 0, 0, "", ()));
+    }
+        
+    # Here if nonempty inbox.
+    # need some lvl of error checking here to make sure that this mapping
+    # is built
+d110 1
+a110 2
+    local($tmpfile) = &aux'tempfile();
+    local($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum +gm_mail > $tmpfile";
+d112 2
+a113 3
+    if (system($cmd)) {
+        &aux'log("gm_mailFetchTOC: $! during `$cmd'");
+        unlink $tmpfile;
+d116 7
+a122 4
+    unless (open(MSGS, $tmpfile)) {
+        &aux'log("gm_mailPutTOC: file read error: $!");
+        unlink $tmpfile;
+        return (0, "read error: $!");
+d124 7
+a130 3
+    @@msgs = <MSGS>;
+    close MSGS;
+    unlink $tmpfile;
+d132 1
+a132 2
+    foreach (@@msgs) {chop;}
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/scan +gm_mail");
+d138 1
+a141 1
+    $totalMsgs = $#msgs + 1;
+d144 1
+a144 1
+    return $proxy->PackageChunk($reqId, $totalMsgs, 0, $scan, @@drtEntries);
+d151 2
+a152 1
+sub gm_mailFetchChunk {
+d155 1
+a175 3
+
+	# Figure out type and handle it appropriately.
+	print $result[1], "\n";
+d185 1
+a185 1
+	    $totalMsgs--;
+d187 1
+a187 1
+	    $proxy->PackageChunk($reqId, $totalMsgs, $msgIndex, $result[1], @@drtEntries); 
+d191 1
+a191 1
+	    send_error $proxy ("Unsupported MIME type encountered msg: $actualIndex\n");
+d208 1
+a208 1
+	    $totalMsgs--;
+d214 1
+a214 1
+				 "/usr/sww/bin/mhn -form ./header.format -moreproc cat -nopause +gm_mail $actualIndex|head -10");
+d226 1
+a226 1
+		send_error $proxy ("Unsupported MIME type encountered in msg $actualIndex\n");
+d232 1
+a232 1
+	$proxy->PackageChunk($reqId, $totalMsgs, $msgIndex, $data[1], @@drtEntries); 
+d243 2
+a244 1
+sub gm_mailPutTOC { 
+d264 1
+a264 1
+    @@msgs = <MSGS>;
+d274 2
+a275 1
+sub gm_mailPutChunk {
+d290 1
+a290 1
+	    $error = &gm_mailProcessLogEntry($proxy,$reqId, $curEntry);
+d302 1
+a302 1
+	$error = &gm_mailSendDraft($proxy,$reqId, $draft);
+d320 2
+a321 1
+sub gm_mailAllDone {
+d333 2
+a334 1
+sub gm_mailIncomplete {
+d351 2
+a352 1
+sub gm_mailProcessLogEntry {
+d383 2
+a384 1
+sub gm_mailSendDraft {
+@
+
+
+1.18
+log
+@debuging
+@
+text
+@d9 2
+d25 1
+a25 1
+    ($status,$incresult) = $proxy->Exec(0, "/usr/sww/bin/inc +gm_mail");
+d27 1
+d29 5
+a33 2
+        $self->send_error( $self->last_error() )
+            unless ($incresult =~ /no mail to inc/i);
+d69 6
+@
+
+
+1.17
+log
+@gm_mail only reports new mail now
+@
+text
+@d20 4
+d25 4
+a28 2
+    $proxy->Exec(0, "/usr/sww/bin/folder -create +gm_mail");
+    $proxy->Exec(0, "/usr/sww/bin/inc +gm_mail");
+@
+
+
+1.16
+log
+@added incin to a temp inbox and then refile on connection close
+@
+text
+@d40 1
+a40 1
+    $proxy->Exec(0, "/usr/sww/bin/rmf -nointeractive +gm_mail");
+d106 1
+a106 2
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/mhn -list -nopause -noheaders
+$actualIndex +gm_mail");
+@
+
+
+1.15
+log
+@Mail works again!
+@
+text
+@d20 4
+d31 2
+d34 9
+d61 1
+a61 1
+    local($cmd) = "/usr/sww/bin/scan -form $proxypath/scan.msgnum > $tmpfile";
+d78 1
+a78 1
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/scan");
+d106 2
+a107 1
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/mhn -list -nopause -noheaders $actualIndex");
+d130 1
+a130 1
+			 "/usr/sww/bin/mhn -form $proxypath/gm_mhl.format -moreproc cat -nopause +inbox $actualIndex");
+d155 1
+a155 1
+				  "/usr/sww/bin/mhn -form $proxypath/gm_mhl.format -moreproc cat -part 1 -nopause +inbox $actualIndex");
+d162 1
+a162 1
+				 "/usr/sww/bin/mhn -form ./header.format -moreproc cat -nopause +inbox $actualIndex|head -10");
+d171 1
+a171 1
+		$proxy->Exec($reqId, "/usr/sww/bin/mhn -type image/gif -store");
+d308 2
+a309 2
+    # WARNING: This assumes messages are in inbox!
+    @@result = $proxy->Exec($reqId, "/usr/sww/bin/rmm +inbox $msgs[($toDelete - 1)]"); 
+@
+
+
+1.14
+log
+@foo bar
+@
+text
+@d37 1
+d44 14
+a57 1
+    open(MSGS, "/usr/sww/bin/scan -form ./scan.msgnum |") || die; # Build msg list.
+d59 3
+d68 2
+a69 2
+                                "gm_mailFetchTOC -- toc fetch aborted\n");
+        return 0;
+d89 2
+a90 1
+    
+d114 1
+a114 1
+			 "/usr/sww/bin/mhn -form ./gm_mhl.format -moreproc cat -nopause +inbox $actualIndex");
+d139 1
+a139 1
+				  "/usr/sww/bin/mhn -form ./gm_mhl.format -moreproc cat -part 1 -nopause +inbox $actualIndex");
+d175 1
+a175 1
+sub gm_mailPutTOC {
+d177 2
+d180 1
+d183 12
+a194 1
+    open(MSGS, "/usr/sww/bin/scan -form ./scan.msgnum |") || die; # Build msg list.
+d196 3
+a198 1
+    1;
+@
+
+
+1.13
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@d10 1
+a10 1
+    my($self) = shift;
+d12 1
+a12 1
+    gm_type'Debug("Mail type image content notified\n");
+d43 1
+a43 1
+    open(MSGS, "scan -form ./scan.msgnum |") || die; # Build msg list.
+d46 1
+a46 1
+    @@result = &gm_type'Exec($reqId, "scan");
+d58 1
+a58 1
+    &gm_type'PackageChunk($reqId, $totalMsgs, 0, $scan, @@drtEntries);
+d73 1
+a73 1
+    @@result = &gm_type'Exec($reqId, "mhn -list -nopause -noheaders $actualIndex");
+d78 1
+a78 1
+	&gm_type'Debug("Msg $actualIndex -- Multipart msg detected\n");
+d91 1
+a91 1
+	    &gm_type'Debug("Msg $actualIndex -- text type detected with subtype $1\n");
+d95 2
+a96 2
+		&gm_type'Exec($reqId, 
+			 "mhn -form ./gm_mhl.format -moreproc cat -nopause +inbox $actualIndex");
+d101 1
+a101 1
+	    &gm_type'PackageChunk($reqId, $totalMsgs, $msgIndex, $result[1], @@drtEntries); 
+d110 1
+a110 1
+        open(LIST, "mhn -list -nopause -noheaders $actualIndex |") || die;
+d117 1
+a117 1
+	    &gm_type'Debug("Msg $actualIndex -- text type detected with subtype $1\n");
+d120 2
+a121 2
+	    @@data = &gm_type'Exec($reqId,
+				  "mhn -form ./gm_mhl.format -moreproc cat -part 1 -nopause +inbox $actualIndex");
+d127 2
+a128 2
+	    @@data =&gm_type'Exec($reqId,
+				 "mhn -form ./header.format -moreproc cat -nopause +inbox $actualIndex|head -10");
+d134 1
+a134 1
+	    &gm_type'Debug("Processing a multipart MIME type\n");
+d137 1
+a137 1
+		&gm_type'Exec($reqId, "mhn -type image/gif -store");
+d146 1
+a146 1
+	&gm_type'PackageChunk($reqId, $totalMsgs, $msgIndex, $data[1], @@drtEntries); 
+d162 1
+a162 1
+    open(MSGS, "scan -form ./scan.msgnum |") || die; # Build msg list.
+d186 1
+a186 1
+	    $error = &gm_mailProcessLogEntry($proxy,reqId, $curEntry);
+d259 1
+a259 1
+    @@result = &gm_type'Exec($reqId, "rmm +inbox $msgs[($toDelete - 1)]"); 
+d284 1
+a284 1
+    &gm_type'Exec($reqId, "folder -create +gm-drafts");
+d286 1
+a286 1
+    @@result =  &gm_type'Exec($reqId, "mhpath +gm-drafts");
+d297 1
+a297 1
+    @@error = &gm_type'Exec($reqId, "send -draftmessage $path/draft");
+d305 2
+a306 2
+    &gm_type'Exec($reqId, "rmf -nointeractive +gm-drafts");
+    &gm_type'Exec($reqId, "folder +inbox");
+@
+
+
+1.12
+log
+@seni stable version of the mime capable proxy
+@
+text
+@d10 1
+d19 1
+a19 1
+
+d26 1
+d36 1
+d50 1
+a50 1
+	&gm_pconnect'send_error($reqId,
+d66 1
+d105 1
+a105 1
+	    &gm_pconnect'send_error("Unsupported MIME type encountered msg: $actualIndex\n");
+d140 1
+a140 1
+		&gm_pconnect'send_error("Unsupported MIME type encountered in msg $actualIndex\n");
+d158 1
+d172 1
+d186 1
+a186 1
+	    $error = &gm_mailProcessLogEntry($reqId, $curEntry);
+d190 2
+a191 2
+		&gm_pconnect'send_error($reqId, 
+                                        "gm_mailPutChunk -- application of log entry $actualNum failed\n");
+d198 1
+a198 1
+	$error = &gm_mailSendDraft($reqId, $draft);
+d201 1
+a201 1
+            &gm_pconnect'send_error($reqId, 
+d206 2
+a207 2
+        &gm_pconnect'send_error($reqId,
+                                "Unrecognized mail doc type: $currentDocType");
+d217 1
+d229 1
+d246 1
+d253 2
+a254 2
+	&gm_pconnect'send_error($reqId, 
+                                "gm_mailProcessLogEntry -- invalid change log entry\n");
+d262 2
+a263 2
+        &gm_pconnect'send_error($reqId, 
+                                "gm_mailProcessLogEntry -- failed to update state via log entry $logEntry\n");
+d277 1
+d300 2
+a301 2
+	&gm_pconnect'send_error($reqId, 
+                                "gm_mailSendDraft -- mh send failed\n");
+@
+
+
+1.11
+log
+@added fixes for change logging
+@
+text
+@d3 4
+d9 5
+d15 1
+a15 4
+# Takes a command as an arguement. This proc is just a wrapper for external 
+# process execution. At this stage the routine completely trusts the caller 
+# to have authenticated the user. Later we may wish to explicitly check 
+# commands. 
+d17 1
+a17 7
+sub gm_exec {
+    local($reqid, $cmd) = @@_;
+    local($status, $result);
+
+    $result = `$cmd`;
+    print $cmd;
+    print "\n";
+a18 7
+    # check for failure here some level of error reporting handling is needed
+    $status = ($& >> 8);
+    if($status != 0) {
+	&gm_pconnect'send_error($reqid, "gm_exec -- exec failed for $cmd\n");
+        return 0, $result;
+    }
+    return 1, $result;
+d22 1
+a22 2
+# This sub will pack a mail chunk, given the appropriate data, in a 
+# transmission ready form.
+d24 1
+a24 6
+sub gm_mailPackageChunk {
+    local($reqId, $totalChunks, $thisChunk, $data, @@drtEntries) = @@_;	
+    local($drtSize);
+
+    $drtSize = $#drtEntries + 1;
+    $numBytes = length($data);
+a25 7
+    $chunk[0] = "HERE $reqId $totalChunks $thisChunk\n";
+    $chunk[1] = "NDOCS $drtSize\n";
+    $chunk[2] = "DSIZE $numBytes\n"; 
+    $chunk[3] = $data;
+    $chunk[4] = "END\n";    
+    
+    return $totalChunks, @@chunk;
+d29 1
+a29 1
+# This sub routine takes a reqid and a sequence name as args and returns 
+d35 2
+a36 1
+    local($scan, $drtSize, $drtEntries, @@result);
+d42 2
+a43 2
+
+    @@result = &gm_exec($reqid, "scan");
+d47 1
+a47 1
+	&gm_pconnect'send_error($reqid,
+d55 1
+a55 1
+    &gm_mailPackageChunk($reqId, $totalMsgs, 0, $scan, @@drtEntries);
+d59 1
+a59 1
+# This sub routine also takes a reqid as well as the chunk number(msg index 
+d64 19
+a82 1
+    local($show, @@result);
+d84 9
+a92 6
+    # WARNING: This assumes msgs are in inbox!
+    # WARNING: The mhl format is currently hardcoded, we need to include
+    # this with the proxy.
+    @@result = &gm_exec($reqid, 
+		       "show -showproc mhl -form ./gm_mhl.format -moreproc cat +inbox $msgs[($msgIndex - 1)]");
+    $show = $result[1];
+d94 32
+d127 16
+a142 4
+    if($result[0] == 0) {
+	&gm_pconnect'send_error($reqid, 
+                                "gm_mailFetchChunk -- chunk fetch aborted\n");
+	return 0;
+d144 1
+a145 5
+    $#drtEntries = -1;
+    $totalMsgs--;
+    
+    &gm_mailPackageChunk($reqId, $totalMsgs, $msgIndex, $show, @@drtEntries);    
+}
+d154 1
+a154 1
+    local($reqid, $pathName, $numChunks, @@toc) = @@_;
+d167 1
+a167 1
+    local($reqid, $chunkIndex, @@chunk) = @@_;
+d180 1
+a180 1
+	    $error = &gm_mailProcessLogEntry($reqid, $curEntry);
+d184 1
+a184 1
+		&gm_pconnect'send_error($reqid, 
+d192 1
+a192 1
+	$error = &gm_mailSendDraft($reqid, $draft);
+d195 1
+a195 1
+            &gm_pconnect'send_error($reqid, 
+d200 1
+a200 1
+        &gm_pconnect'send_error($reqid,
+d211 1
+a211 1
+    local($reqid) = @@_;
+d222 1
+a222 1
+    local($reqid, @@missingChunks) = @@_;
+d226 6
+d238 1
+a238 1
+    local($reqid, $logEntry) = @@_;
+d244 1
+a244 1
+	&gm_pconnect'send_error($reqid, 
+d250 1
+a250 1
+    @@result = &gm_exec($reqid, "rmm +inbox $msgs[($toDelete - 1)]"); 
+d253 1
+a253 1
+        &gm_pconnect'send_error($reqid, 
+d268 1
+a268 1
+    local($reqid, $draft) = @@_;
+d274 1
+a274 1
+    &gm_exec($reqid, "folder -create +gm-drafts");
+d276 1
+a276 1
+    @@result =  &gm_exec($reqid, "mhpath +gm-drafts");
+d287 1
+a287 1
+    @@error = &gm_exec($reqid, "send -draftmessage $path/draft");
+d290 1
+a290 1
+	&gm_pconnect'send_error($reqid, 
+d295 2
+a296 2
+    &gm_exec($reqid, "rmf -nointeractive +gm-drafts");
+    &gm_exec($reqid, "folder +inbox");
+d299 1
+@
+
+
+1.10
+log
+@this should work
+@
+text
+@d16 2
+d115 2
+d127 1
+a127 1
+    local($curEntry, $curEntryNum, $error);
+d134 1
+a134 1
+	$curEntry = 0;
+d141 1
+d143 1
+a143 1
+                                        "gm_mailPutChunk -- application of log entry ($curEntryNum + 1) failed\n");
+d191 1
+a191 1
+    local($toDelete, $error);
+d193 1
+a193 1
+    if($logEntry =~ /rmm (\d+)/) {
+d202 2
+a203 1
+    $error = &gm_exec($reqid, "rmm +inbox $msgs[($toDelete - 1)]"); 
+d221 1
+a221 1
+    local($path, $error);
+d228 2
+a229 1
+    $path = &gm_exec($reqid, "mhpath +gm-drafts");
+@
+
+
+1.9
+log
+@stuff
+@
+text
+@d57 1
+a57 1
+    open(MSGS, "scan -form scan.msgnum |") || die; # Build msg list.
+d87 1
+a87 1
+		       "show -showproc mhl -form /usr/sww/lib/mh-6.8.3/mhl.format -moreproc cat +inbox $msgs[($msgIndex - 1)]");
+@
+
+
+1.8
+log
+@stupid emtry
+@
+text
+@a14 1
+    print "EXEC: $cmd\n";
+d152 3
+a230 4
+    print "The Draft: \n";
+    print $draft;
+    print "\n";
+
+d240 2
+a241 1
+#    &gm_exec($reqid, "rmf -nointeractive +gm-drafts");
+@
+
+
+1.7
+log
+@finished error checking
+@
+text
+@d14 2
+d229 4
+d242 1
+a242 1
+    &gm_exec($reqid, "rmf -nointeractive +gm-drafts");
+@
+
+
+1.6
+log
+@added error checking to the mail type
+@
+text
+@d6 4
+a9 4
+# Takes a command as an arguement. This proc is just a wrapper for external process
+# execution. At this stage the routine completely trusts the caller to have 
+# authenticated the user. Later we may wish to explicitly check commands. This sub
+# should deal with error notification, etc.
+d26 2
+a27 2
+# This sub will pack a mail chunk, given the appropriate data, in a transmission ready
+# form.
+d46 3
+a48 2
+# This sub routine takes a reqid and a sequence name as args and returns the table 
+# of contents in "ready to send" form. It also builds the msg-list.
+d54 2
+d63 2
+a64 1
+	&gm_pconnect'send_error($reqid, "gm_mailFetchTOC -- toc fetch aborted\n");
+d75 2
+a76 2
+# This sub routine also takes a reqid as well as the chunk number(msg index for the
+# mail type).
+d85 2
+a86 1
+    @@result = &gm_exec($reqid, "show -showproc mhl -form /usr/sww/lib/mh-6.8.3/mhl.format -moreproc cat +inbox $msgs[($msgIndex - 1)]");
+d91 2
+a92 1
+	&gm_pconnect'send_error($reqid, "gm_mailFetchChunk -- chunk fetch aborted\n");
+d103 4
+a106 3
+# This sub is called when the toc of the doc that is being sent to the client has been
+# recieved. The arguements are straightforward, the toc is expected to in a list of strings
+# each string being an entry in the toc. For the mail type it currently serves no purpose.
+d111 1
+a111 2
+    $currentDocType = $pathName; # punting on handling multiple outstanding docs at once.
+
+d136 2
+a137 1
+		&gm_pconnect'send_error($reqid, "gm_mailPutChunk -- application of log entry ($curEntryNum + 1) failed\n");
+d147 2
+a148 1
+            &gm_pconnect'send_error($reqid, "gm_mailPutChunk -- draft send failed\n");
+d156 2
+a157 2
+# This sub is called to notify the mail tsm that all chunks have been received and
+# send to us.
+d165 4
+a168 4
+# This sub is called to notify the sub that an error has occured, it gets the id and
+# the chunks that were not recieved. The sub then decides if the missing chunks matter
+# to the overall document and return 1 or 0. On error(0) a list describing what is wrong
+# is also passed.
+d177 2
+a178 2
+# should only encompass rmm events. I therefore assume the format rmm msgNum, tho
+# this could easily be different.
+d187 2
+a188 1
+	&gm_pconnect'send_error($reqid, "gm_mailProcessLogEntry -- invalid change log entry\n");
+d195 2
+a196 1
+        &gm_pconnect'send_error($reqid, "gm_mailProcessLogEntry -- failed to update state via log entry $logEntry\n");
+d204 4
+a207 4
+# This sub takes a draft to be sent. The current implementation of this function
+# is grossly inefficient, it should later be changed to send all the drafts at 
+# once so as to cut down on the number of folder creations and deletions that
+# occur, etc.
+d213 3
+a215 3
+    # Folder creation is not really needed, but if gives an easy way to determine
+    # the path to the users draft and makes it easier to later output all the drafts
+    # first.
+a216 1
+    
+d221 2
+a222 2
+    # NEEDS: Some lvl of error checking here to make sure that the file was actually
+    # created.
+d231 2
+a232 1
+	&gm_pconnect'send_error($reqid, "gm_mailSendDraft -- mh send failed\n");
+@
+
+
+1.5
+log
+@Uplink works! woo hoo!
+@
+text
+@a5 7
+# WARNING: gm_mailFetchTOC sub needs to be called before any of the other subs in 
+# this package. This should happen anyway, but if it does not the msgs array that
+# contains the mappings between client message numbers and actual message numbers
+# will never be initialized. The other "mail" subs depend on this array.
+#
+
+#
+d12 2
+a13 1
+    local($cmd) = @@_;
+d17 6
+a22 2
+
+    return $result;
+d51 1
+a51 1
+    local($scan, $drtSize, $drtEntries);
+d56 8
+a63 2
+    $scan = &gm_exec("scan");
+    
+d76 2
+a77 1
+    
+d81 9
+a89 1
+    $show = &gm_exec("show -showproc mhl -form /usr/sww/lib/mh-6.8.3/mhl.format -moreproc cat +inbox $msgs[($msgIndex - 1)]");
+d116 1
+a116 1
+    local($curEntry, $curEntryNum);
+a120 2
+	# need some level of parsing to extract the individual lines of the 
+	# log and then call the gm_mailProcessLogEntry 
+d127 5
+a131 1
+	    &gm_mailProcessLogEntry($curEntry);
+d137 6
+a142 1
+	&gm_mailSendDraft($draft);
+d153 1
+a153 1
+    1;				# Groovy
+d164 1
+a164 1
+    1;
+d173 2
+a174 2
+    local($logEntry) = @@_;
+    local($toDelete);
+a175 1
+    # Loop thru the log and use a regex to grab off the msg number.
+d178 3
+a180 2
+    } else {			# Need to add an error mechanism thing here
+				# use send_error gm_pconnect
+d184 7
+a190 1
+    &gm_exec("rmm +inbox $msgs[($toDelete - 1)]"); 
+d200 2
+a201 2
+    local($draft) = @@_;
+    local($path);
+d206 1
+a206 1
+    &gm_exec("folder -create +gm-drafts");
+d208 2
+a209 1
+    $path = &gm_exec("mhpath +gm-drafts");
+d212 2
+d219 6
+a224 1
+    &gm_exec("send -draftmessage $path/draft");
+d226 2
+a227 1
+    &gm_exec("rmf +gm-drafts");
+d231 1
+@
+
+
+1.4
+log
+@eq bug fixed
+@
+text
+@d120 1
+a120 2
+
+    } else if($currentDocType eq "draft") {
+d124 1
+@
+
+
+1.3
+log
+@added sendmail and log processing api that matches up with the rest
+of the proxies expectations.
+@
+text
+@d105 1
+a105 1
+    if($currentDocType == "log") {
+d121 1
+a121 1
+    } else if($currentDocType == "draft") {
+@
+
+
+1.2
+log
+@appears to work for sending TOC and incoming mail
+@
+text
+@d84 65
+a148 2
+# This sub is passed a list, each of whose entries correspond to a logged event that 
+# effects the state of the mail environment. For the current version these events
+d152 3
+a154 5
+sub gm_mailProcessLog {
+    local(@@log) = @@_;
+    local($logLen) = $#log + 1;
+    local($curEntry) = 0;
+    local($msg, $toDelete);
+d157 5
+a161 6
+    while($curEntry != $logLen) {
+	
+	$msg = $log[$curEntry];
+	if($msg =~ /rmm (\d+)/) {
+	    $toDelete = $1;
+	}
+d163 2
+a164 5
+	# WARNING: This assumes messages are in inbox!
+	&gm_exec("rmm +inbox $msgs[($toDelete - 1)]"); 
+
+	$curEntry++;
+    }
+d168 4
+a171 2
+# This sub takes a list of strings that represent messages to be sent. It simply
+# creates a temporary draft folder and invokes send on the messages.
+d173 3
+a175 4
+sub gm_mailSendDrafts {
+    local(@@drafts) = @@_;
+    local($totalDrafts) = $#drafts + 1;
+    local($curDraftNum) = 0;
+d185 3
+a187 6
+    while($curDraftNum != $totalDrafts) {
+	$curDraft = $drafts[$curDraftNum];
+
+	open(CURDRAFT, ">$path/draft");
+	print CURDRAFT $curDraft;
+	close CURDRAFT;
+d189 2
+a190 2
+	# We might want to write them all out at once at some point
+	&gm_exec("send -draftmessage $path/draft");
+a191 2
+	$curDraftNum++;
+    }
+@
+
+
+1.1
+log
+@the text mail type
+@
+text
+@d74 3
+a76 1
+    $show = &gm_exec("show -showproc mhl -moreproc cat +inbox $msgs[($msgIndex - 1)]");
+d78 1
+@

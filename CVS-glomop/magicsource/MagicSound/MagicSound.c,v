@@ -1,0 +1,229 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.09.15.01.42.31;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.12.01.49.08;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.09.12.01.49.09;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Newest release of the sound code - correctly converts 16 bit linear
+(derived from mu-law) to 8 bit linear.  Sounds great!
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	MagicSound
+#
+#	The simplest Magic Capª Package
+#
+#	General Magic Developer Technical Support
+#	Copyright © 1992-1994 General Magic, Inc.
+#	All rights reserved.
+#
+#
+#	Version:	MC19						February 22, 1994
+#
+#
+#	Changes to this file in version MC19:
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "Modem.h"
+#include "soundstructs.h"
+
+#undef CURRENTCLASS
+#define CURRENTCLASS SoundTryButton
+
+Private uchar
+ReadByte(ObjectID stream)
+{
+	uchar c;
+	Unsigned pend;
+	
+	/*pend = CountReadPending(stream);
+	while (pend == 0)
+	   pend = CountReadPending(stream); */
+	
+	Read(stream, &c, sizeof(c));   /* was ReadAll */
+	return c;
+}
+
+Private uchar
+SkipOverWhiteSpace(ObjectID stream)
+{
+	uchar c;
+	do {
+		c = ReadByte(stream);
+	} while (CharacterIsWhitespace(c));
+	return c;
+}
+
+Private uchar
+SkipUntilWhiteSpace(ObjectID stream)
+{
+	uchar c;
+	do {
+		c = ReadByte(stream);
+	} while (!CharacterIsWhitespace(c));
+	return c;
+}
+
+Method void SoundTryButton_Action(ObjectID self)
+{
+    ObjectID myNewSound, lpc1, stTime;
+    UnsignedByte *myBuf;
+    ulong i, j;
+	char  c;
+	char  *myExtra;
+	Fixed  theRate;
+	uchar byteBuf[1400];
+	uchar outBuf[180];
+	uchar *inBuf;
+	lpcparams_t theParamBlock;
+	Fixed mySpeed, *fixedArray;
+
+	stTime = NewTransient(Time_, nil);
+    myBuf = (UnsignedByte *) NewTransientBuffer(18000L);
+    myNewSound = NewTransient(Sound_, NULL);
+    SetTransform(myNewSound, nilObject);
+	SetExtraSize(myNewSound, 18000L);
+	SetSampleCount(myNewSound, 18000L);
+	theRate = IntToFixed(8000);
+	SetSampleRate(myNewSound, theRate);
+
+    lpc1 = NewTransient(LPCcoder_, NULL);
+	lpcInit(lpc1, 180L);
+	
+    mySpeed = IntToFixed((Signed) 1);
+	inBuf = (char *) &theParamBlock;
+
+	SetToNow(stTime);
+    Log(("About to start reads...%ld", Milliseconds(stTime)));
+	Flush(iModem);	
+	WriteByte(iModem, (char) 255);
+	Flush(iModem);
+	
+	SetToNow(stTime);
+    Log(("Started reads...%ld", Milliseconds(stTime)));
+	
+	Read(iModem, (Pointer) &(byteBuf[0]), 1400L);   /*** Read in all frames at once... this is temporary for benchmarks ***/
+	
+	SetToNow(stTime);
+    Log(("Finished reads, starting conversion...%ld", Milliseconds(stTime)));
+	Honk();
+	inBuf = &(byteBuf[0]);
+	for (i=0L; i<100L; i++)
+	{
+	   lpcSynthesize(lpc1, (Pointer) inBuf, mySpeed, (Pointer) (&(myBuf[0]) + i*180L));
+	   inBuf += 14L;
+	   
+	   /*** the following were commented out for benchmarks ***/
+	  /***** Read(iModem, (Pointer) &(inBuf[0]), 14L); ****/  /*** Read in the next frame ***/  
+	  /***** lpcSynthesize(lpc1, (Pointer) &theParamBlock, mySpeed, (Pointer) (&(myBuf[0]) + i*180L)); ******/
+	}
+	
+/*	SetToNow(stTime);
+    Log(("Done conversion...%ld", Milliseconds(stTime)));*/
+	
+	Honk();
+	myExtra = (char *) BeginModifyExtra(myNewSound);
+	CopyBytes(myBuf, myExtra, 18000L);
+	DestroyTransientBuffer((Pointer) myBuf);
+	EndModify(myNewSound);
+	SetToNow(stTime);
+    Log(("Done copying of sound...%ld", Milliseconds(stTime)));
+	Honk();	
+	PlaySound(myNewSound);
+	SetToNow(stTime);
+    Log(("Done PlaySound call...%ld", Milliseconds(stTime)));
+	
+	DelayMilliseconds(3000L);
+	SetFieldOf(myNewSound, Sound_formatType, kSampleMuLaw);
+	PlaySound(myNewSound);
+	DelayMilliseconds(3000L);
+	SetFieldOf(myNewSound, Sound_formatType, kSample16bit);
+	PlaySound(myNewSound);
+	DelayMilliseconds(3000L);
+	
+	
+	lpcStop(lpc1);
+	Destroy(lpc1);
+	Destroy(myNewSound);
+	
+	
+	/*raw1 = CopyNear(iConfirmSound, myNewSound);
+	Compress(raw1, iADPCM4bitCompression);*/
+	
+	/*    	operation 
+	PlaySample(buffer: Pointer; length: Unsigned; recordedRate: Unsigned; playbackRate: Unsigned; duration: Unsigned;
+						 loopStart: Unsigned; loopEnd: Unsigned; loopContinueProc: Pointer; completionProc: Pointer); */
+
+}
+ 
+#undef CURRENTCLASS  /* this goes at the end of the file */
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d71 1
+a71 1
+	uchar byteBuf[14];
+d75 1
+a75 1
+	Fixed mySpeed;
+d97 1
+d100 7
+a106 1
+
+d109 6
+a114 2
+	   Read(iModem, (Pointer) &(inBuf[0]), 14L);   /*** Read in the next frame ***/  
+	   lpcSynthesize(lpc1, (Pointer) &theParamBlock, mySpeed, (Pointer) (&(myBuf[0]) + i*180L));
+d117 2
+a118 2
+	SetToNow(stTime);
+    Log(("Done reads...%ld", Milliseconds(stTime)));
+d131 10
+@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

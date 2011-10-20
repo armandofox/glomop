@@ -1,0 +1,1241 @@
+head	1.16;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.16
+date	98.06.03.20.24.53;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	98.05.15.00.48.56;	author gribble;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	98.05.08.22.22.37;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	98.05.08.17.47.54;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	98.03.02.01.49.16;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.03.01.02.27.46;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.03.01.00.52.09;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.02.28.22.29.57;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.02.28.04.46.48;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.02.28.03.24.31;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.02.28.02.22.22;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.02.26.19.05.11;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.02.26.18.06.55;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.02.19.23.33.48;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.02.18.21.00.12;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.02.12.02.15.24;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.02.12.02.15.24;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.16
+log
+@final changes for camera ready
+@
+text
+@% currently contains the TACC section and Extensibility discussion from
+% SOSP; needs to have stuff
+% from armando's quals proposal, class slides, and class projects used
+% as example in IEEE BARWAN paper.
+
+\section{Other TACC Applications}
+\label{taccapps}
+\label{casestudies}
+
+We now discuss several examples of new services in various stages of
+deployment, showing how each exploits the TACC model and discussing
+some of our experiences with the applications.  Rather than providing
+detailed measurements as we did for TranSend in the previous section,
+the present goal is to demonstrate the flexibility of the TACC framework
+in accommodating an interesting range of applications, while providing
+consistent guidelines for approaching application
+partitioning decisions.
+
+We restrict our discussion here to services that can be implemented
+using the proxy model, i.e., transparent interposition of
+computation between clients and servers.  (Some of our services do not
+communicate via HTTP but are conceptually similar.)  Also, although we
+have developed a wider range of applications using the TACC model as
+part of a graduate seminar
+\cite{cs294}, we concentrate  on those applications that enable
+adaptation to network and client variation.  These services share
+the following common characteristics,
+which make them amenable to implementation on our cluster-based framework:
+
+\begin{itemize}
+\item Compute-intensive transformation or aggregation
+\item Computation is parallelizable with granularity of a few CPU 
+seconds
+\item Substantial value added by mass customization
+\end{itemize}
+
+\subsection{TranSend as a TACC Application}
+
+TranSend is one of the simplest TACC applications we have produced.
+The dispatch rules simply match the MIME type of the object
+returned from the origin server to the list of known workers, which (as
+in all TACC applications) can be updated dynamically.  In particular,
+TranSend does not exploit TACC's ability to compose workers by chaining
+them into a ``pipeline'' or having one worker call others as
+coroutines.  
+
+% In addition to user-selectable lossy compression levels, TranSend's workers
+% convert most GIF images to the JPEG format using an off-the-shelf
+% library \cite{jpeg-6a} (since JPEG often compresses 
+% more gracefully), reduce colormap size to at most 256 at most levels of
+% compression, insert HTML markup or JavaScript to allow users to click
+% through to the original images, use Java and JavaScript to provide a
+% ``floating palette'' user interface for changing user profile settings
+% \cite{uist97}, and optionally ``sanitize'' request headers to provide
+% some of the same functionality as Anonymizer Surfing \cite{anonymizer}.
+
+Transformed objects are stored in the cache with ``fat
+URL's'' that encode a subset of
+the transformation parameters, saving the work of
+re-transforming an original should another user ask for the same
+degraded version later.  Each user can select a desired level of
+aggressiveness for the lossy compression and choose between HTML and
+Java-based interfaces for modifying their preferences.
+
+The main difference between TranSend and commercial products based on
+its ideas (such as Intel's recently-announced QuickWeb \cite{quickweb})
+is extensibility: adding support for new datatypes to TranSend is
+as simple as adding a new worker, and composing workers is as simple as
+modifying the dispatch rules (or modifying existing workers to hint to
+the TACC server that they should fall through to new workers).  In fact,
+we have generalized TranSend into a ``lazy fixations'' system \cite{dolf} in
+which users could select from among a variety of available formats for
+viewing an object; this was implemented by a ``graph search'' worker
+that treated all the transformation workers as edges in a directed graph
+and performed a shortest-paths search to determine what sequence of
+workers should be run to satisfy a particular request.
+
+One of the goals of TACC is to exploit modularity and composition to
+make new services easy to prototype by reusing existing building blocks.
+TranSend's HTML and JPEG workers consist almost entirely of
+off-the-shelf code, and each took an afternoon to write.  A pair of
+anecdotes illustrates the flexibility of the TACC API's in constructing
+responsive services.  Our original HTML parser was a fast C-language
+implementation from the W3C.  Debugging the pathological cases for this
+parser was spread out over a period of days---since our prototype TACC server
+masks transient faults by bypassing original content ``around''
+the faulting worker, we could only deduce the existence of bugs by
+noticing (on the Graphical Monitor display) that the HTML worker had been
+restarted several times over a period of hours, although the service as
+a whole was continuously available.
+
+We later wrote a much slower but more robust parser in Perl to handle
+proprietary HTML extensions such as inline JavaScript.  All HTML pages
+are initially passed to the slower Perl parser, but if it believes
+(based on page length and tag density) that processing the page will
+introduce a delay longer than one or two seconds, it immediately throws
+an exception and indicates that the C parser should take over.  Because
+the majority of long pages tend to be papers published in HTML rather
+than complex pages with weird tags, this scheme exploits TACC
+composition and dispatch to handle common cases well while keeping
+HTML processing latency barely noticeable.
+
+% TBD why this makes adaptation easy; slapping an adapter on the back of
+% existing apps
+
+\subsection{Top Gun Wingman}
+
+Top Gun Wingman is the only graphical Web browser available for the 3Com
+PalmPilot, a typical ``thin client'' device.  Based on file downloads,
+we estimate that 8000 to 10,000 users
+are using the client software and UC Berkeley's experimental cluster;
+ProxiNet, Inc.\ has since commercialized the program 
+and deployed a production cluster to serve additional users.
+Figure \ref{wing_shot} shows a
+screenshot of the browser.
+
+\begin{figure}[tbh]
+\epsfxsize 0.55\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 220 337]{./figures/pilot_ya2.epsi}
+}
+\end{center}
+\caption{Screenshot of the Top Gun Wingman browser.  This screenshot is
+taken from the ``xcopilot'' hardware-level Pilot simulator \cite{xcopilot}.}
+\label{wing_shot}
+\end{figure}
+
+
+Previous attempts to provide graphical Web browsing on such small
+devices have foundered on the severe limitations imposed by small
+screens, limited computing capability, and austere programming
+environments, and virtually all have fallen back to simple text-only
+browsing.  Our adaptation approach, combined with the
+composable-workers model provided by TACC, allows us to approach this
+problem from a different perspective.  The core of Top
+Gun Wingman consists of three TACC workers: HTML layout,
+image conversion, and intermediate-form layout to device-specific data
+format conversion.  These three workers address the three areas of
+variation introduced in section \ref{distill}:
+
+\begin{itemize}
+
+\item Hardware and software adaptation:
+We have built TACC workers that
+output simplified binary markup and scaled-down images ready to be ``spoon
+fed'' to a thin-client device, given knowledge of the
+client's screen dimensions, image format, and font metrics.  This
+greatly simplifies 
+client-side code since no HTML parsing, layout, or image processing is
+necessary, and as a side benefit, the smaller and more efficient data
+representation reduces transmission time to the client.  The image
+worker delivers 2-bit-per-pixel images, since that is what the PalmPilot
+hardware  supports, and the HTML parsing and layout worker ensures that
+no page description larger than about 32KB is delivered to the client,
+since that is the approximate heap space limit imposed
+by the PalmPilot's programming environment.
+We have also added three ``software upgrades'' at the proxy since
+Wingman was first deployed:
+a  worker that delivers data in AportisDoc \cite{aportisdoc} format (a popular
+PalmPilot e-book format), a worker that extracts and displays the contents of
+software archives for download directly to the PalmPilot, and an
+improved image-processing module contributed by a senior graphics hacker.
+In terms of code footprint, Wingman weighs in at
+40KB of code (compared with 74KB and 109KB for HandWeb and Palmscape
+5.0 respectively, neither of which currently support image viewing).  
+
+\item Network protocol adaptation:  In addition to delivering data
+in a more 
+compact format and exploiting datatype-specific distillation, we have
+replaced HTTP with a simpler, datagram-oriented protocol based on
+Application Level Framing \cite{alf}.  The combined effect of these
+optimizations makes
+Wingman two to four times faster than a desktop browser loading the same Web
+pages over the same bandwidth, and
+Wingman's performance on text-only pages 
+often exceeds that of HTML/HTTP compliant browsers on the same
+platform, especially on slow ($< 56$ Kb/s) links.
+
+\end{itemize}
+
+\subsection{Top Gun Mediaboard}
+
+TopGun Mediaboard is an electronic shared whiteboard application for the
+PalmPilot.  This is a derivation of the the desktop {\em mediaboard}
+application, which uses SRM (Scalable Reliable Multicast) as the
+underlying communication protocol.  A  reliable multicast proxy (RMX) TACC worker 
+participates in the SRM session on behalf of the PDA clients,
+performing four main types of client adaptation:
+
+\begin{itemize}
+\item Transport protocol conversion: The PalmPilot's
+network stack does not support IP multicast.
+The RMX converts the SRM data into a 
+unicast TCP stream that the client can handle.
+
+\item Application protocol adaptation: To keep the
+client implementation simple, all the
+complexities of the mediaboard command protocol are handled by the
+RMX.  The protocol adapter transforms the entire
+sequence of mediaboard commands into a ``pseudo-canvas'' by executing
+each command and storing its result in the canvas, transmitting only a
+sequence of simple draw-ops to the client.  The protocol and data format
+for transmitting the draw-ops is a direct extension of the Top Gun Wingman
+datagram protocol.
+
+\item On-demand distillation: The RMX converts specific data objects
+according to the client's needs.  For example, it
+transforms the GIF and
+JPEG images that may be placed on the mediaboard into simpler image
+representations that the PalmPilot can understand, using the same worker
+that is part of Wingman.
+The client application can refine (zoom in on)
+specific portions of the canvas.
+
+\item Intelligent Rate Limiting: Since the proxy has complete knowledge
+of the client's state, the RMX can perform intelligent forwarding of
+data from the mediaboard session to the client.  By eliminating redundant
+draw-ops (for example, {\em create} followed by {\em delete} on the same
+object) before
+sending data to the client, the RMX reduces the number of bytes that must
+be sent over the low-bandwidth link.  Moreover, although a
+whiteboard session can consist of a number of distinct pages, the RMX
+forwards only the data associated with the page currently being viewed
+on the client.
+
+\end{itemize}
+
+Top Gun Mediaboard is in prealpha use at UC Berkeley, and performs
+satisfactorily even over slow links such as the Metricom Ricochet wireless packet
+radio modem \cite{ricochet}.
+
+\subsection{Charon: Indirect Authentication for Thin Clients}
+
+Although not yet rewritten as a TACC application, Charon \cite{charon}
+illustrates a similar use of adaptation by proxy, for performing
+indirect authentication.  In particular, Charon mediates between thin
+clients and a Kerberos \cite{kerberos} infrastructure.  Charon is
+necessary because, as we describe in \cite{charon}, the computing
+resources required for a direct port of Kerberos to thin clients are
+forbidding.  With Charon,
+Kerberos can be
+used both to authenticate clients to the proxy service, and to
+authenticate the proxied clients to Kerberized servers.  Charon relieves
+the client of a significant amount of Kerberos protocol processing,
+while limiting the amount of trust that must be placed in the proxy; in
+particular, if the proxy is compromised, existing user sessions may be
+hijacked but no new sessions can be initiated, since new sessions
+require cooperation between the client and proxy.  Our Charon prototype
+client for the Sony MagicLink \cite{sony_magic_link}, a once-popular
+PDA, had a client footprint of only 45KB, including stack and heap usage.
+
+@
+
+
+1.15
+log
+@Final changes
+@
+text
+@d125 1
+a125 1
+taken from the ``xcopilot'' hardware-level Pilot simulator\cite{xcopilot}.}
+@
+
+
+1.14
+log
+@reviewer B changes
+@
+text
+@d134 1
+a134 1
+browsing.  But our adaptation approach, combined with the
+d250 1
+a250 1
+client for the Sony MagicLink \cite{sony_magic_link}, a then-popular
+@
+
+
+1.13
+log
+@*** empty log message ***
+@
+text
+@d108 1
+a108 1
+Top Gun Wingman is the only graphical Web browser available for the USR
+d124 2
+a125 1
+\caption{Screenshot of the Top Gun Wingman browser}
+@
+
+
+1.12
+log
+@first draft sent to Richard LaMaire
+@
+text
+@d11 1
+a11 1
+deployment, showing how each maps onto the TACC model and discussing
+d62 2
+a63 2
+aggressiveness for the lossy compression and turn header sanitizing on
+and off.
+d66 2
+a67 2
+its ideas (such as Intel's QuickWeb \cite{quickweb}, currently in market
+test) is extensibility: adding support for new datatypes to TranSend is
+d110 5
+a114 2
+we estimate our current user base at about 8000, all of whom are using
+the experimental cluster at UC Berkeley.  Figure \ref{wing_shot} shows a
+d181 1
+a181 1
+\subsection{Top Gun MediaBoard}
+@
+
+
+1.11
+log
+@More tersification.
+@
+text
+@d164 1
+a164 1
+\item Network and protocol adaptation:  In addition to delivering data
+d178 1
+a178 1
+\subsection{Top Gun MediaBoard: {\em wb} for Handhelds}
+d188 2
+a189 2
+\item Transport protocol conversion: Although the PalmPilot is
+network-enabled, its network stack has no support for multicast.
+d199 2
+a200 2
+sequence of simple draw-ops to the client.  The protocol for
+transmitting the draw-ops is an extension of the Top Gun Wingman
+d204 2
+a205 1
+according to the client's needs. For example, it transforms the GIF and
+d207 3
+a209 3
+representations that the PalmPilot can understand, 
+discarding unnecessary resolution and
+color information.  The client application can refine (zoom in on)
+d234 5
+a238 1
+clients and a Kerberos \cite{kerberos} infrastructure.  Kerberos can be
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d111 14
+a124 1
+the experimental cluster at UC Berkeley.
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@a36 2
+\subsection{TranSend Discussion}
+
+d106 1
+a106 1
+\subsubsection{Top Gun Wingman}
+d165 1
+a165 1
+\subsubsection{Top Gun MediaBoard: {\em wb} for Handhelds}
+d215 1
+a215 1
+\subsubsection{Charon: Indirect Authentication for Thin Clients}
+a229 5
+
+
+\subsubsection{Other Stuff}
+
+Badri event notification
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d37 29
+a65 1
+\subsubsection{TranSend Discussion}
+d121 1
+a121 7
+problem from a different perspective.  We have built TACC workers that
+output both simplified markup and scaled-down images ready to be ``spoon
+fed'' to an extremely simple browser client, given knowledge of the
+client's screen dimensions and font metrics.  This greatly simplifies
+client-side code since no HTML parsing, layout, or image processing is
+necessary, and as a side benefit, the smaller and more efficient data
+representation reduces transmission time to the client.  The core of Top
+d124 4
+a127 9
+format conversion.  We have also added two transformation workers that
+can deliver data in AportisDoc \cite{aportisdoc} format (a popular
+PalmPilot e-book format) and can extract and display the contents of
+software archives for download directly to the PalmPilot.  These last
+two tasks would be awkward at best without adaptive proxy support; in
+fact, these behaviors were added without upgrading the client-side
+software.  Similarly, when a senior graphics hacker offered to
+contribute some image-processing code, our users suddenly enjoyed the
+benefit of a software upgrade without installing new client software.
+d129 21
+a149 1
+Compared to other Web browsers on the PalmPilot, Wingman weighs in at
+d151 15
+a165 6
+5.0 respectively, neither of which support image viewing).  Wingman's
+performance is typically a factor of two to four faster on the same Web
+pages compared to a desktop web browser at the same bandwidth, and due
+to our compact binary markup, its performance on text-only pages rivals
+and often exceeds that of its direct competitors, especially on slow ($<
+56Kb/s$) links.
+d174 1
+a174 1
+performing three main types of client adaptation:
+d188 3
+a190 1
+sequence of simple draw-ops to the client.
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d37 1
+a37 1
+\subsubsection{TranSend}
+a51 2
+TBD transition
+
+d54 22
+a75 11
+TranSend's HTML and JPEG workers consist 
+almost entirely of off-the-shelf code, and each took an afternoon to 
+write.  Debugging the pathological cases for the HTML worker 
+was spread out over a period of days---since the system masked 
+transient faults by bypassing original content "around" the faulting 
+worker, we could only deduce the existence of bugs by noticing 
+(using the Monitor display) that the HTML worker had been 
+restarted several times over a period of hours.
+The other aspect of extensibility is the ease with which new 
+services can be added by composing workers and modifying the 
+service presentation interface.  
+d87 24
+a110 24
+Previous attempts to provide Web browsing on such small devices have
+foundered on the severe limitations imposed by small screens, limited
+computing capability, and austere programming environments, and
+virtually all have fallen back to simple text-only browsing.  But our
+adaptation approach, combined with the composable-workers model provided
+by TACC, allows us to approach this problem from a different
+perspective.  We have built TACC workers that output both simplified
+markup and scaled-down images ready to be "spoon fed" to an extremely
+simple browser client, given knowledge of the client's screen dimensions
+and font metrics.  This greatly simplifies client-side code since no
+HTML parsing, layout, or image processing is necessary, and as a side
+benefit, the smaller and more efficient data representation reduces
+transmission time to the client.  The core of Top Gun Wingman consists
+of three TACC workers: HTML parsing and layout, image conversion, and
+intermediate-form layout to device-specific data format conversion.  We
+have also added two transformation workers that can deliver data in
+AportisDoc \cite{aportisdoc} format (a popular PalmPilot e-book format)
+and can extract and display the contents of software archives for
+download directly to the PalmPilot.  These last two tasks
+would be awkward at best without adaptive proxy
+support; in fact, these behaviors were added without upgrading the
+client-side software.  Similarly, when a senior graphics hacker offered
+to contribute some image-processing code, our users suddenly enjoyed the
+benefit of a software upgrading without installing a new client.
+d116 4
+a119 1
+pages compared to a desktop web browser at the same bandwidth.
+d125 1
+a125 1
+application that uses SRM (Scalable Reliable Multicast) as the
+d131 1
+a131 1
+\item Transport Protocol Conversion: Although the PalmPilot is
+d133 1
+a133 1
+The RMX acts as an intermediary and converts the SRM data into a simpler
+d136 1
+a136 1
+\item Application Protocol Adaptation: To keep the
+d142 1
+a142 1
+sequence of simple ``draw ops'' to the client.
+d144 1
+a144 1
+\item Dynamic Data Distillation: The RMX converts specific data objects
+d157 2
+a158 2
+sending data to the client, we can reduce the number of bytes that must
+be sent over the low-bandwidth link to the client.  Moreover, although a
+d165 4
+d170 19
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d6 1
+a6 1
+\section{TACC: A Programming Model for Internet Services}
+a7 107
+
+We have developed a simple but flexible programming model for
+structuring interactive Internet services, including the
+adaptation-based services described in section \ref{adapt}.  
+We focus on a particular
+subset of services, based on transformation, aggregation, caching, and
+customization of Internet content (TACC).   In this section, we describe
+this programming model at a high level, attempt to cast some existing
+Internet services into the model, and describe our direct experience
+with specific new services we have implemented using the model, at least two
+of which currently serve large user populations.
+
+\subsection{Elements of the TACC Model}
+
+In the TACC model, applications are built from building blocks
+interconnected with simple API's.  Each building block, or {\em worker},
+specializes in a particular task, for example, scaling/dithering of
+images in a particular format, conversion between data formats,
+extracting landmark information from specific Web pages, etc.  Complete
+applications are built by {\em composing} workers; roughly
+speaking, one worker can {\em chain} to another (similar to processes in
+a Unix pipeline), or a worker can {\em call} another as a subroutine or
+coroutine.  
+This model of composition
+results in a very general programming model that subsumes transformation
+proxies \cite{transend}, proxy filters \cite{proxyfilter},
+customized information aggregators, and search engines. 
+
+A {\em TACC server} is a platform that instantiates TACC workers, routes
+network data traffic to and from them, and provides support for the
+inter-worker calling and chaining API's.  Similar to a Unix shell, 
+a TACC server  provides the
+mechanisms that insulate workers from having to deal directly with
+low-level concerns such as data routing and exception handling, and
+gives workers a clean set of API's to adhere to.  For example, Unix
+processes do not directly concern themselves with the routing of the
+{\em stdin} and {\em stdout} streams, and processes can abort or
+otherwise raise a signal knowing that it will be caught and handled by
+the shell.  We describe our prototype implementation of a scalable,
+commodity-PC cluster-based TACC server in section \ref{scaling}.
+
+The tasks done by TACC workers can be grouped into four largely
+orthogonal categories:
+
+\begin{itemize}
+
+\item {\textbf Transformation} is an
+operation on a single data object that changes its content; examples
+include filtering, transcoding, re-rendering, encryption, and
+compression.  
+\item {\textbf Aggregation} involves collecting data from several objects
+and collating it in a prespecified way; for example, collecting all
+listings of cultural events from a prespecified set of Web pages,
+extracting the date and event information from each, and composing the
+result into a dynamically-generated ``culture this week'' page.  As a
+simple example, search engines deliver the result of aggregating over an
+offline-generated crawler database.
+
+% In this
+% sense, aggregation subsumes transformation, but we believe it is worth
+% keeping them separate in order to emphasize the interesting and
+% less-complex class of pure transformation-based services.)
+
+\item {\textbf Customization}, or the ability to {\em personalize} the
+delivery of content and services, represents a fundamental advantage of the Internet over
+traditional wide-area media such as television.   The TACC API's call for
+user-profile information from a customization  database
+to be automatically
+delivered to workers along with the input data for a particular 
+request, allowing the worker's operation to be tailored for each user.
+For example, the same image-compression worker can be run with one
+set of parameters to reduce image resolution for faster Web browsing,
+and a different set of parameters to reduce image size and bit depth for
+handheld devices.  
+
+\item {\textbf Caching} is important because even with a cache as small
+as $0.5$ GB, storing data (or recomputing it) is cheaper than moving it
+across the Internet \cite{uk_cache,singnet}.  In the TACC model, caches
+can store post-transformation (or post-aggregation) content 
+in addition to original Internet content.
+
+\end{itemize}
+
+% TBD Move to ``scalability/implementation'' discussion
+
+% \subsection{Existing Applications as TACC Services}
+
+% Many existing services
+% are subsumed by the TACC model and fit well with it.  (In Section 5.4 we
+% describe some that do not.) For example, the HotBot search engine
+% collects search results from a number of database partitions and
+% collates the results.  Transformation involves converting the input data
+% from one form to another.  In TranSend, graphic images can be scaled and
+% filtered through a low-pass filter to tune them for a specific client or
+% to reduce their size.  A key strength of our architecture is the ease of
+% composition of tasks; this affords considerable flexibility in the
+% transformations and aggregations the service can perform, without
+% requiring workers to understand service-specific dispatch logic, load
+% balancing, etc., any more than programs in a Unix pipeline need to
+% understand the implementation of the pipe mechanism.  We claim that a
+% large number of interesting services can be implemented entirely at the
+% service and TACC layers, and that relatively few services will benefit
+% from direct modification to the SNS layer unless they have very specific
+% low-level performance needs.  In Section 5.1 we describe our experience
+% adding functionality at both the TACC and service layers.
+
+\subsection{TACC Case Studies}
+d12 6
+a17 5
+some of our experiences with the applications.  Our goal is to
+demonstrate that the
+TACC framework is sufficiently flexible to accommodate an interesting range
+of applications, while providing consistent guidelines for thinking
+about and implementing  application partitioning  decisions.
+d25 4
+a28 2
+\cite{cs294}, we concentrate here on those applications that enable
+adaptation to network and client variation.
+d30 6
+a35 12
+% TBD move to ``scalability'' discussion
+% The services described in section \ref{casestudies}
+% share the following common characteristics,
+% which make them amenable to implementation using our framework:
+
+% \begin{itemize}
+% \item Compute-intensive transformation or aggregation
+% \item Computation is parallelizable with granularity of a few CPU 
+% seconds
+% \item Substantial value added by mass customization
+% \item Data manipulated has BASE semantics
+% \end{itemize}
+a38 54
+TranSend \cite{transend} speeds up Web browsing for users of commodity browsers by
+performing lossy image compression on the fly.  In addition to
+user-selectable lossy compression levels, TranSend converts most
+GIF images to the JPEG format (since JPEG often compresses more
+gracefully), reduces colormap size to at most 256 at most levels of
+compression, inserts HTML markup or JavaScript to allow users to click through to the
+original images,  uses Java and JavaScript to provide a ``floating
+palette'' user interface for changing user profile settings
+\cite{uist97}, and optionally ``sanitizes'' request headers to provide
+some of
+the same functionality as Anonymizer Surfing \cite{anonymizer}.
+Transformed objects are stored in the cache with augmented URL's (``fat
+URL's'') that encode the transformation parameters, saving the work of
+re-transforming an original should another user ask for the same
+degraded version later.  Each user can select a desired level of
+aggressiveness for the lossy compression and turn header sanitizing on
+and off (TranSend optionally performs header
+TranSend has been available to the public since April 1997, running on a
+small cluster at UC Berkeley.  Detailed discussions of TranSend's
+performance appear in section \ref{scaling}.
+
+TranSend is one of the simplest TACC applications we have produced,
+essentially a TACC reimplementation of our earlier prototype called
+Pythia \cite{pythia}.
+Each TranSend worker handles compression or markup for a specific MIME
+type; objects of unsupported types are passed through to the user
+unaltered.  The dispatch rules simply match the MIME type of the object
+returned from the origin server to the list of known workers, which (as
+in all TACC applications) can be updated dynamically.  In particular,
+TranSend does not exploit TACC's ability to compose workers by chaining
+them into a ``pipeline'' or having one worker call others as
+coroutines.  
+
+One dispatch case is worth mentioning because it illustrates the
+flexibility of the TACC API's in constructing responsive services.
+TranSend actually contains two HTML parsers: a fast C-language parser
+(based on code from the W3C) that does not handle proprietary HTML
+extensions such as inline JavaScript, and a much slower but more robust
+parser that we wrote in Perl.  All HTML pages are initially passed to
+the slower Perl parser, but if it believes (based on page length and tag
+density) that processing the page will introduce a delay longer than one
+or two seconds, it immediately throws an exception and indicates that
+the C parser should take over.  Because the majority of pages of this
+length tend to be papers published in HTML rather than complex pages
+with weird tags, this scheme handles the common cases well and keeps the
+latency for processing HTML barely noticeable.
+
+% The TACC model allows for the dispatch rules to consider
+% content length as well as content type, so this decision could have been
+% made in the dispatch logic directly, but allowing the worker to make the
+% decision lazily ......  TBD
+
+TBD: screen shots showing before/after from TranSend?
+
+d45 1
+a45 1
+we generalized TranSend into a ``lazy fixations'' system \cite{dolf} in
+d52 19
+a153 69
+
+
+% Omit following subsubsection??
+
+% \subsubsection{Other Aggregation Services}
+
+% Bay Area Culture
+% Page: This service retrieves scheduling information from a number of
+% cultural pages on the web, and collates the results into a single,
+% comprehensive calendar of upcoming events, bounded by dates stored as
+% part of each user's profile.  The service is implemented as a single
+% aggregator in the TACC layer, and is composed with the unmodified
+% TranSend service layer, delivering the benefits of distillation
+% automatically.  This service exploits BASE "approximate answers"
+% semantics at the application layer: extremely general,
+% layout-independent heuristics are used to extract scheduling information
+% from the cultural pages.  About 10-20% of the time, the heuristics
+% spuriously pick up non-date text (and the accompanying non-descriptions
+% of events), but the service is still useful and users simply ignore
+% spurious results.  Early experience with services such as this one
+% suggest that our SNS architecture may be a promising platform for
+% deploying certain kinds of simple network agents.  
+
+% TranSend Metasearch:
+% The metasearch service is similar to the Bay Area Culture Page in that
+% it collates content from other sources in the Internet.  This content,
+% however, is dynamically produced-an aggregator accepts a search string
+% from a user, queries a number of popular search engines, and collates
+% the top results from each into a single result page.  Commercial
+% metasearch engines already exist [58], but the TranSend metasearch
+% engine was implemented using 3 pages of Perl code in roughly 2.5 hours,
+% and inherits scalability, fault tolerance, and high availability from
+% the SNS layer.  
+
+% \subsubsection{Anonymous Rewebber}
+
+% Just as anonymous remailer chains [24] allow email authors to
+% anonymously disseminate their content, an anonymous rewebber network
+% allows web authors to anonymously publish their content.  The rewebber
+% described in [25] was implemented in two person-weeks using our TACC
+% architecture.  The rewebber's workers perform encryption and decryption,
+% its user profile database maintains public key information for anonymous
+% servers, and its cache stores decrypted versions of frequently accessed
+% pages.  Since encryption and decryption of distinct pages requested by
+% independent users is both computationally intensive and highly
+% parallelizable, this service is a natural fit for our architecture.
+
+\subsection{Discussion}
+
+\subsubsection{Extensibility: New Workers and Composition}
+
+One of the goals of TACC is to exploit modularity and composition to
+make new services easy to prototype by reusing existing building blocks.
+TranSend's HTML and JPEG workers consist 
+almost entirely of off-the-shelf code, and each took an afternoon to 
+write.  Debugging the pathological cases for the HTML worker 
+was spread out over a period of days---since the system masked 
+transient faults by bypassing original content "around" the faulting 
+worker, we could only deduce the existence of bugs by noticing 
+(using the Monitor display) that the HTML worker had been 
+restarted several times over a period of hours.
+The other aspect of extensibility is the ease with which new 
+services can be added by composing workers and modifying the 
+service presentation interface.  
+
+% TBD why this makes adaptation easy; slapping an adapter on the back of
+% existing apps
+
+
+@
+
+
+1.5
+log
+@Added closing itemize to taccapps, working on references and figures in
+scaling.
+@
+text
+@d33 2
+a34 2
+proxies [22], proxy filters [67], customized information aggregators
+[59,13], and search engines. 
+d54 1
+a54 1
+\item[Transformation] is an
+d58 1
+a58 1
+\item[Aggregation] involves collecting data from several objects
+d62 3
+a64 1
+result into a dynamically-generated ``culture this week'' page
+d71 8
+a78 13
+\item[Customization] represents a fundamental advantage of the Internet over
+traditional wide-area media such as television.  Many online services,
+including the Wall Street Journal, the Los Angeles Times, and C/Net,
+have deployed ``personalized'' versions of their service as a way to
+increase loyalty and the quality of the service.  
+The customization database, which can be modeled as a persistent hash
+table, maps
+a user identification token (such as an IP address or cookie) to a list
+of key-value pairs for each user of the service.  The TACC API's
+require that the appropriate profile information be automatically
+delivered to workers along with the input data for a particular user
+request; this allows the same workers to be reused for different
+services.  For example, an image-compression worker can be run with one
+d83 5
+a87 9
+\item[Caching]
+is important because recomputing or storing data has become cheaper than
+moving it across the Internet.  A study of the UK National
+web cache has shown that even a small cache (400MB) can reduce the load
+on the network infrastructure by 40% [61], and SingNet, the largest ISP
+in Singapore, has saved 40% of its telecom charges using web caching
+[60].  In the TACC model, caches can store post-transformation (or
+post-aggregation) content and even intermediate-state content, in
+addition to caching original Internet content.
+d129 3
+a131 2
+have developed a wider range of applications using the TACC model
+\cite{taccprojs}, we concentrate here on those applications that enable
+d149 66
+a214 2
+% description; performance; user community; commercial tie-ins; comparison
+% w/commercial: customiztaion, extensible UI
+d219 34
+a252 21
+PalmPilot [62], a typical "thin client" device.  Previous attempts to
+provide Web browsing on such devices have foundered on the severe
+limitations imposed by small screens, limited computing capability, and
+austere programming environments, and virtually all have fallen back to
+simple text-only browsing.  But our adaptation approach combined with
+the composable-workers model provided by TACC allows us to approach this
+problem from a different perspective.  We have built TACC workers that
+output simplified markup and scaled-down images ready to be "spoon fed"
+to an extremely simple browser client, given knowledge of the client's
+screen dimensions and font metrics.  This greatly simplifies client-side
+code since no HTML parsing, layout, or image processing is necessary,
+and as a side benefit, the smaller and more efficient data
+representation reduces transmission time to the client.  The core of Top
+Gun Wingman consists of three TACC workers: HTML parsing and layout,
+image conversion, and intermediate-form layout to device-specific data
+format conversion.  We have also added two transformation workers that
+can deliver data in AportisDoc \cite{aportisdoc} format (a popular
+PalmPilot e-book format) and can extract and display the contents of
+software archives for download directly to the PalmPilot.  These last
+two are prime examples of tasks that would be awkward at best without
+adaptive proxy support....TBD
+d254 41
+a294 2
+Top Gun Wingman compares favorably with other thin-client Web
+browsers... TBD WinCE, Palmscape, HandWeb
+d296 3
+a298 2
+At last count, over 8,000 users had downloaded the client-side Wingman
+software, all of whom are using the cluster at UCB....
+a299 1
+\subsubsection{Top Gun MediaBoard: {\em wb} for Handhelds}
+a366 5
+\subsubsection{Adaptation by Application Partitioning}
+
+concept/motivation; guidelines provided by adaptation (from my rsch
+stmt); UI extensions/orthogonalization; effect on performance;
+comparison to ``naive'' schemes such as X
+a367 1
+\subsubsection{TACC Mechanics}
+a368 2
+Mechanics of how to build TACC apps; languages, API's, development
+environment, harnesses, SW distribution
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d96 2
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d133 4
+a136 1
+communicate via HTTP but are conceptually similar.)
+a186 4
+\subsubsection{Cha-Cha: Combining Browsing and Searching}
+
+TBD...omit?
+
+d221 1
+a221 1
+\subsubsection{Anonymous Rewebber}
+d223 10
+a232 10
+Just as anonymous remailer chains [24] allow email authors to
+anonymously disseminate their content, an anonymous rewebber network
+allows web authors to anonymously publish their content.  The rewebber
+described in [25] was implemented in two person-weeks using our TACC
+architecture.  The rewebber's workers perform encryption and decryption,
+its user profile database maintains public key information for anonymous
+servers, and its cache stores decrypted versions of frequently accessed
+pages.  Since encryption and decryption of distinct pages requested by
+independent users is both computationally intensive and highly
+parallelizable, this service is a natural fit for our architecture.
+d243 1
+a243 1
+was spread out over a period of days-since the system masked 
+d252 4
+a255 1
+\subsubsection{Application Partitioning}
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d7 1
+d120 1
+a120 1
+\tag{casestudies}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d8 233
+a240 78
+Having encapsulated the "SNS requirements" into a separate 
+software layer, we now require a programming model for building 
+the services themselves in higher layers. We focus on a particular 
+subset of services, based on transformation, aggregation, caching, 
+and customization of Internet content (TACC). Transformation is 
+an operation on a single data object that changes its content; exam
+ples include filtering, transcoding, re-rendering, encryption, and 
+compression. Aggregation involves collecting data from several 
+objects and collating it in a prespecified way; for example, collect
+ing all listings of cultural events from a prespecified set of Web 
+pages, extracting the date and event information from each, and 
+composing the result into a dynamically-generated "culture this 
+week" page. Our initial implementation allows Unix-pipeline-like 
+chaining of an arbitrary number of stateless transformations and 
+aggregations; this results in a very general programming model that 
+subsumes transformation proxies [22], proxy filters [67], custom
+ized information aggregators [59,13], and search engines. The 
+selection of which workers to invoke for a particular request is ser
+vice-specific and controlled outside the workers themselves; for 
+example, given a collection of workers that convert images 
+between pairs of encodings, a correctly chosen sequence of trans
+formations can be used for general image conversion. 
+Customization represents a fundamental advantage of the Inter
+net over traditional wide-area media such as television. Many 
+online services, including the Wall Street Journal, the Los Angeles 
+Times, and C/Net, have deployed "personalized" versions of their 
+service as a way to increase loyalty and the quality of the service. 
+Such mass customization requires the ability to track users and 
+keep profile data for each user, although the content of the profiles 
+differs across services. The customization database, a traditional 
+ACID database, maps a user identification token (such as an IP 
+address or cookie) to a list of key-value pairs for each user of the 
+service. A key strength of the TACC model is that the appropriate 
+profile information is automatically delivered to workers along 
+with the input data for a particular user request; this allows the 
+same workers to be reused for different services. For example, an 
+image-compression worker can be run with one set of parameters 
+to reduce image resolution for faster Web browsing, and a different 
+set of parameters to reduce image size and bit depth for handheld 
+devices. We have found composable, customizable workers to be a 
+powerful building block for developing new services, and we dis
+cuss our experience with TACC and its continuing evolution in 
+Section 5.
+Caching is important because recomputing or storing data has 
+become cheaper than moving it across the Internet. For example, a 
+study of the UK National web cache has shown that even a small 
+cache (400MB) can reduce the load on the network infrastructure 
+by 40% [61], and SingNet, the largest ISP in Singapore, has saved 
+40% of its telecom charges using web caching [60]. In the TACC 
+model, caches can store post-transformation (or post-aggregation) 
+content and even intermediate-state content, in addition to caching 
+original Internet content.
+Many existing services are subsumed by the TACC model and 
+fit well with it. (In Section 5.4 we describe some that do not.) For 
+example, the HotBot search engine collects search results from a 
+number of database partitions and collates the results. Transforma
+tion involves converting the input data from one form to another. In 
+TranSend, graphic images can be scaled and filtered through a low-
+pass filter to tune them for a specific client or to reduce their size. A 
+key strength of our architecture is the ease of composition of tasks; 
+this affords considerable flexibility in the transformations and 
+aggregations the service can perform, without requiring workers to 
+understand service-specific dispatch logic, load balancing, etc., any 
+more than programs in a Unix pipeline need to understand the 
+implementation of the pipe mechanism. 
+We claim that a large number of interesting services can be 
+implemented entirely at the service and TACC layers, and that rela
+tively few services will benefit from direct modification to the SNS 
+layer unless they have very specific low-level performance needs. 
+In Section 5.1 we describe our experience adding functionality at 
+both the TACC and service layers.
+
+\subsection{Extensibility: New Workers and Composition}
+
+
+One of our goals was to make the system easily extensible at 
+the TACC and Service layers by making it easy to create workers 
+and chain them together. Our HTML and JPEG distillers consist 
+d242 1
+a242 1
+write. Debugging the pathological cases for the HTML distiller 
+d245 2
+a246 2
+distiller, we could only deduce the existence of bugs by noticing 
+(using the Monitor display) that the HTML distiller had been 
+d250 9
+a258 81
+service presentation interface. We now discuss several examples of 
+new services in various stages of construction, indicating what 
+must be changed in the TACC and Service layers for each. The ser
+vices share the following common features, which make them ame
+nable to implementation using our framework:
+Compute-intensive transformation or aggregation
+Computation is parallelizable with granularity of a few CPU 
+seconds
+Substantial value added by mass customization
+Data manipulated has BASE semantics
+We restrict our discussion here to services that can be imple
+mented using the HTTP proxy model (i.e., transparent interposition 
+of computation between Web clients and Web servers). The follow
+ing applications have all been prototyped using TranSend.
+Keyword Filtering: The keyword filter aggregator is very 
+simple (about 10 lines of Perl). It allows users to specify a 
+Perl regular expression as customization preference. This 
+regular expression is then applied to all HTML before 
+delivery. A simple example filter marks all occurrences of 
+the chosen keywords with large, bold, red typeface. 
+Bay Area Culture Page: This service retrieves scheduling 
+information from a number of cultural pages on the web, and 
+collates the results into a single, comprehensive calendar of 
+upcoming events, bounded by dates stored as part of each 
+user's profile. The service is implemented as a single 
+aggregator in the TACC layer, and is composed with the 
+unmodified TranSend service layer, delivering the benefits of 
+distillation automatically. This service exploits BASE 
+"approximate answers" semantics at the application layer: 
+extremely general, layout-independent heuristics are used to 
+extract scheduling information from the cultural pages. 
+About 10-20% of the time, the heuristics spuriously pick up 
+non-date text (and the accompanying non-descriptions of 
+events), but the service is still useful and users simply ignore 
+spurious results. Early experience with services such as this 
+one suggest that our SNS architecture may be a promising 
+platform for deploying certain kinds of simple network 
+agents.
+TranSend Metasearch: The metasearch service is similar to 
+the Bay Area Culture Page in that it collates content from 
+other sources in the Internet. This content, however, is 
+dynamically produced-an aggregator accepts a search 
+string from a user, queries a number of popular search 
+engines, and collates the top results from each into a single 
+result page. Commercial metasearch engines already exist 
+[58], but the TranSend metasearch engine was implemented 
+using 3 pages of Perl code in roughly 2.5 hours, and inherits 
+scalability, fault tolerance, and high availability from the 
+SNS layer.
+Anonymous Rewebber: Just as anonymous remailer chains 
+[24] allow email authors to anonymously disseminate their 
+content, an anonymous rewebber network allows web 
+authors to anonymously publish their content. The rewebber 
+described in [25] was implemented in one week using our 
+TACC architecture. The rewebber's workers perform 
+encryption and decryption, its user profile database maintains 
+public key information for anonymous servers, and its cache 
+stores decrypted versions of frequently accessed pages.  
+Since encryption and decryption of distinct pages requested 
+by independent users is both computationally intensive and 
+highly parallelizable, this service is a natural fit for our 
+architecture.
+Real Web Access for PDAs and Smart Phones: We have 
+already extended TranSend to support graphical Web 
+browsing on the USR PalmPilot [62], a typical "thin client" 
+device. Previous attempts to provide Web browsing on such 
+devices have foundered on the severe limitations imposed by 
+small screens, limited computing capability, and austere 
+programming environments, and virtually all have fallen 
+back to simple text-only browsing. But the ability of our 
+architecture to move complexity into the service workers 
+rather than the client allows us to approach this problem 
+from a different perspective. We have built TranSend 
+workers that output simplified markup and scaled-down 
+images ready to be "spoon fed" to an extremely simple 
+browser client, given knowledge of the client's screen 
+dimensions and font metrics. This greatly simplifies client-
+side code since no HTML parsing, layout, or image 
+processing is necessary, and as a side benefit, the smaller and 
+more efficient data representation reduces transmission time 
+to the client.
+d260 2
+@
+
+
+1.1.1.1
+log
+@Client and Network Adaptation paper for IEEE Pers Comms special issue,
+to be submitted 2/98
+@
+text
+@@
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 

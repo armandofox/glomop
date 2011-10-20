@@ -1,0 +1,148 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.20.20.09.24;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+RED Gateways
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Random Early Detection Gateways for Congestion Avoidance
+</h1>
+<strong>
+Sally Floyd and Van Jacobson, LBL
+</strong>
+
+<p><b>One-line summary:</b> When gateway queue exceeds some threshold,
+randomly pick a connection to notify, with probability roughly
+proportional to how much bandwidth it's been using and optionally
+proportional to the size of the packet being notified.  Notification can
+consist of marking a packet (if the transport protocol will cooperate
+and use the mark as a hint) or dropping it otherwise.  </p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Motivations/goals:
+       <ul>
+         <li> Only gateways have "unified" view of congestion over time
+         <li> Want to avoid bias against bursty traffic (DECbit has this
+              problem since a burst on a single connection  is more
+              likely to cause the congestion bit to be set)
+         <li> Want to avoid "global synchronization" (if you drop
+              packets from every connection, as in DropTail, then
+              everyone backs off at once; would prefer to target
+              "aggressive" users)
+         <li> Above 2 items can be achieved by separating congestion
+              detection from choice of which connection to notify.
+         <li> Want to be able to control congestion even in case of
+              non-cooperating transport protocol (by dropping)
+       </ul>
+  <li> RED basic algorithm: On each packet arrival,
+       <ul>
+         <li> If queue size is below low watermark MinTh, do nothing.
+         <li> If between MinTh and MaxTh, notify on this packet with
+              probability Pa (see below);
+         <li> If above MaxTh, notify with probability 1.
+         <li> Let Pb vary from 0 to Pmax as the average queue size
+              varies from MinTh to MaxTh,
+              i.e. Pb=Pmax(avg-MinTh)/(MaxTh-MinTh).
+         <li> Pa is then Pb/(1-count&nbsp;x&nbsp;Pb), where count
+              measures how many 
+              packets ago the last mark occurred.
+         <li> To measure queue size in bytes, let
+              Pb=Pb&nbsp;x&nbsp;(PacketSize/MaxPacketSize).  This makes
+              large packets more likely to be marked than small ones.
+       </ul>
+  <li> Various simulations indicate that:
+       <ul>
+         <li> RED is good at keeping average
+              queue size steady, even with heavy congestion;
+         <li> RED achieves
+              higher throughput with shorter queues than DropTail;
+         <li> Under extreme congestion, RED still achieves about 0.6
+              link utilization in each direction for the bottleneck
+              link, suggesting that the "global synchronization" is
+              being avoided.
+       </ul>
+  <li> Calculating exponential weighted moving average queue length:
+       <ul>
+         <li> avg = (1-w)avg + wQ, where Q is current instantaneous
+              measurement.  How to pick w?  If too large, averaging
+              procedure will be susceptible to "transient" congestion
+              (fast changes in queue length); if too small, RED will
+              respond too slowly to real congestion.
+         <li> Upper bound: Form the geometric series that represents
+              successive computations of avg over L packet arrivals;
+              this gives avg in terms of L and w.  Then simply set
+              avg&lt;MinTh to get upper bound on w. 
+         <li> Lower bound: assume queue remains at 1 packet always.
+              Then it takes -1/ln(1-w) arrivals until avg reaches
+              1-1/e=0.63.  Determine how many arrivals we'd like this to
+              take, this gives lower bound on w.  Authors use w=0.002
+              for most simulations.
+       </ul>
+  <li> Calculating packet-marking probability:  Let each packet be
+       marked with probability Pb, and let X be the "intermarking" time.
+       <ul>
+         <li> Method 1: X is a geometric random variable; Prob[X=n] =
+              (1-Pb)<sup>n-1</sup>Pb, E[x]=1/Pb.
+         <li> Method 2: X is a uniform random variable in
+              {1,2,...,1/Pb}.  Prob[X=n]=Pb, E[X]=1/2 + 1/2Pb.
+         <li> Method 1 results in higher "clustering" of marked
+              packets.  Authors used method 2.
+       </ul>
+  <li> Fairness: "not well defined" as a goal, but RED does not
+       discriminate either against particular connections or classes of
+       connections.
+  <li> Rules of thumb for getting effective performance:
+       <ul>
+         <li> Pick w intelligently.
+         <li> Set MinTh high enough to maximize network power
+              (power=throughput/delay ratio).
+         <li> Make MaxTh-MinTh large enough to avoid "global
+              synchronization" effect.
+       </ul>
+  <li> Identifying aggressive/misbehaving users: We know packets are
+       marked with probability roughly proportional to their share of
+       the bandwidth, so if some connection has a large fraction of
+       recently-marked packets, it is likely to be  misbehaving.
+</ul>
+
+<h2>Relevance</h2>
+
+Another neat hack from LBL and Co. that fixes the problems in simpler
+schemes such as DECbit, supported by nice mathematics.  The section on
+picking the weighting for the EWMA queue size is particularly relevant
+to us (distiller queues).
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Verbose: could have been half as long.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

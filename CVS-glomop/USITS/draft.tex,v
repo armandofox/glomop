@@ -1,0 +1,783 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  usits-release:1.1.1.1 usits-vendor:1.1.1;
+locks    ; strict;
+comment  @% @;
+
+
+1.1
+date     97.10.21.23.17.43;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.10.21.23.17.43;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@\section{Introduction}\label{intro_sec}
+
+The growth of the Internet, and particularly of web-oriented middleware
+services (\cite{transend}, \cite{WBI}, \cite{digestor}) within the
+Internet, has seen a recent explosion
+\cite{seltzer-issues}.  These middleware services, particularly the more
+popular services that experience extremely high load, must overcome a
+number of challenging system design issues in order to maintain fast
+response time, constant availability, and capacity.  Services must be able
+to accommodate an increasingly varied client population (in terms of
+hardware, software, and network connectivity).  They must be able to
+handle offered loads of hundreds of requests per second, and because of the
+often slow connectivity to clients and the implied lengthy delivery times,
+they must be able to handle hundreds of simultaneously outstanding tasks.
+
+Previous work has explored the performance of operating system primitives
+and the relationship between OS performance and architecture
+(\cite{oustwhy}, \cite{ander}), and operating system design issues for
+busy Internet services (\cite{sos}, \cite{mogos}).  In contrast,
+this paper raises a number of system design issues specifically for
+Internet middleware services.  These issues were encountered during two
+separate but related efforts: the analysis of a set of extensive
+client-side HTTP \cite{httprfc} traces that we gathered from the
+University of California at Berkeley's dial-in modem banks during October
+and November of 1996, and the implementation and deployment experience
+we gained from the TranSend Internet middleware service \cite{transend}.
+
+Since nearly 70\% of all Internet clients use dial-in modems of speeds of
+28.8 Kb/s or less \cite{gvu-survey}, we use the traces to make a number of
+observations about the Internet user population and the services with which
+they communicate.  Section \ref{trace_sec} discusses the gathering of the
+traces, including the tools used and the information gathered, and section
+\ref{traceanalysis} performs a detailed analysis of these traces, both in
+terms of observations made about the client population and the services
+themselves.  In section \ref{sys_des}, we discuss the middleware
+system design issues drawn from our experience with the TranSend
+transformation proxy service, and in section \ref{relwork} we present
+related work.  Finally, in section \ref{concl} we conclude.
+
+\section{Home IP Trace Gathering}\label{trace_sec}
+
+During October and November of 1996, we gathered over 45 consecutive days
+worth of HTTP traces from the Home IP service offered by UC Berkeley to its
+students, faculty, and staff available to researchers.  (Two and a half
+weeks worth of anonymized versions of these traces have been made available
+at http://www.acm.org/ita.) Home IP provides dial-up PPP/SLIP connectivity
+using 2.4 kb/s, 9.6 kb/s, 14.4 kb/s, or 28.8 kb/s wireline modems, or
+Metricom Ricochet wireless modems (which achieve approximately 20-30 kb/s
+throughput with a 500 ms RTT).
+
+\begin{figure}[tbh]
+\epsfxsize 0.80\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 226 80]{./figures/trace_des.eps}
+}
+\end{center}
+\caption{{\bf The Home IP Tracing Environment}}\label{home_ip_trace}
+\end{figure}
+
+\subsection{IPSE}
+
+The HTTP client traces were unobtrusively gathered through the use of a
+packet sniffing machine placed on a 10 Mb/s Ethernet segment at the
+head-end of the Home IP modem bank through which all IP traffic flowed
+(figure \ref{home_ip_trace}).  The trace gathering program that we used was
+a custom HTTP module written on top of the Internet Protocol Scanning
+Engine (IPSE)\cite{ipse}. IPSE is a user-level packet filter that runs on
+Linux; IPSE allows filter modules to capture TCP segments and recreate the
+TCP streams observed by the endpoints of the TCP connection.  The custom
+module was therefore able to parse each HTTP request as it was happening,
+and write out the salient features of each HTTP request to a log file
+on-the-fly.  Only traffic destined for port 80 was traced; all non-HTTP
+protocols and HTTP connections to other ports were excluded. Each user of
+the Home IP service is assigned a static IP address, so we could track
+individual users over the entire duration of the tracing experiment.
+
+\subsection{The Trace Files}
+
+The 45 day trace contains approximately 24,000,000 HTTP requests,
+representing the web surfing behaviour of over 8,000 unique clients.  The
+trace capture tool collected the following information for each HTTP
+request seen:
+
+\begin{itemize}
+ \item the time at which the client made the request, the time that
+       the first byte of the server response was seen, and the time that
+       the last byte of the server response was seen,
+ \item the client and server IP addresses and ports,
+ \item the values of the {\bf no-cache}, {\bf keep-alive},
+   {\bf cache-control}, {\bf if-modified-since}, {\bf useragent}, and 
+   {\bf unless} client headers (if present), 
+ \item the values of the {\bf no-cache}, {\bf cache-control},
+   {\bf expires}, and {\bf last-modified} server headers (if present),
+ \item the length of the response HTTP header and response data, and
+ \item the request URL.
+\end{itemize}
+
+IPSE wrote this information to disk in a compact, binary form.  Every four
+hours, IPSE was shut down and restarted, as its memory image would get
+extremely large over time due to a memory leak that we were unable to
+eliminate.  This implies that there are two potential weaknesses in these
+traces:
+
+\begin{enumerate}
+\item Any connection active when the engine was brought down will have a
+possibly incorrect timestamp for the last byte seen from the server, and a
+possibly incorrect reported size.
+\item Any connection that was forged in the very small time window (about
+300 milliseconds) between when the engine was shut down and restarted will
+not appear in the logs.
+\end{enumerate}
+
+We estimate that no more than 150 such entries (out of roughly
+90,000-100,000) are misreported for each 4 hour period.
+
+\section{Trace Analysis}\label{traceanalysis}
+
+In this section, we present the results of our analysis of
+the Home IP traces.  In section \ref{hetero}, we demonstrate the
+heterogeneity of the observed client population.  Section \ref{activity}
+discusses the request rates and interarrival times generated by the client
+population.  In \ref{distrib_type}, object type and size distributions
+are presented.  Section \ref{locality} demonstrates the existence of
+locality of reference within the traces through the use of a number of
+cache simulations driven by trace entries.  Finally, section
+\ref{serv_resp} presents distributions of service response times, and
+argues that at any given time, a very large number of outstanding requests
+will be flowing through middleware or end services.
+
+\subsection{Client Heterogeneity}\label{hetero}
+
+Table \ref{useragent_headers} lists the most frequently observed
+``UserAgent'' HTTP headers observed within the Home IP traces.  From this
+table, it is easy to make a common misconclusion about web clients, namely
+that the set of web clients in use is extremely homogeneous, as nearly all
+browsers observed in our traces are either the Netscape Navigator
+\cite{netscape-home} or Microsoft Internet Explorer (MSIE) \cite{msie-home}
+browsers running on the Windows or Macintosh operating systems.  However,
+there is significant heterogeneity arising from the many versions of these
+browsers and their widely varying feature sets.  Furthermore, we observed a
+total 166 different UserAgent values within the traces, representing a wide
+range of desktop systems (MacOS, Win16, NetBSD, Linux, etc.)  More
+significantly, however, we saw requests from a number of exotic clients
+such as Newton PDAs running the NetHopper \cite{allpen} browser.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{|c|c|c|} \hline
+
+{\bf Browser} & {\bf OS} & {\bf \% Seen} \\ \hline\hline
+
+		& Windows 95 		& 55.1 \\ \cline{2-3}
+		& Macintosh		& 19.7 \\ \cline{2-3}
+Netscape	& Windows (other)	& 8.8  \\ \cline{2-3}
+		& Windows NT		& 3.5  \\ \cline{2-3}
+		& Linux			& 2.2  \\ \cline{2-3}
+		& Other			& 0.4  \\ \hline
+
+		& Windows 95		& 7.6 \\ \cline{2-3}
+		& Macintosh		& 0.6 \\ \cline{2-3}
+MSIE		& Windows NT		& 0.7 \\ \cline{2-3}
+		& Windows (other)       & 0.1 \\ \hline
+
+\multicolumn{2}{|c|}{Other}		& 1.3 \\ \hline
+\end{tabular}
+\caption{{\bf UserAgent HTTP headers:}
+                this table lists the 10 most
+		frequent UserAgent headers observed in the
+                traces. ``Other'' browsers observed include PointCast,
+                Cyberdog, Mosaic, Opera, Lynx, JDK, and NetHopper. }
+\label{useragent_headers}
+\end{table}
+
+Internet services that do not want to limit the effective audience of their
+content must therefore be able to deliver content that suits the needs of
+all of these diverse clients.  Either the services themselves must adapt
+their content, or they must rely on the emergence of
+middleware services (such as in \cite{pythia},
+\cite{pythasplos}, and \cite{transducers}) to adapt content on the fly to
+better suit the clients' particular needs.
+
+\subsection{Client Activity}\label{activity}
+
+\begin{figure*}[htbp]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 372 389]{./figures/allgraphs.eps}
+}
+\end{center}
+\caption{{\bf Diurnal cycle} observed within the
+traces - each graph shows 1 day worth of trace events.
+The y-axis shows the number of observed requests per
+minute.}\label{diurnal}
+\end{figure*}
+
+As seen in figure \ref{diurnal}, the amount of activity seen from the
+client population is strongly dependent on the time of day.  The Berkeley
+web users were most active between 8:00pm and 2:00am, with nearly no
+activity seen at 7:00am.  Services that receive requests from local users
+can thus expect to have widely varying load throughout the day;
+internationally used services will most probably see less of a strong
+diurnal cycle.  Other details can be extracted from these graphs.  For
+example, there is a decrease of activity at noon and at
+7:00pm, presumably due to lunch breaks and dinner breaks, respectively.
+
+\begin{figure}[htbp]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[93 83 780 589]{./figures/avg_dailies_fit.eps}
+}
+\end{center}
+\caption{{\bf Average diurnal cycle} observed within the
+traces - each minutes worth of activity shown is the average across 15 days
+worth of trace events.  The y-axis shows the average number of observed
+requests per minute.}\label{diurnal_average}
+\end{figure}
+
+The diurnal cycle is largely independent of the day of the week, but there
+are some minor differences: for instance, on Fridays and Saturdays, the
+traffic peaks are slightly higher than during the rest of the week.
+However, the gross details of the traces remain independent of the day of
+the week.  We calculated the average daily cycle observed by averaging the
+number of events seen per minute for each minute of the day across 15 days
+of traffic.  For our calculation, we picked days during which there were no
+anomalous trace effects, such as network outages.  Figure
+\ref{diurnal_average} shows this average cycle, including a polynomial
+curve fit that can be used to calculate approximate load throughout a
+typical day.
+
+\begin{figure}[tbhp]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 315 368]{./figures/all_burst.eps}
+}
+\end{center}
+\caption{{\bf Request rate} observed over a 24 hour,
+3 hour, and 3 minute period of the traces.}\label{bursts}
+\end{figure}
+
+On shorter time scales, we observed that client activity was less
+regular.  Figure \ref{bursts} illustrates the observed request rate at
+three time scales from a one-day segment of the traces.  At the daily and
+hourly time scales, traffic is relatively smooth and predictable - no large
+bursts of activity are present.  At the scale of tens of seconds, very
+pronounced bursts of activity can be seen; peak to average ratios of more
+than 5:1 are common.
+
+Many studies have explored the self-similarity of network traffic
+(\cite{Bera95}, \cite{Geor94}, \cite{Lela94}, \cite{Likh95},
+\cite{Mand65}, \cite{Paxs94}), including web traffic \cite{crov95}.  Self-similarity implies burstiness at all
+timescales - this property is {\bf not} compatible with our observations.
+One indicator of self-similarity is a heavy-tailed interarrival process.
+As figure \ref{gif_interarrival} clearly shows, the interarrival time of
+GIF requests seen within the traces is exponentially distributed, and
+therefore not heavy tailed.  (We saw similar exponential distributions for
+other data types' request processes, as well as for the aggregate request
+traffic.)  These observations correspond to requests generated from a large
+population of independent users.
+
+\begin{figure}[tbh]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[93 83 780 589]{./figures/gif_interarrival.eps}
+}
+\end{center}
+\caption{{\bf Interarrival time distribution} for GIF data type
+requests seen within a day-long trace portion.  Note that the 
+Y-axis is on a logarithmic scale.}\label{gif_interarrival}
+\end{figure}
+
+Internet services must be able to handle rapidly varying and bursty load on
+fine time scales (on the order of seconds), but these bursts tend to smooth
+themselves out on larger time scales (on the order of minutes, hours, or
+days).  The provisioning of resources for services is therefore somewhat
+simplified.
+
+% XXX - variance/time plots
+% XXX - pox plots
+
+\subsection{Reference type and size distributions}\label{distrib_type}
+
+Section \ref{hetero} answered the question of who is requesting data, and
+section \ref{activity} discussed how often data is requested.  In this
+section, we inspect the nature of the data that is requested.  Figure
+\ref{type_freq_bytes}a shows the mime type breakdown of the transferred
+data in terms the number of bytes transferred, \ref{type_freq_bytes}b shows
+this breakdown in term of files transferred.
+
+\begin{figure*}[tbh]
+\epsfxsize 0.70\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 449 247]{./figures/type_freq_bytes.eps}
+}
+\end{center}
+\caption{{\bf Breakdown of bytes and files transferred by MIME type}}
+\label{type_freq_bytes}
+\end{figure*}
+
+From figure \ref{type_freq_bytes}a, we see that most of the bytes
+transferred over the Home IP modem lines come from three predominant mime
+types: {\bf text/html}, {\bf image/gif}, and {\bf image/jpeg}.  Similarly,
+figure \ref{type_freq_bytes}b shows that most files sent over the modem
+lines have the same three predominant mime types.  Interestingly, however,
+we see that although most bytes transferred correspond to JPEG images, most
+files transferred correspond to GIF images.  This means that, on average,
+JPEGs are larger than GIFs.
+
+The fact that nearly 58\% of bytes transferred and 67\% of files
+transferred are images is good news for Internet cache infrastructure
+proponents.  Image content tends to change less often than HTML content -
+images are usually statically created and have long periods of stability in
+between modification, in comparison to HTML which is becoming more
+frequently dynamically generated.
+
+\begin{figure}[htb]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 450 278]{./figures/dists.eps}
+}
+\end{center}
+\caption{{\bf Size distributions by MIME type}, shown on a logarithmic
+scale.   The average HTML file size is 5.6 kilobytes, the average GIF file
+size is 4.1 kilobytes, and the average JPEG file size is 12.8 kilobytes.}
+\label{mime_size}
+\end{figure}
+
+In figure \ref{mime_size}, we see the distribution of sizes of files
+belonging to the three most common mime type.  Two observations can
+immediately be made: most Internet content is less than 10 kilobytes in
+size, and data type size distributions are quite heavy-tailed, meaning that
+there is a non-trivial number of large data files on the web.  Looking more
+closely at individual distributions, we can confirm our previous hypothesis
+that JPEG files tend to be larger than GIF files.  Also, the JPEG file size
+distribution is considerably more heavy-tailed than the GIF distribution.
+There are more large JPEGs than GIFs, perhaps in part because JPEGs tend to
+be photographic images, and GIFs tend to be cartoons, line art, or other
+such simple, small images.
+
+There are other anomalies in these distributions.  The GIF distribution has
+two visible plateaus, one at roughly 300-1000 bytes, and another at
+1000-5000 bytes.  We hypothesize that the 300-1000 byte plateau is caused
+by small ``bullet'' images or icons on web pages, and the 1000-5000 byte
+plateau represents all other GIF content, such as cartoons, pictures,
+diagrams, advertisements, etc.  Another anomaly is the large spike in the
+HTML distribution at roughly 11 kilobytes.  Investigation revealed that
+this spike is caused by the extremely popular Netscape Corporation
+``Net Search'' page.
+
+\subsection{Locality of Reference}\label{locality}
+
+\begin{figure}[htb]
+\epsfxsize 0.97\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 423 302]{./figures/csize_user.epsi}
+}
+\end{center}
+\caption{{\bf Hit rate vs. Cache size} 
+for a number of different user population sizes.}\label{csize_user}
+\end{figure}
+
+\begin{figure}[htb]
+\epsfxsize 0.97\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 438 248]{./figures/user_csize.epsi}
+}
+\end{center}
+\caption{{\bf Hit rate vs. User Population size} for a number of 
+cache sizes.}\label{user_csize}
+\end{figure}
+
+A near-universal assumption in systems is that of locality of reference,
+and the typical mechanism used to take advantage of this locality of
+reference is caching (\cite{danzig}, \cite{chank}).  The effectiveness of
+caching depends upon a number of factors, including the size of the user
+population that a cache is serving and the size of the cache serving that
+population.
+
+To measure the effectiveness of infrastructure caching (as opposed to
+client-side or server-side caching) with respect to the HTTP references
+captured from the Home IP population, we implemented a cache simulator and
+played segments of the traces at these caches.  We filtered out requests
+from all but a parameterizable set of client IP addresses in order to
+simulate client populations of different sizes.  The cache simulator obeyed
+all HTTP cache pragmas (such as the no-cache pragma, the
+if-modified-since header, and the expiry header), and implemented a
+simple LRU eviction policy.  Figure \ref{csize_user} shows measured cache
+hit rate as a function of cache size for different user
+population sizes, and figure \ref{user_csize} shows measured hit rate as a
+function of user population size for different cache sizes.
+
+Figure \ref{csize_user} shows two trends: the first is that an increasingly
+large cache size results in an increasingly large cache hit rate.  The
+second trend is that we observed that hit rate is a very strong function of
+the user population size.  As the population gets larger, the locality of
+reference within that population gets stronger, and caches become more
+effective.  For a given population size, the cache hit rate as a function
+cache size plateaus at the working set size of that population.  In figure
+\ref{user_csize}, one additional trend can be observed: as the user 
+population size grows, if the cache size does not also pace the
+increasingly large working set of that population, the cache hit rate will
+start to drop as the cache effectively begins to thrash from constant
+evictions.
+
+\begin{figure}[htb]
+\epsfxsize 0.97\hsize
+\begin{center}
+\makebox{
+\epsfbox[13 113 780 599]{./figures/asymptote.eps}
+}
+\end{center}
+\caption{{\bf Asymptotic Hit Rate vs. User Population Size}}\label{asymptotic_user}
+\end{figure}
+
+An interesting question is: what is the maximum possible cache
+performance for a given user population size?  In figure
+\ref{asymptotic_user}, we have plotted the asymptotic hit rate achieved in
+the limit of infinitely large cache size as a function of the user
+population size.  In other words, this graph explicitly shows the cachable
+working set size of a given user population size.  We see that for the
+range of population sizes that we can model from our traces, the asymptotic
+hit rate grows logarithmically with population size.  Obviously, this
+logarithmic increase cannot continue forever, as there is a maximum
+possible hit rate of 100\%;  unfortunately, our traces do not contain a large
+enough population size to see the logarithmic increase tail off.
+
+A factor that can alter the performance of Internet caches is the
+increasingly prevalent use of cache pragmas in HTTP headers.  To
+investigate this effect, we measured the percentage of HTTP client requests
+and server responses that contained relevant headers, namely:
+
+\begin{description}
+\item{\bf no-cache:} This header can be supplied by either the client or
+the server, and indicates that the requested or returned data may not be
+served out of or stored in a client-side or proxy cache.
+\item{\bf cache-control} This is a generic, extensible HTTP header whose
+value contains the real directive.  Cache-control is intended to be used to
+supply additional caching directives that are interpreted by middleware
+caches, rather than by the end server or client.
+\item{\bf if-modified-since} This HTTP header allows a client to specify
+that a document should be returned only if it has been modified after a
+certain date.  If it hasn't, then the client uses a locally cached version.
+\item{\bf expires} This HTTP header allows a server to supply an expiry
+date for returned content.  Caches obey this directive by treating cached
+data as stale if the expiration date has occurred.
+\item{\bf last-modified} This HTTP header allows a server to indicate when
+a document has last been modified.  This is typically used as a hint for
+caches when calculating time-to-live (TTL) values, or when returning HTTP
+headers in response to a client's HEAD request.
+\end{description}
+
+\begin{table}[htb]
+\centering
+\begin{tabular}{|c|c|c|} \hline
+{\bf Pragma occurrence} & 
+{\bf 11/8/96} & 
+{\bf 4/28/97} \\ \hline\hline
+
+{\bf (C) no-cache} & 7.2\% & 5.7\% \\ \hline
+{\bf (C) cache-control} & 0\% & 0.004\% \\ \hline
+{\bf (C) if-modified-since} & 22.8\% & 20.6\% \\ \hline\hline
+
+{\bf (S) no-cache} & 0.2\% & 0.5\% \\ \hline
+{\bf (S) cache-control} & 0.1\% & 0.5\% \\ \hline
+{\bf (S) expires} & 4.7\% & 5.0\% \\ \hline
+{\bf (S) last-modified} & 54.3\% & 54.5\% \\ \hline
+
+\end{tabular}
+\caption{{\bf HTTP header frequencies:} this table summarizes
+the percent of HTTP client requests (C) and server responses (S) that
+contained various HTTP headers that affect caching behaviour.}
+\label{header_pragma}
+\end{table}
+
+As can be seen in table \ref{header_pragma}, most HTTP headers that can
+affect cache performance are rarely used.  The most frequently used header
+is the last-modified server response header;  this header is now commonly
+returned by default from most HTTP servers.  The presence of this header in
+data stored within a middleware cache or end server can be compared to the
+value of the if-modified-since client header to test whether or not cached
+data is stale.  Unfortunately, only 1/4 of the client requests contained
+this header.  Cache-control, no-cache, and expiry headers are extremely
+infrequent.  These headers should become more commonly used once HTTP 1.1
+compliant browsers and servers are deployed.
+
+Internet services can benefit quite strongly from caching, as there is
+significant locality in a user population's references.  Services must be
+careful to deploy an adequately large cache in order to capture the working
+set of that population.
+
+\subsection{Service Response Times}\label{serv_resp}
+
+The recently emerging class of middleware services must take into
+consideration the performance of conventional content-providing Internet
+services as well as the characteristics of the client population.
+Middleware services retrieve and transform content on behalf of clients,
+and as such interact directly with content-providing services, relying in
+part on the services' performance to determine their own.
+
+In figure \ref{response_dist}, we present a breakdown of the time elapsed
+during the servicing of clients' requests.  Figure \ref{response_dist}a
+shows the distribution of the elapsed time between the first byte of the
+client request and the first byte of the server's response observed by the
+trace gatherer, shown using both a linear and a logarithmic y-axis.  This
+initial server reaction time distribution is approximately exponentially
+decreasing, with the bulk of reaction times being far less than a second.
+Internet services are thus for the most part quite reactive, but there is
+a significant number of very high latency services.
+
+Figure \ref{response_dist}b shows the distribution of the elapsed time
+between the first observed server response byte and the last observed server
+response byte (as measured by when the TCP connection to the server is shut
+down).\footnote{Persistent HTTP connections were very uncommon in these
+traces, but these special cases were handled correctly - the elapsed time
+until the last byte from the server for a given request is seen is reported
+in these figures.}  From these graphs, we see that complete server
+responses are usually delivered to the clients in less than ten seconds,
+although a great number of responses take many tens of seconds to deliver.
+(Bear in mind that the response data is being delivered over a slow modem
+link, so this is not too surprising.)
+
+A number of anomalies can be seen in this graph, for instance the
+pronounced spikes at 0, 4, 30, and roughly 45 seconds.  The spike at 0
+seconds corresponds to HTTP requests that failed or returned no data.  The
+spike at 4 seconds remains a bit of a mystery - however, note that the 4
+second delivery time corresponds to 14 KB worth of data sent over a 28.8 KB
+modem, which is almost exactly the size of the ``home\_igloo.jpg'' picture
+served from Netscape's home page, one of the most frequently served pages
+on the Internet.  We believe that the spikes at 30 and 45 seconds most
+likely correspond to clients or servers timing out requests.  Finally,
+figure \ref{response_dist}b shows the distribution of total elapsed time
+until a client request is fully satisfied.  This distribution is dominated
+by the time to deliver data over the clients' slow modem connections.
+
+\begin{figure*}[htb]
+\epsfxsize 0.95\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 503 423]{./figures/resp_times.eps}
+}
+\end{center}
+\caption{{\bf Response time distributions} (a) elapsed time
+between the first observed byte from the client and the first
+observed byte from the server, (b) elapsed time between
+the first observed byte from the server and the last
+observed byte from the server, and (c) total elapsed time
+(between the first observed byte from the client and the
+last observed byte from the server).  All distributions are shown with both
+a linear and a logarithmic Y-axis.}\label{response_dist}
+\end{figure*}
+
+From these measurements, we can deduce that Internet servers and middleware
+services must be able to handle very large amounts of simultaneous,
+outstanding client requests.  If a busy service expects to handle many
+hundreds of requests per second and requests take tens of seconds to
+satisfy, there will be many thousands of outstanding requests at any given
+time.  Services must be careful to minimize the amount of state dedicated
+to each individual request the overhead incurred when switching between
+the live requests.
+
+\subsection{Summary}
+
+This section of the paper presented a detailed analysis of the Berkeley
+Home IP traces.  We demonstrated the heterogeneity of the user population,
+the burstiness of traffic a fine-grained time scales, the presence of a
+strong and predictable diurnal traffic cycle, locality in client web
+requests, and the heavy-tailed nature of web service response times.  In
+the next section, we discuss how these observations relate to a real
+Internet middleware service designed at Berkeley, the TranSend distillation
+proxy.
+
+\section{System Design Experience from TranSend}\label{sys_des}
+
+The TranSend middleware service provides distillation (\cite{pythia},
+\cite{pythasplos}) services for the Berkeley Home IP modem user
+population, representing roughly 8,000 active users of a bank of 600-700
+modems.  Distillation is data-type specific, lossy compression - for
+example, a distilled image may have reduced resolution or color depth,
+sacrificing image quality for compactness of representation.  Although a
+small additional latency is introduced by performing distillation, the
+byte-wise savings realized by the more compact distilled representations
+more than compensates for the latency of performing the distillation,
+resulting in a factor of 3-7 reduction in the end-to-end latency of
+delivering web content to users over their slow modem links.  It was
+therefore an explicit design goal of TranSend to help mitigate the
+heterogeneity of Internet clients by adapting servers' content to clients'
+needs.
+
+\subsection{Burstiness}
+
+The TranSend service runs on a cluster of high performance workstations.
+Client requests are load balanced across machines in the cluster in order
+to maximize request throughput and minimize the end-to-end latency of each
+request through the system \cite{transend}.  As observed in the Home IP
+traces, the load presented to TranSend is quite bursty on time scales on
+the order of seconds.  Fortunately, the service time for an individual
+request is on the order of milliseconds; if a burst of traffic arrives at
+the system, it takes only a few seconds for the backlog associated with
+that burst to be cleared from the system.
+
+Over longer time scales, we have indeed observed relatively stable,
+non-bursty load.  Certain real-world events (such as the publication of an
+article in the campus newspaper about the service) did trigger temporary
+load bursts that persisted for hours, however these bursts were extremely
+rare (they have only occurred two or three times during the 4 months that
+TranSend has been active).  Because of this long-term smoothness, we were
+able to allocate a fixed number of cluster nodes to TranSend.  To handle
+the infrequent long-term bursts of activity, we designed TranSend to easily
+recruit ``overflow nodes'' in times of need.
+
+\subsection{Reference Locality}
+
+The TranSend service incorporates a large web cache.  We have observed that
+there is locality in both the pre- and post- transformed representations of
+web content.  In our experience, a 6 gigabyte web cache has been more than
+sufficient to serve the needs of the Home IP service, providing close to a
+50\% hit rate, as predicted by the cache simulations.
+
+\subsection{Service Response Times}
+
+The two largest components of end-to-end latency perceived by the end users
+of TranSend are the time that it takes TranSend to retrieve content from
+web services on a cache miss, and the time it takes TranSend to deliver
+transformed content to users over the slow modem lines.  The time spent by
+TranSend actively transforming content is less than 100 milliseconds, but
+content retrieval and delivery latencies often exceed tens of seconds.
+This means that at any given time, there are many idle, outstanding tasks
+supported by TranSend, and a large amount of associated idle state.
+
+We engineered TranSend to assign one thread to each outstanding task.
+Because of these high latencies, we have observed that there must be on the
+order of 400-600 task threads available.  A large amount of the
+computational resources of TranSend is spent context switching among these
+threads.  In retrospect, we concluded that a more efficient design approach
+would have been to use an event-driven architecture, although we would
+certainly lose the ease of implementation associated with the threaded
+implementation.  Similarly, each task handled by TranSend consumes two TCP
+connections and two associated file descriptors (one for the incoming
+connection, and one for the connection within TranSend to the cache).  We
+did not attempt to measure the overhead we incurred from this large amount
+of network state.
+
+\section{Related Work}\label{relwork}
+
+A number of web client tracing efforts have been made in the past.  One of
+the earliest was performed by Boston University \cite{bu_client}, in which
+about a half million client requests were captured.  These traces are
+unique in that the Mosaic browser was exclusively used by the client
+population; the Boston University researchers instrumented the browser
+source code in order to capture their traces.  This research effort
+concentrated on analyzing various distributions in the traces, including
+document sizes, the popularity of documents, and the relationship between
+the two distributions.  They used these measured distributions to make a
+number of recommendations to web cache designers.
+
+Our traces are similar to the Boston University traces in spirit, although
+by using a packet snooper to gather the traces, we did not have to modify
+client software.  Also, our traces were taken from a much larger and more
+active client population (8,000 users generating more than 24,000,000
+requests over a 45 day period, as compared to the Boston University traces'
+591 users generating 500,000 requests over a 6 month period).
+
+In \cite{DECsquid}, a set of web proxy traces gathered for all external web
+requests from Digital Electronics Corporation (DEC) is presented.  These
+traces were gathered by modifying DEC's two SQUID proxy caches.  These
+traces represent over 24,000,000 requests gathered over a 24 day period.
+No analysis of these traces is given - only the traces themselves were made
+public.  Only requests flowing through the SQUID proxy were captured in the
+traces - all web requests that flowed from DEC to external sites were
+captured, but there is a lack of DEC local requests in the traces.
+
+Many papers have been written on the topic of web server and client trace
+analysis.  In \cite{removal}, removal policies for network caches of WWW
+documents are explored, based in part on simulations driven by traces
+gathered from the Computer Science department of Virginia Tech.  In
+\cite{crov95}, WWW traffic self-similarity is demonstrated and in part
+explained through analysis of the Boston University web client traces.  In
+\cite{SPA}, a series of proxy-cache experiments are run on a sophisticated
+proxy-cache simulation environment called SPA (Squid Proxy Analysis), using
+the DEC SQUID proxy traces to drive the simulation.  A collection of
+proxy-level and packet-level traces are analyzed and presented in
+\cite{ratechange} to motivate a caching model in which updates to documents
+are transmitted instead of complete copies of modified documents.  Finally,
+an empirical model of HTTP network traffic and a simulator called INSANE is
+developed in \cite{insane} based on HTTP packet traces captured using the
+{\it tcpdump} tool.
+
+\section{Conclusions}\label{concl}
+
+In this paper, we presented the results of an extensive, unintrusive
+client-side HTTP tracing efforts.  These traces were gathered from a 10
+Mb/s Ethernet over which traffic from 600 modems (used by more than 8,000
+UC Berkeley Home IP users) flowed.  Forty-five days worth of traces were
+gathered.  We used a custom module written on top of the Internet Protocol
+Scanning Engine (IPSE) to perform on-the-fly traffic reconstruction, HTTP
+protocol parsing, and trace file generation.  Being able to do this on the
+fly allowed us to write out only the information that interested us, giving
+us smaller and more manageable trace files.
+
+We measured and observed a number of interesting properties in our Home IP
+HTTP traces, from which we have drawn a number of conclusions related to
+Internet middleware service design:
+
+\begin{enumerate}
+\item Although most web clients can be classified as accessing Internet
+services using a PC-based browsers and desktop machines, there is
+significant heterogeneity in the client population that Internet middleware
+services must be prepared to handle.
+\item There is an extremely prominent diurnal cycle affecting the rate at
+which clients access services.  Furthermore, clients' activity is
+relatively smooth at large time scales (on the order of tens of minutes,
+hours, or days), but increasingly bursty at smaller time scales (order of
+minutes or seconds).  Internet middleware services can thus provision their
+resources based on the request rate observed over several hours if they can
+afford to smooth bursts observed over second-long time scales.
+\item There is a very large amount of locality of reference within clients'
+requests.  The amount of locality increases with the client population
+size, as does the working set of the client population.  Thus, caches that
+take advantage of this locality must grow in size in parallel with the
+client population that they service in order to avoid thrashing.
+\item Although Internet services tend to be very reactive, the latency of
+delivering data to clients is quite lengthy, implying that there could
+potentially be many hundreds or thousands of outstanding, parallel requests
+being handled by a middleware service.  Services must thus minimize the
+amount of state and switching overhead associated with these outstanding,
+mostly idle tasks.
+\end{enumerate}
+
+\section{Acknowledgements}
+
+We would like to thank Armando Fox and Eric Anderson for their excellent
+feedback which improved the quality of this paper, and Clifford Frost for
+helping us to install our network tracing machine at the Berkeley Home-IP
+site.  Thanks also go to Ian Goldberg and David Wagner for their helpful
+suggestions and guidance regarding the content of the traces, and to Vern
+Paxson for his help in publishing the traces in the Internet Traffic
+Archive.
+@
+
+
+1.1.1.1
+log
+@final version of USITS submission.
+@
+text
+@@

@@ -1,0 +1,115 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <math.h>
+#include <stdlib.h>
+#include <sys/types.h>
+
+uint S[256]; // (S[x]&255)==0 \forall x
+uint C; // random 32-bit constant
+
+uint phi(uint x) {
+	return x + S[x&255];
+}
+uint rol(uint x, int bits) {
+	return (x<<bits) | (x>>(32-bits));
+}
+uint g(uint x) {
+	return rol(phi(x), 11) + C;
+}
+uint f(uint x, uint k) {
+	return phi(g(x^k));
+}
+
+int byteparity[256];
+int parity(uint x) {
+	return byteparity[x&0xFF] ^ byteparity[(x>>8)&0xFF]
+		^ byteparity[(x>>16)&0xFF] ^ byteparity[x>>24];
+}
+
+void init() {
+	int i, j, n;
+	srandom(getpid());
+	for (i=0; i<256; i++) {
+		n = 0;
+		for (j=0; j<8; j++)
+			if (i & (1<<j))
+				n++;
+		byteparity[i] = n&1;
+	}
+}
+
+double lin(uint in, uint out, int N) {
+	uint x, k;
+	int ii, i, j, n;
+	double p;
+	n = 0;
+	for (ii=0; ii<10; ii++) {
+		C = random();
+		for (i=0; i<256; i++)
+			S[i] = random()<<8;
+		for (i=0; i<100; i++) {
+			k = random();
+			for (j=0; j<(N/1000); j++) {
+				x = random();
+				n += parity(f(x,k)&out)^parity(x^in);
+			}
+		}
+	}
+	p = ((double)n)/((double)(ii*i*j));
+	p = fabs(2.0*p - 1.0);
+	return p;
+}
+
+void try(uint in, uint out) {
+	double p = lin(in, out, 50000), q = p;
+	if (p > 0.001)
+		q = lin(in, out, 2000000);
+	printf("%8X->%8X: %g = 1/%g [%g]\n", in, out, q, 1.0/q, p);
+}
+
+int main() {
+	int i, j;
+	init();
+	for (i=0; i<32; i++)
+		for (j=i+1; j<32; j++) {
+			try(1<<i, 1<<j);
+		}
+	return 0;
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

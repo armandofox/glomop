@@ -1,0 +1,649 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.09.15.01.42.32;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.12.01.49.07;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.09.12.01.49.08;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Newest release of the sound code - correctly converts 16 bit linear
+(derived from mu-law) to 8 bit linear.  Sounds great!
+@
+text
+@/* Magic Cap System Software includes */
+
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+#include "Modem.h"
+#include "soundstructs.h"
+
+#undef CURRENTCLASS
+#define CURRENTCLASS LPCcoder
+
+#define MAXWINDOW	1000						/* Max analysis window length */
+#define FS		    8000.0						/* Sampling rate */
+#define DOWN		5	    					/* Decimation for pitch analyzer */
+#define PITCHORDER	4	    					/* Model order for pitch analyzer */
+#define FC		    600.0						/* Pitch analyzer filter cutoff */
+#define MINPIT		50.0						/* Minimum pitch */
+#define MAXPIT		300.0						/* Maximum pitch */
+
+
+#define MINPER 5
+#define MAXPER 32
+/*#define MINPER		(int)(FS/(DOWN*MAXPIT)+.5)*/	/* Minimum period */
+/*#define MAXPER		(int)(FS/(DOWN*MINPIT)+.5)*/	/* Maximum period */
+
+
+#define WSCALE		1.5863						/* Energy loss due to windowing */
+#define M_PI 		3.14159265358979323846
+
+#define BIAS 0x84 	/* define the add-in bias for 16 bit samples */
+#define CLIP 32635
+
+typedef struct globST {
+	int framelen, buflen;
+	float s[MAXWINDOW], y[MAXWINDOW], h[MAXWINDOW];
+	float fa[6], u, u1, yp1, yp2;
+	int pitchctr;
+	
+	/* substituted fixeds for decoder */
+	Fixed FOldper, FOldG, FOldk[LPC_FILTORDER+1];
+	Fixed Fb[LPC_FILTORDER+1], Fbp[LPC_FILTORDER+1], Ff[LPC_FILTORDER+1];
+	
+	int   vuv;
+	int   lintoulawexplut[256];
+	int   ulawtolinexplut[8];
+} lpcGlobST;
+	
+Private float dumb_sqrt(float x)
+{
+   float first_guess;
+   int   i;
+
+   if (x < 0.0)
+     return 0.0;
+   if (x == 1.0)
+      return 1.0;
+
+   if (x > 10.0)
+     first_guess = 10.0;
+   else if (x > 1.0)
+     first_guess = 1.6;
+   else
+     first_guess = 0.04;
+   
+   for (i=0; i<5; i++)
+      first_guess -= 0.5 * (first_guess*first_guess - x)/(2.0*first_guess);
+
+   return first_guess;
+}
+
+Private Fixed Fdumb_sqrt(Fixed x)
+{
+   Fixed first_guess, Fhalf, Fzero, Fone, Ftwo, Ften;
+   int   i;
+
+   Fone = IntToFixed(1);
+   Ften = IntToFixed(10);
+   Fzero = IntToFixed(0);
+   Ftwo = IntToFixed(2);
+   Fhalf = FixedDiv(Fone, Ftwo);
+
+   if (x < Fzero)
+     return Fzero;
+   if (x == Fone)
+      return Fone;
+
+   if (x > Ften)
+     first_guess = Ften;
+   else if (x > Fone)
+     first_guess = FixedDiv(IntToFixed(16), Ften);
+   else
+     first_guess = FixedDiv(Fone, IntToFixed(25));
+   
+   for (i=0; i<3; i++)
+      first_guess -=  FixedMul(Fhalf, 
+	                     FixedDiv(  FixedMul(first_guess,first_guess) - x,  
+	                                FixedMul(Ftwo,first_guess)
+								 )   
+							  );
+   return first_guess;
+
+}
+
+#define SHIFTAMOUNT 7
+#define BOUNDARY_SHIFT (7+SHIFTAMOUNT)
+
+Private unsigned char lin_to_byte(int sample) 
+{
+  int signbit, tresult1;
+  unsigned char Tresult, shifted;
+  
+  signbit = (sample >> 8) & 0x80;		/* set aside the sign */
+  if ( signbit != 0 ) sample = -sample;		/* get magnitude */
+  if ( sample > CLIP ) sample = CLIP;		/* clip the magnitude */
+
+  if (sample < (1 << SHIFTAMOUNT))    /* same as number of shifts */
+     return (unsigned char) 128;
+
+  if (sample >= (1 << BOUNDARY_SHIFT))
+     return (unsigned char) (signbit ? 0 : 255);
+
+  shifted = (unsigned char) ((sample >> SHIFTAMOUNT) & 0x00FF);
+ 
+  if (signbit)
+      tresult1 = 128 - shifted;
+  else
+      tresult1 = 128 + shifted;
+
+  Tresult = (unsigned char) tresult1;
+  return Tresult;
+}
+
+Private lin_to_ulaw(int sample, lpcGlobST *theGlobs)
+{
+  int *exp_lut;
+  int signbit, exponent, mantissa;
+  unsigned char ulawbyte;
+
+  exp_lut = &((theGlobs->lintoulawexplut)[0]);
+  
+  /* Get the sample into sign-magnitude. */
+  signbit = (sample >> 8) & 0x80;		/* set aside the sign */
+  if ( signbit != 0 ) sample = -sample;		/* get magnitude */
+  if ( sample > CLIP ) sample = CLIP;		/* clip the magnitude */
+
+  /* Convert from 16 bit linear to ulaw. */
+  sample = sample + BIAS;
+  exponent = exp_lut[( sample >> 7 ) & 0xFF];
+  mantissa = ( sample >> ( exponent + 3 ) ) & 0x0F;
+  ulawbyte = ~ ( signbit | ( exponent << 4 ) | mantissa );
+
+  return ulawbyte;
+}
+
+
+Private int ulaw_to_lin(unsigned char ulawbyte, lpcGlobST *theGlobs)
+{
+  int *exp_lut;
+  int signbit, exponent, mantissa, sample;
+  
+  exp_lut = &((theGlobs->ulawtolinexplut)[0]);
+
+  ulawbyte = ~ ulawbyte;
+  signbit = ( ulawbyte & 0x80 );
+  exponent = ( ulawbyte >> 4 ) & 0x07;
+  mantissa = ulawbyte & 0x0F;
+  sample = exp_lut[exponent] + ( mantissa << ( exponent + 3 ) );
+  if ( signbit != 0 ) sample = -sample;
+
+  return sample;
+}
+
+Private void auto_correl(float w[], int n, int p, float r[], lpcGlobST *theGlobs)
+{
+  int i, k, nk;
+
+  for (k=0; k <= p; k++) {
+    nk = n-k;
+    r[k] = 0.0;
+    for (i=0; i < nk; i++) r[k] += w[i] * w[i+k];
+  }
+}
+
+Private void durbin(float r[], int p, float k[], float *g, lpcGlobST *theGlobs)
+{
+  int i, j;
+  float a[LPC_FILTORDER+1], at[LPC_FILTORDER+1], e;
+  
+  for (i=0; i <= p; i++) a[i] = at[i] = 0.0;
+    
+  e = r[0];
+  for (i=1; i <= p; i++) {
+    k[i] = -r[i];
+    for (j=1; j < i; j++) {
+      at[j] = a[j];
+      k[i] -= a[j] * r[i-j];
+    }
+    k[i] /= e;
+    a[i] = k[i];
+    for (j=1; j < i; j++) a[j] = at[j] + k[i] * at[i-j];
+    e *= 1.0 - k[i]*k[i];
+  }
+
+  *g = dumb_sqrt(e);
+}
+
+Private void inverse_filter(float w[], float k[], lpcGlobST *theGlobs)
+{
+  int i, j;
+  float b[PITCHORDER+1], bp[PITCHORDER+1], f[PITCHORDER+1];
+  
+  for (i = 0; i <= PITCHORDER; i++) b[i] = f[i] = bp[i] = 0.0;
+    
+  for (i = 0; i < (theGlobs->buflen)/DOWN; i++) {
+    f[0] = b[0] = w[i];
+    for (j = 1; j <= PITCHORDER; j++) {
+      f[j] = f[j-1] + k[j] * bp[j-1];
+      b[j] = k[j] * f[j-1] + bp[j-1];
+      bp[j-1] = b[j-1];
+    }
+    w[i] = f[PITCHORDER];
+  }
+}
+
+Private void calc_pitch(float w[], float *per, lpcGlobST *theGlobs)
+{
+  int i, j, rpos;
+  float d[MAXWINDOW/DOWN], k[PITCHORDER+1], r[MAXPER+1], g, rmax;
+  float rval, rm, rp;
+  float a, b, c, x, y;
+
+  for (i=0, j=0; i < (theGlobs->buflen); i+=DOWN) d[j++] = w[i];
+  auto_correl(d, (theGlobs->buflen)/DOWN, PITCHORDER, r, theGlobs);
+  durbin(r, PITCHORDER, k, &g, theGlobs);
+  inverse_filter(d, k, theGlobs);
+  auto_correl(d, (theGlobs->buflen)/DOWN, MAXPER+1, r, theGlobs);
+  rpos = 0;
+  rmax = 0.0;
+  for (i = MINPER; i <= MAXPER; i++) {
+    if (r[i] > rmax) {
+      rmax = r[i];
+      rpos = i;
+    }
+  }
+  
+  rm = r[rpos-1];
+  rp = r[rpos+1];
+  rval = rmax / r[0];
+
+  a = 0.5 * rm - rmax + 0.5 * rp;
+  b = -0.5*rm*(2.0*rpos+1.0) + 2.0*rpos*rmax + 0.5*rp*(1.0-2.0*rpos);
+  c = 0.5*rm*(rpos*rpos+rpos) + rmax*(1.0-rpos*rpos) + 0.5*rp*(rpos*rpos-rpos);
+
+  x = -b / (2.0 * a);
+  y = a*x*x + b*x + c;
+  x *= DOWN;
+
+  rmax = y;
+  rval = rmax / r[0];
+  if (rval >= 0.4 || ((theGlobs->vuv) == 3 && rval >= 0.3)) {
+    *per = x;
+    (theGlobs->vuv) = ((theGlobs->vuv) & 1) * 2 + 1;
+  } else {
+    *per = 0.0;
+    (theGlobs->vuv) = ((theGlobs->vuv) & 1) * 2;
+  }
+}
+
+
+/***** Here are the publically accessible methods *****/
+
+Method Signed  LPCcoder_lpcInit(ObjectID self, long len)
+{
+  int        i, bufL;
+  float      r, v, w, wcT;
+  lpcGlobST *myGlobs;
+  int        Texp_lut[256];
+  int        TTexp_lut[8];
+  int        *TPtr, *TTPtr;
+  
+
+  myGlobs = (lpcGlobST *) NewTransientBuffer(sizeof(lpcGlobST));   /*** essentially a malloc ***/
+  TTPtr = myGlobs->ulawtolinexplut;
+  TPtr = myGlobs->lintoulawexplut;
+
+  /* initialize the Texp_lut table */
+  TPtr[0] = 0;  TPtr[1] = 0;  TPtr[2] = 1;  TPtr[3] = 1;
+  for (i=4; i<8; i++) TPtr[i] = 2;
+  for (i=8; i<15; i++) TPtr[i] = 3;
+  for (i=16; i<32; i++) TPtr[i] = 4;
+  for (i=32; i<64; i++) TPtr[i] = 5;
+  for (i=64; i<128; i++) TPtr[i] = 6;
+  for (i=128; i<256; i++) TPtr[i] = 7;
+    
+  /* initialize the TTexp_lut table */
+  TTPtr[0] = 0;  TTPtr[1] = 132;  TTPtr[2] = 396;  TTPtr[3] = 924;
+  TTPtr[4] = 1980;   TTPtr[5] = 4092;  TTPtr[6] = 8316;  TTPtr[7] = 16764;
+  
+  ReseedRandom(LocalTime());
+  
+  myGlobs->framelen = len;
+  myGlobs->buflen = len*3/2;
+  if (myGlobs->buflen > MAXWINDOW) return -1L;
+  bufL = myGlobs->buflen;
+
+  for (i = 0; i < bufL; i++) {
+    (myGlobs->s)[i] = 0.0;
+	(myGlobs->h)[i] = 0.7;
+  }
+
+  wcT = 2 * M_PI * FC / FS;
+  r = 0.36891079 * wcT;
+  v = 0.18445539 * wcT;
+  w = 0.92307712 * wcT;
+
+  (myGlobs->fa)[1] = -.84042706132517;
+  (myGlobs->fa)[2] = 1.0 + (myGlobs->fa)[1];
+  (myGlobs->fa)[3] = -1.66274942042572;
+  (myGlobs->fa)[4] = 0.84042588304726;
+  (myGlobs->fa)[5] = 1.0 + (myGlobs->fa)[3] + (myGlobs->fa)[4];
+
+  (myGlobs->u1) = 0.0;
+  (myGlobs->yp1) = 0.0;
+  (myGlobs->yp2) = 0.0;
+
+  (myGlobs->FOldper) = IntToFixed(0);
+  (myGlobs->FOldG) = IntToFixed(0);
+
+  for (i=1; i <= LPC_FILTORDER; i++) (myGlobs->FOldk)[i] = IntToFixed(0);
+  for (i=0; i <= LPC_FILTORDER; i++) (myGlobs->Fb)[i] = (myGlobs->Fbp)[i] = (myGlobs->Ff)[i] = IntToFixed(0);
+  
+  (myGlobs->pitchctr) = 0;
+  
+  (myGlobs->vuv) = 0;
+
+  SetLpcGlobalsPtr(self, (Pointer) myGlobs);
+  return 0L;
+}
+
+Method void LPCcoder_lpcStop(ObjectID self)
+{
+   lpcGlobST *myGlobs;
+   
+   myGlobs = (lpcGlobST *) LpcGlobalsPtr(self);
+   DestroyTransientBuffer((Pointer) myGlobs);
+}
+
+Method void LPCcoder_lpcAnalyze(ObjectID self, unsigned char *buf, lpcparams_t *params)
+{
+  int i, j;
+  float w[MAXWINDOW], r[LPC_FILTORDER+1];
+  float per, G, k[LPC_FILTORDER+1];
+  lpcGlobST *theGlobs;
+
+  theGlobs = (lpcGlobST *) LpcGlobalsPtr(self);
+  
+  for (i=0, j=(theGlobs->buflen)-(theGlobs->framelen); i < (theGlobs->framelen); i++, j++) {
+    (theGlobs->s)[j] = ulaw_to_lin(buf[i], theGlobs)/32768.0;
+    (theGlobs->u) = (theGlobs->fa)[2] * (theGlobs->s)[j] - (theGlobs->fa)[1] * (theGlobs->u1);
+    (theGlobs->y)[j] = (theGlobs->fa)[5] * (theGlobs->u1) - (theGlobs->fa)[3] * (theGlobs->yp1) - (theGlobs->fa)[4] * (theGlobs->yp2);
+    (theGlobs->u1) = (theGlobs->u);
+    (theGlobs->yp2) = (theGlobs->yp1);
+    (theGlobs->yp1) = (theGlobs->y)[j];
+  }
+
+  calc_pitch((theGlobs->y), &per, theGlobs);
+
+  for (i=0; i < (theGlobs->buflen); i++) w[i] = (theGlobs->s)[i] * (theGlobs->h)[i];
+  auto_correl(w, (theGlobs->buflen), LPC_FILTORDER, r, theGlobs);
+  durbin(r, LPC_FILTORDER, k, &G, theGlobs);
+
+  params->period = per * (1<<8);
+  params->gain = G * (1<<8);
+  for (i=0; i < LPC_FILTORDER; i++) params->k[i] = k[i+1] * (1<<7);
+
+  
+  CopyBytes((theGlobs->s)+(theGlobs->framelen), (theGlobs->s), ((theGlobs->buflen)-(theGlobs->framelen))*sizeof((theGlobs->s)[0]));
+  CopyBytes((theGlobs->y)+(theGlobs->framelen), (theGlobs->y), ((theGlobs->buflen)-(theGlobs->framelen))*sizeof((theGlobs->y)[0]));
+}
+
+Method Signed LPCcoder_lpcSynthesize(ObjectID self, lpcparams_t *params, Fixed speed,   /** speed is no longer used **/
+                                     unsigned char *buf)
+{
+  lpcGlobST *theGlobs;
+  int i, j, flen;
+  Fixed Fper, FG, Fk[LPC_FILTORDER+1];
+  unsigned char tBuf;
+  Fixed Fu, FNewG, FGinc, FNewper, Fperinc;
+  Fixed FNewk[LPC_FILTORDER+1], Fkinc[LPC_FILTORDER+1];
+  Fixed theZero;
+  Fixed the32, t1;
+  int myRandom;
+	   
+  theZero = IntToFixed(0);  
+  theGlobs = (lpcGlobST *) LpcGlobalsPtr(self);  /**** theGlobs should be passed in - Object field reference is a heavyweight operation */
+  
+  flen = (theGlobs->framelen);  
+  Fper = FixedDiv( IntToFixed(params->period), IntToFixed(1<<8) );
+  FG = FixedDiv( IntToFixed(params->gain), IntToFixed(1<<8) );
+  Fk[0] = theZero;
+  
+  for (i=0; i < LPC_FILTORDER; i++)
+     Fk[i+1] = FixedDiv( IntToFixed(params->k[i]), IntToFixed(1<<7) );
+  
+  if (Fper == theZero)
+  {
+    FG = FixedDiv( FG, Fdumb_sqrt( FixedDiv(IntToFixed(theGlobs->buflen), IntToFixed(3)))
+	             );
+  }
+  else
+  {
+     i = (theGlobs->buflen) / FixedToInt(Fper);
+	 if (i == 0) i = 1;
+	 FG = FixedDiv( FG, Fdumb_sqrt( IntToFixed(i) ));
+  }
+
+  FNewper = (theGlobs->FOldper);
+  FNewG = (theGlobs->FOldG);
+  
+  for (i=1; i <= LPC_FILTORDER; i++) FNewk[i] = (theGlobs->FOldk)[i];
+    
+  if ( (theGlobs->FOldper) != theZero && Fper != theZero )
+  {
+    Fperinc = FixedDiv( Fper - (theGlobs->FOldper) , IntToFixed(flen));
+	FGinc =   FixedDiv( FG   - (theGlobs->FOldG)   , IntToFixed(flen));
+	for (i=1; i<= LPC_FILTORDER; i++) 
+	   Fkinc[i] = 
+	      FixedDiv( (Fk[i] - (theGlobs->FOldk)[i]), IntToFixed(flen) );
+  }
+  else
+  {
+    Fperinc = theZero;
+	FGinc = theZero;
+	for (i=1; i <= LPC_FILTORDER; i++) Fkinc[i] = theZero;
+  }
+    
+  if (FNewper == theZero) (theGlobs->pitchctr) = 0;
+    
+  for (i=0; i < flen; i++) {	 
+  
+	if (FNewper == theZero)
+	{
+       myRandom = ShortRandom() / 2;
+	   the32 = IntToFixed(32768);
+	   t1 = FixedMul(IntToFixed(myRandom), FNewG);
+	   Fu = FixedDiv(t1, the32);
+	}
+	else
+	{
+	   if ((theGlobs->pitchctr) == 0) {
+	      Fu = FNewG;
+		  (theGlobs->pitchctr) = FixedToInt(FNewper);
+	   }
+	   else
+	   {
+	      Fu = theZero;
+		  (theGlobs->pitchctr)--;
+	   }
+	}
+	
+	(theGlobs->Ff)[LPC_FILTORDER] = Fu;	
+    for (j=LPC_FILTORDER; j >= 1; j--) {
+	  (theGlobs->Ff)[j-1] = (theGlobs->Ff)[j] - FixedMul(
+	               FNewk[j], (theGlobs->Fbp)[j-1]       );
+	  
+	  (theGlobs->Fb)[j] = FixedMul( FNewk[j], (theGlobs->Ff)[j-1] ) +
+	                   (theGlobs->Fbp)[j-1];
+	  
+	  (theGlobs->Fbp[j]) = (theGlobs->Fb)[j];
+    }
+
+	(theGlobs->Fb)[0] = (theGlobs->Fbp)[0] = (theGlobs->Ff)[0];
+	
+	
+	/*buf[i] = (unsigned char) lin_to_ulaw( FixedToInt( FixedMul (
+	               (theGlobs->Fb)[0], IntToFixed(32768)
+	                   )), theGlobs);*/
+	/*myRandom = FixedToInt( FixedMul (
+	               (theGlobs->Fb)[0], IntToFixed(32768)
+	                   ));
+	buf[i] = (unsigned char) (myRandom >> 8);*/
+	buf[i] = (unsigned char) lin_to_byte( FixedToInt( FixedMul (
+	               (theGlobs->Fb)[0], IntToFixed(32768)
+	                   )));
+    
+	FNewper += Fperinc;
+	FNewG += FGinc;
+	for (j=1; j <= LPC_FILTORDER; j++) FNewk[j] += Fkinc[j];	
+  }
+  
+  (theGlobs->FOldper) = Fper;
+  (theGlobs->FOldG) = FG;
+  for (i=1; i <= LPC_FILTORDER; i++) (theGlobs->FOldk)[i] = Fk[i];
+
+  return (long int) flen;
+}
+
+
+#undef CURRENTCLASS
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d19 8
+a26 2
+#define MINPER		(int)(FS/(DOWN*MAXPIT)+.5)	/* Minimum period */
+#define MAXPER		(int)(FS/(DOWN*MINPIT)+.5)	/* Maximum period */
+a52 1
+
+d94 1
+a94 1
+   for (i=0; i<5; i++)
+d104 3
+d109 2
+a110 2
+  int signbit;
+  char Tresult;
+a111 1
+/*  Log(("Sample: %d", sample));  */
+d116 14
+a129 1
+  Tresult = (char) ((sample >> 8) * (signbit? -1 : 1));
+d282 1
+a282 1
+  myGlobs = (lpcGlobST *) NewTransientBuffer(sizeof(lpcGlobST));
+d294 1
+a294 4
+  
+  r = 2.0;
+  r = r * 3.0;
+  
+a378 4
+  /*
+  bcopy((theGlobs->s)+(theGlobs->framelen), (theGlobs->s), ((theGlobs->buflen)-(theGlobs->framelen))*sizeof((theGlobs->s)[0]));
+  bcopy((theGlobs->y)+(theGlobs->framelen), (theGlobs->y), ((theGlobs->buflen)-(theGlobs->framelen))*sizeof((theGlobs->y)[0]));
+  */
+d381 2
+a382 1
+Method Signed LPCcoder_lpcSynthesize(ObjectID self, lpcparams_t *params, Fixed speed, unsigned char *buf)
+d390 6
+d397 1
+a397 4
+  
+  theGlobs = (lpcGlobST *) LpcGlobalsPtr(self);
+  flen = (theGlobs->framelen);   /**** DIVIDE BY SPEED HERE ****/
+  
+d400 1
+a400 1
+  Fk[0] = IntToFixed(0);
+d405 1
+a405 1
+  if (Fper == IntToFixed(0))
+d407 2
+a408 2
+    FG = FixedDiv( FG, Fdumb_sqrt( FixedDiv(IntToFixed(theGlobs->buflen), IntToFixed(3))
+	                            )   );
+d422 1
+a422 1
+  if ( (theGlobs->FOldper) != IntToFixed(0) && Fper != IntToFixed(0) )
+d432 3
+a434 3
+    Fperinc = IntToFixed(0);
+	FGinc = IntToFixed(0);
+	for (i=1; i <= LPC_FILTORDER; i++) Fkinc[i] = IntToFixed(0);
+d437 1
+a437 1
+  if (FNewper == IntToFixed(0)) (theGlobs->pitchctr) = 0;
+d439 1
+a439 4
+  for (i=0; i < flen; i++) {
+     int myRandom;
+	 
+	 myRandom = ShortRandom() / 2;
+d441 1
+a441 1
+	if (FNewper == IntToFixed(0))
+d443 2
+a444 3
+	   Fixed the65, t1, t2;
+	   	   
+	   the65 = FixedMul(IntToFixed(2), IntToFixed(16384));
+d446 1
+a446 2
+	   t2 = FixedDiv(t1, the65);
+	   Fu = t2;
+d456 1
+a456 1
+	      Fu = IntToFixed(0);
+a460 1
+      
+d471 1
+d473 9
+a481 1
+    
+d488 1
+a488 2
+	for (j=1; j <= LPC_FILTORDER; j++) FNewk[j] += Fkinc[j];
+	
+@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

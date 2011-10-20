@@ -1,0 +1,108 @@
+head	1.2;
+access;
+symbols
+	v15b:1.2
+	v10b3:1.2
+	v10b2:1.2
+	v10b1:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.10.21.16.25.01;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.21.02.34.50;	author lcddave;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Alarms and Find should no longer crash the Pilot.
+@
+text
+@#ifndef __CALLBACK_H__
+#define __CALLBACK_H__
+
+/* This is a workaround for a bug in the current version of gcc:
+
+   gcc assumes that no one will touch %a4 after it is set up in crt0.o.
+   This isn't true if a function is called as a callback by something
+   that wasn't compiled by gcc (like FrmCloseAllForms()).  It may also
+   not be true if it is used as a callback by something in a different
+   shared library.
+
+   We really want a function attribute "callback" which will insert this
+   progloue and epilogoue automatically.
+   
+      - Ian */
+
+register void *reg_a4 asm("%a4");
+
+#define CALLBACK_PROLOGUE \
+    void *save_a4 = reg_a4; asm("move.l %%a5,%%a4; sub.l #edata,%%a4" : :);
+
+#define CALLBACK_EPILOGUE reg_a4 = save_a4;
+
+/* These versions are for routines (like systrap patches) that might be
+    called _directly_ from OTHER apps.  We can't necessarily calculate our
+    %a4 from %a5, because %a5 isn't ours.  Ugh.  We also want to avoid
+    doing a SysTrap in the common case that we are called from our own
+    app (and so we can calculate %a4 from %a5). */
+
+#define CALLBACK_INTERAPP_PROLOGUE(apptype,ftrnum,magic,magicval) \
+    void *ftr_a4, *save_a4 = reg_a4; \
+    asm("move.l %%a5,%%d0; bclr.l #31,%%d0; move.l %%d0,%%a4; \
+         sub.l #edata,%%a4" : : : "d0"); \
+    if ((magic) != (magicval)) { \
+	if (!FtrGet((apptype),(ftrnum),(DWord *)&ftr_a4)) { \
+	    reg_a4 = ftr_a4; \
+	} \
+    }
+
+#define CALLBACK_INTERAPP_EPILOGUE reg_a4 = save_a4;
+
+#define REGISTER_INTERAPP_CALLBACK(apptype,ftrnum) \
+    FtrSet((apptype),(ftrnum),(DWord)reg_a4);
+
+#define DEREGISTER_INTERAPP_CALLBACK(apptype,ftrnum) \
+    FtrUnregister((apptype),(ftrnum));
+
+#endif
+@
+
+
+1.1
+log
+@.
+@
+text
+@a18 1
+#if 0
+d20 9
+a28 1
+    asm("move.l %%a4,-(%%sp); move.l %%a5,%%a4; sub.l #edata,%%a4" : : : "sp" );
+d30 9
+a38 3
+#define CALLBACK_EPILOGUE \
+    asm("movea.l (%%sp)+,%%a4" : : : "sp" );
+#else
+d40 1
+a40 2
+#define CALLBACK_PROLOGUE \
+    void *save_a4 = reg_a4; asm("move.l %%a5,%%a4; sub.l #edata,%%a4" : :);
+d42 2
+a43 1
+#define CALLBACK_EPILOGUE reg_a4 = save_a4;
+d45 2
+a46 1
+#endif
+@

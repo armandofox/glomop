@@ -1,0 +1,127 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+uint S[256]; // (S[x]&255)==0 \forall x
+uint C; // random 32-bit constant
+
+uint phi(uint x) {
+	return x + S[x&255];
+}
+uint rol(uint x, int bits) {
+	return (x<<bits) | (x>>(32-bits));
+}
+uint g(uint x) {
+	return rol(phi(x), 11) + C;
+}
+uint f(uint x, uint k) {
+	return phi(g(x^k));
+}
+void psi(uint blk[2], uint k[4]) {
+	uint t;
+	int i;
+	for (i=0; i<4; i++) {
+		t = blk[0];
+		blk[0] = blk[1];
+		blk[1] = t^f(blk[1],k[i]);
+	}
+}
+
+void init() {
+	srandom(getpid());
+}
+
+double diff(uint d[2], int N) {
+	uint x[2], y[2], xx[2], yy[2], k[4];
+	int ii, i, j, n;
+	n = 0;
+	for (ii=0; ii<10; ii++) {
+		C = random();
+		for (i=0; i<256; i++)
+			S[i] = random()<<8;
+		for (i=0; i<4; i++)
+			k[i] = random();
+		for (j=0; j<N/10; j++) {
+			x[0] = random();
+			x[1] = random();
+			y[0] = x[0]^d[0];
+			y[1] = x[1]^d[1];
+			psi(x, k);
+			psi(y, k);
+			y[0] ^= x[0];
+			y[1] ^= x[1];
+			xx[0] = random();
+			xx[1] = random();
+			yy[0] = xx[0]^d[0];
+			yy[1] = xx[1]^d[1];
+			psi(xx, k);
+			psi(yy, k);
+			yy[0] ^= xx[0];
+			yy[1] ^= xx[1];
+			if (y[0] == yy[0] && y[1] == yy[1])
+				n++;
+		}
+	}
+	return ((double)n)/((double)(ii*j));
+}
+
+void try(uint ld, uint rd) {
+	double p;
+	uint d[2];
+	d[0] = ld;
+	d[1] = rd;
+	p = diff(d, 20000);
+	if (p > 0.0)
+		p = diff(d, 1000000);
+	printf("%8X,%8X->.: %g = 1/%g\n", d[0], d[1], p, 1.0/p);
+}
+
+int main() {
+	int i, j, ii, jj;
+	init();
+	for (i=0; i<32; i++)
+		for (j=0; j<32; j++)
+			for (ii=i; ii<32; ii++)
+				for (jj=j; jj<32; jj++)
+					try((1<<i)|(1<<ii), (1<<j)|(1<<jj));
+	return 0;
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

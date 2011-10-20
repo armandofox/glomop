@@ -1,0 +1,207 @@
+head	1.3;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	97.06.17.19.40.35;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.17.01.55.09;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.04;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.04;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@doenv needed /usr/x11/bin etc for xterm, pnfs, pxtract changed to use
+/usr/bin/perl.  Will fix for autoconf soon.
+@
+text
+@#!/usr/bin/perl -0777
+
+package pnfs;
+
+$protport = 2049;
+
+sub pnfs {
+MAIN:
+foreach $file (@@_)
+{
+    ($stdin,$lhost,$lport,$hhost,$hport) = $file =~ m{
+	(=?)
+	([\w\.-]+?)
+	:
+	(\d+)
+	-
+	([\w\.-]+?)
+	:
+	(\d+)
+	}sox;
+
+    if ($lport != $protport && $hport != $protport)
+    {
+	warn "Not on port $protport!\n";
+	next MAIN;
+    }
+
+    ($cli, $srv, $clihost, $cliport, $srvhost, $srvport) = 
+	($hport == $protport) ? ("\x01", "\x02", $lhost, $lport, $hhost, $hport)
+			: ("\x02", "\x01", $hhost, $hport, $lhost, $lport);
+
+    if ($stdin eq "=") {
+	open(F, "<&STDIN") || do {warn "Cannot dup STDIN: $!\n"; next MAIN;};
+    } else {
+	open(F, $file) || do {warn "Cannot open $file: $!\n"; next MAIN;};
+    }
+
+    print "\n$file\n" if $main::v;
+    while(1)
+    {
+	last if read(F, $len, 4) < 4;
+        $len = unpack('i',pack('I',unpack('N',$len)));
+        if ($len < 0) {
+            $len = -$len;
+        }
+	last if read(F, $buf, $len) < $len;
+
+	## Parse the buffer
+	## Get the procedure number
+	$prognum = unpack('N',substr($buf,12,4));
+	next unless $prognum == 100003;
+	$procnum = unpack('N',substr($buf,20,4));
+	## Get the lengths of the cred fields
+	$credlen = unpack('N',substr($buf,28,4));
+	$credlen += unpack('N',substr($buf,36+$credlen,4));
+	$fhandle = substr($buf, 40+$credlen, 32);
+	$fhandle = unpack('H*', $fhandle);
+	# procs (1,2,4,5,6,8,9,10,11,12,13,14,15,16,17) have first
+	#  arg a fhandle
+	next if $procnum <= 0 || $procnum >= 18 ||
+	    $procnum == 3 || $procnum == 7;
+
+	## Try to determine the root dir filehandle for this fhandle
+	$convroot = 1;
+	if ($fhandle =~ m{ ^
+	    0{12}
+	    [0-9a-f]{4}      ## drive id
+	    0008
+	    [0-9a-f]{16}     ## file inode
+	    0000
+	    0008
+	    [0-9a-f]{16}     ## root inode
+	    0000
+	$ }oix) {
+	    substr($fhandle, 20, 16) = substr($fhandle, 44, 16);
+	} elsif ($fhandle =~ m{ ^
+	    [0-9a-f]{4}      ## drive id
+	    8000
+	    0100
+	    0000
+	    0c00
+	    0000
+	    [0-9a-f]{16}     ## file inode
+	    0c00
+	    0000
+	    [0-9a-f]{16}     ## root inode
+	$ }oix) {
+	    substr($fhandle, 24, 16) = substr($fhandle, 48, 16);
+	} elsif ($fhandle =~ m{ ^
+	    ## SunOS
+	    0000
+	    [0-9a-f]{4}      ## drive id
+	    0000
+	    0001
+	    000a
+	    0000
+	    [0-9a-f]{16}     ## file inode
+	    000a
+	    0000
+	    [0-9a-f]{16}     ## root inode
+	$ }oix) {
+	    substr($fhandle, 24, 16) = substr($fhandle, 48, 16);
+	} elsif ($fhandle =~ m{ ^
+	    ## ULTRIX
+	    [0-9a-f]{4}      ## drive id
+	    0000
+	    [0-9a-f]{16}     ## file inode
+	    [0-9a-f]{16}     ## root inode
+	    0{24}
+	$ }oix) {
+	    substr($fhandle, 8, 16) = substr($fhandle, 24, 16);
+	} elsif ($fhandle =~ m{ ^
+	    000a
+	    [0-9a-f]{4}      ## part of drive id
+	    0000
+	    0003
+	    000a
+	    [0-9a-f]{16}     ## file inode
+	    0000
+	    000a
+	    [0-9a-f]{16}     ## root inode
+	    0000
+	$ }oix) {
+	    substr($fhandle, 20, 16) = substr($fhandle, 44, 16);
+	} else {
+	    $convroot = 0;
+	}
+	print (($convroot ? "*" : "") . "NFS\t$srvhost\t$fhandle\n");
+    }
+    close(F);
+    #unlink($file) if $main::rm;
+}
+}
+
+1;
+@
+
+
+1.2
+log
+@More updates..
+@
+text
+@d1 1
+a1 1
+#!/home/tomorrow/b/grad/fox/perl-5.004/bin/perl -0777
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+#!/usr/bin/perl -0777
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

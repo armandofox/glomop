@@ -1,0 +1,161 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.04.15.22.28.23;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+Xact Cache Consistency
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Transactional Client-Server Cache Consistency: Alternatives and Performance
+</h1>
+<strong>
+M.J. Franklin, M.J. Carey, M. Livny
+</strong>
+
+<b>Summary by:</B> Armando Fox and Steve Gribble
+
+<p><b>One-line summary:</b>
+Cache consistency for distributed (client-server) DB's is harder to
+implement and has more tradeoffs than traditional SMP cache consistency,
+because of high message cost, consistency granularity, access
+granularity, and ACID semantics.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Architectures: Query-shipping vs. data-shipping. The latter
+       accelerates navigation on client, but must exploit client
+       caching:
+       <ul>
+         <li> intra-transaction
+         <li> Inter-transaction: requires cache consistency protocol.
+              All proposed algs support ACID isolation or Gray's "degree 3"
+              (serializable) transaction model.
+       </ul>
+  <li> Architectural considerations:
+       <ul>
+         <li> Page vs. object caching
+         <li> Aggregate processing/storage likely to be at clients, not
+              server; putting complexity at server allows support needs
+              and bulletproofness to be centrally managed
+         <li> E.g.: Dynamic replication (based on client demands) and
+              second-class ownership (server's copy is the truth)
+       </ul>
+  <li> Taxonomy axes: detection ("lazy") vs. avoidance ("eager")
+       of accessing stale data.
+       Same semantics in all algs, so taxonomy based on
+       <i>performance</i> implications.
+       <ul>
+         <li> Detection-based can be augmented with optimization hints
+              (e.g. asynchronous update notifications), but must still function
+              correctly without them.
+         <li> Avoidance-based use Read One/Write All (clients read any copy,
+              write all copies).
+       </ul>
+  <li> Detection-based algorithms tradeoffs:
+       <ul>
+         <li> When to check validity (synchronous on page write, asynch
+              starting at first write, deferred until commit).  Deferred
+              allows batching and may speed up common case; others may
+              give fewer stale-data-aborts
+         <li> Change notification hints (used for inter-transaction
+              caching): invalidate vs. update
+       </ul>
+  <li> Avoidance-based algorithms: client software needs additional
+       mechanisms to support eager consistency, and server must keep
+       track of location of every copy (to implement ROWA); use 
+       directory-based cache coherence architecture for scalability.
+       Tradeoffs: 
+       <ul>
+         <li> When does client declare intention to write: synchronous
+              (on write-permission fault),
+              asynchronous, deferred (maybe preferable since consistency
+              actions expensive).
+         <li> Write perm duration: this transaction, multiple
+              transactions.
+         <li> What to do when incoming consistency action can affect
+              xact locally in progress:
+              wait for completion, or preempt local xact.  Wait can result in
+              stronger semantic guarantees on reads since forces remote
+              writer to serialize behind local reader.
+         <li> Remote update policy: invalidate, update, or choose
+              dynamically. 
+       </ul>
+  <li> Performance comparisons on a family of algorithms:
+       <ul>
+         <li> Server-based 2PL: synchronous validation, verify at write
+              time that primary copy of page (at server) has same value
+              before write as your copy.
+              <ul>
+                <li> Variants: Caching 2PL: cached copies tagged with
+                     version numbers, xacts request lock from server
+                     before modifying page, if version numbers don't
+                     match, server piggybacks latest version on lock
+                     grant.
+                <li> Variant: Basic 2PL: like Server 2PL, but only
+                     intra-xact caching.
+              </ul>
+         <li> Callback locking: Synchronous write-intention
+              declaration. When server sees one, it issues callbacks to
+              all clients that have the page to invalidate it, then
+              grants write perm to
+              requester.
+              <ul>
+                <li> Variant: Callback-All: server callbacks are
+                     "downgrades"--clients may keep page read-only.
+                     If client detects any outstanding write locks, it
+                     rejects downgrade callback and notifies server.
+                     Global deadlock can result, but it's detectable at
+                     server. 
+              </ul>
+         <li> Optimistic 2PL: defer write intention to end of xact's
+              execution phase.  When server grants write locks to
+              writer, it can either update (O2PL-P) or invalidate
+              (O2PL-I) other clients that have a copy.
+       </ul>
+  <li> As with shared-memory cache consistency, performance depends
+       almost completely on the workload (amount of locality, amount of
+       read or write sharing, communication-to-computation overhead, etc.)
+</ul>
+
+<h2>Relevance</h2>
+
+An encyclopedic and relatively disinterested survey paper; reasonable
+taxonomy of what seems like a large and hack-laden design space.
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Still not clear to me that the differences from "traditional" SMP
+       cache consistency are that large, esp. with respect to
+       performance evaluation.  Seems like designers of these protocols
+       could have leveraged/learned more than they did from that
+       previous work.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

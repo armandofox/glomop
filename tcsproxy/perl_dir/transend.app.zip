@@ -1,0 +1,123 @@
+# Handle .zip files
+
+use TACCutils;
+use clib;
+use CGI;
+
+sub message {
+    my $err = shift;
+    chomp $err;
+    $err .= "\n";
+    &MonitorClient_Send("WingMan Messages", $err, "Log");
+}
+
+sub DistillerInit {
+    %sufmap = (
+	prc => 'application/x-palmosdb',
+	pdb => 'application/x-palmosdb',
+	zip => 'application/zip',
+	htm => 'text/html',
+	html => 'text/html',
+    );
+    0;                                      # the distOk return code
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @_;
+    my($unzip);
+    my($myurl) = &get_my_url($headers);
+    my($listing);
+
+    if (-x '/usr/sww/bin/unzip') {
+      $unzip = '/usr/sww/bin/unzip';
+    } else {
+      $unzip = '/usr/bin/unzip';
+    }
+    ## Write the .zip file to disk (because that's all unzip can understand)
+    $zipfilename = ".zipfile.$$.zip";
+    open(ZIP, ">$zipfilename");
+    print ZIP $data;
+    close(ZIP);
+
+    if ($args{"s219"}.'' eq '') {
+	## Show what's in it
+	unless(open(ZOUT, "-|")) {
+	    exec $unzip, '-l', '-q', $zipfilename;
+	    &message("exec: $!");
+	    exit;
+	}
+	while(<ZOUT>) {
+	    last if /^ -----/;
+	}
+	while(<ZOUT>) {
+	    last if /^ -----/;
+	    chomp;
+	    if (/^\s*(\S+)\s+\S+\s+\S+\s+/) {
+		my ($size, $name) = ($1, substr($_,27));
+		my ($escname, $magicurl);
+		$escname = CGI::escape($name);
+		$magicurl = &tomagic($myurl, "s219=$escname");
+		$name =~ s/\&/&amp;/g;
+		$name =~ s/\</&lt;/g;
+		$name =~ s/\>/&gt;/g;
+		$listing .= "<LI><A HREF=\"$magicurl\">$name</A> ($size bytes)\n";
+	    }
+	}
+	while(<ZOUT>) {
+	}
+	close(ZOUT);
+
+	unlink $zipfilename;
+
+	$data = <<EOD;
+<HTML><HEAD><TITLE>Zipfile listing</TITLE></HEAD>
+<BODY><UL>
+$listing
+</UL></BODY></HTML>
+EOD
+	$hdrs = <<EOH;
+HTTP/1.0 200 OK\r
+Location: $myurl\r
+Content-Type: text/html\r
+\r
+EOH
+	return($data, $hdrs, "text/html", 0);
+    } else {
+	## Retrieve the file
+	my ($file) = $args{"s219"};
+	$file =~ s/\%([0-9a-f][0-9a-f])/pack('H2',$1)/ieg;
+	&message("Extracting $file");
+	unless(open(ZOUT, "-|")) {
+	    exec $unzip, '-p', '-q', $zipfilename, $file;
+	    &message("exec: $!");
+	    exit;
+	}
+	$data = join('',<ZOUT>);
+	close(ZOUT);
+
+	## Figure out the appropriate next distiller
+&message("file is $file\n");
+	if ($file =~ /\.(\w+)$/) {
+	    $suffix = lc $1;
+	} else {
+	    $suffix = '';
+	}
+&message("suffix is $suffix\n");
+	if (defined $sufmap{$suffix}) {
+	    $type = $sufmap{$suffix};
+	} else {
+	    $type = 'text/plain';
+	}
+&message("type is $type\n");
+
+	$hdrs = <<EOH;
+HTTP/1.0 200 OK\r
+Location: $myurl\r
+Content-Type: $type\r
+\r
+EOH
+	return($data, $hdrs, $type, 0);
+    }
+}
+
+1;

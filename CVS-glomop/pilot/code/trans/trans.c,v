@@ -1,0 +1,1067 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	97.07.10.23.12.35;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.10.00.05.51;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.21.02.13.37;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.19.23.30.21;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.19.22.50.41;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@fixed some handle problems
+@
+text
+@#include <Pilot.h>
+
+#include <sys/socket.h>
+#include "trans.h"
+
+/* header is 4 32 bit unsigned words long */
+/* request id                             */
+/* metaSize                               */
+/* dataSize                               */
+/* compression type                       */
+#define HEADERSIZE 16
+#define RIDLOC 0
+#define METALOC 4
+#define SIZELOC 8
+#define COMPLOC 12
+
+#define ConID2Socket(conID) ((Int) conRecs[conID].sock)
+
+
+/*ReadCallbackFuction*/
+typedef void (*Rcf)(Int, unsigned char *, int, void *);
+
+typedef struct {
+  Int sock;
+
+  Boolean inUse;
+
+  struct sockaddr_in saddr;
+  DmOpenRef db;
+  
+  RequestID nextRequest;
+  ChunkID nextChunk;
+
+  /* and now the info needed for reading data */
+  /* getting kinda large here                 */
+  VoidHand dataBufHand;
+  VoidHand metaBufHand;
+  int buffed;
+  unsigned char headBuf[HEADERSIZE];
+  DataSize dataSize;
+  DataSize metaSize;
+  RequestID requestID;
+  DataSize left;
+  /* is just size-left but this makes me happier...OK? */
+  DataSize seen;
+  Boolean readingMeta;
+
+  /* and now some stuff for database evilness... THIS IS GETTING HUGE */
+  ULong metaID;
+  ULong dataID;
+
+} ConRec;
+
+static ConRec conRecs[MAX_CONNECTIONS];
+
+Err errno;
+
+
+Err DestroyChunk(ChunkHand ch) {
+  UInt index;
+  ChunkPtr c;
+  Err err;
+  
+  c = (ChunkPtr) MemHandleLock(ch);
+
+  if ((c->conID < FIRST_CONNECTION) || (c->conID >= MAX_CONNECTIONS)) {
+    return 10;
+  } 
+
+  if (conRecs[c->conID].db) {
+    DmOpenRef db = conRecs[c->conID].db;
+
+    if (c->dataSize) {
+      /*      err = MemHandleFree(c->dataHand);
+      if (err) return 1;*/
+      err = DmFindRecordByID(db, c->dataID, &index);
+      if (err) return 2;
+      err = DmRemoveRecord(db, index);
+      if (err) return 3;
+    }
+    if (c->metaSize) {
+      /*      err = MemHandleFree(c->metaHand);
+      if (err) return 4;*/
+      err = DmFindRecordByID(db, c->metaID, &index);
+      if (err) return 5;      
+      err = DmRemoveRecord(db, index);
+      if (err) return 6;      
+    }
+  } else {
+    if (c->dataSize) {
+      err = MemHandleFree(c->dataHand);
+      if (err) return 7;      
+    }
+    if (c->metaSize) {
+      err = MemHandleFree(c->metaHand);
+      if (err) return 8;      
+    }
+  }
+  MemHandleUnlock(ch);
+  err = MemHandleFree(ch);
+  if (err) return 9;
+
+  return 0;
+}
+
+Int ReOpenConnection(ConID conID) {
+  Err err;
+
+  close(ConID2Socket(conID));
+  
+  conRecs[conID].sock = socket(PF_INET, SOCK_STREAM, 0);
+  err = connect(conRecs[conID].sock, 
+		(struct sockaddr *)&conRecs[conID].saddr, 
+		sizeof(conRecs[conID].saddr));
+  if (err) {
+    conRecs[conID].sock = -1;
+    return -1;
+  }     
+  return conRecs[conID].sock;
+}
+
+ConID Socket2ConID (Int s) {
+  ConID id;
+  for (id = 0; id < MAX_CONNECTIONS; id++) {
+    if ((conRecs[id].sock == s) && (conRecs[id].inUse)) {
+      return id;
+    }
+  }
+  return -1;
+}
+
+Err StartTrans() {
+  Word err = 0;
+  UInt foo;
+ 
+  AppNetTimeout = 1000;
+
+  /* all connections are unused */
+  for (foo = 0; foo < MAX_CONNECTIONS; foo++) {
+    conRecs[foo].inUse = 0;    
+    conRecs[foo].left = 0;    
+    conRecs[foo].buffed = 0;    
+    conRecs[foo].seen = 0;    
+  }
+
+  /* open the net library */
+  err = SysLibFind("Net.lib", &AppNetRefnum);
+  if (err) {
+    return err;
+  }
+  err = NetLibOpen(AppNetRefnum, &foo);
+  return err;
+}
+
+Err StopTrans() {
+  Err err = 0;
+
+  if (AppNetRefnum) {
+    err = NetLibClose(AppNetRefnum, 0);
+  }
+  return err;
+}
+
+static Int get_data(Int s, Rcf rc, void *rcp) {
+  int read;
+  char *buf;
+
+  /* allocate us a buffer, but don't put it on the stack */
+  buf = (char *) MemPtrNew(1024);
+
+  read = read(s, buf, 1024);
+  if (read <= 0) {
+    conRecs[Socket2ConID(s)].sock = -1;
+    MemPtrFree(buf);  
+    return 1;
+  } else {
+    rc(s, buf, read, rcp);
+    MemPtrFree(buf);
+    return 0;
+  }
+}
+
+static Boolean SendData(Int * s, DataSize size, unsigned char * data) {
+  while (!send(*s, data, size, 0)) {    
+    *s = ReOpenConnection(Socket2ConID(*s));
+    if (*s == -1) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+Err SendChunk(ChunkPtr chunk) {
+  Err err;
+  Int s;
+  CompType compType = TRANS_NO_COMP;
+
+  if ((chunk->conID >= MAX_CONNECTIONS) || (chunk->conID < FIRST_CONNECTION)) {
+    return 1;
+  }
+
+  s = ConID2Socket(chunk->conID);
+
+  err = SendData(&s, sizeof(RequestID), (unsigned char *) 
+		 (&(chunk->requestID)));
+  if (err) {
+    /*ErrFatalDisplayIf(err, "Error sending data");*/
+    return err;
+  }
+  err = SendData(&s, sizeof(DataSize), (unsigned char *) (&(chunk->metaSize)));
+  if (err) {
+    /*ErrFatalDisplayIf(err, "Error sending data");*/
+    return err;
+  }
+  err = SendData(&s, sizeof(DataSize), (unsigned char *) (&(chunk->dataSize)));
+  if (err) {
+    /*ErrFatalDisplayIf(err, "Error sending data");*/
+    return err;
+  }
+  err = SendData(&s, sizeof(CompType), (unsigned char *) (&compType));
+  if (err) {
+    /*ErrFatalDisplayIf(err, "Error sending data");*/
+    return err;
+  }
+  if (chunk->metaSize) {
+    err = SendData(&s, chunk->metaSize, (unsigned char *) 
+		   MemHandleLock(chunk->metaHand));
+    MemHandleUnlock(chunk->metaHand);
+  
+    if (err) {
+      /*ErrFatalDisplayIf(err, "Error sending data");*/
+      return err;
+    }
+  }
+  if (chunk->dataSize) {
+    err = SendData(&s, chunk->dataSize, (unsigned char *) 
+		   MemHandleLock(chunk->dataHand));
+    MemHandleUnlock(chunk->dataHand);
+    if (err) {
+      /*ErrFatalDisplayIf(err, "Error sending data");*/
+      return err;
+    }
+  }
+  return 0;
+}
+
+static void NewChunkCallback(ConID conID, RequestID requestID, 
+			     DataSize metaSize, DataSize dataSize, 
+			     VoidHand metaHand, VoidHand dataHand, 
+			     ULong metaID, ULong dataID,
+			     VoidPtr ncp) {
+  ChunkHand ch = MemHandleNew(sizeof(Chunk));
+  transEvent te;
+
+  ChunkPtr c = (ChunkPtr) MemHandleLock(ch);
+
+  conRecs[conID].nextChunk++;
+
+  c->conID = conID;
+  c->requestID = requestID;
+  c->chunkID = conRecs[conID].nextChunk;
+
+  c->metaHand = metaHand;
+  c->metaSize = metaSize;
+  
+  c->dataHand = dataHand;
+  c->dataSize = dataSize;
+
+  c->dataID = dataID;
+  c->metaID = metaID;
+
+  MemHandleUnlock(ch);
+  
+  te.eType = transNewChunk;
+  te.data.newChunk.chunkHand = ch;
+  EvtAddEventToQueue((EventPtr) &te);
+}
+
+static void ReadCallback(Int s, unsigned char *buf, int amt, void *rcp) {
+  /* as in read.  is just size-left but this makes me happier...OK? */
+  ConID conID = Socket2ConID(s);
+
+  char *dataPtr;
+  int *signal = rcp;
+  int i;
+  ConRec *cr = &conRecs[conID];
+  UInt at = 0;
+
+  /* set break to debug */
+
+  while(amt) {
+    /* read the entire header before doing anything stupid */
+    if (cr->left == 0) {
+      if ((amt+cr->buffed) < HEADERSIZE) {
+	for (i = 0; i < amt; i++) {
+	  cr->headBuf[i+cr->buffed] = buf[i];
+	}
+	cr->buffed += amt;
+	amt = 0;
+      } else {
+	for (i = 0; cr->buffed+i < HEADERSIZE; i++) {      
+	  cr->headBuf[i+cr->buffed] = buf[i];
+	}
+	/* WE HAVE AN ENTIRE HEADER!  YAY!                              */
+	/* warning this may crash the machine because of word alignment */
+	/* but it doesn't seem to now... may later?                     */
+	cr->requestID = htonl(*((long*) (cr->headBuf+RIDLOC)));
+	cr->dataSize = htonl(*((long*) (cr->headBuf+SIZELOC)));
+	cr->metaSize = htonl(*((long*) (cr->headBuf+METALOC)));
+
+	if (cr->metaSize) {
+	  cr->left = cr->metaSize;
+	  cr->readingMeta = 1;
+	} else if (cr->dataSize) {
+	  cr->left = cr->dataSize;
+	  cr->readingMeta = 0;
+	} else {
+	  /* all we are is header! */
+	  cr->left = 0;
+	  if (signal) *signal = 1;
+	  NewChunkCallback(Socket2ConID(s), cr->requestID, 0, 
+			   0, NULL, NULL, 0, 0,
+			   NULL);
+	  break;
+	}
+
+	cr->seen = 0;	
+	if (cr->db) {
+	  if (cr->dataSize) {
+	    cr->dataBufHand = DmNewHandle(cr->db, cr->dataSize);
+	    DmAttachRecord(cr->db, &at, cr->dataBufHand, NULL);
+	    if (!(cr->dataBufHand)) {
+	      ErrFatalDisplayIf(1, "Trans: Out of memory");
+	      return;
+	    }
+	    ErrFatalDisplayIf(DmRecordInfo(cr->db, at, NULL, 
+					   &(cr->dataID), NULL), 
+			      "Trans: Error finding data record");
+	  }
+	  if (cr->metaSize) {
+	    cr->metaBufHand = DmNewHandle(cr->db, cr->metaSize);
+	    DmAttachRecord(cr->db, &at, cr->metaBufHand, NULL);
+	    if (!(cr->metaBufHand)) {
+	      ErrFatalDisplayIf(1, "Trans: Out of memory");
+	      return;
+	    }
+	    ErrFatalDisplayIf(DmRecordInfo(cr->db, at, NULL, 
+					   &(cr->metaID), NULL), 
+			      "Trans: Error finding data record");
+	  }
+	} else {
+	  if (cr->dataSize) {
+	    cr->dataBufHand = MemHandleNew(cr->dataSize);
+	    if (!(cr->dataBufHand)) {
+	      ErrFatalDisplayIf(1, "Out of memory");
+	      return;
+	    }
+	  }       
+	  if (cr->metaSize) {
+	    cr->metaBufHand = MemHandleNew(cr->metaSize);
+	    if (!(cr->metaBufHand)) {
+	      ErrFatalDisplayIf(1, "Out of memory");
+	      return;
+	    }
+	  }
+	}
+	buf += i;
+	amt -= i;
+	cr->buffed=0;
+      }
+    } else {
+      if (cr->readingMeta) {
+	if (amt >= cr->left) {
+	  dataPtr = MemHandleLock(cr->metaBufHand);
+	  if (cr->db) {
+	    DmWrite(dataPtr, cr->seen, buf, cr->left);
+	  } else {
+	    MemMove(dataPtr+cr->seen, buf, cr->left);
+	  }
+	  MemHandleUnlock(cr->metaBufHand);
+	  cr->seen = 0;
+	  amt -= cr->left;
+	  buf += cr->left;
+	  cr->left = cr->dataSize;	  
+	  cr->readingMeta = 0;
+	} else {
+	  dataPtr = MemHandleLock(cr->metaBufHand);
+	  if (cr->db) {
+	    DmWrite(dataPtr, cr->seen, buf, amt);
+	  } else {
+	    MemMove(dataPtr+cr->seen, buf, amt);
+	  }
+	  MemHandleUnlock(cr->metaBufHand);
+	  cr->seen += amt;
+	  cr->left -= amt;
+	  amt = 0;
+	}
+      } else {
+	/* reading the actual data now */
+	if (amt >= cr->left) {
+	  dataPtr = MemHandleLock(cr->dataBufHand);
+	  if (cr->db) {
+	    DmWrite(dataPtr, cr->seen, buf, cr->left);
+	  } else {
+	    MemMove(dataPtr+cr->seen, buf, cr->left);
+	  }
+	  MemHandleUnlock(cr->dataBufHand);
+	  NewChunkCallback(Socket2ConID(s), cr->requestID, cr->metaSize, 
+			   cr->dataSize, cr->metaBufHand, cr->dataBufHand,
+			   cr->metaID, cr->dataID, NULL);
+	  /* Signal that we created an event */
+	  if (signal) *signal = 1;
+	  cr->seen = 0;
+	  amt -= cr->left;
+	  buf += cr->left;
+	  cr->left = 0;
+	} else {
+	  dataPtr = MemHandleLock(cr->dataBufHand);
+	  if (cr->db) {
+	    DmWrite(dataPtr, cr->seen, buf, amt);
+	  } else {
+	    MemMove(dataPtr+cr->seen, buf, amt);
+	  }
+	  MemHandleUnlock(cr->dataBufHand);
+	  cr->seen += amt;
+	  cr->left -= amt;
+	  amt = 0;
+	}
+      }
+    }
+  }
+}
+
+ConID OpenConnection(char * host, unsigned short port, DmOpenRef db) { 
+    struct hostent *h;
+    ULong **addrp;
+    Word err;
+
+    ConID conID;
+    
+    for (conID = 0; conID < MAX_CONNECTIONS; conID++) {
+      if (!conRecs[conID].inUse) {
+	break;
+      }
+    }
+    if (conRecs[conID].inUse) {      
+      return -1;      
+    }
+
+    conRecs[conID].db = db;
+
+    h = gethostbyname(host);
+    if (!h) {
+      /*ErrFatalDisplayIf(1, host);*/
+      return -1;
+    }
+
+    conRecs[conID].saddr.sin_family = AF_INET;
+    conRecs[conID].saddr.sin_port = htons(port);
+
+    for(addrp=(ULong **)h->h_addr_list;*addrp;++addrp) {
+      ULong a = htonl(**addrp);
+      if (a != INADDR_ANY) {
+	conRecs[conID].saddr.sin_addr.s_addr = a;
+	break;
+      }
+    }
+
+    conRecs[conID].sock = socket(PF_INET, SOCK_STREAM, 0);
+    if (conRecs[conID].sock < 0) {      
+      /*ErrFatalDisplayIf(1, "Cannot create socket");*/
+      return -1;
+    }
+
+    err = connect(conRecs[conID].sock, 
+		  (struct sockaddr *)&conRecs[conID].saddr, 
+		  sizeof(conRecs[conID].saddr));
+    if (err) {
+      /*ErrFatalDisplayIf(1, "Could not connect");*/
+	return -1;
+    }
+
+    conRecs[conID].inUse = 1;
+
+    return conID;
+}
+
+void CloseConnection(ConID conID) {
+  if ((conID >= MAX_CONNECTIONS) || (conID < FIRST_CONNECTION)) {
+    return;
+  }
+  close(ConID2Socket(conID));
+  conRecs[conID].inUse = 0;
+}
+
+void CheckNetwork() {
+  Int maxSock = 0;
+  fd_set reads;
+  UInt ok;
+  int read;
+  int gotone = 0;
+  int i;
+
+  do {
+    /* Check if there's data available */
+    read = 0;
+    FD_ZERO(&reads);
+    FD_SET(STDIN_FILENO,&reads);
+    for (i = FIRST_CONNECTION; i < MAX_CONNECTIONS; i++) {
+      if (conRecs[i].inUse && (conRecs[i].sock > 0)) {
+	FD_SET(conRecs[i].sock,&reads);
+	maxSock = maxSock > conRecs[i].sock ? maxSock : conRecs[i].sock;
+      }
+    }
+    ok = NetLibSelect(AppNetRefnum, maxSock+1, &reads, NULL, NULL, 
+		      gotone ? 0 : evtWaitForever, &errno);
+    if (ok > 0) {
+      for (i = FIRST_CONNECTION; i < MAX_CONNECTIONS; i++) {
+	if (conRecs[i].inUse && FD_ISSET(conRecs[i].sock, &reads)) {
+	  read = 1;
+	  get_data(conRecs[i].sock, ReadCallback, &gotone);
+	}
+      }
+    }
+  } while (read);
+}
+
+@
+
+
+1.4
+log
+@changed trans so that it ataches records to databases so they won't
+end up leading to stale handles in database memory.
+
+Also created a DestoryChunk funciton as freeing a chunk as become
+kinda messy now.
+@
+text
+@a63 4
+  if ((c->conID < FIRST_CONNECTION) || (c->conID >= MAX_CONNECTIONS)) {
+    return 1;
+  }
+
+d66 3
+d72 1
+d74 2
+d77 1
+a77 1
+      if (err) return err;
+d79 1
+a79 1
+      if (err) return err;
+d82 2
+d85 1
+a85 1
+      if (err) return err;      
+d87 1
+a87 1
+      if (err) return err;      
+d92 1
+a92 1
+      if (err) return err;      
+d96 1
+a96 1
+      if (err) return err;      
+d101 1
+a101 1
+  if (err) return err;
+d250 1
+a250 1
+			     UInt metaID, UInt dataID,
+d333 1
+a333 1
+	      ErrFatalDisplayIf(1, "Out of memory");
+a338 1
+
+d344 1
+a344 1
+	      ErrFatalDisplayIf(1, "Out of memory");
+@
+
+
+1.3
+log
+@Fixed callbacks so that they correctly return when a net event is posted
+@
+text
+@d6 6
+a11 5
+/* header is 32 bit unsigned words long */
+/* request id                           */
+/* size                                 */
+/* compression type                     */
+#define HEADERSIZE 12
+d13 5
+a17 2
+#define SIZELOC 4
+#define COMPLOC 8
+a18 2
+#define ConID2Socket(conID) ((Int) conID)
+#define Socket2ConID(s) (ConID) s
+d23 33
+d58 70
+d132 11
+a142 1
+ /* open the net library */
+d162 4
+a165 1
+  static unsigned char buf[1024];
+d168 4
+a171 3
+  if (read == 0) {
+    ErrNonFatalDisplayIf(1, "Connection Closed!");
+    return 0;
+d174 2
+a175 1
+    return s;
+d179 6
+a184 5
+static Err SendData(Int s, DataSize size, unsigned char * data) {
+  if (send(s, data, size, 0)) {
+    return 0;
+  } else {
+    return TRANS_ERR_CON_CLOSED;
+d186 1
+d194 3
+d200 1
+a200 1
+  err = SendData(s, sizeof(RequestID), (unsigned char *) 
+d203 1
+a203 1
+    ErrFatalDisplayIf(err, "Error sending data");
+d206 1
+a206 1
+  err = SendData(s, sizeof(DataSize), (unsigned char *) (&(chunk->size)));
+d208 1
+a208 1
+    ErrFatalDisplayIf(err, "Error sending data");
+d211 1
+a211 1
+  err = SendData(s, sizeof(CompType), (unsigned char *) (&compType));
+d213 1
+a213 1
+    ErrFatalDisplayIf(err, "Error sending data");
+d216 1
+a216 3
+  err = SendData(s, chunk->size, (unsigned char *) 
+		 MemHandleLock(chunk->dataHand));
+  MemHandleUnlock(chunk->dataHand);
+d218 1
+a218 1
+    ErrFatalDisplayIf(err, "Error sending data");
+d221 19
+d243 5
+a247 3
+static void NewChunkCallback(ConID conID, RequestID requestID, DataSize size, 
+			     VoidHand dataHand, VoidPtr ncp) {
+  static ChunkID chunkID = 0;
+d253 1
+a253 1
+  chunkID++;
+d257 4
+a260 1
+  c->chunkID = chunkID;
+d263 5
+a267 1
+  c->size = size;
+a272 1
+  
+a275 6
+  static VoidHand dataBufHand;
+  static unsigned char headBuf[HEADERSIZE];
+  static int buffed;
+  static DataSize size = 0;
+  static RequestID requestID = 0;
+  static DataSize left = 0;
+d277 1
+a277 1
+  static DataSize red  = 0;
+d282 4
+d288 79
+a366 5
+  /* read the entire header before doing anything stupid */
+  if (left == 0) {
+    if ((amt+buffed) < HEADERSIZE) {
+      for (i = 0; i < amt; i++) {
+	headBuf[i+buffed] = buf[i];
+a367 2
+      buffed += amt;
+      amt = 0;
+d369 57
+a425 2
+      for (i = 0; buffed+i < HEADERSIZE; i++) {      
+	headBuf[i+buffed] = buf[i];
+a426 33
+      /* warning this may crash the machine because of word alignment */
+      /* but it doesn't seem to now... may later?                     */
+      requestID = htonl(*((long*) (headBuf+RIDLOC)));
+      size = left = htonl(*((long*) (headBuf+SIZELOC)));
+      red = 0;
+      dataBufHand = MemHandleNew(size);
+      if (!dataBufHand) {
+	ErrFatalDisplayIf(!dataBufHand, "Out of memory");
+	return;
+      }
+      buf += i;
+      amt -= i;
+      buffed=0;
+    }
+  } else {
+    if (amt >= left) {
+      dataPtr = MemHandleLock(dataBufHand);
+      MemMove(dataPtr+red, buf, left);
+      MemHandleUnlock(dataBufHand);
+      NewChunkCallback(Socket2ConID(s), requestID, size, dataBufHand, NULL);
+      /* Signal that we created an event */
+      if (signal) *signal = 1;
+      red = 0;
+      amt -= left;
+      buf += left;
+      left = 0;
+    } else {
+      dataPtr = MemHandleLock(dataBufHand);
+      MemMove(dataPtr+red, buf, amt);
+      MemHandleUnlock(dataBufHand);
+      red += amt;
+      left -= amt;
+      amt = 0;
+a428 1
+  }
+d431 1
+a431 1
+ConID OpenConnection(char * host, unsigned short port) { 
+a432 1
+    struct sockaddr_in sockaddr; 
+d435 13
+a447 1
+    Int sock;
+d451 2
+a452 2
+	ErrFatalDisplayIf(1, "Can't get hostname");
+	return 0;
+d455 2
+a456 2
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_port = htons(port);
+d461 1
+a461 1
+	sockaddr.sin_addr.s_addr = a;
+d466 4
+a469 4
+    sock = socket(PF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+	ErrFatalDisplayIf(1, "Cannot create socket");
+	return 0;
+d472 3
+a474 1
+    err = connect(sock, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
+d476 2
+a477 2
+	ErrFatalDisplayIf(1, "Could not connect");
+	return 0;
+d480 3
+a482 1
+    return Socket2ConID(sock);
+d486 3
+d490 1
+d493 2
+a494 2
+void CheckNetwork(ConID conID) {
+  Int sock;
+d497 4
+a500 3
+      
+  sock = ConID2Socket(conID);
+  
+d503 7
+a509 9
+    if (sock >= 0) {
+      int gotone = 0;
+      FD_ZERO(&reads);
+      FD_SET(STDIN_FILENO,&reads);
+      FD_SET(sock,&reads);
+      ok = NetLibSelect(AppNetRefnum, sock+1, &reads, NULL, NULL, 
+			evtWaitForever, &errno);
+      if (FD_ISSET(sock,&reads)) {
+	sock = get_data(sock, ReadCallback, &gotone);
+a510 1
+      if (gotone) break;
+d512 11
+a522 1
+  } while (FD_ISSET(sock,&reads));  
+d524 1
+@
+
+
+1.2
+log
+@trans.c now doesn't include actual code to run a program.
+That has been moved to transtest.c
+@
+text
+@d136 1
+d139 1
+a139 1
+
+d172 2
+a186 2
+  if (amt) {
+    ReadCallback(s, buf, amt, rcp);
+d243 1
+d250 1
+a250 1
+	sock = get_data(sock, ReadCallback, NULL);
+d252 1
+@
+
+
+1.1
+log
+@transport works as a standalone program that sends and recieves chunks
+@
+text
+@a0 2
+#pragma pack(2)
+
+a3 1
+#include "transRsc.h"
+a5 3
+#define PROXYHOST "mirage.cs.berkeley.edu"
+#define PROXYPORT 4444
+
+d15 3
+a20 1
+static Int conID = -1;
+d23 15
+a37 26
+#ifdef DEBUG
+extern long data_start, bss_start;
+static void StartDebug(void)
+{
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+        lea data_start(%%a4),%%a1
+        move.l %%a1,%%d2
+        lea bss_start(%%a4),%%a1
+        move.l %%a1,%%d1
+        lea start(%%pc),%%a0
+        move.l %%a0,%%d0
+        sub.l #start, %%d0
+        move.l #0x12BEEF34, %%d3
+        trap #8
+        move.l #0, %%d3
+        move.l #0, %%d0
+        move.l #0, %%d1
+        move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+d39 4
+a43 1
+#endif
+d70 1
+a70 1
+  DWord compType = TRANS_NO_COMP;
+d75 2
+a76 1
+  err = SendData(s, sizeof(RequestID), (unsigned char *) (&(chunk->requestID)));
+a108 2
+  printf("GOT CHUNKS (size = %ld)?\n", size);
+  
+a227 85
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e) {
+  FormPtr frm;
+  Word    formId;
+  Boolean handled = false;
+  
+  if (e->eType == frmLoadEvent) {
+    formId = e->data.frmLoad.formID;
+    frm = FrmInitForm(formId);
+    FrmSetActiveForm(frm);
+    
+    switch(formId) {
+    case MainForm:
+      FrmSetEventHandler(frm, MainFormHandleEvent);
+      break;
+    }
+    handled = true;
+  } else if (e->eType == transNewChunk) {
+    transEventPtr te = (transEventPtr) e;
+    ChunkPtr c = MemHandleLock(te->data.newChunk.chunkHand);
+
+    printf ("Got a chunk!\n");
+    SendChunk(c);
+    MemHandleFree (c->dataHand);
+    MemHandleUnlock(te->data.newChunk.chunkHand);
+    MemHandleFree(te->data.newChunk.chunkHand);
+    handled = true;
+  }
+  
+  return handled;
+}
+
+/* Get preferences, open (or create) app database */
+static Word StartApplication(void)
+{
+  Word err;
+  UInt foo;
+
+  /* open the net library */
+  err = SysLibFind("Net.lib", &AppNetRefnum);
+  ErrFatalDisplayIf (err, "Cannot locate network library");
+  err = NetLibOpen(AppNetRefnum, &foo);
+  ErrFatalDisplayIf(err, "NetLibOpen failed");
+  
+  conID = OpenConnection(PROXYHOST, PROXYPORT);
+  if (conID > 0) {
+    FrmGotoForm(MainForm);
+    return 0;
+  }
+  else {
+    return 1;
+  }
+}
+
+a229 61
+}
+
+/* Save preferences, close forms, close app database */
+static void StopApplication(void) {
+  Word err;
+      
+  if (conID >= 0) {
+    CloseConnection(conID);
+  }
+  if (AppNetRefnum) {
+    err = NetLibClose(AppNetRefnum, 0);
+    ErrFatalDisplayIf(err, "NetLibClose failed");
+  }
+  FrmSaveAllForms();
+  FrmCloseAllForms();
+}
+
+
+
+
+/* The main event loop */
+static void EventLoop(void) {
+  Word err;
+  EventType e;
+  
+  do {
+    Long timeout = evtWaitForever;
+    /* Check if there's data available */
+    
+    CheckNetwork(conID);
+
+    EvtGetEvent(&e, timeout);
+    
+    if (! SysHandleEvent (&e))
+      if (! MenuHandleEvent (NULL, &e, &err))
+	if (! ApplicationHandleEvent (&e))
+	  FrmDispatchEvent (&e);
+    
+  } while (e.eType != appStopEvent);   
+}
+
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags) {
+  Word err;
+  
+  if (cmd == sysAppLaunchCmdNormalLaunch) {
+    
+#ifdef DEBUG
+  StartDebug();
+#endif
+	
+  err = StartApplication();
+  if (err) return err;
+  
+  EventLoop();
+  StopApplication();
+
+  } else {
+    return sysErrParamErr;
+  }
+
+  return 0;
+@

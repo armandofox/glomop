@@ -1,0 +1,637 @@
+head	1.6;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	96.10.25.00.24.57;	author fox;	state dead;
+branches;
+next	1.5;
+
+1.5
+date	96.10.22.20.02.19;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.10.12.02.57.21;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.10.11.02.29.17;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.11.00.43.34;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.09.00.59.57;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.09.00.59.57;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@/*
+ *  thr_queue.c
+ *  Cache of running threads that are spin-blocked waiting on a
+ *  condition.  When we need a new thread to do some work, we select one
+ *  by signaling its condition variable.
+ */
+
+#include <proxy.h>
+#include <string.h>
+#include <unistd.h>
+
+static pthread_t        threadids[MAX_THREADS];
+static task_t *         task_queue[MAX_THREADS];
+
+static int _res;                /* for reporting errors;used by THR_OP macro */
+
+#define DEFAULT_CONDATTR (const pthread_condattr_t *)NULL
+#define DEFAULT_MTXATTR (const pthread_mutexattr_t *)NULL
+
+#define QUEUE_EMPTY() (qhead == qtail)
+#define QUEUE_FULL()  ((qtail+1) % MAX_THREADS == qhead)
+
+/*
+ *  Queue head and queue tail protected by mutex
+ */
+static pthread_mutex_t   mtx_queue;
+static pthread_cond_t    cond_queue;
+static int               qhead, qtail;
+
+/*
+ *  private forward declarations
+ */
+
+static void *   thread_go_proc(void *thrindex_cast_to_void);
+static task_t * get_task(int thrindex);
+/*
+ *  make_threads
+ *  Args: none
+ *  Returns: 0 success, otherwise error code from errno.h
+ *  Description:
+ *    Create a condition variable, a bunch of threads, a task queue
+ *  (circular FIFO) protected by a mutex.
+ *  The dispatcher will add a task to the queue under mutex and signal
+ *  the queue's condition variable.  A thread will wake up and remove work
+ *  from the queue, and signal a different condition variable to put its
+ *  result on the result queue.
+ */
+
+int
+make_threads(void)
+{
+  int i;
+  pthread_attr_t default_thread_attr;
+
+  
+  /*
+   *  create the queue.
+   *  Queue invariants:
+   *  - qhead is index of slot containing next task to be done
+   *  - qtail is index of slot beyond which there are no more tasks
+   *  - if qhead==qtail, there are no tasks to be done.
+   *  - if (qhead+1)%qsize==qtail, the queue is full; a task must be
+   *  removed before one can be added.
+   */
+
+  qhead = qtail = 0;
+
+  THR_OP("attr init", pthread_attr_init(&default_thread_attr));
+  THR_OP("attr set",
+         pthread_attr_setscope(&default_thread_attr, PTHREAD_SCOPE_SYSTEM));
+  THR_OP("condinit queue", pthread_cond_init(&cond_queue, DEFAULT_CONDATTR));
+  THR_OP("mtxinit queue", pthread_mutex_init(&mtx_queue, DEFAULT_MTXATTR));
+
+  for (i=0; i < MAX_THREADS; i++) {
+    THR_OP("Thread create",
+           pthread_create(&threadids[i], &default_thread_attr,
+           thread_go_proc,
+           (void *)i));
+  }
+
+  proxy_debug_3(DBG_THREAD, "Created %d threads", (void *)MAX_THREADS);
+  return 0;
+}
+
+/*
+ *  thread_go_proc is the entry point for all threads.  A thread will
+ *  enter this routine, block on a condition variable which is signaled
+ *  when there's work for the thread to do, wake up and do its work,
+ *  then reblock on the condition variable.  The arg is the index (0 to
+ *  MAX_THREADS-1) of this worker thread.
+ */
+
+static void *
+thread_go_proc(void *arg)
+{
+  int thrindex = (int)arg;
+  task_t *curr_task;
+  
+  while (1) {
+    
+    /* wait for a task to become available */
+
+    curr_task = get_task(thrindex);
+
+    proxy_debug_4(DBG_THREAD, "Thread %d working on task %lu...",
+                  thrindex, curr_task->task_id);
+    {
+      int i;
+      for (i = 0; i < 15e6; i++)
+        ;
+    }
+
+    /*
+     *  Done working, requeue ourselves
+     */
+
+    curr_task->task_result_ptr = (void *)(curr_task->task_id);
+
+    proxy_debug_3(DBG_THREAD, "Thread %d rejoining pool", thrindex);
+  }
+  /* should never get here */
+  return ((void *)0);
+}
+
+/*
+ *  get_task
+ *  Under mutex, check the queue for work; if no work, sleep and wait
+ *  for dispatcher to signal condition variable indicating that there is
+ *  new work.
+ *  When work is found, move the qhead under mutex to dequeue the task,
+ *  and return the pointer to the new task structure.
+ */
+
+static task_t *
+get_task(int thrindex)
+{
+  task_t *task = NULL;
+
+  THR_OP("lock to check queue", pthread_mutex_lock(&mtx_queue));
+  while (QUEUE_EMPTY()) {
+    /* no work to do */
+    proxy_debug_3(DBG_THREAD, "Thr %d Waiting for work\n", thrindex);
+    THR_OP("waiting for work", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_EMPTY());
+  task = task_queue[qhead++];
+  qhead %= MAX_THREADS;
+  /*
+   *  Signal condition variable in case other threads want to grab it,
+   *  or in case dispatcher is waiting for a queue slot.
+   */
+  THR_OP("signal queue", pthread_cond_signal(&cond_queue));
+  THR_OP("unlock queue", pthread_mutex_unlock(&mtx_queue));
+  assert(task != (task_t *)NULL);
+  return(task);
+}
+
+/*
+ *  dispatch
+ *  Args: task ID
+ *  Returns: 0 success, otherwise errno
+ *  Thread-safe: no
+ *  Description:
+ *    There is some work to do, so pick an available thread to do it.
+ *  If no threads are available, wait for one to become available (it
+ *  will signal the condition variable protected by the same mutex that
+ *  protects the threads-available counter).
+ *
+ */
+
+int
+dispatch(task_t *task_state)
+{
+  /*
+   *  Should periodically check the value of did_stall to determine how
+   *  many consecutive thread-dispatches had to wait for a thread to be
+   *  available; when it exceeds some threshold, spawn a new thread.
+   */
+
+  THR_OP("dispatcher lock queue", pthread_mutex_lock(&mtx_queue));
+  while (QUEUE_FULL()) {
+    /* no queue slots available! wait for a thread to complete */
+    proxy_debug_2(DBG_THREAD, "dispatcher waiting for queueslot");
+    THR_OP("dispatcher wait for q", pthread_cond_wait(&cond_queue, &mtx_queue));
+  }
+  assert(! QUEUE_FULL());
+  assert(task_state != (task_t *)NULL);
+  /*
+   *  put the task in the queue and signal any idling threads
+   */
+
+  task_queue[qtail++] = task_state;
+  qtail %= MAX_THREADS;
+  
+  /* signal a thread - somebody will wake up to do the work. */
+  proxy_debug_3(DBG_THREAD, "task %lu queued, signaling a thread...\n",
+                task_state->task_id);
+  THR_OP("signal wakeup", pthread_cond_signal(&cond_queue));
+  THR_OP("Unlock queue", pthread_mutex_unlock(&mtx_queue));
+  return (0);
+}
+
+@
+
+
+1.5
+log
+@thread task queue works better now - a queue of tasks rather than a
+queue of threads, duh
+@
+text
+@@
+
+
+1.4
+log
+@Threads have signs of life
+@
+text
+@d10 1
+a11 2
+static pthread_cond_t   cond_wakeup;
+static pthread_mutex_t  mtx_wakeup[MAX_THREADS];
+d13 1
+d17 5
+a21 6
+/*
+ *  Threads-available counter, mutex, condition var
+ */
+static int nthreads_avail;
+static pthread_cond_t cond_threads_avail;
+static pthread_mutex_t mtx_threads_avail;
+d24 1
+a24 1
+ *  Shared area for placing data to pass to woken-up thread
+d26 3
+a28 2
+
+static void *shared;
+d34 2
+a35 3
+static void *thread_go_proc(void *);
+static void thr_enqueue(int);
+
+d41 6
+a46 6
+ *    Create a condition variable, a bunch of threads, and a mutex per
+ *  thread.  Initially all mutexes are locked by this (main) thread.
+ *  Each worker thread will initially spin on the condition variable
+ *  (for pthreads, condition variable wakeup has a side effect of
+ *  acquiring a mutex), immediately release the "dummy" mutex so the
+ *  dispatcher can grab it again, do some work, and go back to spinning.
+d53 1
+d55 18
+a72 6
+  THR_OP("condinit wakeup",
+         pthread_cond_init(&cond_wakeup, (const pthread_condattr_t *)NULL));
+  THR_OP("condinit threads_avail",
+         pthread_cond_init(&cond_threads_avail,  (const pthread_condattr_t *)NULL));
+  THR_OP("mutexinit threads_avail",
+         pthread_mutex_init(&mtx_threads_avail, (const pthread_mutexattr_t *)NULL));
+a74 2
+    THR_OP("Mutex create",
+           pthread_mutex_init(&mtx_wakeup[i], (const pthread_mutexattr_t *)NULL));
+d76 1
+a76 1
+           pthread_create(&threadids[i], (const pthread_attr_t *)NULL,
+a80 1
+  nthreads_avail = 0;
+a95 1
+  int res;
+d97 2
+a98 14
+  int locked = 0;
+
+  /*
+   *  This mutex lock should never fail, since each thread only tries to
+   *  lock its own mutex.
+   */
+  THR_OP("mtx_wakeup lock", pthread_mutex_lock(&mtx_wakeup[thrindex]));
+
+  /*
+   *  When first spawned, add ourselves to the available thread pool.
+   */
+  proxy_debug_3(DBG_THREAD, "Thr %d adding self to pool", thrindex);
+  thr_enqueue(thrindex);
+
+d101 1
+a101 1
+    proxy_debug_3(DBG_THREAD, "Thread %d idling", thrindex);
+d103 1
+a103 9
+    /*
+     *  Note we could use pthread_cond_timedwait to time out idling,
+     *  thus detect whether we could get by with fewer threads.
+     *  Conversely, when dispatching a thread, we can record how often
+     *  it is the case that no threads are available, and use this as a
+     *  hint to spawn a new worker thread.
+     */
+    THR_OP("cond_wait wakeup",
+           pthread_cond_wait(&cond_wakeup, &mtx_wakeup[thrindex]));
+d105 7
+a111 3
+    proxy_debug_3(DBG_THREAD, "Thread %d working...", thrindex);
+    for (res = 0; res<1e5; res++)
+      locked++;
+d117 2
+a119 1
+    thr_enqueue(thrindex);
+d126 33
+d172 1
+a172 1
+dispatch(void *task_state)
+a173 2
+  static int did_stall = 0;
+
+d180 11
+a190 2
+  THR_OP("Lock threads_avail", pthread_mutex_lock(&mtx_threads_avail));
+  assert(nthreads_avail >= 0);
+d192 2
+a193 2
+  if (nthreads_avail != 0)
+    did_stall = 0;
+d195 5
+a199 12
+  while (nthreads_avail == 0) {
+    did_stall++;
+    proxy_debug_2(DBG_THREAD, "Waiting for thread to be available");
+    THR_OP("wait for avail thread",
+           pthread_cond_wait(&cond_threads_avail, &mtx_threads_avail));
+  }
+
+  /* signal a thread - somebody will wake up. */
+  proxy_debug_2(DBG_THREAD, "Signaling a thread...\n");
+  nthreads_avail--;
+  THR_OP("Unlock threads avail", pthread_mutex_unlock(&mtx_threads_avail));
+  THR_OP("signal wakeup", pthread_cond_signal(&cond_wakeup));
+a200 15
+}
+
+/*
+ *  Enqueue:  When a thread finishes doing
+ *  work, it rejoins the pool and increments the threads_avail counter.
+ */
+
+static void
+thr_enqueue(int thrindex)
+{
+  THR_OP("Lock threads_avail", pthread_mutex_lock(&mtx_threads_avail));
+  nthreads_avail++;
+  /* In case the dispatcher is waiting for a thread to become avail...  */
+  THR_OP("Signaling dispatcher", pthread_cond_signal(&cond_threads_avail));
+  THR_OP("Unlock threads_avail", pthread_mutex_unlock(&mtx_threads_avail));
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d11 3
+a13 3
+static pthread_cond_t cond_wakeup;
+static pthread_mutex_t mtx_wakeup[MAX_THREADS];
+static int nthreads_avail;
+d18 8
+a25 1
+ *  Thread queue and related mutexes/condition variables
+d27 2
+a28 4
+static pthread_t threadids[MAX_THREADS];
+static qhead = 0, qtail = MAX_THREADS;
+static pthread_cond_t cond_queue;
+static pthread_mutex_t mtx_queue;
+d35 1
+a53 1
+  int res;
+d57 4
+a60 4
+  THR_OP("condinit queue",
+         pthread_cond_init(&cond_queue,  (const pthread_condattr_t *)NULL));
+  THR_OP("mutexinit queue",
+         pthread_mutex_init(&mtx_queue, (const pthread_mutexattr_t *)NULL));
+d71 1
+a71 1
+  nthreads_avail = MAX_THREADS;
+a94 1
+  proxy_debug_3(DBG_THREAD, "Thread %d acquiring mutex...", thrindex);
+d97 6
+a116 6
+    /*
+     *  First dequeue ourselves
+     */
+
+    thr_dequeue(thrindex);
+
+d125 1
+d133 2
+a134 2
+ *  thr_dispatch
+ *  Args: none
+d136 1
+d139 3
+a141 4
+ *  Reduce the count of the number of available threads by 1.  If this
+ *  count is zero, we have to block on some thread becoming available:
+ *  pick a random thread and wait for it to unlock its mutex.  (Shoudl
+ *  really use this as hint to spawn a new thread.)
+d146 1
+a146 1
+thr_dispatch(void)
+d148 1
+a148 1
+  int got_thread = 0;
+d150 17
+a166 12
+  while (! got_thread) {
+    THR_OP("Lock dequeue", pthread_mutex_lock(&mtx_queue));
+    if ((got_thread = threadids[qhead]) == -1) {
+      /* wait for a thread to become available */
+      THR_OP("Wait for thread",
+             pthread_cond_wait(&cond_queue, &mtx_queue));
+      continue;
+    } else {
+      /* got a thread: dequeue it and signal it */
+      threadids[qhead++] == -1;
+      break;
+    }
+d168 5
+a172 6
+  THR_OP("Unlock dequeue", pthread_mutex_unlock(&mtx_queue));
+  proxy_debug_3("Signaling thread %d", got_thread);
+  
+  /* unblock a thread, chosen arbitrarily by the scheduler */
+  proxy_debug_3("Dispatcher: waiting for a thread to be available");
+  
+a173 1
+  
+d178 2
+a179 10
+ *  Enqueue and dequeue.  When a thread is signaled to begin work,it
+ *  removes itself from the front of the queue; when it finishes doing
+ *  work, it adds itself to the back of the queue.
+ *
+ *  Invariants:
+ *    - qhead is the queue index of the thread being dispatched
+ *    - (qtail mod MAX_THREADS) is the queue index of the next slot
+ *      available for writing the queue
+ *    - qhead, qtail, and the queue itself (threadids[]) are modified
+ *      only in these routines and only under mutex mtx_queue
+d185 5
+a189 13
+  THR_OP("Lock queue", pthread_mutex_lock(&mtx_queue));
+  threadids[qtail++] = thrindex;
+  qtail %= MAX_THREADS;
+  THR_OP("Unlock queue", pthread_mutex_unlock(&mtx_queue));
+}
+                                                                
+static void
+thr_dequeue(int thrindex)
+{
+  THR_OP("Lock dequeue", pthread_mutex_lock(&mtx_queue));
+  threadids[qhead++] = -1;
+  qhead %= MAX_THREADS;
+  THR_OP("Unlock dequeue", pthread_mutex_unlock(&mtx_queue));
+d191 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d11 1
+a11 2
+static pthread_cond_t wakeup;
+static pthread_t threadids[MAX_THREADS];
+d15 10
+d50 6
+a55 5
+  res = pthread_cond_init(&wakeup, (const pthread_condattr_t *)NULL);
+  if (res != 0) {
+    proxy_errlog_2("Condinit failed: %s", strerror(res));
+    return (res);
+  }
+d58 6
+a63 13
+    if ((res = pthread_mutex_init(&mtx_wakeup[i],
+                                 (const pthread_mutexattr_t *)NULL))) {
+      proxy_errlog_2("Mutex creation failed: %s", strerror(res));
+      return (res);
+    }
+    res = pthread_create(&threadids[i],
+                         (const pthread_attr_t *)NULL,
+                         thread_go_proc,
+                         (void *)i);
+    if (res != 0) {
+      proxy_errlog_2("Thread creation failed: %s", strerror(res));
+      return (res);
+    }
+d67 1
+a67 1
+  proxy_debug(DBG_THREAD, "Created %d threads", (void *)MAX_THREADS);
+d86 7
+d95 1
+a95 10
+    /*
+     *  This mutex lock should never fail, since each thread only tries to
+     *  lock its own mutex.
+     */
+    if ((res = pthread_mutex_lock(&mtx_wakeup[thrindex]))) {
+      proxy_errlog_2("mutex_lock failed: %s", strerror(res));
+      return (res);
+    }
+
+    proxy_debug(DBG_THREAD, "Thread %d idling", thrindex);
+d104 6
+a109 4
+    if ((res = pthread_cond_wait(&wakeup, &mtx_wakeup[thrindex])) != 0) {
+      proxy_errlog_2("cond_wait failed: %s", strerror(res));
+      proxy_shutdown();
+    }
+d111 1
+a111 1
+    /* successful return from cond_wait unlocks the mutex...*/
+d113 1
+a113 1
+    proxy_debug(DBG_THREAD, "Thread %d working...", thrindex);
+d116 6
+d124 1
+a124 1
+  return (0);
+d143 17
+a159 1
+  int res;
+d162 4
+a165 4
+  if ((res = pthread_cond_signal(&wakeup)) != 0) {
+    proxy_errlog_2("Cond_signal failed: %s", strerror(res));
+    exit(1);
+  }
+d169 12
+d182 17
+a198 1
+        
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d12 22
+a33 3
+static pthread_mutex_t dummy[MAX_THREADS];
+static pthread_mutex_t mutex_nthreads;
+static int nthreads;
+d40 95
+d136 4
+a139 3
+  for (i=0; i < MAX_THREADS; i++) {
+    if ((res = pthread_mutex_init(&dummy[i], (pthread_mutex_attr *) NULL)) != 0)
+      proxy_errlog(strerror(res));
+d141 2
+a143 1
+  mutex_nthreads = MAX_THREADS;
+d145 1
+a145 1
+  if ((res = pthread_cond_init(&wakeup, 
+@
+
+
+1.1.1.1
+log
+@front end of proxy: main control code
+@
+text
+@@

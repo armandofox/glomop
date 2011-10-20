@@ -1,0 +1,255 @@
+head	1.2;
+access;
+symbols
+	Yatin-final:1.2
+	Yatin:1.2.0.6
+	pre-yatin-merge:1.2
+	transend-beta2:1.2
+	fox-dev:1.2
+	playback-ng:1.2
+	transend-beta-latest:1.2
+	Aggregators:1.2
+	NoAggregators:1.2
+	iang:1.2.0.4
+	transend-beta:1.2.0.2
+	SOSP:1.1
+	merged_preintegrate:1.1
+	heisenbug:1.1
+	PRE_INTEGRATION:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.04.17.21.45.07;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.03.11.05.28;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@config.h is now config_tr.h
+@
+text
+@/*
+ *     Author: Steve Gribble
+ *       Date: Nov. 19th, 1996
+ *       File: showtrace.c
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <limits.h>
+#include <math.h>
+
+#include "config_tr.h"
+#include "logparse.h"
+#include "utils.h"
+
+typedef struct timestamp_st {
+  UINT32 secs;
+  UINT32 usecs;
+  unsigned char start_or_end;    /* 0 for start of interval, 1 for end */
+} log_ts;
+int  tsComparator(void *node, void *comparison);
+void tsFree(void *freeMe);
+void treeDump(AVL_tree dumpMe);
+
+static int nump = 0;
+
+void stat_init(int num_to_dump);
+void stat_add(log_ts *addme, int nump);
+void stat_forcedump(void);
+
+int main(int argc, char **argv)
+{
+  lf_entry lfntree;
+  AVL_tree timestamp_tree = NULL;
+  int      ret, num=0;
+  log_ts  *entry1, *entry2;
+
+  while(1) {
+    if ((num/1000)*1000 == num)
+      fprintf(stderr, "at %d..\n", num);
+    if ((ret = lf_get_next_entry(0, &lfntree, 0)) != 0) {
+      if (ret == 1)  /* EOF */
+          break;  /* out of the while */
+      fprintf(stderr, "Failed to get next entry.\n");
+      exit(1);
+    }
+    num++;
+    if ((lfntree.crs == 0xFFFFFFFF) || (lfntree.cru == 0xFFFFFFFF)) {
+      free(lfntree.url);
+      continue;
+    }
+    if ((lfntree.sls == 0xFFFFFFFF) || (lfntree.slu == 0xFFFFFFFF)) {
+      free(lfntree.url);
+      continue;
+    }
+    entry1 = (log_ts *) malloc(sizeof(log_ts));
+    if (entry1 == NULL) {
+      fprintf(stderr, "Out of memory while allocating entry for tree.\n");
+      exit(1);
+    }
+    entry1->secs = ntohl(lfntree.crs);
+    entry1->usecs = ntohl(lfntree.cru);
+    entry1->start_or_end = 0;
+    entry2 = (log_ts *) malloc(sizeof(log_ts));
+    if (entry2 == NULL) {
+      fprintf(stderr, "Out of memory while allocating entry for tree.\n");
+      exit(1);
+    }
+    entry2->secs = ntohl(lfntree.sls);
+    entry2->usecs = ntohl(lfntree.slu);
+    entry2->start_or_end = 1;
+    if (Tree_Add(&timestamp_tree, (void *) entry1, tsComparator) != 0)
+      fprintf(stderr, "Couldn't add %lu, %lu\n",
+	      entry1->secs, entry1->usecs);
+    if (Tree_Add(&timestamp_tree, (void *) entry2, tsComparator) != 0)
+      fprintf(stderr, "Couldn't add %lu, %lu\n",
+	      entry2->secs, entry2->usecs);
+    free(lfntree.url);
+  }
+  fprintf(stderr, "num is %d\n", num);
+  stat_init(50);
+  treeDump(timestamp_tree);
+  stat_forcedump();
+  exit(0);
+}
+
+int tsComparator(void *node, void *comparison)
+{
+  log_ts *one, *two;
+
+  if (node == NULL)
+    return 0;
+  if (comparison == NULL)
+    return 0;
+  
+  one = (log_ts *) node;
+  two = (log_ts *) comparison;
+
+  if (one->secs > two->secs)
+    return 1;
+  if (one->secs < two->secs)
+    return -1;
+  if (one->usecs > two->usecs)
+    return 1;
+  if (one->usecs < two->usecs)
+    return -1;
+  return 0;
+}
+
+void tsFree(void *freeMe)
+{
+  log_ts *one;
+
+  one = (log_ts *) freeMe;
+  if (one != NULL)
+    free(one);
+}
+
+void treeDump(AVL_tree dumpMe)
+{
+   log_ts *next;
+   
+   if (dumpMe == NULL)
+      return;
+   
+   treeDump(dumpMe->left);
+   next = (log_ts *) dumpMe->data;
+   if (next->start_or_end == 0)
+     nump++;
+   else
+     nump--;
+
+   stat_add(next, nump);
+   /*fprintf(stdout, "%lu %lu %d\n", next->secs, next->usecs, nump);*/
+
+   treeDump(dumpMe->right);
+}
+
+
+static int num_till_dump;
+static int num_so_far;
+static long long int secs_total;
+static long long int secs_sq_total;
+static long long int nump_total;
+static long long int nump_sq_total;
+static int max_nump;
+static int min_nump;
+
+void stat_init(int num_to_dump)
+{
+  num_till_dump = num_to_dump;
+  num_so_far = 0;
+  max_nump = 0;
+  min_nump = INT_MAX;
+  secs_total = nump_total = 0LL;
+  secs_sq_total = nump_sq_total = 0LL;
+}
+void stat_add(log_ts *addme, int nump){
+  num_so_far++;
+  secs_total += addme->secs;
+  secs_sq_total += (addme->secs)*(addme->secs);
+  nump_total += nump;
+  nump_sq_total += (nump*nump);
+  if (max_nump < nump)
+    max_nump = nump;
+  if (min_nump > nump)
+    min_nump = nump;
+  if (num_so_far == num_till_dump) {
+    /* print stats */
+    stat_forcedump();
+    stat_init(num_till_dump);
+  }
+}
+
+void stat_forcedump(void)
+{
+  double sstderr, nstderr;
+  double avgssq, avgs, avgnsq, avgn;
+
+  if (num_so_far == 0)
+    return;
+
+  avgssq = (double) ((double) secs_sq_total / (double) (num_so_far));
+  avgs = (double) ((double) secs_total / (double) num_so_far);
+  avgnsq = (double) ( (double) nump_sq_total / 
+		      (double) (num_so_far));
+  avgn = (double) ( (double) nump_total / (double) num_so_far);
+
+  sstderr = sqrt(avgssq - (avgs*avgs));
+  nstderr = sqrt(avgnsq - (avgn*avgn));
+  
+  fprintf(stdout, "%.2lf %.2lf %.2lf %d %d\n",
+	  avgs, avgn, nstderr, min_nump, max_nump);
+
+}
+@
+
+
+1.1
+log
+@Added counting of parallel open tasks.
+@
+text
+@d18 1
+a18 1
+#include "config.h"
+@

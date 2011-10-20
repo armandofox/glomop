@@ -1,0 +1,43 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.23.19.14.20;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@1) Vulnerabilities in the program
+
+- We saw in class how to send in a different argv[0] than the program name.  If we change that, we can get a buffer overrun on line 68.  This allows us to change the return address, or play with variables further up the stack.  There seems to be a similar possibility for overrun on line 157, but I'm not sure whether one can mess with his own pw_name.  If so, making the name greater than the size of the msg buffer can allow us to buffer overrun.
+- An additional problem occurs with looksok.  After it opens the file for READING ONLY, we can still modify it without those changes being visible to that function.  Thus, looksok might return true even though we've put in stuff manually which is bad.  Then rename will put the file right where we want it.  The temporary file name is easy to guess because its seems to be a simple name.
+- It appears that vi is started with root priviledges, since almost the entire program is run as root.  In vi you can open up a shell, which would be as root since the vi opens as the current user id.  Once you've got a root shell, it doesn't matter what you put in the modifiers file, you can do much more damage.
+
+
+2) Active Networks
+1) A malicious user can still create a loop even though the code can't have loops.  He can cause a loop by choosing a circular path amongst the routers.  This is denial of service by slowing down a bunch of routers.  To handle this, we could stick on a history of routers visited onto the packet by each router.  The packet is already huge thanks to the code it carries, why not accompany some history.  We could also have the routers keep a cache of recently seen packets and have them drop packets which appear again.
+2) A malicious user can break into someone else's packet handler and put in a new one which redirects its traffic somewhere else where the malicious user can either pose as the intended machine or just act as a man-in-the-middle.  I was thinking we could require user authentication for handlers, but the world has too many users to authenticate each one.  Perhaps you can get a group authentication of some sort, for people in trusted groups.
+3) This allows for the attack in the first question to be easier.  We can loop within the code and kill a router by sending many such packets.  This denial of service can be prevented though by allowing the router to drop a packet which is "taking too long."
+4) If a malicious user modifies or overwrites a handler, then the handler code can be made to act as the man-in-the-middle.  This would make the malicious user's job much easier.  Also, the malicious handler could write in new data which could cause problems to the receiving machine.  Again, some sort of authentication for setting the handler is necessary.
+5) A malicious user can crash a Router by starting a bunch of different flows (just change local ports), which cause the allocation of a bunch of memory.  In order to avoid this, we must define flows differently.  On the other hand, we could multiplex memory amongst the incoming interfaces so that one path sending in many packets of different flows to do this would only have a maximum amount of memory to exhaust and therefore wouldn't hurt other flows.  In addition, once you allow a program to reach memory, then you have to consider all sandboxing issues.  As long as one Router can't promise safe and secure execution of handlers, then the trusted path is broken.  I guess this means that every router will need to run Janus-like applications to limit packet handlers.
+6) A malicious program can generate all sorts of problems.  It can spoof IP packets, changing both to and from addresses now that it can create new IP packtes.  In fact, this allows a malicious user to have the router do all of its dirty work.  The handle can create lots of packets to a new destination to cause a denial of service.  This attack can be handled by requiring that headers contain source and destination (and other security-relevant fields) which are the same as the original IP packet.  At least denial of service would be localized to the destination of the IP packet.  Also, a limit on the number of generated packets by the handler could limit the effectiveness of denial of service attacks.  However, fragmentation attacks which we discussed in class would still be possible.  I would say that this level really reduces security too far and the only way I can think of fixing it is not allowing such freedom to handlers.
+7) If we use java byte code, then all of the java security holes that we covered in class could be exploited.  Someone mentioned in class that a subset of java can be proven safe.  So we only allow that code.  Then, a java program can't crash routers.  In addition, we might want to wrap the JVM with something like Janus to make sure that nothing malicious is being done.  Signing Java code isn't going to be good enough to prevent someone from overwriting your handler.  We're still going to need some authentication for handlers.  This is also important for intrusion detection which will help track down who is the malicious user or machine, in which case we stop servicing the network to it. 
+
+3) Firewall security
+1) This would require more than a simple packet filter.  The gateway would have to assemble the entire message being sent and then look at it to make sure that it is all some format of text which it allowed.  Any excessive use of brackets and parentheses, for example, would deny the message.  This might be way too strict, but its necessary.  I'm still not sure if this will work because scripting languages and other formats which are unknown to the firewall might pass.
+2) Inspecting the code to figure out whether its safe or not is a really hard problem.  If we decide to allow mobile code based on signing of the code, that still creates a trusted computing base of all the people who have received mobile code authority.  However, if someone else's signature is compromised, we're back at square one.  Proof-carrying code limits the expressiveness of the mobile code but we've discussed in class that this is safe.  This brings the issue of verification.  Any code that allows for verification (java) would require the verification process to be flawless.  However, we do know that certain subsets of the java language are safe and therefore we can let only those subsets through.
+3) Since the filter is done using an application-level firewall, most of the blame is on the firewall.  Trusting bad or forged signatures is the firewall's fault.  The process of identifying whether something is mobile code is the firewall's responsibility.  If the firewall applies a bad verifier or does not notice that the proof for some code is wrong, the fault lies on the firewall.  However, when an end host starts an application on the firewall and states that it wants to trust a certain set of mobile code and then trusts everything that is sent to it, the blame is at the end host.
+@

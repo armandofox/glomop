@@ -1,0 +1,358 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     98.12.07.21.34.57;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.12.07.21.34.57;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@(*
+Copyright (c) 1997,1998 The Regents of the University of California.
+All rights reserved.
+
+Permission to use, copy, modify, and distribute this software for any
+purpose, without fee, and without written agreement is hereby granted,
+provided that the above copyright notice and the following two
+paragraphs appear in all copies of this software.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF THE UNIVERSITY OF
+CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
+ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATION TO
+PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+*)
+
+structure CType : CTYPE =
+
+    (*************************************************************
+     
+     Routines for working with C Types
+     
+     *************************************************************)
+
+    struct
+
+	open PTUtil
+
+	exception notFunc     (* Called returnType with a non-function *)
+	exception badNumArgs  (* Operator had a bad number of arguments *)
+	exception noSuchField (* Looked up a non-existant field *)
+	exception undefinedTypedef (* Looked for a typedef that's undefined *)
+	exception undefinedStruct (* Looked for a struct that's undefined *)
+
+	type extType = AST.lookupFun * AST.syntacticType
+
+	(* Handy types *)
+	fun errLookup _ _ = raise Match
+	val nullType = (errLookup, AST.SyntacticType (NONE, AST.Void, [], []))
+	val charType = (errLookup, AST.SyntacticType (NONE, AST.Char, [], []))
+	val intType  = (errLookup, AST.SyntacticType (NONE, AST.Int, [], []))
+	val realType = (errLookup,
+			AST.SyntacticType (NONE, AST.Double, [], []))
+	val stringType = (errLookup,
+			  AST.SyntacticType (NONE, AST.Char, [],
+					     [AST.Pointer []]))
+	val unknownFunType = (errLookup,
+			      AST.SyntacticType (NONE, AST.Int, [],
+						 [AST.OldFunction ([], NONE)]))
+	val voidPtrType = (errLookup,
+			   AST.SyntacticType (NONE, AST.Void, [],
+					      [AST.Pointer []]))
+	val allocFunType = (errLookup,
+			    AST.SyntacticType (NONE, AST.Void, [],
+					       [AST.Function [],
+						AST.Pointer []]))
+
+	(* Test properties of types *)
+	fun isArrayType (_, (AST.SyntacticType(_, _, _, (AST.Array _::_)))) =
+	    true
+	  | isArrayType _ = false
+	fun isCharArrayType (_, (AST.SyntacticType(_, AST.Char, _,
+					       (AST.Array _::_)))) = true
+	  | isCharArrayType _ = false
+	fun isExternType (_, (AST.SyntacticType (SOME AST.Extern, _, _, _))) =
+	    true
+	  | isExternType _ = false
+	fun isFunType (_, (AST.SyntacticType (_, _, _, (AST.Function _::_))))
+	    = true
+	  | isFunType (_, (AST.SyntacticType (_, _, _,
+					      (AST.OldFunction _::_))))
+	    = true
+	  | isFunType _ = false (* function pointers are not function types *)
+	fun isStaticType (_, (AST.SyntacticType (SOME AST.Static, _, _, _)))
+	    = true
+	  | isStaticType _ = false
+	fun isStructType (_, (AST.SyntacticType (_, AST.Aggregate _, _, _)))
+	    = true
+	  | isStructType _ = false
+	fun isPtrType (_, (AST.SyntacticType (_, _, _, (AST.Pointer _::_))))
+	    = true
+	  | isPtrType _ = false
+
+	(* Promote an array type to a pointer type *)
+	fun arrayToPtr (lookup,
+			AST.SyntacticType (sc, ts, tq, (AST.Array _::rest))) =
+	    (lookup, AST.SyntacticType (sc, ts, tq, (AST.Pointer []::rest)))
+
+	(* Resolve any typedef names and struct names (only as far
+           as pointers) in a type *)
+	fun resolveType (lookup, AST.SyntacticType(tc, AST.NamedType id,
+						   tq, dl)) =
+	    (case lookup AST.VarNames id of
+		 SOME (AST.SymInfo {typ=AST.SyntacticType(_, typ, _, dl'),
+				    typLookup,
+				    ...}) =>
+		 resolveType (typLookup,
+			      AST.SyntacticType(tc, typ, tq, dl@@dl'))
+	       | NONE => raise undefinedTypedef)
+	  | resolveType (lookup, t as AST.SyntacticType(tc,
+						    AST.NamedAggregate(ag, id),
+						    tq, dl)) =
+		 (case lookup AST.StructNames id of
+		      SOME (AST.SymInfo {typ=AST.SyntacticType(_, typ, _, _),
+					 typLookup,
+					 ...}) =>
+		      (typLookup, AST.SyntacticType(tc, typ, tq, dl))
+		    | NONE => ((*print (concat ["Warning:  Unable to resolve ",
+					      Unparse.aggregate ag,
+					      " ",
+					      AST.idToString id,
+					      "\n"]);*)
+			       (lookup, t)))
+	  | resolveType t = t
+
+	(* Get the type of a variable *)
+	fun getVarType lookup id =
+	    let val deConverted = AST.mkIdentifier (beforeFirst #"@@"
+						     (AST.idToString id))
+	    in
+		case lookup AST.VarNames deConverted of
+		    SOME (AST.SymInfo {typ, typLookup, isParam, ...}) =>
+			resolveType (typLookup, typ)
+		  | NONE => unknownFunType
+	    end
+
+	(* Given a function type, return its return type *)
+	fun returnType (lookup, AST.SyntacticType(_, typeSpec, _, declList)) =
+	    case declList of
+		((AST.Function _|AST.OldFunction _)::rest) =>
+		    (lookup, AST.SyntacticType (NONE, typeSpec, [], rest))
+	      | (AST.Pointer _::(AST.Function _|AST.OldFunction _)::rest) =>
+		    (lookup, AST.SyntacticType (NONE, typeSpec, [], rest))
+	      | _ => raise notFunc
+
+	(* Given an operator and the types of its operands, return
+	   the type of the result *)
+	fun operType (AST.Plus | AST.Minus) [t1, t2] =
+	    if isPtrType t1 orelse isArrayType t1 then
+		(* a[2] == *(a+2) *)
+		t1
+	    else if isPtrType t2 orelse isArrayType t2 then
+		(* 2[a] == *(2+a) ! *)
+		t2
+	    else
+		t1               (* Must have same type; ignore
+				    promotions *)
+	  | operType (AST.Plus | AST.Minus) [t1] = t1
+	    (* Parser never returns unary minus, for some reason *)
+	  | operType (AST.Mul | AST.Div | AST.Mod) [(l1, t1),t2] =
+		intType
+	  | operType (AST.Incr | AST.Decr) [t] = t
+	  | operType (AST.And | AST.Or) [(l1, t1),t2] = intType
+	  | operType AST.Not [t1] = intType
+	  | operType (AST.BitAnd | AST.BitOr | AST.BitXor)
+                     [t1,t2] = t1
+	  | operType AST.BitNot [t1] = t1
+	  | operType (AST.Rshift | AST.Lshift) [t1,t2] = t1
+	  | operType (AST.Lt | AST.Le | AST.Gt | AST.Ge | AST.Eq | AST.Ne)
+		     [t1,t2] = intType
+	  | operType AST.Address [(l, t)] =
+		     let val AST.SyntacticType(_, ts, _, dl) = t
+		     in
+			 (l, AST.SyntacticType(NONE, ts, [],
+					       (AST.Pointer [])::dl))
+		     end
+	  | operType AST.Deref [(l, t)] =
+		     if isPtrType (l, t) orelse isArrayType (l, t) then
+			 let val AST.SyntacticType(_, ts, _, dl) = t
+			 in
+			     (l, AST.SyntacticType(NONE, ts, [], tl dl))
+			 end
+		     else if isFunType (l, t) then
+			 (* The type of *f, where f is a function, is
+			    still a function type. *)
+			 (l, t)
+		     else
+			 (print "Dereference of non-pointer type ";
+			  print (Unparse.syntacticType "" t);
+			  print "\n";
+			  raise Match)
+	  | operType AST.UnaryMinus [t] = intType
+	  | operType _ _ = raise badNumArgs
+
+	(* Find the type of a field of an aggregate *)
+	fun fieldType (lookup, typ as AST.SyntacticType (_,
+					  AST.Aggregate(_, _, dl), _, _)) id =
+	    let fun findField id [] =
+		(print (concat ["Field ",
+				AST.idToString id,
+				" not in ",
+				Unparse.syntacticType "" typ,
+				"\n"]);
+		 raise noSuchField)
+		  | findField id ((AST.VarDecl{name, typ, ...})::xs) =
+		    if AST.IdKey.compare(id, name) = EQUAL then
+			resolveType (lookup, typ)
+		    else
+			findField id xs
+		  | findField id ((AST.FunDecl{name, typ, ...})::xs) =
+		    if AST.IdKey.compare(id, name) = EQUAL then
+			resolveType (lookup, typ)
+		    else
+			findField id xs
+		  | findField _ (t::_) =
+			(print "Unknown decl in struct ";
+			 print (Unparse.declaration t);
+			 print "\n";
+			 raise Match)
+	    in
+	        findField id dl
+	    end
+	  | fieldType (lookup, AST.SyntacticType (_,
+					    AST.NamedAggregate(ag, id),
+					    _, _)) _ =
+	    (print (concat ["Asked to find field in unresolved ",
+			    Unparse.aggregate ag,
+			    " ",
+			    AST.idToString id,
+			    "\n"]);
+	     raise Match)
+	  | fieldType (lookup, t) id =
+	    (print "Asked to find field ";
+	     print (AST.idToString id);
+	     print " in non-aggregate ";
+	     print (Unparse.syntacticType "" t);
+	     print "\n";
+	     raise Match)
+
+
+	fun fields (lookup, AST.SyntacticType(_, AST.Aggregate(_, _, dl),
+					     _, _)) =
+	    let fun getField (AST.VarDecl {name, typ, ...}) = (name,
+						resolveType (lookup, typ))
+		  | getField (AST.FunDecl {name, typ, ...}) = (name,
+						resolveType (lookup, typ))
+	    in
+		map getField dl
+	    end
+
+	(* Compute the C type of an expression.  Be careful using this;
+	   it's usually better to infer the type with the main analysis. *)
+	fun exprType lookup (AST.Variable (id, _)) = getVarType lookup id
+	  | exprType lookup (AST.Constant (AST.Integer _, _)) = intType
+	  | exprType lookup (AST.Constant (AST.BigInteger _, _)) = intType
+	  | exprType lookup (AST.Constant (AST.String id, _)) = stringType
+	  | exprType lookup (AST.Constant (AST.Character _, _)) = charType
+	  | exprType lookup (AST.Constant (AST.Real _, _)) = realType
+	  | exprType lookup (AST.Conditional(e1, e2, e3, _)) =
+	    let val c1 = exprType lookup e1
+		val c2 = exprType lookup e2
+		val c3 = exprType lookup e3
+	    in
+		c2 (* = c3 *)
+	    end
+	  | exprType lookup (AST.Application(e, el, _, _)) =
+	    let val cf = exprType lookup e
+		val cels = map (exprType lookup) el
+	    in
+		returnType cf
+	    end
+	  | exprType lookup (AST.Operation(oper, el, _)) =
+	    let val elTypes = map (exprType lookup) el
+	    in
+		operType oper elTypes
+	    end
+	  | exprType lookup (AST.Assignment(e1, oper, e2, region)) =
+	    let val c1 = exprType lookup e1
+		val c2 = exprType lookup e2
+	    in
+		c2
+	    end
+	  | exprType lookup (AST.Comma(e1, e2, _)) =
+	    let val c1 = exprType lookup e1
+		val c2 = exprType lookup e2
+	    in
+		c2
+	    end
+	  | exprType lookup (AST.Cast(t, e, _)) =
+	    let val ce = exprType lookup e
+	    in
+		resolveType (lookup, t)
+	    end
+	  | exprType lookup (AST.SizeOfExpr _) = intType
+	  | exprType lookup (AST.SizeOfTypeExpr _) = intType
+	  | exprType lookup (AST.FieldDirect(e, id, _)) =
+	    let val ct = exprType lookup e
+	    in
+		fieldType ct id
+	    end
+	  | exprType lookup (AST.FieldIndirect(e, id, region)) =
+		 let val eDeref = AST.Operation(AST.Deref, [e], region)
+		     val eDerefId = AST.FieldDirect(eDeref, id, region)
+		 in
+		     exprType lookup eDerefId
+		 end
+	  | exprType lookup (AST.Postfix(oper, e, region)) =
+		 exprType lookup (AST.Operation(oper, [e], region))
+	  | exprType lookup (AST.Index(e1, e2, region)) =
+		 let val joinOp = AST.Operation(AST.Plus, [e1, e2], region)
+		 in
+		     exprType lookup (AST.Operation(AST.Deref, [joinOp],
+						    region))
+		 end
+	  | exprType _ (AST.Extension (stmt,_)) =
+		 case stmt of
+		     AST.Compound {decls, body, lookup, ...} =>
+			 (case List.last body of
+			      (* Lookup body in scope of compound *)
+			      AST.Expression (SOME e, _) => exprType lookup e
+			    | _ => nullType)
+		   | _ => (print "Extension doesn't contain compound stmt\n";
+			  raise (Fail "Extension"))
+
+    end
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

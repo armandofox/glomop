@@ -1,0 +1,374 @@
+head	1.4;
+access;
+symbols
+	Yatin-final:1.4
+	Yatin:1.4.0.6
+	pre-yatin-merge:1.4
+	transend-beta2:1.4
+	fox-dev:1.4
+	playback-ng:1.4
+	transend-beta-latest:1.4
+	Aggregators:1.4
+	NoAggregators:1.4
+	iang:1.4.0.4
+	transend-beta:1.4.0.2
+	SOSP:1.3;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.04.17.21.45.10;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.26.10.08.54;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.24.23.09.44;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.13.03.49.06;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@config.h is now config_tr.h
+@
+text
+@/*
+ *     Author: Steve Gribble
+ *       Date: Feb 12th, 1997
+ *       File: new_bp_engine.c
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <dirent.h>
+#include <sys/dirent.h>
+
+#include "config_tr.h"
+#ifdef HAVE_PTHREAD_H
+#include "pthread.h"
+#endif
+
+#include "bp_timer.h"
+#include "http_task.h"
+#include "logparse.h"
+#include "simclient.h"
+#include "playback_sched.h"
+
+#define MAX_DIR_ENTRIES 256
+#define FILENAME_BUFSIZE 1024
+#define NUM_PARALLEL_READS 250
+
+typedef struct rf_st {
+  char filename_buf[FILENAME_BUFSIZE];
+  int  start_random;
+  simclient_list *clist;
+} readfile_thrproc_st;
+
+void *readfile_thrproc(void *arg);
+
+int main(int argc, char **argv)
+{
+  simclient_list clist;
+  unsigned long int i, j, cur_client=0;
+  struct timeval max_delay;
+  pthread_t           ids[NUM_PARALLEL_READS];
+  readfile_thrproc_st sts[NUM_PARALLEL_READS];
+  pthread_attr_t      attr;
+  void               *status;
+  double              speedup;
+
+  pthread_attr_init(&attr);
+  if (argc <= 5) {
+    fprintf(stderr, 
+	    "usage: new_bp_engine host port max_delay speedup directory [directories]\n");
+    exit(1);
+  }
+
+  /* Initialize all of the subsystems of our cool app */
+
+  if (bp_timer_init()) {
+    fprintf(stderr, "timer subsystem init failed\n");
+    exit(1);
+  }
+
+  if (initialize_http_tasks("UC Berkeley Trace Playback Engine (please contact gribble@@cs.berkeley.edu for inquiries regarding this access)",
+			    "Steven Gribble, http://www.cs.berkeley.edu/~gribble, gribble@@cs.berkeley.edu")) {
+    fprintf(stderr, "http_tasks subsystem init failed\n");
+    exit(1);
+  }
+  
+  if (!init_list_o_clients(&clist, 6000)) {
+    fprintf(stderr, "init_list_o_clients failed\n");
+    exit(1);
+  }
+
+  if (sscanf(argv[3], "%lu", &(max_delay.tv_sec)) != 1) {
+    fprintf(stderr, "Bogus max delay %s\n", argv[3]);
+    exit(1);
+  }
+  max_delay.tv_usec = 0;
+  set_dest_addr_and_port(argv[1], argv[2]);
+  set_max_delay(max_delay);
+  if (sscanf(argv[4], "%lf", &speedup) != 1) {
+    fprintf(stderr, "Bogus speedup factor %f\n", speedup);
+    exit(1);
+  }
+  set_speedup_factor(speedup);
+
+  /* Now prep all of the client entry files */
+  for (i=5; i<argc; i++) {
+    DIR *thedir;
+    struct dirent *direntp;
+
+    thedir = opendir(argv[i]);
+    if (thedir == NULL) {
+      fprintf(stderr, "Couldn't open directory %s\n", argv[i]);
+      continue;
+    }
+    while ((direntp = readdir(thedir)) != NULL) {
+      if ( (strcmp(direntp->d_name, ".") != 0) &&
+	   (strcmp(direntp->d_name, "..") != 0)) {
+	
+	sprintf(sts[cur_client].filename_buf, "%s/%s", 
+		argv[i], direntp->d_name);
+	sts[cur_client].start_random = 0;
+	sts[cur_client].clist = &clist;
+	fprintf(stderr, "Adding %s\n", sts[cur_client].filename_buf);
+	pthread_create(&(ids[cur_client]), &attr, readfile_thrproc,
+		       (void *) &(sts[cur_client]));
+	cur_client++;
+
+	if (cur_client == NUM_PARALLEL_READS) {
+	  for (j=0; j<cur_client; j++) {
+	    pthread_join(ids[j], &status);
+	  }
+	  cur_client = 0;
+	}
+      }
+    }
+    closedir(thedir);
+  }
+  for (j=0; j<cur_client; j++) {
+    pthread_join(ids[j], &status);
+  }
+
+  while(1)
+    sleep(500);
+  exit(0);
+}
+
+void *readfile_thrproc(void *arg)
+{
+  readfile_thrproc_st *st = (readfile_thrproc_st *) arg;
+  unsigned long int cid;
+
+  cid = add_client_to_list(st->filename_buf, st->start_random, st->clist);
+  initialize_scheduler(cid, st->clist);
+  inject_client(cid, st->clist);
+
+  return NULL;
+}
+@
+
+
+1.3
+log
+@AAAAAAAGh.  (Ok, almost there now.)
+@
+text
+@d19 1
+a19 1
+#include "config.h"
+@
+
+
+1.2
+log
+@Much work done on playback engine.
+@
+text
+@d28 1
+d32 9
+d45 12
+a56 5
+  char   filename_buf[FILENAME_BUFSIZE];
+  int i;
+
+  if (argc <= 1) {
+    fprintf(stderr, "usage: new_bp_engine directory [directories]\n");
+d73 1
+a73 1
+  if (!init_list_o_clients(&clist, 5000)) {
+d78 13
+d92 1
+a92 1
+  for (i=1; i<argc; i++) {
+a94 1
+    unsigned long int client_id;
+d104 16
+a119 3
+	sprintf(filename_buf, "%s/%s", argv[i], direntp->d_name);
+	fprintf(stderr, "Adding %s\n", filename_buf);
+	client_id = add_client_to_list(filename_buf, 0, &clist);
+d124 6
+d131 12
+@
+
+
+1.1
+log
+@Will eventually become a new playback engine.
+@
+text
+@d13 1
+d16 2
+d27 4
+d34 4
+d39 1
+a39 1
+    fprintf(stderr, "usage: new_bp_engine directory [directories]\n",
+d43 2
+a54 1
+
+d56 4
+d61 5
+a65 23
+  exit(0);
+}
+
+void timeraddproc(int id, void *data)
+{
+  struct timeval  tv;
+/*  int             i;*/
+
+  while (numthreads > 400)
+      sleep(1);
+  gettimeofday(&tv, NULL);
+
+  if (numpersec == 1) {
+    tv.tv_sec += 1;
+  } else {
+    tv.tv_usec += (1000000 / numpersec);
+    if (tv.tv_usec > 1000000) {
+      tv.tv_usec -= 1000000;
+      tv.tv_sec += 1;
+    }
+  }
+/*  for (i=0; i<numpersec; i++)*/ {
+    lf_entry      *lfntree;
+d67 4
+a70 4
+    lfntree = (lf_entry *) malloc(sizeof(lf_entry));
+    if (lfntree == NULL) {
+      fprintf(stderr, "Out of mem in main.\n");
+      exit(1);
+d72 7
+a78 3
+    if (lf_get_next_entry(0, lfntree, 3) != 0) {
+      fprintf(stderr, "Failed to get next entry.\n");
+      exit(1);
+d80 1
+a80 2
+    
+    bp_timer_add(ABSOLUTE, tv, timerproc, (void *) lfntree);
+d82 1
+a82 76
+  bp_timer_add(ABSOLUTE, tv, timeraddproc, (void *) NULL);
+
+  bp_dispatch_signal();
+  fprintf(outfile, "%d threads, %d connecting\n", numthreads, numconnecting);
+}
+
+void timerproc(int id, void *data)
+{
+  http_task      t;
+  lf_entry      *lfntree = (lf_entry *) data;
+  char          *retd;
+  int            retl, res;
+
+  if (pthread_mutex_lock(&numt_mutex) < 0)
+    exit(1);
+  numthreads++;
+  if (pthread_mutex_unlock(&numt_mutex) < 0)
+    exit(1);
+  t.url = (char *) lfntree->url;
+  if ( (strcmp(t.url, "-") == 0) ||
+       (strlen(t.url) < 5) ||
+       (lfntree->sip == 0xFFFFFFFF) ||
+       (lfntree->spt == 0xFFFF) ||
+       !((strncmp(t.url, "GET ", 4) == 0) ||
+	(strncmp(t.url, "POST ", 5) == 0) ||
+	(strncmp(t.url, "HEAD ", 5) == 0) ||
+	(strncmp(t.url, "PUT " , 4) == 0))
+    ) {
+    fprintf(stderr, "Ignoring bum url %s\n", t.url);
+    free(t.url);
+    free(lfntree);
+    if (pthread_mutex_lock(&numt_mutex) < 0)
+      exit(1);
+    numthreads--;
+    if (pthread_mutex_unlock(&numt_mutex) < 0)
+      exit(1);
+    return;
+  }
+  t.urllen = strlen(t.url);
+  t.dst_host = lfntree->sip;
+  t.dst_port = lfntree->spt;
+  t.client_pragmas = lfntree->cprg;
+  t.server_pragmas = lfntree->sprg;
+  t.client_if_modified_date = ntohl(lfntree->cims);
+  t.server_expires_date = ntohl(lfntree->sexp);
+  t.server_last_modified_date = ntohl(lfntree->slmd);
+  insert_host_into_url(&t);
+  t.dst_host = inet_addr(ip_addr); t.dst_port = htons(port);
+  if (t.dst_host == (unsigned long) -1) {
+    free(t.url);
+    free(lfntree);
+    if (pthread_mutex_lock(&numt_mutex) < 0)
+      exit(1);
+    numthreads--;
+    if (pthread_mutex_unlock(&numt_mutex) < 0)
+      exit(1);
+    return;
+  }
+  res = do_http_task(t, &retd, &retl);
+  if (res == 0) {
+    free(retd);
+  } else {
+    fprintf(outfile, "do_http_task failed. (%d threads, ignoring..)\n", 
+	    numthreads);
+    lfntree->url = t.url;
+    lf_dump(outfile, lfntree);
+    if (retd)
+      free(retd);
+  }
+  free(t.url);
+  free(lfntree);
+  if (pthread_mutex_lock(&numt_mutex) < 0)
+    exit(1);
+  numthreads--;
+  if (pthread_mutex_unlock(&numt_mutex) < 0)
+    exit(1);
+@

@@ -1,0 +1,490 @@
+head	1.12;
+access;
+symbols
+	Yatin-final:1.12
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.11
+	fox-dev:1.11
+	ptm-ng:1.10
+	transend-beta-latest:1.10
+	Aggregators:1.10
+	NoAggregators:1.10
+	iang:1.10.0.4
+	transend-beta:1.10.0.2
+	SOSP:1.10
+	stable_ptm:1.7
+	merged_preintegrate:1.6
+	heisenbug:1.6
+	PRE_INTEGRATION:1.6
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.12
+date	97.09.18.22.45.20;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.06.14.05.05.43;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.03.06.02.49.14;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.26.04.14.54;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.17.03.01.09;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.04.09.55.37;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.12;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.12;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.00.42.26;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.47;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.38;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.50;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.50;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@#ifndef __PTMNET_H__
+#define __PTMNET_H__
+
+#include "communication.h"
+#include "ptmdb.h"
+#include "log.h"
+
+
+
+class PrivateConnection : public TcpSocket, public gm_PacketHandler {
+public:
+  PrivateConnection(int socketID);
+  ~PrivateConnection();
+  void SetDistiller(DistillerRecord *r) { record = r;    }
+  DistillerRecord *getDistiller()       { return record; }
+  gm_Bool IsDistillerConnection() { return (record==NULL) ? gm_False:gm_True;}
+
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+  gm_Bool AskForDistillerReply(UINT32 replyID, AskForDistillerStatus status,
+			       List<DatabaseRecord> *list);
+  gm_Bool Beacon(RemoteID &ptmAddress, UINT32 ptmRandomID, 
+		 List<DatabaseRecord> *list);
+protected:
+  gm_Bool EvSelect(EventSystem *evs) 
+  { return gm_PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return Read(packet); };
+  void ErrorOutput(const char *string) { gm_Log(string); };
+
+  DistillerRecord *record;	// will be NULL for non-distiller sockets
+};
+
+
+class PrivateConnectionServer : public TcpServer {
+public:
+  PrivateConnectionServer() : TcpServer(0) { };
+  // let the system pick a port number
+protected:
+  gm_Bool EvConnectionReceived(EventSystem *evs, int socketID);
+};
+
+
+class SharedBus : public gm_CoordinationBus, public gm_PacketHandler { 
+//MulticastSocket {
+public:
+  SharedBus(RemoteID &rid, int ttl=DefaultTTL);
+  gm_Bool Beacon(RemoteID &ptmAddress, UINT32 ptmRandomID, 
+		 List<DatabaseRecord> *list);
+protected:
+  gm_Bool EvSelect(EventSystem *evs) {return gm_PacketHandler::EvSelect(evs);};
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return getListener()->Read(packet);};
+  void ErrorOutput(const char *string) { gm_Log(string); };
+
+};
+
+
+#endif // __PTMNET_H__
+@
+
+
+1.11
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d10 1
+a10 1
+class PrivateConnection : public TcpSocket, public PacketHandler {
+d25 2
+a26 2
+  { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d28 1
+a28 1
+  gm_Bool ReadPacket(Packet *packet) { return Read(packet); };
+d44 1
+a44 1
+class SharedBus : public CoordinationBus, public PacketHandler { 
+d51 2
+a52 2
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d54 1
+a54 1
+  gm_Bool ReadPacket(Packet *packet) { return getListener()->Read(packet);};
+@
+
+
+1.10
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d12 5
+a16 6
+  PrivateConnection(int socketID) 
+    : TcpSocket(socketID), PacketHandler(), record(NULL) { };
+
+  void SetDistiller(DistillerRecord *r) { record = r;    };
+  DistillerRecord *getDistiller()       { return record; };
+  gm_Bool IsDistillerConnection() { return (record==NULL) ? gm_False:gm_True; };
+@
+
+
+1.9
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d22 2
+@
+
+
+1.8
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d6 1
+d27 1
+a27 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d53 1
+a53 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(getListener());};
+@
+
+
+1.7
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d20 1
+a20 1
+			    LinkedList<DatabaseRecord> *list);
+d47 1
+a47 1
+	      LinkedList<DatabaseRecord> *list);
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d27 1
+a27 1
+  void ErrorOutput(const char *string) { LOG(string); };
+d52 2
+a53 2
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(getListener()); };
+  void ErrorOutput(const char *string) { LOG(string); };
+a55 64
+
+
+/*class Listener : public MulticastSocket, public PacketHandler {
+public:
+  Listener(RemoteID &multicast) : MulticastSocket(), PacketHandler()
+  { if (CreateListener(multicast.ipAddress, multicast.port)==gm_False) return; };
+
+protected:
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+  void ErrorOutput(char *string) { LOG(string); };
+};*/
+
+
+/*class PTMPacketHandler : public PacketHandler {
+public:
+  PTMPacketHandler();
+protected:
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet, 
+			CommunicationObject *object);
+};*/
+
+
+/*class AnyRecord;
+
+class ServerSocket : public TcpServer {
+public:
+  ServerSocket(Port port) : TcpServer(port) { };
+protected:
+  gm_Bool EvConnectionReceived(EventSystem *evs, int socketID);
+};
+
+
+class ConnectionSocket : public TcpSocket {
+public:
+  ConnectionSocket(int socketID) : TcpSocket(socketID), record(NULL) { };
+  void SetRecord(AnyRecord *r) { record = r; }
+  AnyRecord *getRecord() { return record; }
+
+  gm_Bool EvSelect(EventSystem *evs);
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+
+protected:
+  AnyRecord *record;		// can be a proxy or a distiller record
+};
+
+
+
+
+struct PacketEvent {
+  PacketEvent(ConnectionSocket *sck, Packet *pkt) : socket(sck),packet(pkt){ };
+  ConnectionSocket *socket;
+  Packet           *packet;
+};
+
+
+class PTMPacketHandler : public EventHandler {
+protected:
+  gm_Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+};*/
+
+
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d16 1
+a16 1
+  Bool IsDistillerConnection() { return (record==NULL) ? FALSE:TRUE; };
+d18 2
+a19 2
+  Bool EvConnectionBroken(EventSystem *evs);
+  Bool AskForDistillerReply(UINT32 replyID, AskForDistillerStatus status,
+d22 1
+a22 1
+  Bool EvSelect(EventSystem *evs) 
+d24 1
+a24 1
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d26 1
+a26 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d38 1
+a38 1
+  Bool EvConnectionReceived(EventSystem *evs, int socketID);
+d46 1
+a46 1
+  Bool Beacon(RemoteID &ptmAddress, UINT32 ptmRandomID, 
+d49 2
+a50 2
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d52 1
+a52 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(getListener()); };
+d61 1
+a61 1
+  { if (CreateListener(multicast.ipAddress, multicast.port)==FALSE) return; };
+d64 2
+a65 2
+  Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d67 1
+a67 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d76 1
+a76 1
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet, 
+d87 1
+a87 1
+  Bool EvConnectionReceived(EventSystem *evs, int socketID);
+d97 2
+a98 2
+  Bool EvSelect(EventSystem *evs);
+  Bool EvConnectionBroken(EventSystem *evs);
+d116 1
+a116 1
+  Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+@
+
+
+1.4
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d27 1
+a27 1
+  void ErrorOutput(char *string) { LOG(string); };
+d35 2
+a36 1
+  PrivateConnectionServer(Port port) : TcpServer(port) { };
+d53 1
+a53 1
+  void ErrorOutput(char *string) { LOG(string); };
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d41 2
+a42 1
+class SharedBus : public MulticastSocket {
+d45 2
+a46 1
+  Bool Beacon(RemoteID &ptmAddress, LinkedList<DatabaseRecord> *list);
+d48 5
+d57 8
+d66 3
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d19 2
+d44 1
+a44 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+a5 1
+#include "ptmdist.h"
+d9 1
+a9 1
+class PrivateConnection : public TcpSocket {
+d11 2
+a12 4
+  PrivateConnection(int socketID) : TcpSocket(socketID), record(NULL) { };
+
+  Bool EvSelect(EventSystem *evs);
+  Bool EvConnectionBroken(EventSystem *evs);
+d17 2
+d20 7
+d41 1
+a41 1
+  SharedBus(RemoteID &rid);
+d51 1
+a51 1
+class PTMPacketHandler : public PacketHandler {
+d57 1
+a57 1
+};
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

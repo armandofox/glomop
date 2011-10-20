@@ -1,0 +1,567 @@
+/*
+ * File:          icp.c
+ * Purpose:       Client-library ICP implementation.
+ * Author:        Steve Gribble
+ * Creation Date: September 25th, 1996
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+
+int do_http_put_verify(int tcp_fd);
+int test_client_read_done(char *buf, int blen);
+
+/***
+*** "do_icp_query" will send an ICP UDP query datagram across an already
+*** connect'ed socket, to a harvest partition.  This function will
+*** return the number of bytes sent on success, and -1 on failure.  In
+*** the case of failure, errno should be checked for an appropriate
+*** error message.
+***/
+
+int do_icp_query(int udp_fd, char *url, struct in_addr source_addr,
+		 int reqnum)
+{
+  unsigned char    *buf, *p;
+  int               len, bytes_sent, resp=0;
+  icp_common_t      header;
+  struct in_addr    addrcopy;
+
+  len = sizeof(icp_common_t) + sizeof(struct in_addr) + strlen(url) + 1;
+  addrcopy.s_addr = htonl(source_addr.s_addr);
+
+  /* Prepare the header */
+  header.opcode = ICP_OP_QUERY;
+  header.version = ICP_VERSION_CURRENT;
+  header.length = htons(len);
+  header.reqnum = htons(reqnum);
+  memset(&(header.auth), '\0', sizeof(clib_u32)*ICP_AUTH_SIZE);
+  header.shostid = addrcopy.s_addr;
+
+  /* Prepare the data */
+  buf = (unsigned char *) malloc(len*sizeof(char));
+  if (buf == NULL) {
+    fprintf(stderr, "Out of memory in do_icp_query.\n");
+    exit(1);
+  }
+  
+  /* Copy in common header */
+  p = buf;
+  memcpy(p, &header, sizeof(header));
+  p += sizeof(header);
+
+  /* Copy in source address as "requestor address" field */
+  memcpy(p, &addrcopy, sizeof(addrcopy));
+  p += sizeof(addrcopy);
+  
+  /* Copy in URL and NULL-term */
+  memcpy(p, url, strlen(url)+1);
+  
+  /* Now send that puppy */
+  if ((resp = bytes_sent = send(udp_fd, buf, len, 0)) < 0) {
+    fprintf(stderr, "Send of UDP packet failed in do_icp_query.\n");
+  }
+
+  free(buf);
+  return resp;
+}
+
+/***
+*** do_icp_udp_receive will attempt to perform a "recv" on a connected
+*** datagram socket, expecting a reply back from a harvest partition.
+*** Note that if the datagram is blocking, do_icp_udp_receive will block.
+*** If the "recv" function fails, do_icp_udp_receive will return -1, and
+*** errno should be checked for the cause of the error.  If the "recv"
+*** function succeeds, but the received packet is bogus, then -2 will be
+*** returned.  Otherwise, 1 will be returned for a "HIT" packet, and 2
+*** will be returned for a "MISS" packet.  Note that the ret_obj
+*** argument will be filled in - the caller is responsible for freeing
+*** the h_url or m_url field, in the case of a successful packet received.
+***/
+
+int do_icp_udp_receive(int udp_fd, icp_message_t *ret_obj)
+{
+  unsigned char    *buf, *p;
+  int               retlen, resp=0;
+
+  buf = (unsigned char *) malloc(sizeof(char)*ICP_MAX_URL);
+  if (buf == NULL) {
+    fprintf(stderr, "Out of memory in do_icp_udp_receive.\n");
+    exit(-1);
+  }
+
+  if ( (retlen = recv(udp_fd, buf, ICP_MAX_URL, 0)) <= 0) {
+    free(buf);
+    perror("recv failed in do_icp_udp_receive: ");
+    return retlen;
+  }
+
+#if 0
+  dump_buf(stdout, buf, retlen);
+#endif
+
+  /* Copy in the common header */
+  p = buf;
+  if (retlen < sizeof(icp_common_t)) {
+    free(buf);
+    return -2;
+  }
+  memcpy(&(ret_obj->header), buf, sizeof(icp_common_t));
+  p += sizeof(icp_common_t);
+  retlen -= sizeof(icp_common_t);
+  (ret_obj->header).reqnum = ntohl((ret_obj->header).reqnum);
+  (ret_obj->header).length = ntohs((ret_obj->header).length);
+  (ret_obj->header).shostid = ntohl((ret_obj->header).shostid);
+
+  /* Now grab the body of the ICP packet.  Should be a HIT or a MISS */
+  switch((ret_obj->header).opcode) {
+    case ICP_OP_HIT:
+      (ret_obj->op).hit.h_size = ntohl( 0 );
+      
+      /* copy in h_url field */
+      if (retlen == 0) {
+	free(buf);
+	return -2;
+      }
+      (ret_obj->op).hit.h_url = (char *) malloc(sizeof(char)*retlen);
+      if ((ret_obj->op).hit.h_url == NULL) {
+	fprintf(stderr, "Out of mem copying h_url in icp_do_udp_receive\n");
+	exit(1);
+      }
+      memcpy((ret_obj->op).hit.h_url, p, retlen);
+      resp=1;
+      break;
+    case ICP_OP_MISS:
+      /* copy in h_url field */
+      if (retlen == 0) {
+	free(buf);
+	return -2;
+      }
+      (ret_obj->op).miss.m_url = (char *) malloc(sizeof(char)*retlen);
+      if ((ret_obj->op).miss.m_url == NULL) {
+	fprintf(stderr, "Out of mem copying m_url in icp_do_udp_receive\n");
+	exit(1);
+      }
+      memcpy((ret_obj->op).miss.m_url, p, retlen);
+      resp=0;
+      break;
+    case ICP_OP_INVALID:
+    case ICP_OP_QUERY:
+    case ICP_OP_SEND:
+    case ICP_OP_SENDA:
+    case ICP_OP_DATABEG:
+    case ICP_OP_DATA:
+    case ICP_OP_DATAEND:
+    case ICP_OP_SECHO:
+    case ICP_OP_DECHO:
+    case ICP_OP_END:
+    default:
+      free(buf);
+      fprintf(stderr, "unexpected ICP packet received (do_icp_udp_receive)\n");
+      return -2;
+  }
+
+  free(buf);
+  return resp;
+}
+
+/*** do_http_send accepts:
+***    -  a connected TCP socket
+***    - an URL (for example "http://www.cs.berkeley.edu/")
+***    - a set of mime_headers complete with cr/lf line terminations
+***      (e.g. "User-Agent: Mozilla/3.0\r\nHost: 128.32.33.179:80\r\n"),
+***      or NULL to indicate no mime_headers
+***    - data to send on a POST
+***    - length of data to send on POST
+***    - whether or not " HTTP/1.0\r\n" should be appended to the URL
+***      (1 for append, 0 for don't append)
+***    - the type of HTTP request (0 for GET, 1 for POST, 2 for HEAD)
+*** and sends off an appropriately formed HTTP request.  1 is returned
+*** in case of success, and -1 if failure.  If failure, errno should
+*** be checked for the reason.
+***/
+
+int do_http_send(int tcp_fd, char *url, char *mime_headers,
+		 char *data, int data_len,
+		 int send_http, int request_type)
+{
+  int retval, urllen, mhlen, otherlen=0, totlen;
+  char *buffer = NULL;
+
+  /* Compute the length of the buffer necessary to hold all data being
+     scribbled */
+  urllen = strlen(url);
+  if (mime_headers != NULL)
+    mhlen = strlen(mime_headers);
+  else
+    mhlen = 0;
+  switch(request_type) {
+  case ICP_GET:
+    otherlen = 4;
+    break;
+  case ICP_POST:
+  case ICP_HEAD:
+    otherlen = 5;
+    break;
+  default:
+    fprintf(stderr, "Unknown request type in do_http_send.\n");
+    exit(1);
+  }
+  if (send_http)
+    otherlen += 11;
+  otherlen += 2;  /* for terminating \r\n - may or may not need */
+
+  totlen = otherlen + mhlen + urllen;
+  buffer = (char *) malloc(sizeof(char)*(totlen+1));
+  if (buffer == NULL) {
+    fprintf(stderr, "Out of memory in do_http_send\n");
+    exit(1);
+  }
+
+  /* add the request to the buffer */
+  switch(request_type) {
+  case ICP_GET:
+    sprintf(buffer, "GET ");
+    break;
+  case ICP_POST:
+    sprintf(buffer, "POST ");
+    break;
+  case ICP_HEAD:
+    sprintf(buffer, "HEAD ");
+    break;
+  }
+
+  /* add the URL */
+  strcat(buffer, url);
+
+  /* optionally add the HTTP/1.0 declaration */
+  if (send_http) {
+    strcat(buffer, " HTTP/1.0\r\n");
+  }
+
+  /* write out mime_headers, if provided */
+  if (mime_headers != NULL) {
+    strcat(buffer, mime_headers);
+    if (memcmp(mime_headers + strlen(mime_headers) - 4, "\r\n\r\n", 4) != 0)
+      /* Finally, terminate with a CR/LF */
+      strcat(buffer, "\r\n");
+    else
+      totlen -= 2;  /* didn't use extra 2 for \r\n */
+    /* Write out the buffer */
+    if ((retval = correct_write(tcp_fd, buffer, totlen)) != totlen) {
+      free(buffer);
+      return retval;
+    }
+  } else {
+    /* Write out the buffer */
+    totlen -= 2;  /* Didn't use padding for headers */
+    if ((retval = correct_write(tcp_fd, buffer, totlen)) != totlen) {
+      free(buffer);
+      return retval;
+    }
+    /* No headers. If we have data to write, we must write a content-length
+       header and content-type, else we don't care. */
+    if ((data_len == 0) || (request_type != ICP_POST)) {
+      if ((retval = correct_write(tcp_fd, "\r\n", 2)) != 2) {
+	free(buffer);
+	return retval;
+      }
+    } else {
+      char extra_headers[512];
+      int leno;
+
+      sprintf(extra_headers, "Accept: image/gif, image/jpeg, */*\r\nContent-type: application/x-www-form-urlencoded\r\nContent-length: %d\r\n\r\n", data_len);
+      leno = strlen(extra_headers);
+
+      if ((retval = correct_write(tcp_fd, extra_headers, leno)) != leno) {
+	free(buffer);
+	return retval;
+      }
+    }
+  }
+
+  /* If we have any data to write, write that out as well */
+  if (data_len != 0) {
+    if ((retval = correct_write(tcp_fd, data, data_len)) != data_len) {
+      free(buffer);
+      return retval;
+    }
+  }
+
+  free(buffer);
+  return 1;
+}
+
+#define HTTP_READ_INCR 4096
+
+/***
+*** do_http_receive accepts a connected tcp socket, which has presumably
+*** had a HTTP request sent out for it.  It will attempt to read data
+*** from the socket, allocate space for the data, and return the
+*** allocated space and the length of data read in the data and len
+*** arguments.  It will read until either an error occurs (in which
+*** case it returns -1) or the socket is closed/EOF occurs (in which
+*** case it returns 0).  In case of -1 return value, errno should be
+*** checked for the cause (most likely E_AGAIN or E_WOULDBLOCK).
+*** In case of -2 return value, cutthrough should be performed.
+***/
+
+int do_http_receive(int tcp_fd, unsigned *len, char **data)
+{
+  int retval;
+  char *ldata = NULL, *bup, *ptr = NULL;
+  unsigned curbuff = 0U, cursize = 0;
+
+  *data = NULL;
+
+  /* Read until we're done or an error occurs */
+  while(1) {
+    if (cursize > CLIB_CUTTHROUGH_THRESH) {
+      *len = cursize;
+      *data = ldata;
+      return -2;
+    }
+    if (cursize % HTTP_READ_INCR == 0) {
+
+      /* We've maxxed out our curbuff, add some more space to it */
+      bup = realloc(ldata, curbuff + HTTP_READ_INCR);
+      if (bup == NULL) {
+	fprintf(stderr, "Out of memory in do_http_receive\n");
+	exit(1);
+      }
+      ldata = bup;
+      curbuff += HTTP_READ_INCR;
+      if (ptr == NULL)
+	ptr = ldata;
+      else
+	ptr = ldata + (unsigned) cursize;
+    }
+
+    /* Attempt to max our curbuff with a read */
+    retval = read(tcp_fd, ptr, curbuff-cursize);
+    if (retval <= 0) {
+      if ((retval < 0) && ((errno == EINTR) || (errno == EAGAIN))) {
+	continue;
+      }
+      /* end of file or error - return data */
+      *len = cursize;
+      *data = ldata;
+      return retval;
+    }
+
+    ptr += retval;
+    cursize += retval;
+  }
+
+  return 0;
+}
+
+/***
+*** do_http_receive accepts a connected tcp socket, which has presumably
+*** has an HTTP request coming in on it.  It will attempt to read data
+*** from the socket, allocate space for the data, and return the
+*** allocated space and the length of data read in the data and len
+*** arguments.  It will read until either an error occurs (in which
+*** case it returns -1) or the end of the client request occurs (in which
+*** case it returns 0).  In case of -1 return value, errno should be
+*** checked for the cause (most likely E_AGAIN or E_WOULDBLOCK).
+***/
+
+int do_http_client_receive(int tcp_fd, unsigned *len, char **data)
+{
+  int retval;
+  char *ldata = NULL, *bup, *ptr = NULL;
+  unsigned curbuff = 0U, cursize = 0;
+
+  *data = NULL;
+
+  /* Read until we're done or an error occurs */
+  while(1) {
+    if (cursize % HTTP_READ_INCR == 0) {
+
+      /* We've maxxed out our curbuff, add some more space to it */
+      bup = realloc(ldata, curbuff + HTTP_READ_INCR);
+      if (bup == NULL) {
+	fprintf(stderr, "Out of memory in do_http_receive\n");
+	exit(1);
+      }
+      ldata = bup;
+      curbuff += HTTP_READ_INCR;
+      if (ptr == NULL)
+	ptr = ldata;
+      else
+	ptr = ldata + (unsigned) cursize;
+    }
+
+    /* Attempt to max our curbuff with a read */
+    retval = read(tcp_fd, ptr, curbuff-cursize);
+    if (retval <= 0) {
+      if ((errno == EINTR) || (errno == EAGAIN))
+         continue;
+      /* end of file or error - return data */
+      *len = cursize;
+      *data = ldata;
+      return retval;
+    }
+
+    ptr += retval;
+    cursize += retval;
+
+    if (test_client_read_done(ldata, cursize)) {
+      *len = cursize;
+      *data = ldata;
+      return 0;
+    }
+  }
+
+  return 0;
+}
+
+/***
+*** do_http_put takes as arguments an URL (null-term), mime-headers
+*** (NULL-term), and arbitrary binary "data" of len "data_len".  
+***
+*** It writes the url over "tcp_fd", waits for a byte back, then writes
+*** the mime-headers and data as though it were a response from a web
+*** server.  This is a clever trick to allow me to fool harvest.
+***
+*** CPUT URL, wait, MIME_HEADERS + DATA
+***
+*** This function returns the number of bytes written on success, 
+*** and -1 on failure.  If -1 is returned, errno should be checked for
+*** the reason.
+***/
+
+int do_http_put(int tcp_fd, char *url, char *mime_headers, int mh_len,
+		char *data, int data_len)
+{
+  int   len_url, len_mime_headers, len_len, retval, totret=0, totreq=0;
+  char  len_buf[32];
+  char *req_buf = NULL;
+
+  len_url = strlen(url);
+  len_mime_headers = mh_len;
+  sprintf(len_buf, "%d", data_len);
+  len_len = strlen(len_buf);
+
+  totreq = 5 + len_url + 13 + 1;
+  req_buf = (char *) malloc(sizeof(char) * totreq);
+  if (req_buf == NULL) {
+    fprintf(stderr, "Out of memory in do_http_put\n");
+    exit(1);
+  }
+  sprintf(req_buf, "CPUT %s HTTP/1.0\r\n\r\n", url);
+
+  if ((retval = correct_write(tcp_fd, req_buf, totreq)) != totreq) {
+    fprintf(stderr, "write of req_buf failed in do_http_put\n");
+    return retval;
+  }
+  totret += retval;
+  free(req_buf);
+
+  /* Now wait for a byte back */
+  if ((retval = do_http_put_verify(tcp_fd)) != 1) {
+    fprintf(stderr, "do_http_put_verify failed in do_http_put\n");
+    return retval;
+  }
+
+  if ((retval = correct_write(tcp_fd, mime_headers, len_mime_headers)) !=
+      len_mime_headers) {
+    fprintf(stderr, "write mime_headers failed in do_http_put\n");
+    return retval;
+  }
+  totret += retval;
+
+  if ((retval = correct_write(tcp_fd, data, data_len)) != data_len) {
+    fprintf(stderr, "write data failed in do_http_put\n");
+    return retval;
+  }
+  totret += retval;
+
+  return totret;
+}
+
+/***
+*** do_http_put_verify will read a single byte from the
+*** tcp_connection.  It returns 1 if a byte was read, 0 if the
+*** socket shut down, and -1 on error.
+***/
+
+int do_http_put_verify(int tcp_fd)
+{
+  int  retval;
+  char tmptest[1024];
+
+  tmptest[0] = tmptest[1] = '\0';
+  if ((retval = read(tcp_fd, tmptest, 1024)) <= 0) {
+    fprintf(stderr, "read failed in do_http_put_verify\n");
+    return retval;
+  }
+  return 1;
+}
+
+/* Has the client's request finished? */
+int test_client_read_done(char *buf, int blen)
+{
+  /* Look for the first end-of-line to see if this is an HTTP/0.9
+     request */
+  char *lf, *crsplit = NULL, *clen;
+  int headlen, contlen;
+
+  crsplit = buf;
+  lf = (char *) memchr((void *) crsplit, 0x0A, blen - (crsplit-buf));
+  if (lf  == NULL)
+    return 0;
+  while ( ((*lf == 0x0A) || (*lf == 0x0D)) && (lf >= buf))
+    lf--;
+
+  if (strncmp(lf-8, " HTTP/", 6) != 0) {
+    return 1;  /* is HTTP/0.9, and we've seen the LF */
+  }
+
+  /* OK - is HTTP/1.x or later, let's look for the double whammy at the
+     end of the HTTP headers*/
+
+  lf = dumb_strnstr(buf, "\r\n\r\n", blen);
+  if (lf == NULL) {
+    lf = dumb_strnstr(buf, "\n\n", blen);
+    if (lf == NULL)
+      return 0;
+    lf += 2;
+  } else
+    lf += 4;
+
+  /* lf now points after buffer.  Let's look for the content-length field */
+  headlen = lf - buf;
+  if ((clen = dumb_strnstr(buf, "content-length: ", headlen)) == NULL) {
+    if ((clen = dumb_strnstr(buf, "Content-length: ", headlen)) == NULL) {
+      if ((clen = dumb_strnstr(buf, "Content-Length: ", headlen)) == NULL) {
+	if ((clen = dumb_strnstr(buf, "CONTENT-LENGTH: ", headlen)) == NULL) {
+	  /* Is none, so must assume we're done? */
+	  return 1;
+	}
+      }
+    }
+  }
+  clen += 16;
+  contlen = atoi(clen);
+  if (blen - headlen >= contlen)
+    return 1;
+
+  return 0;
+}
+
+

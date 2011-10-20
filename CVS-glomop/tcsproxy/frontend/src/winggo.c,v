@@ -1,0 +1,3717 @@
+head	1.29;
+access;
+symbols
+	Yatin-final:1.27.2.3
+	Yatin:1.27.0.2
+	pre-yatin-merge:1.27;
+locks; strict;
+comment	@ * @;
+
+
+1.29
+date	98.01.21.23.54.56;	author transend;	state Exp;
+branches;
+next	1.28;
+
+1.28
+date	98.01.16.22.15.55;	author yatin;	state Exp;
+branches;
+next	1.27;
+
+1.27
+date	97.11.05.21.59.54;	author iang;	state Exp;
+branches
+	1.27.2.1;
+next	1.26;
+
+1.26
+date	97.10.30.02.26.23;	author iang;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.10.28.05.09.51;	author iang;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.10.27.22.09.43;	author iang;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.10.26.00.29.39;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.10.25.00.38.36;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.10.24.02.53.18;	author iang;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.10.23.20.06.00;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.10.23.17.19.02;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.10.22.17.04.30;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.10.22.00.15.18;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.18.00.26.48;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.10.17.16.51.12;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.10.17.16.50.13;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.10.07.21.00.07;	author iang;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.10.07.05.50.49;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.10.06.04.59.01;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.10.06.01.49.24;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.10.06.01.32.29;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.30.20.25.55;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.26.01.47.24;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.24.01.29.20;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.11.00.58.27;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.10.19.34.35;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.10.06.08.42;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.09.23.43.38;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.06.02.29.50;	author gribble;	state Exp;
+branches;
+next	;
+
+1.27.2.1
+date	97.11.17.22.06.49;	author yatin;	state Exp;
+branches;
+next	1.27.2.2;
+
+1.27.2.2
+date	97.11.18.03.07.31;	author yatin;	state Exp;
+branches;
+next	1.27.2.3;
+
+1.27.2.3
+date	97.11.27.00.51.48;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.29
+log
+@Sanity checking for version number in winggo.c (this prevents people from
+crashing the frontend if they enter GET http://foo.bar/ HTTP/1.0 into
+a Wingman frontend).
+@
+text
+@/*
+ *  winggo.c
+ *  This file contains the request handling code that defines the
+ *  TranSend distillation web proxy.  It corresponds to the TranSend Service
+ *  layer in the layered SNS model.  This particular set of code handles
+ *  the GLALFTP protocol to be used with Wingman compatible browsers.
+ */
+
+#define DEBUGGING
+#include "frontend.h"
+#include "debug.h"
+#include "comm_http.h"
+#include "userpref.h"
+#include "url_magic.h"
+#include "ARGS.h"
+#include "utils.h"
+#include "wingreq.h"
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+
+#ifdef LOGGING
+/*
+#include "md5.h"
+static char magicKey[] = "aa883fd833ef";
+*/
+#endif /* LOGGING */
+
+/* Metadata for uncachable content and the "is a database" flag */
+static char uncache_metadata[] = 
+  { 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01 };
+static char contenttype_metadata[] = 
+  { 0x00, 0x03, 0x00, 0x02, 0x00, 0x00 };
+
+static userkey userkey_from_sock_ipaddr(int sock);
+static void    wing_error_return(Request *h, 
+				 task_t *t,
+				 ArgumentList prefs,
+				 int index,
+				 gl_hdr *hdrs);
+#if 0
+static void wing_raw_return(int fd, UINT32 vers, UINT32 ID, UINT32 metalen,
+    UINT32 datalen, UINT32 comp, unsigned char *metadata, unsigned char *data);
+#endif
+
+/* What client versions support what features? */
+#define version_check(vers, needvers) \
+    (((unsigned long)((vers)&0xffffff00UL)) >= \
+     ((unsigned long)((needvers)&0xffffff00UL)))
+
+#define CLIENT_VERSION_PLAIN 0x01000200
+#define CLIENT_VERSION_AGGLIST 0x01000200
+#define CLIENT_VERSION_LOADDB 0x01000300
+#define CLIENT_VERSION_NEWAGG 0x01050300
+
+#define AGGLISTURL "http://www.isaac.cs.berkeley.edu/pilot/wingman/nph-agg.cgi/agglist/"
+
+#define DEFAULT_AGGLIST_URL "agg://agglist/"
+#define DEFAULT_ABOUT_URL "http://www.isaac.cs.berkeley.edu/pilot/wingman/about-"
+
+     /*#define CONTENT_TYPE_AGG        "application/x-wingman-agg"
+       #define CONTENT_TYPE_AGGLIST    "application/x-wingman-agglist"
+       #define CONTENT_TYPE_WINGDATA   "application/x-wingman"
+       #define CONTENT_TYPE_PALMOSDB   "application/x-palmosdb"*/
+
+#define CONTENT_TYPE_WINGPREFIX       "x-wingman/"
+#define CONTENT_TYPE_AGG              "application/x-wingman-agg"
+#define CONTENT_TYPE_WINGMAN_(type)   CONTENT_TYPE_WINGPREFIX ## #type
+#define CONTENT_TYPE_WINGMAN(type)    CONTENT_TYPE_WINGMAN_(type)
+
+
+/* See if the passed content type matches the given one, and the versions are
+   compatible.  Note that the passed content_type is _not_ NUL-terminated. */
+static int typecmp(char *matchtype, unsigned int matchvers, char *contenttype,
+    unsigned int vers)
+{
+    int l;
+    char c;
+
+    if (!contenttype) return 1;
+    if (!version_check(vers, matchvers)) return 1;
+    l = strlen(matchtype);
+    if (strncasecmp(contenttype, matchtype, l)) return 1;
+    c = contenttype[l];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+	(c >= '0' && c <= '9') || c == '-' || c == '_') {
+	return 1;
+    }
+    return 0;
+}
+
+
+/*
+ *  wing_read_client_request: reads in an entire client request from the 
+ *  socket. Times out if the data cannot be read
+ *
+ *  ARGS:
+ *  i/o: the wing_request structure; its http_req.cli_fd field contains 
+ *      the file number of the socket on which the request is arriving.
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_read_client_request(wing_request *req)
+{
+  int res, timed_out;
+  struct timeval to;
+  unsigned char hdr_buf[sizeof_gl_hdr];
+
+  /* Read the wingman protocol header */
+
+  to.tv_sec = PERF_HTTP_REQ_TIMEOUT;
+  to.tv_usec = 0;
+  res = correct_read_to(req->http_req.cli_fd, (char *) hdr_buf, 
+			sizeof_gl_hdr, to, &timed_out);
+  if (timed_out || res != sizeof_gl_hdr) {
+    /* We timed out or had a socket error */
+    return gm_False;
+  }
+
+
+  /* We have our headers - let's extract out the fields */
+  memcpy(&req->wing_hdr.version, hdr_buf, 4);
+  req->wing_hdr.version = ntohl(req->wing_hdr.version);
+
+  /* Sanity check on the version number */
+  if ((req->wing_hdr.version & 0xffff0000) < 0x01000000 ||
+      (req->wing_hdr.version & 0xffff0000) >= 0x02000000) {
+    /* Failed the sanity check */
+    return gm_False;
+  }
+
+  memcpy(&req->wing_hdr.request_id, hdr_buf+4, 4);
+  req->wing_hdr.request_id = ntohl(req->wing_hdr.request_id);
+
+  memcpy(&req->wing_hdr.metadatasize, hdr_buf+8, 4);
+  req->wing_hdr.metadatasize = ntohl(req->wing_hdr.metadatasize);
+
+  memcpy(&req->wing_hdr.datasize, hdr_buf+12, 4);
+  req->wing_hdr.datasize = ntohl(req->wing_hdr.datasize);
+
+  memcpy(&req->wing_hdr.comp, hdr_buf+16, 4);
+  req->wing_hdr.comp = ntohl(req->wing_hdr.comp);
+
+  proxy_debug_3(DBG_WING, "version %lu", req->wing_hdr.version);
+  proxy_debug_4(DBG_WING, "reqid %lu metadatasize %lu", 
+		req->wing_hdr.request_id, req->wing_hdr.metadatasize);
+  proxy_debug_4(DBG_WING, "datasize %lu comp %lu", req->wing_hdr.datasize,
+		req->wing_hdr.comp);
+  if (req->wing_hdr.datasize == 0) {
+    /* Some sort of bogosity - no control messages; we need data */
+    return gm_False;
+  }
+
+  /* Now pull down the metadata */
+  if (req->wing_hdr.metadatasize > 0) {
+    to.tv_sec = PERF_HTTP_REQ_TIMEOUT;
+    to.tv_usec = 0;
+    assert(DistillerBufferAlloc(&req->wing_metadata, 
+				req->wing_hdr.metadatasize+1) == gm_True);
+    res = correct_read_to(req->http_req.cli_fd, 
+			  (char *) DistillerBufferData(&req->wing_metadata),
+			  req->wing_hdr.metadatasize, to, &timed_out);
+    if (timed_out || res != req->wing_hdr.metadatasize) {
+      /* Timed out or had socket error */
+      return gm_False;
+    }
+    /* NULL terminate */
+    *(((char *) DistillerBufferData(&req->wing_metadata)) + 
+      req->wing_hdr.metadatasize) = '\0';
+    proxy_debug_3(DBG_WING, "Metadata: %s",
+		  DistillerBufferData(&req->wing_metadata));
+  }
+
+  /* Now pull down the data */
+  if (req->wing_hdr.datasize > 0) {
+    to.tv_sec = PERF_HTTP_REQ_TIMEOUT;
+    to.tv_usec = 0;
+    assert(DistillerBufferAlloc(&req->wing_data, req->wing_hdr.datasize+1)
+	   == gm_True);
+    res = correct_read_to(req->http_req.cli_fd,
+			  (char *) DistillerBufferData(&req->wing_data),
+			  req->wing_hdr.datasize, to, &timed_out);
+    if (timed_out || res != req->wing_hdr.datasize) {
+      /* Timed out or had socket error */
+      return gm_False;
+    }
+    /* NULL terminate */
+    *(((char *) DistillerBufferData(&req->wing_data)) + 
+      req->wing_hdr.datasize) = '\0';
+    proxy_debug_3(DBG_WING, "Data: %s", DistillerBufferData(&req->wing_data));
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_parse_metadata: parse out the wing_metadata field of the incoming
+ *      request and set the appropriate flags in the req->flags structure
+ *  ARGS:
+ *  i/o: the wing_request structure; its wing_hdr field contains the wingman
+ *      protocol header, the wing_data and wing_metadata fields contain the
+ *      client request's data and metadata respectively
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_parse_metadata(wing_request *req)
+{
+  /* Parse incoming metadata */
+  if (req->wing_hdr.metadatasize > 0) {
+    unsigned char *metaptr, *endptr;
+    
+    metaptr = DistillerBufferData(&req->wing_metadata);
+    endptr = metaptr + req->wing_hdr.metadatasize;
+
+    /* Keep scanning until we run off the buffer */
+    while ( (metaptr+4) <= endptr) {
+      unsigned int m_type, m_len;
+
+      m_type = ((*metaptr) << 8) + (*(metaptr+1));
+      metaptr+=2;
+      m_len = ((*metaptr) << 8) + (*(metaptr+1));
+      metaptr+=2;
+
+      switch(m_type) {
+      case MetaCacheExpire:
+      case MetaPageType:
+	/* Wacked - this should only occur for server->client pragmas */
+	break;
+
+      case MetaNoCache:
+	/* Aha - client has requested a nocache */
+	req->flags.out_nocache = 1;
+	break;
+
+#ifdef BACKWARD_COMPATIBLE
+      case MetaAggList:
+	if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+	  /* Send an aggregator list? OK! */
+	  req->flags.out_sendagglist = 1;
+	  req->flags.out_nocache     = 1; /* Don't cache the agglist */
+	}
+	break;
+#endif
+
+      default:
+	break;
+      }
+      metaptr += m_len;
+    }
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_grab_userprefs: use the client's IP address to grab the user-prefs
+ *      from the userpref database; Set the userid in the user-prefs to 
+ *      "wingman". Also, add the FRONT_CLI_VERSION, FRONT_CLIENT_IP and
+ *      FRONT_NOCACHE user prefs
+ *  ARGS:
+ *  i/o: the wing_request structure; its prefs field is filled with the
+ *      client's user prefs.
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_grab_userprefs(wing_request *req)
+{
+  userkey k;
+  int i;
+
+  /* Grab the user's preferences.  Also add in the s11=wingman pref,
+     and the client's IP address pref. */
+
+  k = userkey_from_sock_ipaddr(req->http_req.cli_fd);
+#ifdef LOGGING
+  req->http_req.lo->ipaddr = k;
+#endif /* LOGGING */
+  (void)get_userprefs(k, &req->prefs);
+  for (i=0; i<req->prefs.nargs; i++) {
+    if (req->prefs.arg[i].id == FRONT_USERID) {
+      SET_ARG_STRING(req->prefs.arg[i], "wingman");
+      break;
+    }
+  }
+  if (i == req->prefs.nargs) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(req->prefs.arg[i], FRONT_USERID);
+    SET_ARG_STRING(req->prefs.arg[i], "wingman");
+    req->prefs.nargs++;
+  }
+  for (i=0; i<req->prefs.nargs; i++) {
+    if (req->prefs.arg[i].id == FRONT_CLI_VERSION) {
+      SET_ARG_INT(req->prefs.arg[i], req->wing_hdr.version);
+      break;
+    }
+  }
+  if (i == req->prefs.nargs) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(req->prefs.arg[i], FRONT_CLI_VERSION);
+    SET_ARG_INT(req->prefs.arg[i], req->wing_hdr.version);
+    req->prefs.nargs++;
+  }
+  assert(req->prefs.nargs != MAX_ARGS);
+  SET_ARG_INT(req->prefs.arg[req->prefs.nargs], (INT32) k);
+  SET_ARG_ID(req->prefs.arg[req->prefs.nargs], FRONT_CLIENT_IP);
+  req->prefs.nargs++;
+
+  /* If we're sending a no-cache header to the server, we also need to set
+     a no-cache argument so the distiller knows to send no-cache on inlines.
+     */
+  if (req->flags.out_nocache) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_INT(req->prefs.arg[req->prefs.nargs], (INT32) 1);
+    SET_ARG_ID(req->prefs.arg[req->prefs.nargs], FRONT_NOCACHE);
+    req->prefs.nargs++;
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_parse_url: parse out the client's requested URL from the wing_data
+ *      field; replace the original replace URL with a new corresponding one,
+ *      if necessary
+ *  ARGS:
+ *  i/o: the wing_request structure; its wing_data field contains a 
+ *      NULL-terminated URL string
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_parse_url(wing_request *req)
+{
+  /* Copy in the URL - need to prepend http:/ / if it's not already
+     in there, and we should demagify. XXXX - what about chained
+     URLs, i.e. http://foo.bar/http://baz/bof/ ? */
+
+  extern Options runtime_options;
+
+  {
+    char *magicURL;
+    char *s,*d;
+    int extrasize = 8;  /* The size of "http://" */
+    const char *urlprefix = "";
+    int urloffset = 0;
+
+    /* Is this "view source"? */
+    if (!strncmp(DistillerBufferData(&req->wing_data), "src:", 4) ||
+	!strncmp(DistillerBufferData(&req->wing_data), "doc:", 4)) {
+	int i, len;
+	int isdoc = (!strncmp(DistillerBufferData(&req->wing_data), "doc:",4));
+
+	len = DistillerBufferLength(&req->wing_data)-4;
+	memmove(DistillerBufferData(&req->wing_data),
+	    ((char *)DistillerBufferData(&req->wing_data))+4, len);
+	DistillerBufferSetLength(&req->wing_data, len);
+
+	for (i=0; i<req->prefs.nargs; i++) {
+	    if (req->prefs.arg[i].id == FRONT_SRCFLAG) {
+	      SET_ARG_INT(req->prefs.arg[i], isdoc ? 2 : 1);
+	      break;
+	    }
+	}
+	if (i == req->prefs.nargs) {
+	    assert(req->prefs.nargs != MAX_ARGS);
+	    SET_ARG_ID(req->prefs.arg[i], FRONT_SRCFLAG);
+	    SET_ARG_INT(req->prefs.arg[i], isdoc ? 2 : 1);
+	    req->prefs.nargs++;
+	}
+    }
+
+    /* Check if this is an "about" URL */
+    if (!strncmp(DistillerBufferData(&req->wing_data), "about:", 6)) {
+      urlprefix = Options_Find(runtime_options, "wingman.about_url");
+      if (urlprefix==NULL) {
+	urlprefix = DEFAULT_ABOUT_URL;
+      }
+      extrasize = strlen(urlprefix) + 1;
+      urloffset = 6;
+    }
+
+    magicURL = (char *) malloc(req->wing_hdr.datasize+extrasize);
+    assert(magicURL);
+    strcpy(magicURL, urlprefix);
+    
+    /* Allow http://, ftp://, gopher://, etc. to work */
+    if (strncmp(DistillerBufferData(&req->wing_data), "http://", 7) &&
+	strncmp(DistillerBufferData(&req->wing_data), "agg://", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "about:", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "ftp://", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "gopher://", 9)) {
+      strcat(magicURL, "http://");
+    }
+    
+    /* create the magic url; remove any special chars; replace %5E with ^ */
+    strcat(magicURL, ((char *)DistillerBufferData(&req->wing_data))+urloffset);
+    for(d=s=magicURL; *s; ++s, ++d) {
+	if (*s < '!' || *s > 0x7e) {
+	    /* Someone tried to sneak an illegal char in the URL */
+	    *d = '+';
+	} else if (*s == '%' && s[1] == '5' && (s[2] == 'E' || s[2] == 'e')) {
+	    *d = '^';
+	    s += 2;
+	} else {
+	    *d = *s;
+	}
+    }
+    *d = '\0';
+    req->http_req.url = (char *) malloc(req->wing_hdr.datasize+extrasize);
+    assert(req->http_req.url);
+    from_magic(magicURL, req->http_req.url, &req->prefs);
+    free(magicURL);
+    magicURL = NULL;
+    proxy_debug_3(DBG_WING, "URL is %s", req->http_req.url);
+
+#ifdef BACKWARD_COMPATIBLE
+    if ((!version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) && 
+	req->flags.out_sendagglist) {
+      const char *url;
+      req->saveoldurl = req->http_req.url;
+      url = Options_Find(runtime_options, "wingman.agglist_url");
+      if (url==NULL) url = DEFAULT_AGGLIST_URL;
+      req->http_req.url = strdup(url);
+    }
+#endif
+  }
+  
+  /* Copy in the method - assume GET for now */
+  {
+    req->http_req.method = (char *) malloc(sizeof(char) * (strlen("GET")+1));
+    assert(req->http_req.method);
+    strcpy(req->http_req.method, "GET");
+  }
+
+  /* Just fake an HTTP/1.0 request, I guess */
+  req->http_req.version = HTTP_VERSION_10_OR_LATER;
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_create_client_http_headers: create HTTP client headers from
+ *      the wingman request
+ *  ARGS:
+ *  i/o: the wing_request structure; 
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_create_client_http_headers(wing_request *req)
+{
+  char *hostpart = NULL;
+  int hostlen = 0;
+  
+  /* Find the value for the Host: header */
+  if (!strncmp(req->http_req.url, "http://", 7)) {
+    char *hp;
+    hp = hostpart = req->http_req.url + 7;
+    for(hostlen = 0; *hp && *hp != ':' && *hp != '/'; ++hp) ++hostlen;
+  } else  {
+    hostpart = NULL;
+    hostlen = 0;
+  }
+  
+  /* Create and copy in client headers */
+  {
+    static char fake_nocache_hdr[] = "Pragma: no-cache\r\n";
+    static char fake_headers[] = 
+      "User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\nAccept: text/*, "
+      "image/gif, image/jpeg\r\n\r\n";
+
+    /* Malloc space for GET <url> HTTP/1.0\r\n<fake_headers> */
+    assert(DistillerBufferAlloc(&req->http_req.cli_hdrs, 
+				strlen(fake_headers)+
+				strlen(fake_nocache_hdr)+
+				hostlen+8+1) == gm_True);
+    sprintf(DistillerBufferData(&req->http_req.cli_hdrs),
+	    "%s%s%.*s%s%s", 
+	      req->flags.out_nocache ? fake_nocache_hdr : "", 
+	      hostlen ? "Host: " : "", hostlen,
+	      hostlen ? hostpart : "", hostlen ? "\r\n" : "",
+	      fake_headers);
+    proxy_debug_3(DBG_WING, "Client headers '%s'",
+		  DistillerBufferData(&req->http_req.cli_hdrs));
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_dispatch_request: the main dispatch loop.
+ *      The loop is executed as long as an HTTP-redirect response is
+ *      received fromn the server/distiller (limited, of course, to some max)
+ *      If the request URL is not an aggregator URL, then invoke 
+ *      server_dispatch
+ *      If the response is not an HTTP-redirect, invoke proxy dispatch
+ *  ARGS:
+ *  i/o: the wing_request structure; 
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_dispatch_request(wing_request *req)
+{
+  int index = TASK_THRINDEX(req->task), num_redirect=0, tot_num_redirect=0, 
+    nfound;
+  HTTP_Status result;
+  DistillerStatus dist_result;
+  DistillerBuffer *current_http_hdrs=NULL, *current_http_data=NULL;
+  UINT32 current_http_status;
+
+  /*
+   * do
+   *    if agg, construct fake response
+   *    else do server_dispatch
+   *    if response is not 300, reset ctr and do proxy_dispatch
+   * while response is not 300 and ctr < max
+   */
+
+  while (num_redirect <= PERF_HTTP_MAX_REDIRECT &&
+	 tot_num_redirect <= 3 * PERF_HTTP_MAX_REDIRECT) {
+    
+    if (!strncmp(req->http_req.url, "agg://", 6)) {
+      /* this is an aggregator URL */
+      static char agg_svr_reply[] = 
+	"HTTP/1.0 200 OK\r\n"
+	"Content-type: " CONTENT_TYPE_AGG "\r\n\r\n";
+      int len;
+
+      req->http_req.svr_http_status = 200;
+      DistillerBufferSetStatic(&req->http_req.svr_hdrs, agg_svr_reply, 
+			       strlen(agg_svr_reply));
+
+      len = strlen(req->http_req.url);
+      DistillerBufferAlloc(&req->http_req.svr_data, len);
+      strncpy(DistillerBufferData(&req->http_req.svr_data), 
+	      req->http_req.url, len);
+    } else {
+      if (wing_create_client_http_headers(req)==gm_False) return gm_False;
+
+      /* Now, get the data from the server */
+      req->http_req.errmsg[0] = '\0';
+      result = server_dispatch(&req->prefs, req->task);
+      /* If transport-level error, wrap error in HTML and continue as though
+	 we got a good result from the cache. XXX - we need a wingman transport
+	 level error reporting mechanism for this case, I believe. */
+      if (result != HTTP_NO_ERR) {
+	if (req->http_req.errmsg[0] == '\0')
+	  sprintf(req->http_req.errmsg, 
+		  "Internal proxy error: unknown server_dispatch "
+		  "error %d.  Please retry, and report this bug if "
+		  "it persists.", result);
+	wing_error_return(&req->http_req, req->task, req->prefs, 
+			  index, &req->wing_hdr);
+	return gm_False;
+      }
+      proxy_debug_3(DBG_WING, "Server headers '%s'",
+		    DistillerBufferData(&req->http_req.svr_hdrs));
+      proxy_debug_3(DBG_WING, "Server datalen %d",
+		    DistillerBufferLength(&req->http_req.svr_data));
+    }
+
+    /* XXX - this is where we should check for a redirect... */
+    if (  !((req->http_req.svr_http_status >= 300) && 
+	    (req->http_req.svr_http_status < 400))  ) {
+
+      /*
+       * reset the num_redirect counter
+       */
+      num_redirect = 0;
+
+      /* 
+       * Give data to distiller.
+       */
+      req->http_req.errmsg[0] = '\0';
+      INST_set_thread_state(index, THR_DISTILLERSEND);
+      dist_result = proxy_dispatch(&req->prefs, req->task);
+      switch(dist_result) {
+      case distOk:
+	/* Fall through into writeback phase */
+	break;
+      case distDistillerNotFound:
+      case distLaunchTimeout:
+      case distBadInput:
+      case distConnectionBroken:
+      default:
+	proxy_debug_3(DBG_WING, 
+		      "Non-distOk result returned by proxy-dispatch (%d)",
+		      dist_result);
+	if (req->http_req.errmsg[0] == '\0')
+	  sprintf(req->http_req.errmsg, 
+		  "Distiller error - non-distOk returned by proxy-dispatch "
+		  "(%d) - please report this internal error to the transend "
+		  "team, along with the URL that generated it.",
+		  dist_result);
+	wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			  &req->wing_hdr);
+	return gm_False;
+      }
+
+      current_http_hdrs = &req->http_req.pxy_hdrs;
+      current_http_data = &req->http_req.pxy_data;
+
+      nfound = sscanf(DistillerBufferData(current_http_hdrs), "%*s %lu",
+		      &current_http_status);
+      if (nfound < 1) {             /* no status found */
+	current_http_status = 0;
+      }
+    }
+    else {
+      current_http_hdrs = &req->http_req.svr_hdrs;
+      current_http_data = &req->http_req.svr_data;
+      current_http_status = req->http_req.svr_http_status;
+    }
+
+#ifdef BACKWARD_COMPATIBLE
+    if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+      const char *content_type;
+      content_type = get_header_value(current_http_hdrs,
+				      "content-type", NULL, NULL, NULL);
+      if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeAgglist), 
+		   CLIENT_VERSION_AGGLIST,
+		   (char *)content_type, req->wing_hdr.version)) {
+	req->agglistlen = DistillerBufferLength(current_http_data);
+	if (req->agglistdata!=NULL) free(req->agglistdata);
+	req->agglistdata = malloc(req->agglistlen);
+	assert(req->agglistdata);
+	memmove(req->agglistdata, DistillerBufferData(current_http_data),
+		req->agglistlen);
+
+	/* now redirect to the original URL */
+	current_http_status = 300;
+      }
+    }
+#endif
+
+    if ((current_http_status >= 300) && 
+	(current_http_status < 400)) {
+      char *location, *locend; /* XXX , *content_type;*/
+      
+      /* See if we should be paying any attention to this content, anyway. */
+      /* XXX content_type = (char *)get_header_value(current_http_hdrs,
+                                              "content-type", NULL, NULL,
+                                              NULL);*/
+
+      /* Grab the "Location" header, and go there */
+#ifdef BACKWARD_COMPATIBLE
+      if (version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG) ||
+	  req->saveoldurl==0) {
+#endif
+	location = (char *) get_header_value(current_http_hdrs,
+					     "location", 
+					     NULL, NULL, NULL);
+	if (location == NULL) {
+	  proxy_debug_2(DBG_WING, "Couldn't find location in redirect.");
+	  if (req->http_req.errmsg[0] == '\0')
+	    sprintf(req->http_req.errmsg, 
+		    "Couldn't find Location header in redirect - "
+		    "this server is badly behaved.  Please report "
+		    "this to the web page's administrator.");
+	  wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			    &req->wing_hdr);
+	  return gm_False;
+	}
+	  
+	locend = strchr(location, '\r');
+	if (locend == NULL) {
+	  proxy_debug_2(DBG_WING, "Ill-formatted location in redirect.");
+	  if (req->http_req.errmsg[0] == '\0')
+	    sprintf(req->http_req.errmsg, 
+		    "Ill-formatted location in redirect - "
+		      "this server is badly behaved.  Please report this "
+		    "to the web page's administrator.");
+	  wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			    &req->wing_hdr);
+	  return gm_False;
+	}
+	
+	/* Let's copy in the location */
+	if (req->http_req.url != NULL)
+	  free(req->http_req.url);
+	req->http_req.url = 
+	  (char *) malloc(sizeof(char) * ((locend-location)+2));
+	assert(req->http_req.url);
+	memcpy(req->http_req.url, location, (locend-location));
+	req->http_req.url[locend-location] = '\0';
+#ifdef BACKWARD_COMPATIBLE
+      } else {
+	  if (req->http_req.url) free(req->http_req.url);
+	  req->http_req.url = req->saveoldurl;
+	  req->saveoldurl = NULL;
+      }
+#endif
+      proxy_debug_3(DBG_WING, "Redirected URL is %s", req->http_req.url);
+
+      /* Free up the client/server/proxy buffers from before */
+      DistillerBufferFree(&req->http_req.cli_hdrs);
+      DistillerBufferFree(&req->http_req.cli_data);
+
+      DistillerBufferFree(&req->http_req.svr_hdrs);
+      DistillerBufferFree(&req->http_req.svr_data);
+
+      DistillerBufferFree(&req->http_req.pxy_hdrs);
+      DistillerBufferFree(&req->http_req.pxy_data);
+
+      /* All's well, keep trying */
+      num_redirect++;
+      tot_num_redirect++;
+      continue;
+    } else {
+
+      /* 
+       * we are done; we have done proxy dispatch, and the response is
+       * not a HTTP redirect
+       */
+
+      break;
+    }
+  }
+
+  if (num_redirect > PERF_HTTP_MAX_REDIRECT || 
+      tot_num_redirect > 3 * PERF_HTTP_MAX_REDIRECT) {
+    proxy_debug_2(DBG_WING, "Redirection loop detected.");
+    if (req->http_req.errmsg[0] == '\0')
+      sprintf(req->http_req.errmsg, "Redirection loop detected - the proxy "
+	      "cannot resolve the URL, because the web server is badly "
+	      "configured.");
+    wing_error_return(&req->http_req, req->task, req->prefs, index, 
+		      &req->wing_hdr);
+    return gm_False;
+  }
+
+  /* Check to see if it is a non-200 return code */
+  if (current_http_status != 200) {
+    req->flags.in_nocache = 1;
+    /* proxy_debug_3(DBG_WING, "Non-200 status code (%ld)", h.svr_http_status);
+       if (h.errmsg[0] == '\0')
+       sprintf(h.errmsg, "Non-200 status code (%ld) - the web server "
+       "returned an error.", h.svr_http_status);
+       wing_error_return(&h, t, prefs, index, hdrs);
+       goto WINGGO_FINISH; */
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_writeback_reply: convert the HTTP server/distiller response to
+ *      the wingman protocol and write it back to the client
+ *  ARGS:
+ *  i/o: the wing_request structure; the req->http_req.pxy_data/hdrs
+ *      contains the HTTP response
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_writeback_reply(wing_request *req)
+{
+  const char *content_type;
+  int content_type_len, content_type_int;
+
+  /*
+   * Check that the result is of a type the client can understand
+   */
+  {
+    gm_Bool handled = gm_False;
+    char *endptr;
+
+    content_type = get_header_value(&req->http_req.pxy_hdrs,
+				    "content-type", &content_type_len, 
+				    NULL, NULL);
+    if (content_type && !strncasecmp(content_type, CONTENT_TYPE_WINGPREFIX,
+				     strlen(CONTENT_TYPE_WINGPREFIX))) {
+      content_type_int = 
+	strtoul(&content_type[strlen(CONTENT_TYPE_WINGPREFIX)], &endptr, 10);
+      if ((endptr - content_type) == content_type_len) {
+	/* 
+	 * for now, we assume that distillers never return and parameters
+	 * for x-wingman content-types 
+	 */
+	handled = gm_True;
+      }
+    }
+
+    if (handled==gm_False) {
+      proxy_debug_2(DBG_WING, "Content-type can't be handled");
+      if (req->http_req.errmsg[0] == '\0') {
+	char *endct;
+	endct = content_type ? strchr(content_type, '\r') : NULL;
+	if (endct) {
+	  *endct = '\0';
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type %s can't be handled yet by the proxy.", 
+		   content_type);
+	} else {
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type can't be handled by the proxy.");
+	}
+      }
+      wing_error_return(&req->http_req, req->task, req->prefs, 
+			TASK_THRINDEX(req->task), &req->wing_hdr);
+      return gm_False;
+    }
+
+  }
+
+  /*
+   * Check that the result is of a type the client can understand
+   */
+  {
+    const char *pragma_value;
+    pragma_value = get_header_value(&req->http_req.pxy_hdrs,
+				    "pragma", NULL, NULL, NULL);
+    if (pragma_value && !strncasecmp(pragma_value, "no-cache", 8)) {
+      req->flags.in_nocache = 1;
+    }
+  }
+
+#ifdef OLD
+  {
+    content_type = get_header_value(&req->http_req.pxy_hdrs,
+				    "content-type", &content_type_len, 
+				    NULL, NULL);
+
+    if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeAgglist), CLIENT_VERSION_AGGLIST,
+		 (char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 0;
+    }
+    else if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeRegular), 
+		      CLIENT_VERSION_PLAIN,
+		      (char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 0;
+    } else if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeDatabase), 
+			CLIENT_VERSION_LOADDB,
+			(char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 1;
+    } else {
+      proxy_debug_2(DBG_WING, "Content-type can't be handled");
+      if (req->http_req.errmsg[0] == '\0') {
+	char *endct;
+	endct = content_type ? strchr(content_type, '\r') : NULL;
+	if (endct) {
+	  *endct = '\0';
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type %s can't be handled yet by the proxy.", 
+		   content_type);
+	} else {
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type can't be handled by the proxy.");
+	}
+      }
+      wing_error_return(&req->http_req, req->task, req->prefs, 
+			TASK_THRINDEX(req->task), &req->wing_hdr);
+      return gm_False;
+    }
+  }
+#endif
+
+  /* 
+   * Writeback the data from the distiller.
+   */
+  {
+    char response_hdrbuf[sizeof_gl_hdr];
+    gl_hdr response_hdr;
+
+    INST_set_thread_state(TASK_THRINDEX(req->task), THR_WRITEBACK);
+    response_hdr.version = htonl(req->wing_hdr.version);
+    response_hdr.request_id = htonl(req->wing_hdr.request_id);
+
+#ifdef OLD
+    response_hdr.metadatasize = 
+      (req->flags.in_nocache ? sizeof(uncache_metadata) : 0) +
+      (req->flags.in_isdatabase ? sizeof(database_metadata) : 0) +
+      (content_type_len + 5);
+#endif
+    response_hdr.metadatasize = 
+      (req->flags.in_nocache ? sizeof(uncache_metadata) : 0) +
+      (content_type_int ? sizeof(contenttype_metadata) : 0);
+
+#ifdef BACKWARD_COMPATIBLE
+    if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+      response_hdr.metadatasize += (req->agglistlen ? req->agglistlen + 4 : 0);
+    }
+#endif
+    response_hdr.metadatasize = htonl(response_hdr.metadatasize);
+    response_hdr.datasize = htonl(DistillerBufferLength(&req->
+							http_req.pxy_data));
+    response_hdr.comp = htonl(0);
+
+    proxy_debug_4(DBG_WING,
+		  "About to write headers %lu %lu",
+		  ntohl(response_hdr.version), ntohl(response_hdr.request_id));
+    proxy_debug_4(DBG_WING,
+		  "  %d %d", ntohl(response_hdr.metadatasize), 
+		  ntohl(response_hdr.datasize));
+    proxy_debug_3(DBG_WING, "  %d", ntohl(response_hdr.comp));
+    
+    memcpy(response_hdrbuf+ 0, &response_hdr.version,     sizeof(UINT32));
+    memcpy(response_hdrbuf+ 4, &response_hdr.request_id,  sizeof(UINT32));
+    memcpy(response_hdrbuf+ 8, &response_hdr.metadatasize,sizeof(UINT32));
+    memcpy(response_hdrbuf+12, &response_hdr.datasize,    sizeof(UINT32));
+    memcpy(response_hdrbuf+16, &response_hdr.comp,        sizeof(UINT32));
+
+    correct_write(req->http_req.cli_fd, response_hdrbuf, sizeof_gl_hdr);
+    if (req->flags.in_nocache) 
+      correct_write(req->http_req.cli_fd, uncache_metadata, 
+		    sizeof(uncache_metadata));
+    if (content_type_int) {
+      char content_type_string[2];
+      content_type_string[0] = (((unsigned int)content_type_int) >> 8) & 0xFF;
+      content_type_string[1] =  ((unsigned int)content_type_int) & 0xFF;
+      correct_write(req->http_req.cli_fd, contenttype_metadata, 
+		    sizeof(contenttype_metadata) - 2);
+      correct_write(req->http_req.cli_fd, content_type_string, 2);
+    }
+
+#ifdef OLD
+    if (req->flags.in_isdatabase) 
+      correct_write(req->http_req.cli_fd, database_metadata, 
+		    sizeof(database_metadata));
+#endif
+
+#ifdef BACKWARD_COMPATIBLE
+    if ((! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) &&
+	req->agglistlen) {
+      unsigned char hdr[4] = { 0, 4, 0, 0 };
+      hdr[2] = (req->agglistlen >> 8) & 0xff;
+      hdr[3] = req->agglistlen & 0xff;
+      correct_write(req->http_req.cli_fd, (char *)hdr, 4);
+      correct_write(req->http_req.cli_fd, req->agglistdata, req->agglistlen);
+    }
+#endif
+
+#ifdef OLD
+    {
+      /* write the content type header */
+      unsigned char hdr[4] = { 0, MetaContentType, 0, 0 };
+      content_type_len++;
+      hdr[2] = (content_type_len >> 8) & 0xff;
+      hdr[3] = content_type_len & 0xff;
+      correct_write(req->http_req.cli_fd, (char *)hdr, 4);
+      correct_write(req->http_req.cli_fd, (char *)content_type, 
+		    content_type_len-1);
+      correct_write(req->http_req.cli_fd, "", 1);
+    }
+#endif
+
+    correct_write(req->http_req.cli_fd, 
+		  DistillerBufferData(&req->http_req.pxy_data),
+		  DistillerBufferLength(&req->http_req.pxy_data));
+  }
+  
+  return gm_True;
+}
+
+
+
+/*
+ *  wing_go_proc: thread entry point to handle an incoming Wingman request 
+ *  The request will be parsed, validated, and handed off to a remote
+ *  distiller (or else rejected).  This is a long blocking operation.
+ *
+ *  ARGS:
+ *  i/o: the task_t structure; its task_data field contains the file
+ *      number of the socket on which the request is arriving.
+ *  RETURNS: a void* which is ignored; errors are reported directly on
+ *      socket using HTTP error protocol (500 Error, etc)
+ *  REENTRANT: yes
+ *  
+ */
+
+
+void *
+wing_go_proc(task_t *t)
+{
+  wing_request req;
+  int index = TASK_THRINDEX(t);
+
+#ifdef LOGGING
+  userkey k;
+  struct loginfo lo;
+  char logmsg[MAX_LOGMSG_LEN];
+#endif /* LOGGING */
+
+  /* Initialize all buffers */
+  memset(&req, 0, sizeof(wing_request));
+
+  /*
+   *  New task data should be the request structure.
+   */
+  init_Request(&req.http_req);
+  req.http_req.cli_fd = (int)TASK_DATA(t); /* socket FD of client */
+  SET_TASK_DATA(t,&req.http_req);
+  req.task = t;
+  
+  INST_begin_timestamp(index);
+  INST_set_size(index,0);
+  INST_set_thread_state(index, THR_ACCEPTED);
+  INST_timestamp(index, m_arrival);
+#ifdef LOGGING
+  LOGGING_init_loginfo(&lo);
+  req.http_req.lo = &lo;
+#endif /* LOGGING */
+
+  if (wing_read_client_request(&req)==gm_False) goto WINGGO_FINISH;
+
+  INST_timestamp(index, m_headersdone);
+
+  if (wing_parse_metadata(&req)==gm_False) goto WINGGO_FINISH;
+
+  /* For the sake of logging, fill in the loginfo structure url field */
+#ifdef LOGGING
+  snprintf(req.http_req.lo->url, MAX_LOGMSG_LEN-1, "%s", 
+	   DistillerBufferData(&req.wing_data));
+  req.http_req.lo->url[MAX_LOGMSG_LEN-1] = '\0';
+#endif /* LOGGING */
+
+  if (wing_grab_userprefs(&req)==gm_False) goto WINGGO_FINISH;
+
+  if (wing_parse_url(&req)==gm_False) goto WINGGO_FINISH;
+
+  if (wing_dispatch_request(&req)==gm_False) goto WINGGO_FINISH;
+  
+  if (wing_writeback_reply(&req)==gm_False) goto WINGGO_FINISH;
+
+
+  /* 
+   * All done - clean up. 
+   */
+
+
+  /* all cases exit through this single exit point */
+WINGGO_FINISH:
+  free_Request(&req.http_req);
+  DistillerBufferFree(&req.wing_data);
+  DistillerBufferFree(&req.wing_metadata);
+#ifdef BACKWARD_COMPATIBLE
+  if (req.saveoldurl) free(req.saveoldurl);
+  if (req.agglistdata) free(req.agglistdata);
+#endif
+  
+  INST_timestamp(index, m_wbdone);
+  INST_end_timestamp(index);
+
+  if (TASK_PARENT(t) == 0 && TASK_CHILD_INDEX(t) == 0) {
+    /* this is a "root task" */
+    close(req.http_req.cli_fd);
+  }
+
+#ifdef LOGGING
+  /* I compare the IP address to 127.0.0.1 so that I don't log connections
+     from localhost, namely the fe_check script.  I also MD5 the IP address. */
+  k = lo.ipaddr;
+  if (((UINT32) k) != ((UINT32) htonl(0x7F000001))) {
+    /* MD5_CTX   theHash;
+       UINT32    res;
+
+       MD5Init(&theHash);
+       MD5Update(&theHash, magicKey, sizeof(magicKey));
+       MD5Update(&theHash, &k, sizeof(UINT32));
+       MD5Final(&theHash);
+       
+       memcpy(&res, theHash.digest, sizeof(UINT32));
+       res = ntohl(res);
+       
+       snprintf(logmsg, MAX_LOGMSG_LEN-1,
+       "(WING) %lu %lu \"%s\" %d %ld %ld\n",
+       res, lo.date, lo.url,
+       lo.http_response, lo.size_before, lo.size_after);*/
+    
+    if ((req.http_req.lo != NULL) && (lo.url != NULL)) {
+      snprintf(logmsg, MAX_LOGMSG_LEN-1,
+	       "(WING) %08x %08x %08x \"%s\" %d %ld %ld\n",
+	       (UINT32) k, (UINT32) req.wing_hdr.version, lo.date, lo.url,
+	       lo.http_response, lo.size_before, lo.size_after);
+      gm_log(logmsg);
+    }
+  }
+#endif /* LOGGING */
+  return (void *)0;
+}
+
+
+
+
+/*
+ *  userkey_from_sock_ipaddr: make incoming IP address into a user prefs
+ *  key, so we can look up user in prefs database
+ *
+ *  ARGS: socket (filehandle)
+ *  REENTRANT: as safe as getpeername()
+ *  RETURNS: userkey; the "null key" if conversion fails
+ *
+ */
+
+static userkey
+userkey_from_sock_ipaddr(int s)
+{
+  struct sockaddr_in a;
+  int alen = sizeof(a);
+
+  memset(&a, 0, alen);
+  if (getpeername(s, (struct sockaddr *)&a, &alen) != 0) {
+    proxy_errlog_2("userkey_from_sock_ipaddr: %s", strerror(errno));
+    return USERKEY_NULL;
+  }
+  return ((userkey)(a.sin_addr.s_addr));
+}
+
+static void    
+wing_error_return(Request *h, 
+		  task_t *t,
+		  ArgumentList prefs,
+		  int index,
+		  gl_hdr *hdrs)
+{
+  DistillerStatus dist_result;
+  char response_header[20];
+  unsigned long ID, metalen, datalen, comp, vers;
+  int content_length = 0;
+  static char errhdr[] =
+    "HTTP/1.0 200 Document follows\r\n\
+Server: Wingman Proxy Server\r\n\
+Content-type: text/html\r\n\
+Content-length: ";
+  static char errmsg1[] =
+    "<html><head><TITLE>Wingman Error</TITLE></head>\n\
+<body><h1>Error</h1><p>\n";
+  static char errmsg2[] =
+    "<BR><P>\
+<img src=\"http://www.cs.berkeley.edu/~gribble/imagedir/homer.gif\">\n\
+\n\
+</body></html>\n\n";
+
+  static unsigned char canned_msg[] =    /* A canned error message */
+  { 
+    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 
+    0x00, 0x41, 0x00, 0x0b, 0x00, 0x01, 0x00, 0x0e, 
+    0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x20, 
+    0x45, 0x72, 0x72, 0x6f, 0x72, 0x20, 0x00, 0x00, 
+    0xff, 0xd2, 0x00, 0x26, 0x00, 0x00, 0x00, 0x0b, 
+    0x00, 0x67, 0x00, 0x16, 0x00, 0x08, 0x00, 0x14, 
+    0x50, 0x72, 0x6f, 0x78, 0x79, 0x20, 0x49, 0x6e, 
+    0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c, 0x20, 0x45, 
+    0x72, 0x72, 0x6f, 0x72, 0x00, 0x00, 0xff, 0xcc, 
+    0x00, 0x32, 0x00, 0x00, 0x00, 0x21, 0x00, 0xa0, 
+    0x00, 0x0b, 0x00, 0x00, 0x00, 0x20, 0x54, 0x68, 
+    0x65, 0x20, 0x70, 0x72, 0x6f, 0x78, 0x79, 0x20, 
+    0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x20, 
+    0x6d, 0x61, 0x79, 0x20, 0x62, 0x65, 0x20, 0x64, 
+    0x6f, 0x77, 0x6e, 0x20, 0x6f, 0x72, 0x00, 0x00, 
+    0xff, 0xc0, 0x00, 0x36, 0x00, 0x00, 0x00, 0x2c, 
+    0x00, 0x8f, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x24, 
+    0x64, 0x6f, 0x65, 0x73, 0x20, 0x6e, 0x6f, 0x74, 
+    0x20, 0x68, 0x61, 0x6e, 0x64, 0x6c, 0x65, 0x20, 
+    0x74, 0x68, 0x69, 0x73, 0x20, 0x70, 0x61, 0x67, 
+    0x65, 0x20, 0x70, 0x72, 0x6f, 0x70, 0x65, 0x72, 
+    0x6c, 0x79, 0x2e, 0x20, 0x00, 0x00, 0xff, 0xbc, 
+    0x00, 0x22, 0x00, 0x00, 0x00, 0x37, 0x00, 0x54, 
+    0x00, 0x0b, 0x00, 0x00, 0x00, 0x10, 0x54, 0x72, 
+    0x61, 0x6e, 0x73, 0x65, 0x6e, 0x64, 0x2f, 0x57, 
+    0x69, 0x6e, 0x67, 0x6d, 0x61, 0x6e, 0x00, 0x00, 
+    0xff, 0xff };
+
+  /* 
+   * Package up nice, simple HTML for error response
+   */
+  DistillerBufferFree(&h->pxy_data);
+  DistillerBufferFree(&h->pxy_hdrs);
+  DistillerBufferFree(&h->svr_data);
+  DistillerBufferFree(&h->svr_hdrs);
+  content_length = strlen(errmsg1)+strlen(errmsg2)+strlen(h->errmsg);
+  assert(DistillerBufferAlloc(&h->svr_hdrs, strlen(errhdr)+15) == gm_True);
+  sprintf(DistillerBufferData(&h->svr_hdrs), "%s%d\r\n\r\n",
+			      errhdr, content_length);
+  DistillerBufferSetLength(&h->svr_hdrs,
+			   strlen((char *) DistillerBufferData(&h->svr_hdrs)));
+  assert(DistillerBufferAlloc(&h->svr_data, content_length+3) == gm_True);
+  sprintf(DistillerBufferData(&h->svr_data), "%s%s%s",
+	  errmsg1, h->errmsg, errmsg2);
+  DistillerBufferSetLength(&h->svr_data,
+			   strlen((char *) DistillerBufferData(&h->svr_data)));
+
+  proxy_debug_3(DBG_WING, "Debug content: %s",
+		DistillerBufferData(&h->svr_data));
+
+  /* Prepare Wingman protocol headers */
+  vers = htonl(hdrs->version);
+  INST_set_thread_state(index, THR_WRITEBACK);
+  ID = htonl(hdrs->request_id);
+  metalen = htonl(sizeof(uncache_metadata));
+  comp = htonl(0);
+  *((UINT32 *) &(response_header[0])) = vers;
+  *((UINT32 *) &(response_header[4])) = ID;
+  *((UINT32 *) &(response_header[8])) = metalen;
+  *((UINT32 *) &(response_header[16])) = comp;
+
+  dist_result = proxy_dispatch(&prefs, t);
+  switch(dist_result) {
+  case distOk:
+    /* Fall through into writeback phase */
+    datalen = htonl(DistillerBufferLength(&h->pxy_data));
+    *((UINT32 *) &(response_header[12])) = datalen;
+    break;
+  case distDistillerNotFound:
+  case distLaunchTimeout:
+  case distBadInput:
+  case distConnectionBroken:
+  default:
+    /* XXX - Must send generic, prepackaged error response */
+    datalen = htonl(sizeof(canned_msg));
+    proxy_debug_3(DBG_WING, "Sizeof data is %ld\n", datalen);
+    *((UINT32 *) &(response_header[12])) = datalen;
+    proxy_debug_3(DBG_WING, "Debug distill failed (%d)", dist_result);
+    correct_write(h->cli_fd, response_header, 20);
+    correct_write(h->cli_fd, uncache_metadata, sizeof(uncache_metadata));
+    correct_write(h->cli_fd, (char *) canned_msg,
+		  sizeof(canned_msg));
+    return;
+  }
+
+  /* 
+   * Writeback the data from the distiller.
+   */
+  correct_write(h->cli_fd, response_header, 20);
+  correct_write(h->cli_fd, uncache_metadata, sizeof(uncache_metadata));
+  correct_write(h->cli_fd, DistillerBufferData(&h->pxy_data),
+		DistillerBufferLength(&h->pxy_data));
+  return;
+}
+
+#if 0
+/* Send stuff that's already in the right form back to the client.  The
+   UINT32 values are in _host_ order. */
+static void wing_raw_return(int fd, UINT32 vers, UINT32 ID, UINT32 metalen,
+    UINT32 datalen, UINT32 comp, unsigned char *metadata, unsigned char *data)
+{
+    unsigned char response_header[20];
+
+    *((UINT32 *) &(response_header[0])) = htonl(vers);
+    *((UINT32 *) &(response_header[4])) = htonl(ID);
+    *((UINT32 *) &(response_header[8])) = htonl(metalen);
+    *((UINT32 *) &(response_header[12])) = htonl(datalen);
+    *((UINT32 *) &(response_header[16])) = htonl(comp);
+
+    correct_write(fd, (char *)response_header, 20);
+    if (metalen) {
+	correct_write(fd, (char *)metadata, metalen);
+    }
+    if (datalen) {
+	correct_write(fd, (char *)data, datalen);
+    }
+}
+#endif
+@
+
+
+1.28
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@d129 7
+@
+
+
+1.27
+log
+@Added text-to-doc conversion
+@
+text
+@d9 1
+d32 2
+a33 2
+static char database_metadata[] = 
+  { 0x00, 0x03, 0x00, 0x02, 0x00, 0x01 };
+d54 1
+d58 14
+d92 1
+d94 2
+a95 3
+ *  wing_go_proc: thread entry point to handle an incoming Wingman request 
+ *  The request will be parsed, validated, and handed off to a remote
+ *  distiller (or else rejected).  This is a long blocking operation.
+d98 4
+a101 4
+ *  i/o: the task_t structure; its task_data field contains the file
+ *      number of the socket on which the request is arriving.
+ *  RETURNS: a void* which is ignored; errors are reported directly on
+ *      socket using HTTP error protocol (500 Error, etc)
+d106 2
+a107 2
+void *
+wing_go_proc(task_t *t)
+d109 14
+a122 13
+  int index = TASK_THRINDEX(t), i, num_redirect=0;
+  Request h;
+  ArgumentList prefs;
+  userkey k;
+  DistillerBuffer wing_hdrs, wing_data, wing_metadata;
+  gl_hdr *hdrs = NULL;
+  HTTP_Status result;
+  DistillerStatus dist_result;
+  int innocache=0, outnocache=0, sendagglist=0, isdatabase=0;
+  char *agglistdata = NULL;
+  int agglistlen = 0;
+  char *saveoldurl = NULL;
+  UINT32 saveversion;
+a123 4
+#ifdef LOGGING
+  struct loginfo lo;
+  char logmsg[MAX_LOGMSG_LEN];
+#endif /* LOGGING */
+d125 25
+a149 27
+  /* Local scratch buffers */
+  memset(&wing_hdrs, 0, sizeof(DistillerBuffer));
+  memset(&wing_data, 0, sizeof(DistillerBuffer));
+  memset(&wing_metadata, 0, sizeof(DistillerBuffer));
+
+  /*
+   *  New task data should be the request structure.
+   */
+  init_Request(&h);
+  h.cli_fd = (int)TASK_DATA(t); /* socket FD of client */
+  SET_TASK_DATA(t,&h);
+  
+  INST_begin_timestamp(index);
+  INST_set_size(index,0);
+  INST_set_thread_state(index, THR_ACCEPTED);
+  INST_timestamp(index, m_arrival);
+#ifdef LOGGING
+  LOGGING_init_loginfo(&lo);
+  h.lo = &lo;
+#endif /* LOGGING */
+  /*
+   *  Read the client request "headers".
+   */
+  {
+    int res, timed_out;
+    struct timeval to;
+    unsigned char hdr_buf[20];
+d151 2
+a152 1
+    assert(DistillerBufferAlloc(&wing_hdrs, sizeof(gl_hdr)) == gm_True);
+d155 8
+a162 44
+    res = correct_read_to(h.cli_fd, (char *) hdr_buf, 20, to, &timed_out);
+    if (timed_out || res != 20) {
+      /* We timed out or had a socket error */
+      goto WINGGO_FINISH;
+    }
+    /* We have our headers - let's extract out the fields */
+    hdrs = (gl_hdr *) DistillerBufferData(&wing_hdrs);
+    hdrs->version = ntohl((unsigned long)
+			   *((UINT32 *) hdr_buf));
+    hdrs->request_id = ntohl((unsigned long)
+			     *((UINT32 *) (hdr_buf+4)));
+    hdrs->metadatasize = ntohl((unsigned long)
+			       *((UINT32 *) (hdr_buf+8)));
+    hdrs->datasize = ntohl((unsigned long)
+			   *((UINT32 *) (hdr_buf+12)));
+    hdrs->comp = ntohl((unsigned long)
+		       *((UINT32 *) (hdr_buf+16)));
+    proxy_debug_3(DBG_WING, "version %lu", hdrs->version);
+    proxy_debug_4(DBG_WING, "reqid %lu metadatasize %lu", hdrs->request_id,
+		  hdrs->metadatasize);
+    proxy_debug_4(DBG_WING, "datasize %lu comp %lu", hdrs->datasize,
+		  hdrs->comp);
+    if (hdrs->datasize == 0) {
+      /* Some sort of bogosity - no control messages; we need data */
+      goto WINGGO_FINISH;
+    }
+    /* Now pull down the metadata and data */
+    if (hdrs->metadatasize) {
+      to.tv_sec = PERF_HTTP_REQ_TIMEOUT;
+      to.tv_usec = 0;
+      assert(DistillerBufferAlloc(&wing_metadata, hdrs->metadatasize+1) == 
+	     gm_True);
+      res = correct_read_to(h.cli_fd, 
+			    (char *) DistillerBufferData(&wing_metadata),
+			    hdrs->metadatasize, to, &timed_out);
+      if (timed_out || res != hdrs->metadatasize) {
+	/* Timed out or had socket error */
+	goto WINGGO_FINISH;
+      }
+      /* NULL terminate */
+      *(((char *) DistillerBufferData(&wing_metadata)) + hdrs->metadatasize)
+	= '\0';
+      proxy_debug_3(DBG_WING, "Metadata: %s",
+		    DistillerBufferData(&wing_metadata));
+d164 9
+d175 6
+a180 5
+    assert(DistillerBufferAlloc(&wing_data, hdrs->datasize+1) == gm_True);
+    res = correct_read_to(h.cli_fd,
+			  (char *) DistillerBufferData(&wing_data),
+			  hdrs->datasize, to, &timed_out);
+    if (timed_out || res != hdrs->datasize) {
+d182 1
+a182 1
+      goto WINGGO_FINISH;
+d185 3
+a187 3
+    *(((char *) DistillerBufferData(&wing_data)) + hdrs->datasize) = '\0';
+    proxy_debug_3(DBG_WING, "Data: %s", DistillerBufferData(&wing_data));
+    INST_timestamp(index, m_headersdone);
+d190 20
+d211 1
+a211 1
+  if (hdrs->metadatasize > 0) {
+d214 2
+a215 2
+    metaptr = DistillerBufferData(&wing_metadata);
+    endptr = metaptr + hdrs->metadatasize;
+d227 2
+a228 2
+      case 0x01:
+      case 0x03:
+d231 2
+a232 1
+      case 0x02:
+d234 1
+a234 1
+	outnocache = 1;
+d236 8
+a243 4
+      case 0x04:
+	/* Send an aggregator list? OK! */
+	sendagglist = 1;
+	outnocache = 1; /* Don't cache the agglist */
+d245 2
+d254 24
+d281 1
+a281 1
+  k = userkey_from_sock_ipaddr(h.cli_fd);
+d283 1
+a283 1
+  lo.ipaddr = k;
+d285 4
+a288 4
+  (void)get_userprefs(k, &prefs);
+  for (i=0; i<prefs.nargs; i++) {
+    if (prefs.arg[i].id == FRONT_USERID) {
+      SET_ARG_STRING(prefs.arg[i], "wingman");
+d292 9
+a300 9
+  if (i == prefs.nargs) {
+    assert(prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(prefs.arg[i], FRONT_USERID);
+    SET_ARG_STRING(prefs.arg[i], "wingman");
+    prefs.nargs++;
+  }
+  for (i=0; i<prefs.nargs; i++) {
+    if (prefs.arg[i].id == FRONT_CLI_VERSION) {
+      SET_ARG_INT(prefs.arg[i], hdrs->version);
+d304 10
+a313 10
+  if (i == prefs.nargs) {
+    assert(prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(prefs.arg[i], FRONT_CLI_VERSION);
+    SET_ARG_INT(prefs.arg[i], hdrs->version);
+    prefs.nargs++;
+  }
+  assert(prefs.nargs != MAX_ARGS);
+  SET_ARG_INT(prefs.arg[prefs.nargs], (INT32) k);
+  SET_ARG_ID(prefs.arg[prefs.nargs], FRONT_CLIENT_IP);
+  prefs.nargs++;
+d318 5
+a322 5
+  if (outnocache) {
+    assert(prefs.nargs != MAX_ARGS);
+    SET_ARG_INT(prefs.arg[prefs.nargs], (INT32) 1);
+    SET_ARG_ID(prefs.arg[prefs.nargs], FRONT_NOCACHE);
+    prefs.nargs++;
+d325 3
+a327 5
+  /* For the sake of logging, fill in the loginfo structure url field */
+#ifdef LOGGING
+  snprintf(h.lo->url, MAX_LOGMSG_LEN-1, "%s", DistillerBufferData(&wing_data));
+  h.lo->url[MAX_LOGMSG_LEN-1] = '\0';
+#endif /* LOGGING */
+d329 12
+a340 4
+  /*
+   * Ask the server to get the data for me.  We have to create a
+   * well-formed task and h structure first.
+   */
+d342 3
+d348 3
+d355 1
+a355 1
+    char *urlprefix = "";
+d359 13
+a371 11
+    if (!strncmp(DistillerBufferData(&wing_data), "src:", 4) ||
+	!strncmp(DistillerBufferData(&wing_data), "doc:", 4)) {
+	int i;
+	int isdoc = (!strncmp(DistillerBufferData(&wing_data), "doc:", 4));
+
+	memmove(DistillerBufferData(&wing_data),
+	    ((char *)DistillerBufferData(&wing_data))+4,
+	    DistillerBufferLength(&wing_data)-4);
+	for (i=0; i<prefs.nargs; i++) {
+	    if (prefs.arg[i].id == FRONT_SRCFLAG) {
+	      SET_ARG_INT(prefs.arg[i], isdoc ? 2 : 1);
+d375 5
+a379 5
+	if (i == prefs.nargs) {
+	    assert(prefs.nargs != MAX_ARGS);
+	    SET_ARG_ID(prefs.arg[i], FRONT_SRCFLAG);
+	    SET_ARG_INT(prefs.arg[i], isdoc ? 2 : 1);
+	    prefs.nargs++;
+a382 6
+    /* Check if this is an aggregator URL */
+    if (!strncmp(DistillerBufferData(&wing_data), "agg://", 6)) {
+	urlprefix = "http://www.isaac.cs.berkeley.edu/pilot/wingman/nph-agg.cgi/";
+	extrasize = strlen(urlprefix) + 1;
+	urloffset = 6;
+    }
+d384 7
+a390 4
+    if (!strncmp(DistillerBufferData(&wing_data), "about:", 6)) {
+	urlprefix = "http://www.isaac.cs.berkeley.edu/pilot/wingman/about-";
+	extrasize = strlen(urlprefix) + 1;
+	urloffset = 6;
+d393 1
+a393 1
+    magicURL = (char *) malloc(hdrs->datasize+extrasize);
+d398 5
+a402 5
+    if (strncmp(DistillerBufferData(&wing_data), "http://", 7) &&
+	strncmp(DistillerBufferData(&wing_data), "agg://", 6) &&
+	strncmp(DistillerBufferData(&wing_data), "about:", 6) &&
+	strncmp(DistillerBufferData(&wing_data), "ftp://", 6) &&
+	strncmp(DistillerBufferData(&wing_data), "gopher://", 9)) {
+d405 3
+a407 1
+    strcat(magicURL, ((char *)DistillerBufferData(&wing_data)) + urloffset);
+d420 3
+a422 3
+    h.url = (char *) malloc(hdrs->datasize+extrasize);
+    assert(h.url);
+    from_magic(magicURL, h.url, &prefs);
+d425 10
+a434 4
+    proxy_debug_3(DBG_WING, "URL is %s", h.url);
+    if (sendagglist) {
+	saveoldurl = h.url;
+	h.url = strdup(AGGLISTURL);
+d436 1
+d441 3
+a443 3
+    h.method = (char *) malloc(sizeof(char) * (strlen("GET")+1));
+    assert(h.method);
+    strcpy(h.method, "GET");
+d447 1
+a447 1
+  h.version = HTTP_VERSION_10_OR_LATER;
+d449 14
+a462 13
+  while (num_redirect <= PERF_HTTP_MAX_REDIRECT) {
+    char *hostpart = NULL;
+    int hostlen = 0;
+
+    /* Find the value for the Host: header */
+    if (!strncmp(h.url, "http://", 7)) {
+	char *hp;
+	hp = hostpart = h.url + 7;
+	for(hostlen = 0; *hp && *hp != ':' && *hp != '/'; ++hp) ++hostlen;
+    } else  {
+	hostpart = NULL;
+	hostlen = 0;
+    }
+d464 31
+a494 16
+    /* Create and copy in client headers */
+    {
+      static char fake_nocache_hdr[] =
+	"Pragma: no-cache\r\n";
+      static char fake_headers[] = 
+	"User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\nAccept: text/*, image/gif, image/jpeg\r\n\r\n";
+    
+      /* Malloc space for GET <url> HTTP/1.0\r\n<fake_headers> */
+      assert(
+	DistillerBufferAlloc(&h.cli_hdrs, 
+			     strlen(fake_headers)+
+			     strlen(fake_nocache_hdr)+
+			     hostlen+8+1) == gm_True);
+      sprintf(DistillerBufferData(&h.cli_hdrs),
+	      "%s%s%.*s%s%s", 
+	      outnocache ? fake_nocache_hdr : "", 
+d498 82
+a579 2
+      proxy_debug_3(DBG_WING, "Client headers '%s'",
+		    DistillerBufferData(&h.cli_hdrs));
+a581 18
+    /* Now, get the data from the server */
+    h.errmsg[0] = '\0';
+    result = server_dispatch(&prefs, t);
+    /* If transport-level error, wrap error in HTML and continue as though
+     we got a good result from the cache. XXX - we need a wingman transport
+     level error reporting mechanism for this case, I believe. */
+    if (result != HTTP_NO_ERR) {
+      if (h.errmsg[0] == '\0')
+	sprintf(h.errmsg, "Internal proxy error: unknown server_dispatch "
+	"error %d.  Please retry, and report this bug if it persists.", result);
+      wing_error_return(&h, t, prefs, index, hdrs);
+      goto WINGGO_FINISH;
+    }
+    proxy_debug_3(DBG_WING, "Server headers '%s'",
+		  DistillerBufferData(&h.svr_hdrs));
+    proxy_debug_3(DBG_WING, "Server datalen %d",
+		  DistillerBufferLength(&h.svr_data));
+  
+d583 39
+a621 2
+    if ((h.svr_http_status >= 300) && (h.svr_http_status < 400)) {
+      char *location, *locend, *content_type;
+d623 37
+d661 1
+a661 1
+      content_type = (char *)get_header_value(&h.svr_hdrs,
+d663 1
+a663 9
+                                              NULL);
+      if (!typecmp("application/x-wingman-agglist", CLIENT_VERSION_AGGLIST,
+	    content_type, hdrs->version)) {
+	  if (agglistdata) free(agglistdata);
+	  agglistlen = DistillerBufferLength(&h.svr_data);
+	  agglistdata = malloc(agglistlen);
+	  assert(agglistdata);
+	  memmove(agglistdata, DistillerBufferData(&h.svr_data), agglistlen);
+      }
+d666 18
+a683 13
+      if (!saveoldurl) {
+	  location = (char *) get_header_value(&h.svr_hdrs,
+					       "location", 
+					       NULL, NULL, NULL);
+	  if (location == NULL) {
+	    proxy_debug_2(DBG_WING, "Couldn't find location in redirect.");
+	    if (h.errmsg[0] == '\0')
+	      sprintf(h.errmsg, "Couldn't find Location header in redirect - \
+    this server is badly behaved.  Please report this to the web page's\
+    administrator.");
+	    wing_error_return(&h, t, prefs, index, hdrs);
+	    goto WINGGO_FINISH;
+	  }
+d685 22
+a706 18
+	  locend = strchr(location, '\r');
+	  if (locend == NULL) {
+	    proxy_debug_2(DBG_WING, "Ill-formatted location in redirect.");
+	    if (h.errmsg[0] == '\0')
+	      sprintf(h.errmsg, "Ill-formatted location in redirect - \
+    this server is badly behaved.  Please report this to the web page's\
+    administrator.");
+	    wing_error_return(&h, t, prefs, index, hdrs);
+	    goto WINGGO_FINISH;
+	  }
+
+	  /* Let's copy in the location */
+	  if (h.url != NULL)
+	    free(h.url);
+	  h.url = (char *) malloc(sizeof(char) * ((locend-location)+2));
+	  assert(h.url);
+	  memcpy(h.url, location, (locend-location));
+	  h.url[locend-location] = '\0';
+d708 3
+a710 3
+	  if (h.url) free(h.url);
+	  h.url = saveoldurl;
+	  saveoldurl = NULL;
+d712 2
+a713 1
+      proxy_debug_3(DBG_WING, "Redirected URL is %s", h.url);
+d715 9
+a723 3
+      /* Free up the server buffers from before */
+      DistillerBufferFree(&h.svr_hdrs);
+      DistillerBufferFree(&h.svr_data);
+d727 1
+d730 7
+a736 1
+      break;  /* Out of the redirect loop */
+d739 3
+a741 1
+  if (num_redirect > PERF_HTTP_MAX_REDIRECT) {
+d743 7
+a749 5
+    if (h.errmsg[0] == '\0')
+      sprintf(h.errmsg, "Redirection loop detected - the proxy cannot\
+resolve the URL, because the web server is badly configured.");
+    wing_error_return(&h, t, prefs, index, hdrs);
+    goto WINGGO_FINISH;
+d753 8
+a760 8
+  if (h.svr_http_status != 200) {
+    innocache=1;
+/*    proxy_debug_3(DBG_WING, "Non-200 status code (%ld)", h.svr_http_status);
+    if (h.errmsg[0] == '\0')
+      sprintf(h.errmsg, "Non-200 status code (%ld) - the web server\
+ returned an error.", h.svr_http_status);
+    wing_error_return(&h, t, prefs, index, hdrs);
+    goto WINGGO_FINISH; */
+d763 24
+a786 2
+  /* 
+   * Give data to distiller.
+d788 40
+a827 23
+  h.errmsg[0] = '\0';
+  INST_set_thread_state(index, THR_DISTILLERSEND);
+  dist_result = proxy_dispatch(&prefs, t);
+  switch(dist_result) {
+  case distOk:
+    /* Fall through into writeback phase */
+    break;
+  case distDistillerNotFound:
+  case distLaunchTimeout:
+  case distBadInput:
+  case distConnectionBroken:
+  default:
+    proxy_debug_3(DBG_WING, 
+		  "Non-distOk result returned by proxy-dispatch (%d)",
+		  dist_result);
+    if (h.errmsg[0] == '\0')
+      sprintf(h.errmsg, 
+	      "Distiller error - non-distOk returned by proxy-dispatch (%d)\
+ - please report this internal error to the transend team, along with the\
+ URL that generated it.",
+	      dist_result);
+    wing_error_return(&h, t, prefs, index, hdrs);
+    goto WINGGO_FINISH;
+d834 7
+a840 1
+    const char *content_type;
+d842 18
+a859 8
+    content_type = get_header_value(&h.pxy_hdrs,
+				    "content-type", NULL, NULL, NULL);
+    if (!typecmp("application/x-wingman", CLIENT_VERSION_PLAIN,
+		    (char *)content_type, hdrs->version)) {
+	isdatabase = 0;
+    } else if (!typecmp("application/x-palmosdb", CLIENT_VERSION_LOADDB,
+		    (char *)content_type, hdrs->version)) {
+	isdatabase = 1;
+d862 1
+a862 1
+      if (h.errmsg[0] == '\0') {
+d867 3
+a869 2
+	  snprintf(h.errmsg, HTTP_ERRMSG_MAX, "Content-type %s can't be "
+			    "handled yet by the proxy.", content_type);
+d871 2
+a872 2
+	  snprintf(h.errmsg, HTTP_ERRMSG_MAX, "Content-type can't be "
+	                    "handled by the proxy.");
+d875 3
+a877 2
+      wing_error_return(&h, t, prefs, index, hdrs);
+      goto WINGGO_FINISH;
+d880 1
+d886 2
+a887 2
+    char response_header[20];
+    unsigned long vers, ID, metalen, datalen, comp;
+d889 23
+a911 8
+    INST_set_thread_state(index, THR_WRITEBACK);
+    vers = htonl(hdrs->version);
+    ID = htonl(hdrs->request_id);
+    metalen = htonl((agglistlen ? agglistlen + 4 : 0) +
+		    (innocache ? sizeof(uncache_metadata) : 0) +
+		    (isdatabase ? sizeof(database_metadata) : 0));
+    datalen = htonl(DistillerBufferLength(&h.pxy_data));
+    comp = htonl(0);
+d915 1
+a915 1
+		  ntohl(vers), ntohl(ID));
+d917 3
+a919 3
+		  "  %d %d", ntohl(metalen), 
+		  ntohl(datalen));
+    proxy_debug_3(DBG_WING, "  %d", ntohl(comp));
+d921 47
+a967 17
+    *((UINT32 *) &(response_header[0])) = vers;
+    *((UINT32 *) &(response_header[4])) = ID;
+    *((UINT32 *) &(response_header[8])) = metalen;
+    *((UINT32 *) &(response_header[12])) = datalen;
+    *((UINT32 *) &(response_header[16])) = comp;
+
+    correct_write(h.cli_fd, response_header, 20);
+    if (innocache) 
+      correct_write(h.cli_fd, uncache_metadata, sizeof(uncache_metadata));
+    if (isdatabase) 
+      correct_write(h.cli_fd, database_metadata, sizeof(database_metadata));
+    if (agglistlen) {
+	unsigned char hdr[4] = { 0, 4, 0, 0 };
+	hdr[2] = (agglistlen >> 8) & 0xff;
+	hdr[3] = agglistlen & 0xff;
+	correct_write(h.cli_fd, (char *)hdr, 4);
+	correct_write(h.cli_fd, agglistdata, agglistlen);
+d969 5
+a973 2
+    correct_write(h.cli_fd, DistillerBufferData(&h.pxy_data),
+		  DistillerBufferLength(&h.pxy_data));
+d975 74
+d1057 7
+a1063 6
+  saveversion = hdrs ? hdrs->version : 0;
+  free_Request(&h);
+  DistillerBufferFree(&wing_hdrs);
+  DistillerBufferFree(&wing_data);
+  DistillerBufferFree(&wing_metadata);
+  if (agglistdata) free(agglistdata);
+d1070 1
+a1070 1
+    close(h.cli_fd);
+d1078 2
+a1079 2
+/*    MD5_CTX   theHash;
+    UINT32    res;
+d1081 14
+a1094 14
+    MD5Init(&theHash);
+    MD5Update(&theHash, magicKey, sizeof(magicKey));
+    MD5Update(&theHash, &k, sizeof(UINT32));
+    MD5Final(&theHash);
+
+    memcpy(&res, theHash.digest, sizeof(UINT32));
+    res = ntohl(res);
+
+    snprintf(logmsg, MAX_LOGMSG_LEN-1,
+             "(WING) %lu %lu \"%s\" %d %ld %ld\n",
+             res, lo.date, lo.url,
+             lo.http_response, lo.size_before, lo.size_after);*/
+
+    if ((h.lo != NULL) && (lo.url != NULL) && (hdrs != NULL)) {
+d1097 1
+a1097 1
+	       (UINT32) k, (UINT32) saveversion, lo.date, lo.url,
+d1107 2
+d1133 6
+a1138 5
+static void    wing_error_return(Request *h, 
+				 task_t *t,
+				 ArgumentList prefs,
+				 int index,
+				 gl_hdr *hdrs)
+@
+
+
+1.27.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a8 1
+#define DEBUGGING
+d31 2
+a32 2
+static char contenttype_metadata[] = 
+  { 0x00, 0x03, 0x00, 0x02, 0x00, 0x00 };
+a52 1
+#define CLIENT_VERSION_NEWAGG 0x01050200
+a55 13
+#define DEFAULT_AGGLIST_URL "agg://agglist/"
+#define DEFAULT_ABOUT_URL "http://www.isaac.cs.berkeley.edu/pilot/wingman/about-"
+
+     /*#define CONTENT_TYPE_AGG        "application/x-wingman-agg"
+       #define CONTENT_TYPE_AGGLIST    "application/x-wingman-agglist"
+       #define CONTENT_TYPE_WINGDATA   "application/x-wingman"
+       #define CONTENT_TYPE_PALMOSDB   "application/x-palmosdb"*/
+
+#define CONTENT_TYPE_WINGPREFIX       "x-wingman/"
+#define CONTENT_TYPE_AGG              "application/x-wingman-agg"
+#define CONTENT_TYPE_WINGMAN(type)    CONTENT_TYPE_WINGPREFIX ## #type
+
+
+a75 1
+
+d77 3
+a79 2
+ *  wing_read_client_request: reads in an entire client request from the 
+ *  socket. Times out if the data cannot be read
+d82 4
+a85 4
+ *  i/o: the wing_request structure; its http_req.cli_fd field contains 
+ *      the file number of the socket on which the request is arriving.
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+d90 2
+a91 2
+gm_Bool
+wing_read_client_request(wing_request *req)
+d93 18
+a110 14
+  int res, timed_out;
+  struct timeval to;
+  unsigned char hdr_buf[sizeof_gl_hdr];
+
+  /* Read the wingman protocol header */
+
+  to.tv_sec = PERF_HTTP_REQ_TIMEOUT;
+  to.tv_usec = 0;
+  res = correct_read_to(req->http_req.cli_fd, (char *) hdr_buf, 
+			sizeof_gl_hdr, to, &timed_out);
+  if (timed_out || res != sizeof_gl_hdr) {
+    /* We timed out or had a socket error */
+    return gm_False;
+  }
+d112 4
+d117 22
+a138 25
+  /* We have our headers - let's extract out the fields */
+  memcpy(&req->wing_hdr.version, hdr_buf, 4);
+  req->wing_hdr.version = ntohl(req->wing_hdr.version);
+
+  memcpy(&req->wing_hdr.request_id, hdr_buf+4, 4);
+  req->wing_hdr.request_id = ntohl(req->wing_hdr.request_id);
+
+  memcpy(&req->wing_hdr.metadatasize, hdr_buf+8, 4);
+  req->wing_hdr.metadatasize = ntohl(req->wing_hdr.metadatasize);
+
+  memcpy(&req->wing_hdr.datasize, hdr_buf+12, 4);
+  req->wing_hdr.datasize = ntohl(req->wing_hdr.datasize);
+
+  memcpy(&req->wing_hdr.comp, hdr_buf+16, 4);
+  req->wing_hdr.comp = ntohl(req->wing_hdr.comp);
+
+  proxy_debug_3(DBG_WING, "version %lu", req->wing_hdr.version);
+  proxy_debug_4(DBG_WING, "reqid %lu metadatasize %lu", 
+		req->wing_hdr.request_id, req->wing_hdr.metadatasize);
+  proxy_debug_4(DBG_WING, "datasize %lu comp %lu", req->wing_hdr.datasize,
+		req->wing_hdr.comp);
+  if (req->wing_hdr.datasize == 0) {
+    /* Some sort of bogosity - no control messages; we need data */
+    return gm_False;
+  }
+d140 1
+a140 2
+  /* Now pull down the metadata */
+  if (req->wing_hdr.metadatasize > 0) {
+d143 44
+a186 8
+    assert(DistillerBufferAlloc(&req->wing_metadata, 
+				req->wing_hdr.metadatasize+1) == gm_True);
+    res = correct_read_to(req->http_req.cli_fd, 
+			  (char *) DistillerBufferData(&req->wing_metadata),
+			  req->wing_hdr.metadatasize, to, &timed_out);
+    if (timed_out || res != req->wing_hdr.metadatasize) {
+      /* Timed out or had socket error */
+      return gm_False;
+a187 9
+    /* NULL terminate */
+    *(((char *) DistillerBufferData(&req->wing_metadata)) + 
+      req->wing_hdr.metadatasize) = '\0';
+    proxy_debug_3(DBG_WING, "Metadata: %s",
+		  DistillerBufferData(&req->wing_metadata));
+  }
+
+  /* Now pull down the data */
+  if (req->wing_hdr.datasize > 0) {
+d190 5
+a194 6
+    assert(DistillerBufferAlloc(&req->wing_data, req->wing_hdr.datasize+1)
+	   == gm_True);
+    res = correct_read_to(req->http_req.cli_fd,
+			  (char *) DistillerBufferData(&req->wing_data),
+			  req->wing_hdr.datasize, to, &timed_out);
+    if (timed_out || res != req->wing_hdr.datasize) {
+d196 1
+a196 1
+      return gm_False;
+d199 3
+a201 3
+    *(((char *) DistillerBufferData(&req->wing_data)) + 
+      req->wing_hdr.datasize) = '\0';
+    proxy_debug_3(DBG_WING, "Data: %s", DistillerBufferData(&req->wing_data));
+a203 20
+  return gm_True;
+}
+
+
+/*
+ *  wing_parse_metadata: parse out the wing_metadata field of the incoming
+ *      request and set the appropriate flags in the req->flags structure
+ *  ARGS:
+ *  i/o: the wing_request structure; its wing_hdr field contains the wingman
+ *      protocol header, the wing_data and wing_metadata fields contain the
+ *      client request's data and metadata respectively
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_parse_metadata(wing_request *req)
+{
+d205 1
+a205 1
+  if (req->wing_hdr.metadatasize > 0) {
+d208 2
+a209 2
+    metaptr = DistillerBufferData(&req->wing_metadata);
+    endptr = metaptr + req->wing_hdr.metadatasize;
+d221 2
+a222 2
+      case MetaCacheExpire:
+      case MetaPageType:
+d225 1
+a225 2
+
+      case MetaNoCache:
+d227 1
+a227 1
+	req->flags.out_nocache = 1;
+d229 4
+a232 8
+
+#ifdef BACKWARD_COMPATIBLE
+      case MetaAggList:
+	if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+	  /* Send an aggregator list? OK! */
+	  req->flags.out_sendagglist = 1;
+	  req->flags.out_nocache     = 1; /* Don't cache the agglist */
+	}
+a233 2
+#endif
+
+a240 24
+  return gm_True;
+}
+
+
+/*
+ *  wing_grab_userprefs: use the client's IP address to grab the user-prefs
+ *      from the userpref database; Set the userid in the user-prefs to 
+ *      "wingman". Also, add the FRONT_CLI_VERSION, FRONT_CLIENT_IP and
+ *      FRONT_NOCACHE user prefs
+ *  ARGS:
+ *  i/o: the wing_request structure; its prefs field is filled with the
+ *      client's user prefs.
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_grab_userprefs(wing_request *req)
+{
+  userkey k;
+  int i;
+
+d244 1
+a244 1
+  k = userkey_from_sock_ipaddr(req->http_req.cli_fd);
+d246 1
+a246 1
+  req->http_req.lo->ipaddr = k;
+d248 4
+a251 4
+  (void)get_userprefs(k, &req->prefs);
+  for (i=0; i<req->prefs.nargs; i++) {
+    if (req->prefs.arg[i].id == FRONT_USERID) {
+      SET_ARG_STRING(req->prefs.arg[i], "wingman");
+d255 9
+a263 9
+  if (i == req->prefs.nargs) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(req->prefs.arg[i], FRONT_USERID);
+    SET_ARG_STRING(req->prefs.arg[i], "wingman");
+    req->prefs.nargs++;
+  }
+  for (i=0; i<req->prefs.nargs; i++) {
+    if (req->prefs.arg[i].id == FRONT_CLI_VERSION) {
+      SET_ARG_INT(req->prefs.arg[i], req->wing_hdr.version);
+d267 10
+a276 10
+  if (i == req->prefs.nargs) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_ID(req->prefs.arg[i], FRONT_CLI_VERSION);
+    SET_ARG_INT(req->prefs.arg[i], req->wing_hdr.version);
+    req->prefs.nargs++;
+  }
+  assert(req->prefs.nargs != MAX_ARGS);
+  SET_ARG_INT(req->prefs.arg[req->prefs.nargs], (INT32) k);
+  SET_ARG_ID(req->prefs.arg[req->prefs.nargs], FRONT_CLIENT_IP);
+  req->prefs.nargs++;
+d281 5
+a285 5
+  if (req->flags.out_nocache) {
+    assert(req->prefs.nargs != MAX_ARGS);
+    SET_ARG_INT(req->prefs.arg[req->prefs.nargs], (INT32) 1);
+    SET_ARG_ID(req->prefs.arg[req->prefs.nargs], FRONT_NOCACHE);
+    req->prefs.nargs++;
+d288 5
+a292 2
+  return gm_True;
+}
+d294 4
+a298 16
+/*
+ *  wing_parse_url: parse out the client's requested URL from the wing_data
+ *      field; replace the original replace URL with a new corresponding one,
+ *      if necessary
+ *  ARGS:
+ *  i/o: the wing_request structure; its wing_data field contains a 
+ *      NULL-terminated URL string
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_parse_url(wing_request *req)
+{
+d306 1
+a306 1
+    const char *urlprefix = "";
+d310 11
+a320 13
+    if (!strncmp(DistillerBufferData(&req->wing_data), "src:", 4) ||
+	!strncmp(DistillerBufferData(&req->wing_data), "doc:", 4)) {
+	int i, len;
+	int isdoc = (!strncmp(DistillerBufferData(&req->wing_data), "doc:",4));
+
+	len = DistillerBufferLength(&req->wing_data)-4;
+	memmove(DistillerBufferData(&req->wing_data),
+	    ((char *)DistillerBufferData(&req->wing_data))+4, len);
+	DistillerBufferSetLength(&req->wing_data, len);
+
+	for (i=0; i<req->prefs.nargs; i++) {
+	    if (req->prefs.arg[i].id == FRONT_SRCFLAG) {
+	      SET_ARG_INT(req->prefs.arg[i], isdoc ? 2 : 1);
+d324 5
+a328 5
+	if (i == req->prefs.nargs) {
+	    assert(req->prefs.nargs != MAX_ARGS);
+	    SET_ARG_ID(req->prefs.arg[i], FRONT_SRCFLAG);
+	    SET_ARG_INT(req->prefs.arg[i], isdoc ? 2 : 1);
+	    req->prefs.nargs++;
+d332 6
+d339 4
+a342 7
+    if (!strncmp(DistillerBufferData(&req->wing_data), "about:", 6)) {
+      urlprefix = Options_Find(NULL, "wingman.about_url");
+      if (urlprefix==NULL) {
+	urlprefix = DEFAULT_ABOUT_URL;
+      }
+      extrasize = strlen(urlprefix) + 1;
+      urloffset = 6;
+d345 1
+a345 1
+    magicURL = (char *) malloc(req->wing_hdr.datasize+extrasize);
+d350 5
+a354 5
+    if (strncmp(DistillerBufferData(&req->wing_data), "http://", 7) &&
+	strncmp(DistillerBufferData(&req->wing_data), "agg://", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "about:", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "ftp://", 6) &&
+	strncmp(DistillerBufferData(&req->wing_data), "gopher://", 9)) {
+d357 1
+a357 3
+    
+    /* create the magic url; remove any special chars; replace %5E with ^ */
+    strcat(magicURL, ((char *)DistillerBufferData(&req->wing_data))+urloffset);
+d370 3
+a372 3
+    req->http_req.url = (char *) malloc(req->wing_hdr.datasize+extrasize);
+    assert(req->http_req.url);
+    from_magic(magicURL, req->http_req.url, &req->prefs);
+d375 4
+a378 10
+    proxy_debug_3(DBG_WING, "URL is %s", req->http_req.url);
+
+#ifdef BACKWARD_COMPATIBLE
+    if ((!version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) && 
+	req->flags.out_sendagglist) {
+      const char *url;
+      req->saveoldurl = req->http_req.url;
+      url = Options_Find(NULL, "wingman.agglist_url");
+      if (url==NULL) url = DEFAULT_AGGLIST_URL;
+      req->http_req.url = strdup(url);
+a379 1
+#endif
+d384 3
+a386 3
+    req->http_req.method = (char *) malloc(sizeof(char) * (strlen("GET")+1));
+    assert(req->http_req.method);
+    strcpy(req->http_req.method, "GET");
+d390 1
+a390 1
+  req->http_req.version = HTTP_VERSION_10_OR_LATER;
+d392 13
+a404 2
+  return gm_True;
+}
+d406 16
+a421 43
+
+/*
+ *  wing_create_client_http_headers: create HTTP client headers from
+ *      the wingman request
+ *  ARGS:
+ *  i/o: the wing_request structure; 
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_create_client_http_headers(wing_request *req)
+{
+  char *hostpart = NULL;
+  int hostlen = 0;
+  
+  /* Find the value for the Host: header */
+  if (!strncmp(req->http_req.url, "http://", 7)) {
+    char *hp;
+    hp = hostpart = req->http_req.url + 7;
+    for(hostlen = 0; *hp && *hp != ':' && *hp != '/'; ++hp) ++hostlen;
+  } else  {
+    hostpart = NULL;
+    hostlen = 0;
+  }
+  
+  /* Create and copy in client headers */
+  {
+    static char fake_nocache_hdr[] = "Pragma: no-cache\r\n";
+    static char fake_headers[] = 
+      "User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\nAccept: text/*, "
+      "image/gif, image/jpeg\r\n\r\n";
+
+    /* Malloc space for GET <url> HTTP/1.0\r\n<fake_headers> */
+    assert(DistillerBufferAlloc(&req->http_req.cli_hdrs, 
+				strlen(fake_headers)+
+				strlen(fake_nocache_hdr)+
+				hostlen+8+1) == gm_True);
+    sprintf(DistillerBufferData(&req->http_req.cli_hdrs),
+	    "%s%s%.*s%s%s", 
+	      req->flags.out_nocache ? fake_nocache_hdr : "", 
+d425 2
+a426 82
+    proxy_debug_3(DBG_WING, "Client headers '%s'",
+		  DistillerBufferData(&req->http_req.cli_hdrs));
+  }
+
+  return gm_True;
+}
+
+
+/*
+ *  wing_dispatch_request: the main dispatch loop.
+ *      The loop is executed as long as an HTTP-redirect response is
+ *      received fromn the server/distiller (limited, of course, to some max)
+ *      If the request URL is not an aggregator URL, then invoke 
+ *      server_dispatch
+ *      If the response is not an HTTP-redirect, invoke proxy dispatch
+ *  ARGS:
+ *  i/o: the wing_request structure; 
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_dispatch_request(wing_request *req)
+{
+  int index = TASK_THRINDEX(req->task), num_redirect=0, tot_num_redirect=0, 
+    nfound;
+  HTTP_Status result;
+  DistillerStatus dist_result;
+  DistillerBuffer *current_http_hdrs=NULL, *current_http_data=NULL;
+  UINT32 current_http_status;
+
+  /*
+   * do
+   *    if agg, construct fake response
+   *    else do server_dispatch
+   *    if response is not 300, reset ctr and do proxy_dispatch
+   * while response is not 300 and ctr < max
+   */
+
+  while (num_redirect <= PERF_HTTP_MAX_REDIRECT &&
+	 tot_num_redirect <= 3 * PERF_HTTP_MAX_REDIRECT) {
+    
+    if (!strncmp(req->http_req.url, "agg://", 6)) {
+      /* this is an aggregator URL */
+      static char agg_svr_reply[] = 
+	"HTTP/1.0 200 OK\r\n"
+	"Content-type: " CONTENT_TYPE_AGG "\r\n\r\n";
+      int len;
+
+      req->http_req.svr_http_status = 200;
+      DistillerBufferSetStatic(&req->http_req.svr_hdrs, agg_svr_reply, 
+			       strlen(agg_svr_reply));
+
+      len = strlen(req->http_req.url);
+      DistillerBufferAlloc(&req->http_req.svr_data, len);
+      strncpy(DistillerBufferData(&req->http_req.svr_data), 
+	      req->http_req.url, len);
+    } else {
+      if (wing_create_client_http_headers(req)==gm_False) return gm_False;
+
+      /* Now, get the data from the server */
+      req->http_req.errmsg[0] = '\0';
+      result = server_dispatch(&req->prefs, req->task);
+      /* If transport-level error, wrap error in HTML and continue as though
+	 we got a good result from the cache. XXX - we need a wingman transport
+	 level error reporting mechanism for this case, I believe. */
+      if (result != HTTP_NO_ERR) {
+	if (req->http_req.errmsg[0] == '\0')
+	  sprintf(req->http_req.errmsg, 
+		  "Internal proxy error: unknown server_dispatch "
+		  "error %d.  Please retry, and report this bug if "
+		  "it persists.", result);
+	wing_error_return(&req->http_req, req->task, req->prefs, 
+			  index, &req->wing_hdr);
+	return gm_False;
+      }
+      proxy_debug_3(DBG_WING, "Server headers '%s'",
+		    DistillerBufferData(&req->http_req.svr_hdrs));
+      proxy_debug_3(DBG_WING, "Server datalen %d",
+		    DistillerBufferLength(&req->http_req.svr_data));
+d429 18
+d448 2
+a449 2
+    if (  !((req->http_req.svr_http_status >= 300) && 
+	    (req->http_req.svr_http_status < 400))  ) {
+a450 74
+      /*
+       * reset the num_redirect counter
+       */
+      num_redirect = 0;
+
+      /* 
+       * Give data to distiller.
+       */
+      req->http_req.errmsg[0] = '\0';
+      INST_set_thread_state(index, THR_DISTILLERSEND);
+      dist_result = proxy_dispatch(&req->prefs, req->task);
+      switch(dist_result) {
+      case distOk:
+	/* Fall through into writeback phase */
+	break;
+      case distDistillerNotFound:
+      case distLaunchTimeout:
+      case distBadInput:
+      case distConnectionBroken:
+      default:
+	proxy_debug_3(DBG_WING, 
+		      "Non-distOk result returned by proxy-dispatch (%d)",
+		      dist_result);
+	if (req->http_req.errmsg[0] == '\0')
+	  sprintf(req->http_req.errmsg, 
+		  "Distiller error - non-distOk returned by proxy-dispatch "
+		  "(%d) - please report this internal error to the transend "
+		  "team, along with the URL that generated it.",
+		  dist_result);
+	wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			  &req->wing_hdr);
+	return gm_False;
+      }
+
+      current_http_hdrs = &req->http_req.pxy_hdrs;
+      current_http_data = &req->http_req.pxy_data;
+
+      nfound = sscanf(DistillerBufferData(current_http_hdrs), "%*s %lu",
+		      &current_http_status);
+      if (nfound < 1) {             /* no status found */
+	current_http_status = 0;
+      }
+    }
+    else {
+      current_http_hdrs = &req->http_req.svr_hdrs;
+      current_http_data = &req->http_req.svr_data;
+      current_http_status = req->http_req.svr_http_status;
+    }
+
+#ifdef BACKWARD_COMPATIBLE
+    if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+      const char *content_type;
+      content_type = get_header_value(current_http_hdrs,
+				      "content-type", NULL, NULL, NULL);
+      if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeAgglist), 
+		   CLIENT_VERSION_AGGLIST,
+		   (char *)content_type, req->wing_hdr.version)) {
+	req->agglistlen = DistillerBufferLength(current_http_data);
+	if (req->agglistdata!=NULL) free(req->agglistdata);
+	req->agglistdata = malloc(req->agglistlen);
+	assert(req->agglistdata);
+	memmove(req->agglistdata, DistillerBufferData(current_http_data),
+		req->agglistlen);
+
+	/* now redirect to the original URL */
+	current_http_status = 300;
+      }
+    }
+#endif
+
+    if ((current_http_status >= 300) && 
+	(current_http_status < 400)) {
+      char *location, *locend, *content_type;
+      
+d452 1
+a452 1
+      content_type = (char *)get_header_value(current_http_hdrs,
+d455 8
+d465 13
+a477 18
+#ifdef BACKWARD_COMPATIBLE
+      if (version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG) ||
+	  req->saveoldurl==0) {
+#endif
+	location = (char *) get_header_value(current_http_hdrs,
+					     "location", 
+					     NULL, NULL, NULL);
+	if (location == NULL) {
+	  proxy_debug_2(DBG_WING, "Couldn't find location in redirect.");
+	  if (req->http_req.errmsg[0] == '\0')
+	    sprintf(req->http_req.errmsg, 
+		    "Couldn't find Location header in redirect - "
+		    "this server is badly behaved.  Please report "
+		    "this to the web page's administrator.");
+	  wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			    &req->wing_hdr);
+	  return gm_False;
+	}
+d479 18
+a496 22
+	locend = strchr(location, '\r');
+	if (locend == NULL) {
+	  proxy_debug_2(DBG_WING, "Ill-formatted location in redirect.");
+	  if (req->http_req.errmsg[0] == '\0')
+	    sprintf(req->http_req.errmsg, 
+		    "Ill-formatted location in redirect - "
+		      "this server is badly behaved.  Please report this "
+		    "to the web page's administrator.");
+	  wing_error_return(&req->http_req, req->task, req->prefs, index, 
+			    &req->wing_hdr);
+	  return gm_False;
+	}
+	
+	/* Let's copy in the location */
+	if (req->http_req.url != NULL)
+	  free(req->http_req.url);
+	req->http_req.url = 
+	  (char *) malloc(sizeof(char) * ((locend-location)+2));
+	assert(req->http_req.url);
+	memcpy(req->http_req.url, location, (locend-location));
+	req->http_req.url[locend-location] = '\0';
+#ifdef BACKWARD_COMPATIBLE
+d498 3
+a500 3
+	  if (req->http_req.url) free(req->http_req.url);
+	  req->http_req.url = req->saveoldurl;
+	  req->saveoldurl = NULL;
+d502 1
+a502 6
+#endif
+      proxy_debug_3(DBG_WING, "Redirected URL is %s", req->http_req.url);
+
+      /* Free up the client/server/proxy buffers from before */
+      DistillerBufferFree(&req->http_req.cli_hdrs);
+      DistillerBufferFree(&req->http_req.cli_data);
+d504 3
+a506 5
+      DistillerBufferFree(&req->http_req.svr_hdrs);
+      DistillerBufferFree(&req->http_req.svr_data);
+
+      DistillerBufferFree(&req->http_req.pxy_hdrs);
+      DistillerBufferFree(&req->http_req.pxy_data);
+a509 1
+      tot_num_redirect++;
+d512 1
+a512 7
+
+      /* 
+       * we are done; we have done proxy dispatch, and the response is
+       * not a HTTP redirect
+       */
+
+      break;
+d515 1
+a515 3
+
+  if (num_redirect > PERF_HTTP_MAX_REDIRECT || 
+      tot_num_redirect > 3 * PERF_HTTP_MAX_REDIRECT) {
+d517 5
+a521 7
+    if (req->http_req.errmsg[0] == '\0')
+      sprintf(req->http_req.errmsg, "Redirection loop detected - the proxy "
+	      "cannot resolve the URL, because the web server is badly "
+	      "configured.");
+    wing_error_return(&req->http_req, req->task, req->prefs, index, 
+		      &req->wing_hdr);
+    return gm_False;
+d525 8
+a532 8
+  if (current_http_status != 200) {
+    req->flags.in_nocache = 1;
+    /* proxy_debug_3(DBG_WING, "Non-200 status code (%ld)", h.svr_http_status);
+       if (h.errmsg[0] == '\0')
+       sprintf(h.errmsg, "Non-200 status code (%ld) - the web server "
+       "returned an error.", h.svr_http_status);
+       wing_error_return(&h, t, prefs, index, hdrs);
+       goto WINGGO_FINISH; */
+d535 27
+a561 21
+  return gm_True;
+}
+
+
+/*
+ *  wing_writeback_reply: convert the HTTP server/distiller response to
+ *      the wingman protocol and write it back to the client
+ *  ARGS:
+ *  i/o: the wing_request structure; the req->http_req.pxy_data/hdrs
+ *      contains the HTTP response
+ *  RETURNS: a gm_Bool; gm_True indicates that it's ok to proceed on to 
+ *      the next step, gm_False indicates "abort the request"
+ *  REENTRANT: yes
+ *  
+ */
+
+gm_Bool
+wing_writeback_reply(wing_request *req)
+{
+  const char *content_type;
+  int content_type_len, content_type_int;
+d567 1
+a567 40
+    gm_Bool handled = gm_False;
+    char *endptr;
+
+    content_type = get_header_value(&req->http_req.pxy_hdrs,
+				    "content-type", &content_type_len, 
+				    NULL, NULL);
+    if (! strncasecmp(content_type, CONTENT_TYPE_WINGPREFIX,
+		      strlen(CONTENT_TYPE_WINGPREFIX))) {
+      content_type_int = 
+	strtoul(&content_type[strlen(CONTENT_TYPE_WINGPREFIX)], &endptr, 10);
+      if ((endptr - content_type) == content_type_len) {
+	/* 
+	 * for now, we assume that distillers never return and parameters
+	 * for x-wingman content-types 
+	 */
+	handled = gm_True;
+      }
+    }
+
+    if (handled==gm_False) {
+      proxy_debug_2(DBG_WING, "Content-type can't be handled");
+      if (req->http_req.errmsg[0] == '\0') {
+	char *endct;
+	endct = content_type ? strchr(content_type, '\r') : NULL;
+	if (endct) {
+	  *endct = '\0';
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type %s can't be handled yet by the proxy.", 
+		   content_type);
+	} else {
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type can't be handled by the proxy.");
+	}
+      }
+      wing_error_return(&req->http_req, req->task, req->prefs, 
+			TASK_THRINDEX(req->task), &req->wing_hdr);
+      return gm_False;
+    }
+
+  }
+d569 8
+a576 18
+#ifdef OLD
+  {
+    content_type = get_header_value(&req->http_req.pxy_hdrs,
+				    "content-type", &content_type_len, 
+				    NULL, NULL);
+
+    if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeAgglist), CLIENT_VERSION_AGGLIST,
+		 (char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 0;
+    }
+    else if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeRegular), 
+		      CLIENT_VERSION_PLAIN,
+		      (char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 0;
+    } else if (!typecmp(CONTENT_TYPE_WINGMAN(PageTypeDatabase), 
+			CLIENT_VERSION_LOADDB,
+			(char *)content_type, req->wing_hdr.version)) {
+      req->flags.in_isdatabase = 1;
+d579 1
+a579 1
+      if (req->http_req.errmsg[0] == '\0') {
+d584 2
+a585 3
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type %s can't be handled yet by the proxy.", 
+		   content_type);
+d587 2
+a588 2
+	  snprintf(req->http_req.errmsg, HTTP_ERRMSG_MAX, 
+		   "Content-type can't be handled by the proxy.");
+d591 2
+a592 3
+      wing_error_return(&req->http_req, req->task, req->prefs, 
+			TASK_THRINDEX(req->task), &req->wing_hdr);
+      return gm_False;
+a594 1
+#endif
+d600 2
+a601 2
+    char response_hdrbuf[sizeof_gl_hdr];
+    gl_hdr response_hdr;
+d603 8
+a610 23
+    INST_set_thread_state(TASK_THRINDEX(req->task), THR_WRITEBACK);
+    response_hdr.version = htonl(req->wing_hdr.version);
+    response_hdr.request_id = htonl(req->wing_hdr.request_id);
+
+#ifdef OLD
+    response_hdr.metadatasize = 
+      (req->flags.in_nocache ? sizeof(uncache_metadata) : 0) +
+      (req->flags.in_isdatabase ? sizeof(database_metadata) : 0) +
+      (content_type_len + 5);
+#endif
+    response_hdr.metadatasize = 
+      (req->flags.in_nocache ? sizeof(uncache_metadata) : 0) +
+      (content_type_int ? sizeof(contenttype_metadata) : 0);
+
+#ifdef BACKWARD_COMPATIBLE
+    if (! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) {
+      response_hdr.metadatasize += (req->agglistlen ? req->agglistlen + 4 : 0);
+    }
+#endif
+    response_hdr.metadatasize = htonl(response_hdr.metadatasize);
+    response_hdr.datasize = htonl(DistillerBufferLength(&req->
+							http_req.pxy_data));
+    response_hdr.comp = htonl(0);
+d614 1
+a614 1
+		  ntohl(response_hdr.version), ntohl(response_hdr.request_id));
+d616 3
+a618 3
+		  "  %d %d", ntohl(response_hdr.metadatasize), 
+		  ntohl(response_hdr.datasize));
+    proxy_debug_3(DBG_WING, "  %d", ntohl(response_hdr.comp));
+d620 17
+a636 47
+    memcpy(response_hdrbuf+ 0, &response_hdr.version,     sizeof(UINT32));
+    memcpy(response_hdrbuf+ 4, &response_hdr.request_id,  sizeof(UINT32));
+    memcpy(response_hdrbuf+ 8, &response_hdr.metadatasize,sizeof(UINT32));
+    memcpy(response_hdrbuf+12, &response_hdr.datasize,    sizeof(UINT32));
+    memcpy(response_hdrbuf+16, &response_hdr.comp,        sizeof(UINT32));
+
+    correct_write(req->http_req.cli_fd, response_hdrbuf, sizeof_gl_hdr);
+    if (req->flags.in_nocache) 
+      correct_write(req->http_req.cli_fd, uncache_metadata, 
+		    sizeof(uncache_metadata));
+    if (content_type_int) {
+      char content_type_string[2];
+      content_type_string[0] = (((unsigned int)content_type_int) >> 8) & 0xFF;
+      content_type_string[1] =  ((unsigned int)content_type_int) & 0xFF;
+      correct_write(req->http_req.cli_fd, contenttype_metadata, 
+		    sizeof(contenttype_metadata) - 2);
+      correct_write(req->http_req.cli_fd, content_type_string, 2);
+    }
+
+#ifdef OLD
+    if (req->flags.in_isdatabase) 
+      correct_write(req->http_req.cli_fd, database_metadata, 
+		    sizeof(database_metadata));
+#endif
+
+#ifdef BACKWARD_COMPATIBLE
+    if ((! version_check(req->wing_hdr.version, CLIENT_VERSION_NEWAGG)) &&
+	req->agglistlen) {
+      unsigned char hdr[4] = { 0, 4, 0, 0 };
+      hdr[2] = (req->agglistlen >> 8) & 0xff;
+      hdr[3] = req->agglistlen & 0xff;
+      correct_write(req->http_req.cli_fd, (char *)hdr, 4);
+      correct_write(req->http_req.cli_fd, req->agglistdata, req->agglistlen);
+    }
+#endif
+
+#ifdef OLD
+    {
+      /* write the content type header */
+      unsigned char hdr[4] = { 0, MetaContentType, 0, 0 };
+      content_type_len++;
+      hdr[2] = (content_type_len >> 8) & 0xff;
+      hdr[3] = content_type_len & 0xff;
+      correct_write(req->http_req.cli_fd, (char *)hdr, 4);
+      correct_write(req->http_req.cli_fd, (char *)content_type, 
+		    content_type_len-1);
+      correct_write(req->http_req.cli_fd, "", 1);
+d638 2
+a639 5
+#endif
+
+    correct_write(req->http_req.cli_fd, 
+		  DistillerBufferData(&req->http_req.pxy_data),
+		  DistillerBufferLength(&req->http_req.pxy_data));
+a640 74
+  
+  return gm_True;
+}
+
+
+
+/*
+ *  wing_go_proc: thread entry point to handle an incoming Wingman request 
+ *  The request will be parsed, validated, and handed off to a remote
+ *  distiller (or else rejected).  This is a long blocking operation.
+ *
+ *  ARGS:
+ *  i/o: the task_t structure; its task_data field contains the file
+ *      number of the socket on which the request is arriving.
+ *  RETURNS: a void* which is ignored; errors are reported directly on
+ *      socket using HTTP error protocol (500 Error, etc)
+ *  REENTRANT: yes
+ *  
+ */
+
+
+void *
+wing_go_proc(task_t *t)
+{
+  wing_request req;
+  int index = TASK_THRINDEX(t);
+
+#ifdef LOGGING
+  userkey k;
+  struct loginfo lo;
+  char logmsg[MAX_LOGMSG_LEN];
+#endif /* LOGGING */
+
+  /* Initialize all buffers */
+  memset(&req, 0, sizeof(wing_request));
+
+  /*
+   *  New task data should be the request structure.
+   */
+  init_Request(&req.http_req);
+  req.http_req.cli_fd = (int)TASK_DATA(t); /* socket FD of client */
+  SET_TASK_DATA(t,&req.http_req);
+  req.task = t;
+  
+  INST_begin_timestamp(index);
+  INST_set_size(index,0);
+  INST_set_thread_state(index, THR_ACCEPTED);
+  INST_timestamp(index, m_arrival);
+#ifdef LOGGING
+  LOGGING_init_loginfo(&lo);
+  req.http_req.lo = &lo;
+#endif /* LOGGING */
+
+  if (wing_read_client_request(&req)==gm_False) goto WINGGO_FINISH;
+
+  INST_timestamp(index, m_headersdone);
+
+  if (wing_parse_metadata(&req)==gm_False) goto WINGGO_FINISH;
+
+  /* For the sake of logging, fill in the loginfo structure url field */
+#ifdef LOGGING
+  snprintf(req.http_req.lo->url, MAX_LOGMSG_LEN-1, "%s", 
+	   DistillerBufferData(&req.wing_data));
+  req.http_req.lo->url[MAX_LOGMSG_LEN-1] = '\0';
+#endif /* LOGGING */
+
+  if (wing_grab_userprefs(&req)==gm_False) goto WINGGO_FINISH;
+
+  if (wing_parse_url(&req)==gm_False) goto WINGGO_FINISH;
+
+  if (wing_dispatch_request(&req)==gm_False) goto WINGGO_FINISH;
+  
+  if (wing_writeback_reply(&req)==gm_False) goto WINGGO_FINISH;
+
+d649 6
+a654 7
+  free_Request(&req.http_req);
+  DistillerBufferFree(&req.wing_data);
+  DistillerBufferFree(&req.wing_metadata);
+#ifdef BACKWARD_COMPATIBLE
+  if (req.saveoldurl) free(req.saveoldurl);
+  if (req.agglistdata) free(req.agglistdata);
+#endif
+d661 1
+a661 1
+    close(req.http_req.cli_fd);
+d669 2
+a670 2
+    /* MD5_CTX   theHash;
+       UINT32    res;
+d672 14
+a685 14
+       MD5Init(&theHash);
+       MD5Update(&theHash, magicKey, sizeof(magicKey));
+       MD5Update(&theHash, &k, sizeof(UINT32));
+       MD5Final(&theHash);
+       
+       memcpy(&res, theHash.digest, sizeof(UINT32));
+       res = ntohl(res);
+       
+       snprintf(logmsg, MAX_LOGMSG_LEN-1,
+       "(WING) %lu %lu \"%s\" %d %ld %ld\n",
+       res, lo.date, lo.url,
+       lo.http_response, lo.size_before, lo.size_after);*/
+    
+    if ((req.http_req.lo != NULL) && (lo.url != NULL)) {
+d688 1
+a688 1
+	       (UINT32) k, (UINT32) req.wing_hdr.version, lo.date, lo.url,
+a697 2
+
+
+d722 5
+a726 6
+static void    
+wing_error_return(Request *h, 
+		  task_t *t,
+		  ArgumentList prefs,
+		  int index,
+		  gl_hdr *hdrs)
+@
+
+
+1.27.2.2
+log
+@the new aggregators
+@
+text
+@d54 1
+a54 1
+#define CLIENT_VERSION_NEWAGG 0x01050300
+d68 1
+a68 2
+#define CONTENT_TYPE_WINGMAN_(type)   CONTENT_TYPE_WINGPREFIX ## #type
+#define CONTENT_TYPE_WINGMAN(type)    CONTENT_TYPE_WINGMAN_(type)
+d654 1
+a654 1
+      char *location, *locend; /* XXX , *content_type;*/
+d657 1
+a657 1
+      /* XXX content_type = (char *)get_header_value(current_http_hdrs,
+d659 1
+a659 1
+                                              NULL);*/
+d791 2
+a792 2
+    if (content_type && !strncasecmp(content_type, CONTENT_TYPE_WINGPREFIX,
+				     strlen(CONTENT_TYPE_WINGPREFIX))) {
+a823 12
+  }
+
+  /*
+   * Check that the result is of a type the client can understand
+   */
+  {
+    const char *pragma_value;
+    pragma_value = get_header_value(&req->http_req.pxy_hdrs,
+				    "pragma", NULL, NULL, NULL);
+    if (pragma_value && !strncasecmp(pragma_value, "no-cache", 8)) {
+      req->flags.in_nocache = 1;
+    }
+@
+
+
+1.27.2.3
+log
+@fixes for myurl/dispatch
+exposed runtime_options globally
+@
+text
+@a347 3
+
+  extern Options runtime_options;
+
+d382 1
+a382 1
+      urlprefix = Options_Find(runtime_options, "wingman.about_url");
+d429 1
+a429 1
+      url = Options_Find(runtime_options, "wingman.agglist_url");
+@
+
+
+1.26
+log
+@Added winman dispatcher.  .prc's in .zip's now works
+@
+text
+@d310 2
+a311 1
+    if (!strncmp(DistillerBufferData(&wing_data), "src:", 4)) {
+d313 2
+d320 1
+a320 1
+	      SET_ARG_INT(prefs.arg[i], 1);
+d327 1
+a327 1
+	    SET_ARG_INT(prefs.arg[i], 1);
+@
+
+
+1.25
+log
+@bug fix
+@
+text
+@d28 1
+a28 1
+/* Metadata for uncachable content */
+d31 2
+d50 1
+d52 1
+d56 20
+d101 1
+a101 1
+  int innocache=0, outnocache=0, sendagglist=0;
+d452 2
+a453 3
+      if (content_type &&
+	!strncasecmp(content_type, "application/x-wingman-agglist", 29) &&
+	version_check(hdrs->version, CLIENT_VERSION_AGGLIST)) {
+a531 46
+  /* Check to see if it is text / * or image / * - if not, wingman 
+     distiller won't handle it. */
+  /* If the client is sufficiently new, it can handle some other types, too */
+  {
+    const char *content_type;
+
+    content_type = get_header_value(&h.svr_hdrs,
+				    "content-type", NULL, NULL, NULL);
+    /* fprintf(stderr, "content type = %s, hdrs->version = %ul, version_check = %d\n", content_type ?: "(null)", (unsigned long)hdrs->version, 
+    version_check(hdrs->version, CLIENT_VERSION_AGGLIST)); */
+#if 0
+    if (content_type &&
+	!strncasecmp(content_type, "application/x-wingman-agglist", 29) &&
+	version_check(hdrs->version, CLIENT_VERSION_AGGLIST)) {
+        INST_set_thread_state(index, THR_WRITEBACK);
+	wing_raw_return(h.cli_fd, hdrs->version, hdrs->request_id, 
+			6, DistillerBufferLength(&h.pxy_data), 0,
+			(unsigned char *)"\x00\x03\x00\x02\x00\x01",
+			DistillerBufferData(&h.pxy_data));
+	goto WINGGO_FINISH;
+    } else
+#endif
+    if ((content_type == NULL) ||
+	((strncasecmp("text/", content_type, 5) != 0) &&
+	 (strncasecmp("image/", content_type, 6) != 0) &&
+	 (strncasecmp("application/x-zip-compressed", content_type, 28) != 0) &&
+	 (strncasecmp("application/zip", content_type, 15) != 0)
+	 )) {
+      proxy_debug_2(DBG_WING, "Content-type can't be handled");
+      if (h.errmsg[0] == '\0') {
+	char *endct;
+	endct = content_type ? strchr(content_type, '\r') : NULL;
+	if (endct != NULL) {
+	  *endct = '\0';
+	  sprintf(h.errmsg, "Content-type %s can't be handled yet by the\
+ proxy.", 
+		  content_type);
+	} else {
+	  sprintf(h.errmsg, "Content-type can't be handled by the proxy.");
+	}
+      }
+      wing_error_return(&h, t, prefs, index, hdrs);
+      goto WINGGO_FINISH;
+    }
+  }
+
+d560 33
+d604 2
+a605 1
+		    (innocache ? sizeof(uncache_metadata) : 0));
+d626 2
+@
+
+
+1.24
+log
+@Fixed some memory bugs, added "view source"
+@
+text
+@d266 1
+a266 1
+  snprintf(h.lo->url, MAX_LOGMSG_LEN-1, DistillerBufferData(&wing_data));
+@
+
+
+1.23
+log
+@changes to headers functions, ptm, and server_dispatch to maintain 2
+invariants: (1) DistillerBuffer length field does NOT include
+terminating null; (2) terminating null is always present for headers,
+and is accoutned for by the maxLength field, so that maxLength >=
+length+1.  Changed dispatch logic to allow for "X-static-route"
+dispatcher worker.  Somewhat convoluted interaction with existing
+X-Route mechanism, which i would remove entirely but for the fact that
+it enables dynamic dispatch decisions after each pipestage.  New "guru"
+argument i15 allows user to see all pipeline diagnostics that would
+normally result in a bypass.
+@
+text
+@d22 1
+d25 1
+d74 1
+a74 1
+  gl_hdr *hdrs;
+d81 1
+d285 20
+d633 1
+d672 1
+a672 1
+	       (UINT32) k, (UINT32) hdrs->version, lo.date, lo.url,
+@
+
+
+1.22
+log
+@Logging now works!  yaaay.
+@
+text
+@d262 1
+d265 1
+d402 3
+a404 3
+      content_type = (char *)get_header_value(DistillerBufferData(&h.svr_hdrs),
+						"content-type", NULL, NULL,
+						NULL);
+d417 1
+a417 1
+	  location = (char *) get_header_value(DistillerBufferData(&h.svr_hdrs),
+d492 1
+a492 1
+    content_type = get_header_value(DistillerBufferData(&h.svr_hdrs),
+@
+
+
+1.21
+log
+@o Pass client version to workers
+o Make room for scrollbar
+@
+text
+@d102 2
+a103 1
+  INST_init_loginfo(&lo);
+a104 1
+
+a141 1
+
+d261 4
+a607 1
+  fprintf(stderr, "Cleaning up..\n");
+d627 1
+a627 1
+    MD5_CTX   theHash;
+d641 9
+a649 2
+             lo.http_response, lo.size_before, lo.size_after);
+    gm_log(logmsg);
+@
+
+
+1.20
+log
+@just in case...
+@
+text
+@d226 1
+d233 12
+@
+
+
+1.19
+log
+@Handle .zip files
+@
+text
+@d493 1
+@
+
+
+1.18
+log
+@Fixed handling of single quotes in HTML tags
+@
+text
+@d259 1
+a259 1
+    char *u;
+d290 2
+a291 2
+    for(u=magicURL; *u; ++u) {
+	if (*u < '!' || *u > 0x7e) {
+d293 6
+a298 1
+	    *u = '+';
+d301 1
+@
+
+
+1.17
+log
+@Respond to requests for the up-to-date aggregator list
+@
+text
+@d486 3
+a488 1
+	 (strncasecmp("image/", content_type, 6) != 0))) {
+@
+
+
+1.16
+log
+@Added Clib_Redir_Fetch
+@
+text
+@d36 13
+d75 4
+a78 1
+  int innocache=0, outnocache=0;
+d196 1
+d203 5
+d287 1
+a287 1
+      strcpy(magicURL, "http://");
+d302 4
+d375 15
+a389 1
+      char *location, *locend;
+d392 36
+a427 22
+      location = (char *) get_header_value(DistillerBufferData(&h.svr_hdrs),
+					   "location", 
+					   NULL, NULL, NULL);
+      if (location == NULL) {
+	proxy_debug_2(DBG_WING, "Couldn't find location in redirect.");
+	if (h.errmsg[0] == '\0')
+	  sprintf(h.errmsg, "Couldn't find Location header in redirect - \
+this server is badly behaved.  Please report this to the web page's\
+administrator.");
+	wing_error_return(&h, t, prefs, index, hdrs);
+	goto WINGGO_FINISH;
+      }
+      
+      locend = strchr(location, '\r');
+      if (locend == NULL) {
+	proxy_debug_2(DBG_WING, "Ill-formatted location in redirect.");
+	if (h.errmsg[0] == '\0')
+	  sprintf(h.errmsg, "Ill-formatted location in redirect - \
+this server is badly behaved.  Please report this to the web page's\
+administrator.");
+	wing_error_return(&h, t, prefs, index, hdrs);
+	goto WINGGO_FINISH;
+a428 8
+
+      /* Let's copy in the location */
+      if (h.url != NULL)
+	free(h.url);
+      h.url = (char *) malloc(sizeof(char) * ((locend-location)+2));
+      assert(h.url);
+      memcpy(h.url, location, (locend-location));
+      h.url[locend-location] = '\0';
+d464 1
+d470 14
+d485 2
+a486 2
+	((strncmp("text/", content_type, 5) != 0) &&
+	 (strncmp("image/", content_type, 6) != 0))) {
+d543 2
+a544 1
+    metalen = htonl(innocache ? sizeof(uncache_metadata) : 0);
+d565 7
+d588 1
+d769 24
+@
+
+
+1.15
+log
+@Changed agg: prefix
+@
+text
+@d568 1
+a568 2
+  struct sockaddr a;
+  struct sockaddr_in *ap = (struct sockaddr_in *)&a;
+d576 1
+a576 1
+  return ((userkey)(ap->sin_addr.s_addr));
+@
+
+
+1.14
+log
+@Added Host: header to client requests
+@
+text
+@d244 1
+a244 1
+	urlprefix = "http://www.isaac.cs.berkeley.edu/pilot/wingman/agg.cgi/";
+@
+
+
+1.13
+log
+@more improvements to HTML distiller
+@
+text
+@d293 13
+d317 2
+a318 1
+			     strlen(fake_nocache_hdr)+1) == gm_True);
+d320 1
+a320 1
+	      "%s%s", 
+d322 2
+d337 2
+a338 2
+	sprintf(h.errmsg, "Internal proxy error: unknown server_dispatch\
+error.  Please retry, and report this bug if it persists.");
+@
+
+
+1.12
+log
+@Lots o' improvements...
+@
+text
+@d239 2
+a240 2
+    char *aggprefix = "";
+    int aggoffset = 0;
+d244 9
+a252 3
+	aggprefix = "http://www.isaac.cs.berkeley.edu/pilot/agg.cgi/";
+	extrasize = strlen(aggprefix) + 1;
+	aggoffset = 6;
+d257 1
+a257 1
+    strcpy(magicURL, aggprefix);
+d259 1
+a259 1
+    /* Allow http://, ftp://, and gopher:// to work */
+d262 1
+d267 1
+a267 1
+    strcat(magicURL, ((char *)DistillerBufferData(&wing_data)) + aggoffset);
+@
+
+
+1.11
+log
+@o Watch out for illegal chars in URLs
+o Do something sort of right with text/plain
+o Add some more icons for FTP/gopher
+@
+text
+@d236 1
+a236 1
+    char *magicURL = (char *) malloc(sizeof(char) * (hdrs->datasize+8));
+d238 12
+d251 1
+a251 1
+    *magicURL = '\0';
+d255 1
+d260 1
+a260 1
+    strcat(magicURL, DistillerBufferData(&wing_data));
+d267 1
+a267 1
+    h.url = (char *) malloc(sizeof(char) * (hdrs->datasize+8));
+@
+
+
+1.10
+log
+@gopher works now, too
+@
+text
+@d237 1
+d248 6
+@
+
+
+1.9
+log
+@o Made newlines in <PRE> work
+o FTP now works! (but we need to design some icons for text, image, etc.)
+@
+text
+@d240 1
+a240 1
+    /* Allow both http:// and ftp:// to work */
+d242 2
+a243 1
+	strncmp(DistillerBufferData(&wing_data), "ftp://", 6)) {
+@
+
+
+1.8
+log
+@Headers are now sent properly from wingman frontend.
+@
+text
+@d240 5
+a244 2
+    if (strncmp(DistillerBufferData(&wing_data), "http://", 7) != 0)
+      strcat(magicURL, "http://");
+d270 1
+a270 1
+	"User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\nAccept: text/*, image/gif, image/jpeg, image/pnm\r\n\r\n";
+@
+
+
+1.7
+log
+@Added inline nocache by arguments.
+@
+text
+@d267 1
+a267 1
+	"User-Agent: Top Gun Wingman (Pilot OS/2.0)\r\nAccept: application/x-wingman\r\n\r\n";
+@
+
+
+1.6
+log
+@Fixes:
+  1. Client->Server nocache obeyed
+  2. Error messages get propagated
+  3. Random NULL error fixed.
+@
+text
+@d217 10
+@
+
+
+1.5
+log
+@Errors returned by frontend are now uncacheable
+@
+text
+@d26 4
+d62 1
+d162 31
+d254 2
+d262 6
+a267 4
+			     strlen(fake_headers)+strlen(h.method)+
+			     strlen(h.url)+13) == gm_True);
+      sprintf(DistillerBufferData(&h.cli_hdrs), "%s %s HTTP/1.0\r\n%s",
+	      h.method, h.url, fake_headers);
+d350 2
+a351 1
+    proxy_debug_3(DBG_WING, "Non-200 status code (%ld)", h.svr_http_status);
+d356 1
+a356 1
+    goto WINGGO_FINISH;
+d372 1
+a372 1
+	endct = strchr(content_type, '\r');
+d425 1
+a425 1
+    metalen = htonl(0);
+d444 2
+a448 1
+  
+a575 2
+  static char uncache_metadata[] = 
+  { 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01 };
+@
+
+
+1.4
+log
+@Fixed canned error message.
+@
+text
+@d534 2
+d563 1
+a563 1
+  metalen = htonl(0);
+d588 1
+d598 1
+@
+
+
+1.3
+log
+@fixed much badness reported by purify
+@
+text
+@d516 18
+a533 20
+    0x00, 0x5a, 0x00, 0x00, 0x00, 0x21, 0x00, 0xa0, 
+    0x00, 0x16, 0x00, 0x00, 0x00, 0x26, 0x20, 0x54, 
+    0x68, 0x65, 0x20, 0x70, 0x72, 0x6f, 0x78, 0x79, 
+    0x20, 0x73, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 
+    0x20, 0x6d, 0x61, 0x79, 0x20, 0x62, 0x65, 0x20, 
+    0x64, 0x6f, 0x77, 0x6e, 0x20, 0x6f, 0x72, 0x20, 
+    0x74, 0x68, 0x65, 0x20, 0x00, 0x20, 0x70, 0x72, 
+    0x6f, 0x78, 0x79, 0x20, 0x64, 0x6f, 0x65, 0x73, 
+    0x20, 0x6e, 0x6f, 0x74, 0x20, 0x68, 0x61, 0x6e, 
+    0x64, 0x6c, 0x65, 0x20, 0x74, 0x68, 0x69, 0x73, 
+    0x20, 0x70, 0x61, 0x67, 0x65, 0x20, 0x00, 0x00, 
+    0xff, 0x98, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x37, 
+    0x00, 0x28, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x0a, 
+    0x70, 0x72, 0x6f, 0x70, 0x65, 0x72, 0x6c, 0x79, 
+    0x2e, 0x20, 0x00, 0x00, 0xff, 0xd6, 0x00, 0x24, 
+    0x00, 0x00, 0x00, 0x42, 0x00, 0x56, 0x00, 0x0b, 
+    0x00, 0x00, 0x00, 0x12, 0x20, 0x54, 0x72, 0x61, 
+    0x6e, 0x73, 0x65, 0x6e, 0x64, 0x2f, 0x57, 0x69, 
+    0x6e, 0x67, 0x6d, 0x61, 0x6e, 0x20, 0x00, 0x00 };
+
+d582 1
+@
+
+
+1.2
+log
+@Much minor hackery....fixed a number of little things.
+@
+text
+@d225 1
+a225 1
+			     strlen(h.url)+12) == gm_True);
+@
+
+
+1.1
+log
+@Incorporated wingman protocol directly into the frontend.
+@
+text
+@d201 1
+d280 2
+a281 1
+      free(h.url);
+d415 1
+@

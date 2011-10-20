@@ -1,0 +1,241 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.5
+	Yatin:1.5.0.6
+	pre-yatin-merge:1.5
+	transend-beta2:1.5
+	fox-dev:1.5
+	transend-beta-reallylatest:1.5
+	browser-ng:1.5
+	transend-beta-latest:1.5
+	Aggregators:1.5
+	NoAggregators:1.5
+	iang:1.5.0.4
+	transend-beta:1.5.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	98.01.24.22.51.11;	author fox;	state dead;
+branches;
+next	1.5;
+
+1.5
+date	97.04.09.02.44.57;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.09.00.29.14;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.04.08.23.41.50;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.04.08.23.25.47;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.08.20.07.41;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.04.08.20.07.41;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@<HTML>
+<HEAD>
+<TITLE>TranSend Proxy: Known Bugs</TITLE>
+</HEAD>
+
+<BODY BGCOLOR=#FFFFFF TEXT=#000000>
+
+<TABLE WIDTH=100% BORDER=0 CELLPADDING=3 CELLSPACING=0 BGCOLOR=#FFFFFF>
+  <TR><TD WIDTH=100% ALIGN=center BGCOLOR=#000000>
+    <FONT SIZE=5 COLOR=#FFFFFF>
+    <STRONG>TranSend Proxy: Known Bugs</STRONG>
+    </FONT>
+  </TD></TR>
+</TABLE>
+
+<TABLE WIDTH=100% BORDER=1 CELLPADDING=15 CELLSPACING=1 BGCOLOR=#FFFFFF>
+<TR><TD WIDTH=100% ALIGN=left>
+<a href="http://www.nytimes.com">New York Times on the Web</a> and other
+servers that authenticate accesses partially based on the IP address from
+which the request is coming will break.
+</TD></TR>
+<TR><TD WIDTH=100% ALIGN=left>
+JavaScript (especially ill-formed, illegal JavaScript) sometimes confuses
+our HTML lexical analyzer, causing the JavaScript to be corrupted and your
+browser to complain.  (But why do you have JavaScript turned on?  It's
+insecure.  Maybe this is really a feature and we're just not telling you.)
+</TD></TR>
+<TR><TD WIDTH=100% ALIGN=left>
+Your browser's client-side cache may be polluted with distilled
+representations of images.  This will only affect you if you stop surfing
+the web through the proxy; if you notice cache pollution (some images won't
+load, others load in degraded form) then flush your browser's main memory
+and disk cache.
+</TD></TR>
+<TR><TD WIDTH=100% ALIGN=left>
+Transparent GIFs are no longer transparent after distillation.
+</TD></TR>
+</TABLE>
+</BODY>
+</HTML>
+@
+
+
+1.5
+log
+@More rewrites.
+@
+text
+@@
+
+
+1.4
+log
+@More changes.
+@
+text
+@d20 1
+a20 4
+which the request is coming will break.  This is because TranSend employs
+a partitioned web cache;  URLs that point to the same site but differ in
+any way may be routed through different cache partitions, changing the IP
+address from which the request appears to come.
+@
+
+
+1.3
+log
+@More changes.
+@
+text
+@d38 3
+@
+
+
+1.2
+log
+@Added to bugs.html
+@
+text
+@d31 7
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d18 14
+a31 1
+</TD></TR></TABLE>
+d33 1
+a33 1
+</HTML>@
+
+
+1.1.1.1
+log
+@browser side software
+@
+text
+@@

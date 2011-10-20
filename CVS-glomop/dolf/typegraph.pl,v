@@ -1,0 +1,522 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.03.05.34.02;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.28.02.06.39;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Seems to all work OK now.
+
+  1) Fixed up a few bugs in typegraph.pl that perl -w caught for me.
+  2) Added tgconfig.pl, which parses and deals with config files, and
+     runs conversion pipelines for you (not very efficiently, though).
+  3) Added tgconfig.txt, which is a sample configuration file.
+  4) Modified test.pl to try out the tgconfig.pl routines.
+  5) Got some test data to try stuff out on.
+@
+text
+@#
+# typegraph.pl
+#
+# This file contains code that implements the DOLF typegraph subsystem.  This
+# subsystem accepts a graph with mime datatypes as vertices and
+# transformations between datatypes as edges, and will on demand, given
+# any datatype in that graph, return a list of reachable datatypes, and
+# with each reachable datatype, a list of transformations that
+# represents the shortest path to reach it.
+#
+# $Id: typegraph.pl,v 1.1 1996/11/28 02:06:39 gribble Exp $
+# 
+
+package typegraph;
+
+# return a new (as of yet uninitialized) typegraph object
+
+sub new {
+    my $class = shift;
+
+    my $self = bless {
+	"vertextlist" => [],    # an array defining the vertex mimetypes
+	"inverse_vlist" => {},  # a hash going from mimetype to the
+                                # vertexlist array offset of that mimetype
+	"edgematrix" => [],     # double array - adjacency matrix, whose
+	                        # values are tokens passed in accept_typegraph
+        "costestimate" => [],   # array of cost estimates, one per vertex
+        "predecessors" => [],   # array of predecessor lists, one per vertex
+    };
+    return $self
+}
+
+# given a typegraph object and an array of "SMT DMT TOKEN FUNC"
+# strings, where "SMT" is the source mimetype (e.g. "application/postscript"),
+# "DMT" is the destination mimetype (e.g. "text/html"), "TOKEN" is
+# some unique token describing this transform (e.g. "pstohtml"), and
+# "FUNC" is yet to be defined, this function will load up the instance
+# variables "vertextlist", "inverse_vlist", and "edgematrix" with the
+# appropriate entries, and then call Dijkstra's algorithm to generate
+# the array of predecessor lists.
+
+sub accept_typegraph {
+    my $self = shift(@@_);        # the typegraph we'll be prepping
+    my $cur_edgenum = 0;
+    my ($smt, $dmt, $tok, $fnc);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest, $i, $j, $row1);
+
+    # undefine all previous entries
+    $self->{"vertexlist"} = [];  $vlist = $self->{"vertexlist"};
+    $self->{"inverse_vlist"} = {}; $ivlist = $self->{"inverse_vlist"};
+    $self->{"edgematrix"} = []; $edgemat = $self->{"edgematrix"};
+    $self->{"predecessors"} = []; $pred = $self->{"predecessors"};
+    $self->{"costestimate"} = []; $cest = $self->{"costestimate"};
+
+    # now loop through input, adding to appropriate structures as we go
+    foreach $nextentry (@@_) {
+	if ( ! ( ($smt, $dmt, $tok, $fnc) = 
+	    ($nextentry =~ /^(\S*)\s(\S*)\s(\S*)\s(\S*)$/) ) ) {
+		print "** bogus input line: \"$nextentry\" (ignoring)\n";
+		next;
+	    };
+	if ($smt eq $dmt) {
+	    print "** self-directed edge in \"$nextentry\" (ignoring)\n";
+	    next;
+	}
+	if ($cur_edgenum == 0) {  # special case first time
+	    push (@@$vlist, $smt);
+	    push (@@$vlist, $dmt);
+	    $$ivlist{$smt} = 0;
+	    $$ivlist{$dmt} = 1;
+	    $cur_edgenum = 2;
+	    push (@@$edgemat, ["-", $tok]);
+	    push (@@$edgemat, ["-", "-"]);
+	    next;
+	}
+
+	# we have our stuff initialized, let's put this new one in.
+	# first check to make sure an equivalent transform doesn't
+	# already exist
+	if (defined($$ivlist{$smt}) && defined($$ivlist{$dmt})  ) {
+	    if (!($$edgemat[$$ivlist{$smt}][$$ivlist{$dmt}] eq "-")) {
+		print "** ${smt}->${dmt} already exists as \"";
+		print $$edgemat[$$ivlist{$smt}][$$ivlist{$dmt}];
+		print "\" (ignoring)\n";
+		next;
+	    }
+	}
+
+	# if this is a brand new source type, then we have a whole new
+	# row to add
+	if (!defined($$ivlist{$smt})) {
+	    $cur_edgenum++;
+	    push (@@$edgemat, []);
+	    for ($i=0; $i<$cur_edgenum-1; $i++) {
+		my $lastrowref = $$edgemat[$cur_edgenum-1];
+		push (@@$lastrowref, "-");
+	    }
+	    for ($i=0; $i<$cur_edgenum; $i++) {
+		my $curedgeref = $$edgemat[$i];
+		push (@@$curedgeref, "-");
+	    }
+	    push(@@$vlist, $smt);
+	    $$ivlist{$smt} = $cur_edgenum-1;
+	}
+	# same thing for destination type
+	if (!defined($$ivlist{$dmt})) {
+	    $cur_edgenum++;
+	    push (@@$edgemat, []);
+	    for ($i=0; $i<$cur_edgenum-1; $i++) {
+		my $lastrowref = $$edgemat[$cur_edgenum-1];
+		push (@@$lastrowref, "-");
+	    }
+	    for ($i=0; $i<$cur_edgenum; $i++) {
+		my $curedgeref = $$edgemat[$i];
+		push (@@$curedgeref, "-");
+	    }
+	    push(@@$vlist, $dmt);
+	    $$ivlist{$dmt} = $cur_edgenum-1;
+	}
+
+	# now let's add the token to the edgematrix
+	$row1 = $$edgemat[$$ivlist{$smt}];
+	$$row1[$$ivlist{$dmt}] = $tok;
+    }
+
+    # Now create the cost estimate and predecessor, initialized to infinities
+    for ($i=0; $i<$cur_edgenum; $i++) {
+	push(@@$pred, []);
+	push(@@$cest, []);
+	for ($j=0; $j<$cur_edgenum; $j++) {
+	    my $currowref = $$pred[$i];
+	    my $currowcref = $$cest[$i];
+	    push(@@$currowcref, "infty");
+	    push(@@$currowref, "nil");
+	}
+    }
+
+    # Excellent!  We now have our structures fully prepped for
+    # Dijkstra's algorithm.  Off we go.
+    $self->DoDijkstra();
+}
+
+# given a typegraph object and a source mimetype, this function will
+# return an array of reachable types.  Each element of the array is a
+# string of the form "DMT tok1 tok2 ... tokn", where DMT is the
+# destination mimetype, and each of the "toki" are the TOKENs passed in
+# to the accept_typegraph function previously that describe transformations.
+# Each destination/transformation list entry is minimal in cost.
+# If no destinations exist, this function returns undef.
+
+sub typegraph_reachables {
+    my $self = shift(@@_);
+    my $source = shift(@@_);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+    my ($i, $nodecount, $sourcerowref);
+    my @@retarray;
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    # let's make sure that this node exists
+    if (!defined($$ivlist{$source})) {
+	return undef;
+    }
+
+    $nodecount = scalar(@@$vlist);
+    $sourcerowref = $$pred[$$ivlist{$source}];
+    for ($i=0; $i<$nodecount; $i++) {
+	if ($i !=  $$ivlist{$source}) {
+	    my $appendstring = undef;
+
+	    $curnodenum = $i;
+	    $ref = $$sourcerowref[$curnodenum];
+	    while ( !($ref eq "nil") ) {
+		my ($correctedgeref, $ednum);
+
+		$ednum = $$ivlist{$ref};
+		$correctedgeref = $$edgemat[$ednum];
+		if (defined($appendstring)) {
+		    $appendstring = $$correctedgeref[$curnodenum] . " "
+			. $appendstring;
+		} else {
+		    $appendstring = $$correctedgeref[$curnodenum] . " ";
+		}
+		$curnodenum = $$ivlist{$ref};
+		$ref = $$sourcerowref[$curnodenum];
+	    }
+	    if (defined($appendstring)) {
+		chop($appendstring);
+		$appendstring = "$$vlist[$i] " . $appendstring;
+		push(@@retarray, $appendstring);
+	    }
+	}
+    }
+    return @@retarray;
+}
+
+# debugging procedure - dumps out typegraph state
+
+sub dump_typegraph {
+    my $self = shift(@@_);        # the typegraph we'll be prepping
+    my ($vlist, $ivlist, $edgemat, $pred, $cest, $i, $j, $nextrow);
+
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    print "Vertices:\n";
+    foreach $vert (@@$vlist) {
+	print "  " . $vert . " [" . $$ivlist{$vert} . "]\n";
+    }
+
+    print "Edges:\n";
+    $nextrow = $$edgemat[0];
+    printf("       ");
+    for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	printf("%-10.10s ", "[$j]");
+    }
+    print "\n";
+    for ($i=0; $i< scalar(@@$edgemat); $i++) {
+	$nextrow = $$edgemat[$i];
+        printf("%-6.6s ", "[$i]");
+	for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	    printf("%-10.10s ", $$nextrow[$j]);
+	}
+	print "\n";
+    }
+
+    print "Cost estimates:\n";
+    $nextrow = $$cest[0];
+    printf("       ");
+    for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	printf("%-10.10s ", "[$j]");
+    }
+    print "\n";
+    for ($i=0; $i< scalar(@@$cest); $i++) {
+	$nextrow = $$cest[$i];
+        printf("%-6.6s ", "[$i]");
+	for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	    printf("%-10.10s ", $$nextrow[$j]);
+	}
+	print "\n";
+    }
+
+    print "Predecessors:\n";
+    $nextrow = $$pred[0];
+    printf("       ");
+    for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	printf("%-18.18s ", "[$j]");
+    }
+    print "\n";
+    for ($i=0; $i< scalar(@@$pred); $i++) {
+	$nextrow = $$pred[$i];
+        printf("%-6.6s ", "[$i]");
+	for ($j=0; $j < scalar(@@$nextrow); $j++) {
+	    printf("%-18.18s ", $$nextrow[$j]);
+	}
+	print "\n";
+    }
+}
+
+##############################################################################
+## Herein lies the heart of this code, namely an implementation of 
+## Dijkstra's algorithm for solving the single-source shortest path
+## problem.
+##############################################################################
+
+sub InitializeSingleSource {
+    my $self = shift(@@_);
+    my $source = shift(@@_);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+    my ($i, $numvert, $cestrow, $predrow);
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    $numvert = scalar(@@$vlist);
+    $cestrow = $$cest[$$ivlist{$source}];
+    $predrow = $$pred[$$ivlist{$source}];
+    for ($i=0; $i<$numvert; $i++) {
+	$$cestrow[$i] = "infty";
+	$$predrow[$i] = "nil";
+    }
+    $$cestrow[$$ivlist{$source}] = 0;
+}
+
+sub ExtractMin {
+    my $self = shift(@@_);
+    my $arrayref = shift(@@_);
+    my $curvert = shift(@@_);
+    my ($minnum, $minval, $count, $i, $cestrow, $rval);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    # find the minimum
+    $minnum = -1;
+    $minval = "infty";
+    $count = scalar(@@$arrayref);
+    $cestrow = $$cest[$$ivlist{$curvert}];
+    for ($i=0; $i<$count; $i++) {
+	my $elnum;
+
+	$elnum = $$ivlist{$$arrayref[$i]};
+	if ($minnum == -1) {  # first time round
+	    $minnum = $i;
+	    $minval = $$cestrow[$elnum];
+	} else {
+	    if ($minval eq "infty") {
+		$minnum = $i;
+		$minval = $$cestrow[$elnum];
+	    } elsif ( !($$cestrow[$elnum] eq "infty") ) {
+		if ($$cestrow[$elnum] < $minval) {
+		    $minnum = $i;
+		    $minval = $$cestrow[$elnum];
+		}
+	    }
+	}
+    }
+    
+    # we have our minimum
+    $rval = $$arrayref[$minnum];
+    splice (@@$arrayref, $minnum, 1);
+    return $rval;
+}
+
+sub GetAdj {
+    my $self = shift(@@_);
+    my $vertex = shift(@@_);
+    my (@@adjlist, $i, $count);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+    my $edgerowref;
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+    $count = scalar(@@$vlist);
+
+    $edgerowref = $$edgemat[$$ivlist{$vertex}];
+
+    for ($i=0; $i<$count; $i++) {
+	if ( !($$edgerowref[$i] eq "-") &&
+	    ($i != $$ivlist{$vertex}) ) {
+	    push(@@adjlist, $$vlist[$i]);
+	}
+    }
+    return @@adjlist;
+}
+
+sub Relax {
+    my $self = shift(@@_);
+    my $source = shift(@@_);
+    my $curmin = shift(@@_);
+    my $adj    = shift(@@_);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+    my ($cestrow, $predrow, $curminnum, $adjnum);
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    $cestrow = $$cest[$$ivlist{$source}];
+    $predrow = $$pred[$$ivlist{$source}];
+    $curminnum = $$ivlist{$curmin};
+    $adjnum = $$ivlist{$adj};
+
+    # do the actual relaxation ### HERE'S WHERE WEIGHT IS
+    if ($$cestrow[$adjnum] eq "infty") {
+	if ( !($$cestrow[$curminnum] eq "infty") ) {
+	    if (defined($$cestrow[$curminnum])) {
+		$$cestrow[$adjnum] = $$cestrow[$curminnum] + 1;
+	    } else {
+		print "warning: undefined cestrow[$curminnum]\n";
+		$$cestrow[$adjnum] = 1;
+	    }
+	    $$predrow[$adjnum] = $curmin;
+	}
+    } else {
+	if (!($$cestrow[$curminnum] eq "infty")) {
+	    if ($$cestrow[$adjnum] > $$cestrow[$curminnum] + 1) { 
+		$$cestrow[$adjnum] = $cestrow[$curminnum] + 1;
+		$$predrow[$adjnum] = $curmin;
+	    }
+	}
+    }
+}
+sub DoDijkstra {
+    my $self = shift(@@_);
+    my ($vlist, $ivlist, $edgemat, $pred, $cest);
+    my ($numvert, $i, $curvert);
+
+    # for convenience
+    $vlist = $self->{"vertexlist"};
+    $ivlist = $self->{"inverse_vlist"};
+    $edgemat = $self->{"edgematrix"};
+    $pred = $self->{"predecessors"};
+    $cest = $self->{"costestimate"};
+
+    $numvert = scalar(@@$vlist);
+    for ($i=0; $i<$numvert; $i++) {
+	$curvert = $$vlist[$i];
+	$self->InitializeSingleSource($curvert);
+    }
+
+    for ($i=0; $i<$numvert; $i++) {
+	my @@vertexcopy = @@$vlist;
+	my @@solved = ();
+
+	$curvert = $$vlist[$i];
+	while (scalar(@@vertexcopy) != 0) {
+	    my (@@adjlist, $adjvert);
+
+	    $min = $self->ExtractMin(\@@vertexcopy, $curvert);
+	    push (@@solved, $min);
+	    @@adjlist = $self->GetAdj($min);
+	    foreach $adjvert (@@adjlist) {
+		$self->Relax($curvert, $min, $adjvert);
+	    }
+	}
+    }
+}
+
+1;
+@
+
+
+1.1
+log
+@Typegraph implemented and tested.  It just works, dammit.
+@
+text
+@d11 1
+a11 1
+# $Id$
+a121 1
+	print "source $smt [$$ivlist{$smt}] dest $dmt [$$ivlist{$dmt}]\n";
+d179 1
+a179 1
+		my $correctedgeref;
+d181 8
+a188 3
+		$correctedgeref = $$edgemat[$$ivlist{$ref}];
+		$appendstring = $$correctedgeref[$curnodenum] . " "
+		. $appendstring;
+d313 1
+d322 11
+a332 4
+	    $minval = $$cestrow[$i];
+	} elsif ($$cestrow[$i] < $minval) {
+	    $minnum = $i;
+	    $minval = $$cestrow[$i];
+d391 6
+a396 1
+	    $$cestrow[$adjnum] = $cestrow[$curminnum] + 1;
+d399 7
+a405 4
+    }
+    if ($$cestrow[$adjnum] > $$cestrow[$curminnum] + 1) { 
+	$$cestrow[$adjnum] = $cestrow[$curminnum] + 1;
+	$$predrow[$adjnum] = $curmin;
+d422 5
+a430 1
+	$self->InitializeSingleSource($curvert);
+d432 1
+a432 1
+	    my @@adjlist, $adjvert;
+@

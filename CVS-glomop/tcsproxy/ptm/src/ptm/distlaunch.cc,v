@@ -1,0 +1,1978 @@
+head	1.23;
+access;
+symbols
+	Yatin-final:1.22.2.1
+	Yatin:1.22.0.2
+	pre-yatin-merge:1.22
+	transend-beta2:1.19
+	fox-dev:1.19
+	ptm-ng:1.15
+	transend-beta-latest:1.15
+	Aggregators:1.15
+	NoAggregators:1.15
+	iang:1.14.0.4
+	transend-beta:1.14.0.2
+	SOSP:1.13
+	stable_ptm:1.9
+	merged_preintegrate:1.7
+	heisenbug:1.6
+	PRE_INTEGRATION:1.6;
+locks; strict;
+comment	@// @;
+
+
+1.23
+date	98.01.16.22.16.27;	author yatin;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.09.15.03.09.41;	author yatin;	state Exp;
+branches
+	1.22.2.1;
+next	1.21;
+
+1.21
+date	97.09.11.00.25.56;	author yatin;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.09.10.23.26.47;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.07.23.23.54.45;	author yatin;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.07.21.23.21.37;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.07.21.21.30.22;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.06.14.05.05.50;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.05.11.10.24.37;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.18.19.26.46;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.03.07.20.36.55;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.03.06.02.49.23;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.26.04.15.11;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.17.03.01.27;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.07.21.54.57;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.04.09.55.49;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.15.13.46.41;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.29;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.28;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.08.21.43;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.00.42.33;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.28.00;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.43.00;	author yatin;	state Exp;
+branches;
+next	;
+
+1.22.2.1
+date	97.11.17.22.07.09;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.23
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "log.h"
+#include "distlaunch.h"
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+
+DistillerLauncher *PendingLaunch::distillerLauncher=NULL;
+OptionDatabase *LaunchRecord::options=NULL;
+
+
+DistillerLauncher::DistillerLauncher(OptionDatabase *options)
+{
+  if (launchDB.Create(options)==gm_False) {
+    return;
+  }
+
+  const char *rsh=NULL, *rshArgs=NULL, *rhosts=NULL;
+  rsh     = options->Find(Opt_Rsh);
+  rshArgs = options->Find(Opt_RshArgs);
+  rhosts  = options->Find(Opt_Hosts);
+  
+  if (rexec.Initialize(rsh, rshArgs, rhosts)==gm_False) {
+    // error occurred; return
+    return;
+  }
+
+  LaunchRecord::options = options;
+}
+
+
+gm_Bool
+DistillerLauncher::OptionsUpdate(OptionDatabase *options)
+{
+  if (launchDB.Update(options)==gm_False) {
+    return gm_False;
+  }
+
+  const char *rsh=NULL, *rshArgs=NULL, *rhosts=NULL;
+  rsh     = options->Find(Opt_Rsh);
+  rshArgs = options->Find(Opt_RshArgs);
+  rhosts  = options->Find(Opt_Hosts);
+  
+  if (rexec.Update(rsh, rshArgs, rhosts)==gm_False) {
+    // error occurred; return
+    return gm_False;
+  }
+
+  LaunchRecord::options = options;
+  return gm_True;
+}
+
+
+void
+DistillerLauncher::RemoveBrokenConnection(PrivateConnection *object)
+{
+  ListIndex idx1, idx2;
+  LaunchRequest *current;
+  PendingLaunch *pendingLaunch;
+
+  idx1 = pendingList.BeginTraversal();
+  for (; pendingList.IsDone(idx1)==gm_False;
+       idx1=pendingList.getNext(idx1)) {
+    
+    pendingLaunch = pendingList.getData(idx1);
+
+    idx2 = pendingLaunch->waitingList.BeginTraversal();
+    while (pendingLaunch->waitingList.IsDone(idx2)==gm_False) {
+      current = pendingLaunch->waitingList.getData(idx2);
+      idx2 = pendingLaunch->waitingList.getNext(idx2);
+      if (current->replyObject==object) {
+	pendingLaunch->waitingList.Remove(idx2);
+      }
+    }
+    pendingLaunch->waitingList.EndTraversal();
+  }
+  pendingList.EndTraversal();
+}
+
+
+gm_Bool
+DistillerLauncher::TryToLaunch(DistillerType *distillerType,
+			       PrivateConnection *replyObject, 
+			       UINT32 replyID)
+{
+  LaunchRecord  *launchRecord;
+  PendingLaunch *pendingLaunch;
+
+  // try to locate a sleeping distiller
+
+  // locate an appropriate distiller binary to launch
+
+  launchRecord = launchDB.FindMatchingDistiller(distillerType);
+
+  if (launchRecord==NULL) {
+    // can't find an appropriate distiller :(
+    gm_Log("Could not find any distiller of type " << (*distillerType) <<'\n');
+    if (replyObject!=NULL) 
+      replyObject->AskForDistillerReply(replyID, ptmNoDistiller, NULL);
+    // ignore the return value
+    return gm_True;
+  }
+
+  // check if there is already a pending launch for that binary
+  pendingLaunch = FindPendingLaunch(launchRecord);
+  if (pendingLaunch!=NULL) {
+    // there is a pending launch
+    gm_Log("Launch already pending for distiller (type = "
+	   << pendingLaunch->launchRecord->type       << "): " 
+	   << pendingLaunch->launchRecord->executable << '\n');
+
+    return pendingLaunch->Append(replyObject, replyID);
+  }
+
+  // no pending launch; so initiate one
+  pendingLaunch = new PendingLaunch(launchRecord, this);
+  if (pendingLaunch==NULL) return gm_False;
+
+  if (pendingLaunch->Append(replyObject, replyID)==gm_False) return gm_False;
+
+  gm_Log("Initiating launch of distiller (type = " 
+	 << pendingLaunch->launchRecord->type       << "): " 
+	 << pendingLaunch->launchRecord->executable << '\n');
+
+  if (pendingLaunch->launchRecord->Launch(pendingLaunch->getID())==gm_False) {
+    // launch didn't succeed, no need for pendingLaunch 
+    // (launch will fail only if fork() fails i.e. no more processes)
+    pendingLaunch->LaunchFailed();
+    delete pendingLaunch;
+  }
+
+  return gm_True;
+}
+
+
+PendingLaunch *
+DistillerLauncher::FindPendingLaunch(LaunchRecord *record)
+{
+  ListIndex idx;
+  PendingLaunch *returnValue = NULL;
+
+  idx = pendingList.BeginTraversal();
+  for (;
+       pendingList.IsDone(idx)==gm_False; 
+       idx = pendingList.getNext(idx)) {
+    if (pendingList.getData(idx)->launchRecord==record) {
+      returnValue = pendingList.getData(idx);
+      break;
+    }
+  }
+  pendingList.EndTraversal();
+
+  return returnValue;
+}
+
+
+void
+LaunchRecord::ParseParam(ts_strtok_state *state, char *&token, 
+			 UINT32 &variable, UINT32 defaultValue)
+{
+  if (token!=NULL) {
+    // we've already hit the end of the param list; just set the default
+    variable = defaultValue;
+    return;
+  }
+
+  token = ts_strtok(" \t", state);
+  if (token==NULL) {
+    variable = defaultValue;
+  }
+  else {
+    if (*token=='-') {
+      // use the default value
+      variable = defaultValue;
+      
+      if (*(token+1) == '\0') {
+	// this is an explicit arg to use the default value
+	token = NULL;
+      }
+      // else don't set token to NULL!!!
+    }
+    else {
+      variable = strtoul(token, NULL, 10);
+      if (variable==0) variable = defaultValue;
+      token = NULL;
+    }
+  }
+}
+
+
+gm_Bool
+LaunchRecord::Parse(const char *optionsLine)
+{
+  ts_strtok_state *state;
+  int idx, size;
+  char *token, **newArgv;
+  UINT32 history_ms;
+  gm_Bool beforeExtraArgs=gm_False, expectingDashNArg=gm_False;
+
+  if ((state = ts_strtok_init((char*)optionsLine))==NULL) {
+    Return(gm_False, errGenericError);
+  }
+
+  // parse out the executable pathname and load-balancing params
+  token = ts_strtok(" \t", state);
+  if (token==NULL) {
+    Return(gm_False, errGenericError);
+  }
+  safe_strncpy(executable, token, MAXPATH);
+
+  token = NULL;
+  ParseParam(state, token, autoLaunchLimit, DefaultAutoLaunchLimit);
+  ParseParam(state, token, history_ms, DefaultLoadHistoryPeriod_ms);
+  notificationTimeout_ms = DefaultNotificationTimeout_ms;
+
+  // parse out extra cmdline args to the distiller
+  if (argv!=NULL) {
+    for (idx=0; idx<argc; idx++) delete [] argv[idx];
+    delete [] argv;
+  }
+
+  size = 2;
+  argc = 0;
+  argv = NULL;
+
+  if (token==NULL) token = ts_strtok(" \t", state);
+  while (token != NULL) {
+    argc++;
+    gm_Log("Parsing out argument " << argc << ": " << token << "\n");
+    if (argc > size || argv==NULL) {
+      size *= 2;
+      newArgv = new char* [size];
+      if (newArgv==NULL) Return(gm_False, errOutOfMemory);
+      if (argv!=NULL) {
+	for (idx=0; idx < size/2; idx++) {
+	  newArgv[idx] = argv[idx];
+	}
+	delete [] argv;
+      }
+      argv = newArgv;
+    }
+
+    argv[argc-1] = new char [strlen(token)+1];
+    if (argv[argc-1]==NULL) Return(gm_False, errOutOfMemory);
+    strcpy(argv[argc-1], token);
+
+    if (beforeExtraArgs==gm_True) {
+      // parse out the notification timeout argument if present
+      if (expectingDashNArg==gm_True) {
+	expectingDashNArg = gm_False;
+	notificationTimeout_ms = strtoul(argv[argc-1], NULL, 10);
+	if (notificationTimeout_ms==0) 
+	  notificationTimeout_ms = DefaultNotificationTimeout_ms;
+      }
+
+      if (strcmp(argv[argc-1], "--")==0) {
+	beforeExtraArgs = gm_False;
+      }
+      else if (strcmp(argv[argc-1], "-n")==0) {
+	expectingDashNArg = gm_True;
+      }
+    }
+
+    token = ts_strtok(" \t", state);
+  }
+
+  ts_strtok_finish(state);
+
+  loadHistorySize = history_ms/notificationTimeout_ms;
+  if (loadHistorySize<=0) loadHistorySize = 1;
+
+  return gm_True;
+}
+
+
+
+void
+LaunchRecord::TryToAutoLaunch()
+{
+  timeval diff, now;
+  UINT32 diff_ms;
+  gettimeofday(&now, NULL);
+  diff = tv_timesub(now, lastLaunch);
+  diff_ms = timeval_to_ms(diff);
+  if (diff_ms <= AutoLaunchHysteresisInterval_ms) {
+    // we just launched a distiller of the same time, some time ago
+    return;
+  }
+  gm_Log("Load on distiller " << type
+	 << " too high. Trying to auto-launch a new one\n");
+  DistillerRecord *dist = PTM::getInstance()->getDistillerDB()->
+    WakeSleepingDistiller(&type);
+  if (dist!=NULL) {
+    gm_Log("Found a sleeping distiller at " << dist->rid << '\n');
+    // update lastLaunch field, so that a new distiller doesn't get launched 
+    // immediately
+    gettimeofday(&lastLaunch, NULL);
+  }
+  else
+    PTM::getInstance()->getDistillerLauncher()->TryToLaunch(&type, NULL, 0);
+}
+
+
+void
+LaunchRecord::Relaunch()
+{
+ gm_Log("Distiller of type " << type
+	 << " just died. Trying to launch a new one\n");
+  DistillerRecord *dist = PTM::getInstance()->getDistillerDB()->
+    WakeSleepingDistiller(&type);
+  if (dist!=NULL) {
+    gm_Log("Found a sleeping distiller at " << dist->rid << '\n');
+    // update lastLaunch field, so that a new distiller doesn't get launched 
+    // immediately
+    gettimeofday(&lastLaunch, NULL);
+  }
+  else
+    PTM::getInstance()->getDistillerLauncher()->TryToLaunch(&type, NULL, 0);
+}
+
+
+
+void
+LaunchRecord::UpdateLoad(Load &newLoad, Load &prevLoad)
+{
+  Load avg;
+  if (autoLaunchLimit==0) {
+    // don't auto-launch; so don't bother doing anything!
+    return;
+  }
+
+  totalLoad -= prevLoad;
+  totalLoad += newLoad;
+
+  if (numberOfActiveDistillers > 0) {
+    avg.Average(totalLoad, numberOfActiveDistillers);
+    if (avg.totalLatency_ms > autoLaunchLimit) TryToAutoLaunch();
+  }
+}
+
+
+gm_Bool
+LaunchRecord::Launch(UINT32 requestID)
+{
+  char **distArgv, **current; //, executablePath[1024];
+
+  distArgv = new char* [argc+25];
+  current = distArgv;
+  *current++ = executable;
+
+  char ptmAddressString[50],
+    notificationTimeoutString[50],
+    distillerTypeString[MAXDISTILLER_TYPE_STRING+5],
+    requestIDString[25],
+    optionsFileString[MAXPATH+3], *quote="";
+  
+  if (PTM::getInstance()->getDistillerLauncher()->getRExec()->
+      IsRemoteExecution()==gm_True) quote = "\"";
+  sprintf(ptmAddressString, "-p%s/%d", 
+	  PTM::getInstance()->getAddress().ipAddress,
+	  PTM::getInstance()->getAddress().port);
+  sprintf(distillerTypeString, "%s-t%s%s", quote, type.c_struct.string, quote);
+  sprintf(notificationTimeoutString, "-n%lu", notificationTimeout_ms);
+  sprintf(requestIDString, "-r%lu", requestID);
+
+  sprintf(optionsFileString, "%s-o%s%s", quote, 
+	  options->Find(Opt_OptionsFile), quote);
+  
+  *current++ = ptmAddressString;
+  *current++ = distillerTypeString;
+  *current++ = notificationTimeoutString;
+  *current++ = requestIDString;
+  *current++ = optionsFileString;
+
+  for (int i=0; i<argc; i++) {
+    gm_Log("Setting argument: " << argv[i] << "\n");
+    *current++ = argv[i];
+  }
+
+  *current++ = NULL;
+  gettimeofday(&lastLaunch, NULL);
+  if ( (PTM::getInstance()->getDistillerLauncher()->
+	getRExec()->Exec(*distArgv, distArgv)) == gm_False) {
+    delete [] distArgv;
+    return gm_False;
+  }
+  
+  delete [] distArgv;
+  return gm_True;
+}
+
+
+void
+LaunchRecord::Die()
+{
+  if (PTM::getInstance()->getDistillerLauncher()->
+      FindPendingLaunch(this)!=NULL) {
+    // there is a pending launch for this distiller! we can't die right away
+    mustDie = gm_True;
+  }
+  else {
+    delete this;
+  }
+}
+
+
+PendingLaunch::PendingLaunch(LaunchRecord *r, DistillerLauncher *launcher)
+  : RequestReply(PTM::getInstance()->getEventSystem(), 
+		 SECONDS(LaunchTimeout_ms), USECONDS(LaunchTimeout_ms)), 
+    launchRecord(r),
+    countOfTimeouts(0)
+{
+  distillerLauncher = launcher;
+  if (distillerLauncher->AddPendingLaunch(this)==gm_False) return;
+}
+
+
+PendingLaunch::~PendingLaunch()
+{
+  if (launchRecord->mustDie==gm_True) {
+    // this distiller type no longer exists! we must destroy this object
+    delete launchRecord;
+  }
+
+  distillerLauncher->RemovePendingLaunch(this);
+  while(waitingList.IsEmpty()==gm_False) {
+    delete waitingList.RemoveFromHead();
+  }
+}
+
+
+
+gm_Bool
+PendingLaunch::Append(PrivateConnection *replyObject, UINT32 replyID)
+{
+  LaunchRequest *request = new LaunchRequest(replyObject, replyID);
+  if (request==NULL) Return(gm_False, errOutOfMemory);
+  return waitingList.InsertAtHead(request);
+}
+
+
+gm_Bool
+PendingLaunch::EvReplyReceived(RequestReplyEventSystem */*evs*/, void *args)
+{
+  DistillerRecord *newDistiller = (DistillerRecord*)args;
+
+  if (newDistiller->sleepStatus==distWakeUp) {
+    ListIndex idx;
+    List<DatabaseRecord> list;
+    if (list.InsertAtHead(newDistiller)==gm_False) {
+      delete this;
+      return gm_False;
+    }
+    
+    gm_Log("Launch for distiller (type = " << launchRecord->type
+	   << ") succeeded\n");
+    idx = waitingList.BeginTraversal();
+    for (; waitingList.IsDone(idx)==gm_False; idx=waitingList.getNext(idx)) {
+      if (waitingList.getData(idx)->replyObject!=NULL && 
+	  waitingList.getData(idx)->replyObject->
+	  AskForDistillerReply(waitingList.getData(idx)->replyID, ptmOk, &list)
+	  ==gm_False) {
+	// ignore error
+	Error::SetStatus(success);
+      }
+    }
+    waitingList.EndTraversal();
+    delete this;
+  }
+  else {
+    gm_Log("Distiller of type " << newDistiller->type << " succeeded; but the "
+	   "distiller is " << ((newDistiller->sleepStatus==distSleep) ?
+			       "sleeping" : "trying to die") << '\n');
+  }
+
+  return gm_True;
+}
+
+
+gm_Bool
+PendingLaunch::EvTimer(RequestReplyEventSystem */*evs*/)
+{
+  countOfTimeouts++;
+
+  if (countOfTimeouts >= MaxLaunchTimeouts) {
+    gm_Log("Launch of distiller (type = " << launchRecord->type<<") timed out "
+	 << countOfTimeouts << " times. Aborting.\n");
+    LaunchFailed();
+    delete this;
+    return gm_True;
+  }
+
+  gm_Log("Launch of distiller (type = " << launchRecord->type 
+	 << ") timed out. Trying again.\n");
+
+  if (launchRecord->Launch(getID())==gm_False) {
+    LaunchFailed();
+    delete this;
+    Error::SetStatus(success);
+    return gm_True;
+  }
+
+  Retry(SECONDS(LaunchTimeout_ms), USECONDS(LaunchTimeout_ms));
+  return gm_True;
+}
+
+
+gm_Bool 
+PendingLaunch::LaunchFailed()
+{
+  ListIndex idx;
+
+  idx = waitingList.BeginTraversal();
+  for (; waitingList.IsDone(idx)==gm_False; 
+       idx=waitingList.getNext(idx)) {
+
+    if (waitingList.getData(idx)->replyObject!=NULL && 
+	waitingList.getData(idx)->replyObject->
+	AskForDistillerReply(waitingList.getData(idx)->replyID, 
+			     ptmDistillerLaunchTimeout, NULL)==gm_False) {
+      // ignore it
+      Error::SetStatus(success);
+    }
+  }
+  waitingList.EndTraversal();
+  return gm_True;
+}
+
+
+gm_Bool
+LaunchDatabase::Sweep()
+{
+  List<LaunchRecord> list;
+  ListIndex idx;
+  LaunchRecord *record;
+  if (ForEach(SweepHelper, &list)==gm_False) return gm_False;
+
+  idx = list.BeginTraversal();
+  for (; list.IsDone(idx) == gm_False;
+       idx =  list.getNext(idx)) {
+    
+    record = list.getData(idx);
+    Remove(record);
+    record->Die();
+  }
+  list.EndTraversal();
+  return gm_True;
+}
+
+
+gm_Bool
+LaunchDatabase::SweepHelper(Database */*db*/, DatabaseRecord *r, 
+			    void *args)
+{
+  LaunchRecord *record = (LaunchRecord*) r;
+  List<LaunchRecord> *list = (List<LaunchRecord> *) args;
+
+  if (record->marked==gm_True) {
+    // this record is still marked i.e. we didn't find an entry for it in the
+    // new options file
+    // we should delete this record from the launch database
+    gm_Log("Removing auto-launch record for " << record->type << "\n");
+    list->InsertAtTail(record);
+  }
+  return gm_True;
+}
+
+
+
+gm_Bool
+LaunchDatabase::ForEachCreate(OptionDatabase */*options*/, const char *key, 
+			      const char *value, void *args)
+{
+  // ignore all options that do not start with "dist."
+  if (strncmp(key, "dist.", 5)!=0) return gm_True;
+
+  key += 5;
+  LaunchDatabase *this_ = (LaunchDatabase*) args;
+  DatabaseRecord *record = this_->CreateRecord(key, value);
+  if (record==NULL) return gm_False;
+  if (this_->Add(record)==gm_False) return gm_False;
+  return gm_True;
+}
+
+
+gm_Bool
+LaunchDatabase::ForEachUpdate(OptionDatabase */*options*/, const char *key, 
+			      const char *value, void *args)
+{
+  // ignore all options that do not start with "dist."
+  if (strncmp(key, "dist.", 5)!=0) return gm_True;
+  
+  key += 5;
+  LaunchDatabase *this_ = (LaunchDatabase*) args;
+  DistillerType type(key);
+  LaunchRecord *record = this_->getLaunchRecord(&type);
+  if (record==NULL) {
+    // this is a brand new record
+    DatabaseRecord *record = this_->CreateRecord(key, value);
+    if (record==NULL) return gm_False;
+    if (this_->Add(record)==gm_False) return gm_False;
+    this_->Unmark((LaunchRecord*) record);
+    return gm_True;
+  }
+  else {
+    this_->Unmark(record);
+    gm_Log("Updating launch record for " << record->type << ": " 
+	   << value << "\n");
+    return this_->UpdateRecord(record, value);
+  }
+}
+
+
+DatabaseRecord*
+LaunchDatabase::CreateRecord(const char *key, const char *value)
+{
+  /*char path[MAXPATH];
+  UINT32 autoLaunchLimit=0, history_ms=0, notificationTimeout_ms=0;
+  int historySize=0, itemsScanned;*/
+  DistillerType type(key);
+
+  /*itemsScanned = sscanf(value, "%s %lu %lu %lu",path, &autoLaunchLimit,
+			&history_ms, &notificationTimeout_ms);
+  switch (itemsScanned) {
+  case 1:
+    // we were able to read neither autoLaunchLimit nor history_ms
+    autoLaunchLimit = DefaultAutoLaunchLimit;
+    // no break here!
+
+  case 2:
+    // we weren't able to read history_ms
+    history_ms = DefaultLoadHistoryPeriod_ms;
+    // no break here!
+
+  case 3:
+    // we weren't able to read notificationTimeout_ms
+    notificationTimeout_ms = DefaultNotificationTimeout_ms;
+    // no break here!
+
+  case 4:
+    // we are fine
+    break;
+
+  default:
+    // something bad happenned
+    Return(NULL, errFormattingError);
+  }
+
+  if (notificationTimeout_ms==0) 
+    notificationTimeout_ms = DefaultNotificationTimeout_ms;
+  historySize = history_ms/notificationTimeout_ms;
+  if (historySize==0) historySize = 1;*/
+
+  gm_Log("Creating auto-launch record for distiller " << key << ": " 
+	 << value << "\n");
+  LaunchRecord *record = new LaunchRecord(type, value);
+  if (record==NULL) Return(NULL, errOutOfMemory);
+  if (Error::getStatus()!=success) {
+    delete record;
+    return NULL;
+  }
+  return record;
+}
+
+
+gm_Bool
+LaunchDatabase::UpdateRecord(LaunchRecord *record, const char *optionsLine)
+{
+  return record->Parse(optionsLine);
+}
+
+
+LaunchRecord *
+LaunchDatabase::FindMatchingDistiller(DistillerType *type)
+{
+  MatchingDistillerFinder finder(type);
+  ForEach(MatchEachDistiller, (void*) &finder); 
+  return finder.launchRecord;
+}
+
+
+gm_Bool
+LaunchDatabase::MatchEachDistiller(Database */*db*/, DatabaseRecord *record, 
+				   void *args)
+{
+  MatchingDistillerFinder *finder = (MatchingDistillerFinder*) args;
+
+  if (((LaunchRecord*)record)->type.CanSatisfy(finder->distillerType)==gm_True) {
+    finder->launchRecord = (LaunchRecord*) record;
+    return gm_False;
+  }
+
+  return gm_True;
+}
+
+
+struct getLRFinder {
+  getLRFinder(DistillerType *type_) 
+    : record(NULL), type(type_) { };
+  LaunchRecord *record;
+  DistillerType *type;
+};
+
+
+LaunchRecord *
+LaunchDatabase::getLaunchRecord(DistillerType *type)
+{
+  getLRFinder finder(type);
+  ForEach(getLRHelper, (void*) &finder);
+  return finder.record;
+}
+
+
+gm_Bool
+LaunchDatabase::getLRHelper(Database */*db*/, DatabaseRecord *record, 
+			    void *args)
+{
+  getLRFinder *finder = (getLRFinder*)args;
+  if (((LaunchRecord*)record)->type.Equal(finder->type)==gm_True) {
+    finder->record = ((LaunchRecord*)record);
+    return gm_False;
+  }
+  return gm_True;
+}
+@
+
+
+1.22
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d304 18
+@
+
+
+1.22.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a303 18
+void
+LaunchRecord::Relaunch()
+{
+ gm_Log("Distiller of type " << type
+	 << " just died. Trying to launch a new one\n");
+  DistillerRecord *dist = PTM::getInstance()->getDistillerDB()->
+    WakeSleepingDistiller(&type);
+  if (dist!=NULL) {
+    gm_Log("Found a sleeping distiller at " << dist->rid << '\n');
+    // update lastLaunch field, so that a new distiller doesn't get launched 
+    // immediately
+    gettimeofday(&lastLaunch, NULL);
+  }
+  else
+    PTM::getInstance()->getDistillerLauncher()->TryToLaunch(&type, NULL, 0);
+}
+
+
+@
+
+
+1.21
+log
+@bug fix
+@
+text
+@a5 1
+#include "utils.h"
+d157 34
+d196 1
+a196 1
+  char *s[4] = { NULL, NULL, NULL, NULL}, *token, **newArgv;
+d198 1
+d205 2
+a206 9
+  for (idx=0; idx<4; idx++) {
+    s[idx] = ts_strtok(" \t", state);
+    if (s[idx]!=NULL && strcmp(s[idx], "--")==0) {
+      s[idx] = NULL;
+      break;
+    }
+  }
+
+  if (s[0]==NULL) {
+d209 1
+d211 4
+a214 13
+  safe_strncpy(executable, s[0], MAXPATH);
+  autoLaunchLimit = ((s[1]==NULL) ? 0 : strtoul(s[1], NULL, 10));
+  history_ms = ((s[2]==NULL) ? 0 : strtoul(s[2], NULL, 10));
+  notificationTimeout_ms = ((s[3]==NULL) ? 0 : strtoul(s[3], NULL, 10));
+
+  if (autoLaunchLimit==0) autoLaunchLimit = DefaultAutoLaunchLimit;
+  if (history_ms==0) history_ms = DefaultLoadHistoryPeriod_ms;
+  if (notificationTimeout_ms==0) 
+    notificationTimeout_ms = DefaultNotificationTimeout_ms;
+
+
+  loadHistorySize = history_ms/notificationTimeout_ms;
+  if (loadHistorySize<=0) loadHistorySize = 1;
+a224 5
+  while ((token = ts_strtok(" \t", state))!=NULL) {
+    if (argc==0 && strcmp(token, "--")==0) {
+      // ignore any leading '--'
+      continue;
+    }
+d226 2
+d246 19
+d268 4
+a355 4
+
+  if (argc > 0) {
+    *current++ = "--";
+  }
+@
+
+
+1.20
+log
+@bug fixes for the * character
+@
+text
+@a287 1
+  MonitorClient *monitor;
+d298 1
+a298 1
+    optionsFileString[MAXPATH+3];
+d300 2
+d305 1
+a305 1
+  sprintf(distillerTypeString, "\"-t%s\"", type.c_struct.string);
+d309 2
+a310 1
+  sprintf(optionsFileString, "\"-o%s\"", options->Find(Opt_OptionsFile));
+@
+
+
+1.19
+log
+@modified distiller stub and ptm to handle "--" correctly for additional
+distiller arguments
+
+modified distiller stubs to read the multicast addresses from the options
+file instead of accepting them on the command line
+
+added run targets for html, gig and jpg mungers
+@
+text
+@d304 1
+a304 1
+  sprintf(distillerTypeString, "-t%s", type.c_struct.string);
+d308 1
+a308 1
+  sprintf(optionsFileString, "-o%s", options->Find(Opt_OptionsFile));
+@
+
+
+1.18
+log
+@fixed bug where I wasn't checking for NULL while parsing out distiller
+arguments
+@
+text
+@d295 1
+a295 1
+  char ptmAddressString[50], ptmMulticastString[50],
+d299 1
+a299 2
+    optionsFileString[MAXPATH+3],
+    monitorAddressString[MAXLINE];
+a300 3
+  sprintf(ptmMulticastString, "-m%s/%d", 
+	  PTM::getInstance()->getMulticast().ipAddress,
+	  PTM::getInstance()->getMulticast().port);
+d306 1
+a306 1
+  sprintf(requestIDString, "-i%lu", requestID);
+a309 1
+  *current++ = ptmMulticastString;
+d316 2
+a317 4
+  monitor = PTM::getInstance()->getMonitorClient();
+  if (monitor!=NULL) {
+    sprintf(monitorAddressString, "-l%s", monitor->getAddress());
+    *current++ = monitorAddressString;
+d327 8
+a334 2
+  return (PTM::getInstance()->getDistillerLauncher()->
+	  getRExec()->Exec(*distArgv, distArgv));
+@
+
+
+1.17
+log
+@Changes to monitor to do unicast and multicast listening properly
+Modified distiller database so that everything after "--" is assumed to
+be command line args to the distiller
+@
+text
+@d173 1
+a173 1
+    if (strcmp(s[idx], "--")==0) {
+@
+
+
+1.16
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d163 1
+a163 1
+  char *s[4], *token, **newArgv;
+d173 4
+d200 1
+a201 1
+  delete [] argv;
+d207 5
+d300 1
+a300 1
+    monitorMulticastString[MAXLINE];
+d323 2
+a324 2
+    sprintf(monitorMulticastString, "-l%s", monitor->getMulticast());
+    *current++ = monitorMulticastString;
+@
+
+
+1.15
+log
+@added distAsyncBegin to distiller return code.  modified ptm and distiller stubs to allow passing of options file name on distiller cmd line with -o
+@
+text
+@d10 1
+d13 1
+a13 3
+DistillerLauncher::DistillerLauncher(const char *dbFilename, 
+				     const char *rsh, const char *rshArgs,
+				     const char *hosts)
+d15 2
+a16 5
+  if (launchDB.Create(dbFilename)==gm_False && 
+      Error::getStatus()==errFileOpenError) {
+    Error::SetStatus(success);
+    gm_Log("Could not open launch database: " << dbFilename << "\n"
+	   << "Starting PTM without auto-launch capabilities\n");
+d19 6
+a24 1
+  if (rexec.Initialize(rsh, rshArgs, hosts)==gm_False) {
+d28 24
+d158 71
+d280 4
+a283 1
+  char *argv[25], **current=argv; //, executablePath[1024];
+d303 1
+a303 2
+  extern char optionsFile[];
+  sprintf(optionsFileString, "-o%s", optionsFile);
+d318 5
+d325 16
+a340 2
+  return PTM::getInstance()->getDistillerLauncher()->getRExec()->Exec(*argv, 
+								      argv);
+d357 5
+d467 2
+a468 2
+/*gm_Bool
+LaunchDatabase::Create(char *filename)
+d470 16
+a485 2
+  FILE *fp;
+  char line[500], typeString[500], pathname[500];
+a486 2
+  fp = fopen(filename, "r");
+  if (fp==NULL) Return(gm_False, errLaunchDBCreationError);
+d488 13
+a500 6
+  while (fgets(line, 500, fp)!=NULL) {
+    sscanf(line, "%s = %s", typeString, pathname);
+    DistillerType type(typeString);
+    LaunchRecord *record = new LaunchRecord(type, pathname);
+    if (record==NULL) Return(gm_False, errOutOfMemory);
+    if (Add(record)==gm_False) return gm_False;
+d502 3
+d506 13
+a518 1
+  fclose(fp);
+d520 29
+a548 1
+}*/
+d554 1
+a554 1
+  char path[MAXPATH];
+d556 1
+a556 1
+  int historySize=0, itemsScanned;
+d559 1
+a559 1
+  itemsScanned = sscanf(value, "%s %lu %lu %lu",path, &autoLaunchLimit,
+d589 1
+a589 1
+  if (historySize==0) historySize = 1;
+d591 3
+a593 2
+  LaunchRecord *record = new LaunchRecord(type, path, autoLaunchLimit, 
+					  historySize, notificationTimeout_ms);
+d595 4
+d600 7
+@
+
+
+1.14
+log
+@Added rexec.args, so now you can pass arguments to rsh
+Cleaned up the ptm to always read options from the options file
+@
+text
+@d191 1
+d204 3
+d212 1
+@
+
+
+1.13
+log
+@Added sleep mechanism to the distillers
+@
+text
+@d12 3
+a14 3
+DistillerLauncher::DistillerLauncher(char *dbFilename, 
+				     char *rsh,
+				     char *hosts)
+d23 1
+a23 1
+  if (rexec.Initialize(rsh, hosts)==gm_False) {
+@
+
+
+1.12
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d65 2
+d147 10
+a156 1
+  PTM::getInstance()->getDistillerLauncher()->TryToLaunch(&type, NULL, 0);
+d256 22
+a277 3
+  ListIndex idx;
+  List<DatabaseRecord> list;
+  if (list.InsertAtHead(newDistiller)==gm_False) {
+a278 1
+    return gm_False;
+d280 4
+a283 12
+
+  gm_Log("Launch for distiller (type = " << launchRecord->type
+	 << ") succeeded\n");
+  idx = waitingList.BeginTraversal();
+  for (; waitingList.IsDone(idx)==gm_False; idx=waitingList.getNext(idx)) {
+    if (waitingList.getData(idx)->replyObject!=NULL && 
+	waitingList.getData(idx)->replyObject->
+	AskForDistillerReply(waitingList.getData(idx)->replyID, ptmOk, &list)
+	==gm_False) {
+      // ignore error
+      Error::SetStatus(success);
+    }
+a284 1
+  waitingList.EndTraversal();
+a285 1
+  delete this;
+@
+
+
+1.11
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d176 2
+a177 1
+  char ptmAddressString[50], 
+d182 3
+d189 1
+d192 1
+d195 1
+d347 2
+a348 1
+  UINT32 autoLaunchLimit=0;
+d351 5
+a355 1
+  if (sscanf(value, "%s %lu", path, &autoLaunchLimit) < 2) {
+d357 28
+a384 2
+  }
+  LaunchRecord *record = new LaunchRecord(type, path, autoLaunchLimit);
+@
+
+
+1.10
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d6 1
+a6 1
+
+d72 2
+a73 1
+    replyObject->AskForDistillerReply(replyID, ptmNoDistiller, NULL);
+d131 2
+a132 3
+
+/*gm_Bool
+DistillerLauncher::RegisterDistiller(DistillerRecord *record)
+d134 8
+a141 16
+  ListIdx idx;
+  gm_Bool returnValue = gm_True;
+  PendingLaunch *pendingLaunch;
+
+  idx = pendingList.Head(); 
+
+  while (pendingList.IsDone(idx)==gm_False) {
+
+    pendingLaunch = pendingList.Record(idx);
+    if (pendingLaunch->SameAs(&record->type)==gm_True) {
+      pendingLaunch->NotifyEveryone(record);
+      idx = pendingList.Next(idx);
+      delete pendingLaunch;
+    }
+    else idx = pendingList.Next(idx);
+
+d143 4
+a146 3
+
+  return returnValue;
+}*/
+d150 2
+a151 2
+/*gm_Bool
+LaunchRecord::Launch(UINT32 requestID)
+d153 5
+a157 2
+  int returnValue;
+  MonitorClient *monitor;
+d159 2
+a160 10
+  returnValue = fork();
+  if (returnValue==0) {
+    returnValue = fork();
+    if (returnValue != 0) {
+      exit(returnValue);
+    }
+  }
+  else if (returnValue > 0) {
+    returnValue = waitpid(returnValue, NULL, 0);
+  }
+d162 3
+a164 44
+  if (returnValue < 0) {
+    gm_Log("Could not fork off child process\n");
+    Return(gm_False, errCouldNotLaunch);
+  }
+  if (returnValue== 0) {
+    char ptmAddressString[50], 
+         distillerTypeString[MAXDISTILLER_TYPE_STRING+5],
+         requestIDString[25];
+
+    sprintf(ptmAddressString, "-p%s/%d", 
+	    PTM::getInstance()->getAddress().ipAddress,
+	    PTM::getInstance()->getAddress().port);
+    sprintf(distillerTypeString, "-t%s", type.c_struct.string);
+    sprintf(requestIDString, "-i%lu", requestID);
+
+    monitor = PTM::getInstance()->getMonitorClient();
+    if (monitor!=NULL) {
+      char monitorMulticast[MAXLINE];
+      strcpy(monitorMulticast, monitor->getMulticast());
+      char *argv[] = { executable,
+		       ptmAddressString,
+		       distillerTypeString,
+		       requestIDString,
+		       "-l", monitorMulticast,
+		       NULL
+      };
+      
+      if (execv(executable, argv) < 0) {
+	gm_Log("Error starting process: " << executable << '\n');
+	exit(-1);
+      }
+    }
+    else {
+      char *argv[] = { executable,
+		       ptmAddressString,
+		       distillerTypeString,
+		       requestIDString,
+		       NULL
+      };
+      if (execv(executable, argv) < 0) {
+	gm_Log("Error starting process: " << executable << '\n');
+	exit(-1);
+      }
+    }
+d166 1
+a166 3
+
+  return gm_True;
+}*/
+a173 15
+
+  /*if (*executable!='/') {
+    // this is a relative pathname; so prepend the current working dir
+    if (getcwd(executablePath, sizeof(executablePath))==NULL) 
+      Return(gm_False, errBufferOverflow);
+    if (strlen(executablePath)+strlen(executable)+2 > sizeof(executablePath))
+      Return(gm_False, errBufferOverflow);
+    sprintf(executablePath, "%s/%s", executablePath, executable);
+    *current++ = executablePath;
+  }
+  else *current++ = executable;*/
+
+  /*if (RExec::getAbsolutePath(executable, executablePath, 
+			     sizeof(executablePath))==gm_False)
+    return gm_False;*/
+a175 1
+
+d198 1
+d249 2
+a250 1
+    if (waitingList.getData(idx)->replyObject->
+d301 2
+a302 1
+    if (waitingList.getData(idx)->replyObject->
+d339 6
+a344 2
+  if (strlen(value)>= sizeof(LaunchRecord::executable)) {
+    Return(NULL, errBufferOverflow);
+d346 1
+a346 2
+  DistillerType type(key);
+  LaunchRecord *record = new LaunchRecord(type, value);
+d375 29
+@
+
+
+1.9
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d33 1
+a33 1
+  ListIdx idx1, idx2;
+d37 3
+a39 2
+  for (idx1=pendingList.Head(); pendingList.IsDone(idx1)==gm_False;
+       idx1=pendingList.Next(idx1)) {
+d41 1
+a41 1
+    pendingLaunch = pendingList.Record(idx1);
+d43 1
+a43 1
+    idx2 = pendingLaunch->waitingList.Head();
+d45 2
+a46 3
+      current = pendingLaunch->waitingList.Record(idx2);
+
+      idx2 = pendingLaunch->waitingList.Next(idx2);
+d48 1
+a48 1
+	pendingLaunch->waitingList.Remove(current);
+d51 1
+d53 1
+d112 2
+a113 1
+  ListIdx idx;
+d115 2
+a116 1
+  for (idx = pendingList.Head(); 
+d118 5
+a122 3
+       idx = pendingList.Next(idx)) {
+    if (pendingList.Record(idx)->launchRecord==record)
+      return pendingList.Record(idx);
+d124 1
+d126 1
+a126 1
+  return NULL;
+d308 2
+a309 2
+  ListIdx idx;
+  LinkedList<DatabaseRecord> list;
+d317 4
+a320 4
+  for (idx=waitingList.Head(); waitingList.IsDone(idx)==gm_False; 
+       idx=waitingList.Next(idx)) {
+    if (waitingList.Record(idx)->replyObject->
+	AskForDistillerReply(waitingList.Record(idx)->replyID, ptmOk, &list)
+d326 1
+d364 1
+a364 1
+  ListIdx idx;
+d366 3
+a368 2
+  for (idx=waitingList.Head(); waitingList.IsDone(idx)==gm_False; 
+       idx=waitingList.Next(idx)) {
+d370 2
+a371 2
+    if (waitingList.Record(idx)->replyObject->
+	AskForDistillerReply(waitingList.Record(idx)->replyID, 
+d374 1
+d377 1
+a377 1
+
+a420 1
+
+@
+
+
+1.8
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d12 3
+a14 1
+DistillerLauncher::DistillerLauncher(char *dbFilename)
+d22 5
+d150 1
+a150 1
+gm_Bool
+d214 50
+@
+
+
+1.7
+log
+@Yatin's first commit from India
+@
+text
+@d15 4
+a18 4
+      GlobalErrorCode==errFileOpenError) {
+    SetGlobalError(success);
+    LOG ("Could not open launch database: " << dbFilename << "\n"
+	 << "Starting PTM without auto-launch capabilities\n");
+d62 1
+a62 1
+    LOG ("Could not find any distiller of type " << (*distillerType) << '\n');
+d65 1
+a65 1
+    gm_BoolErrorReturn(success);
+d72 3
+a74 3
+    LOG ("Launch already pending for distiller (type = "
+       << pendingLaunch->launchRecord->type       << "): " 
+       << pendingLaunch->launchRecord->executable << '\n');
+d85 3
+a87 3
+  LOG ("Initiating launch of distiller (type = " 
+       << pendingLaunch->launchRecord->type       << "): " 
+       << pendingLaunch->launchRecord->executable << '\n');
+d96 1
+a96 1
+  gm_BoolErrorReturn(success);
+d138 1
+a138 2
+  if (returnValue==gm_True) gm_BoolErrorReturn(success);
+  return gm_False;
+d161 2
+a162 2
+    LOG("Could not fork off child process\n");
+    gm_BoolErrorReturn(errCouldNotLaunch);
+d177 2
+d183 1
+a183 1
+		       "-l", monitor->getMulticast(),
+d188 1
+a188 1
+	LOG("Error starting process: " << executable << '\n');
+d200 1
+a200 1
+	LOG("Error starting process: " << executable << '\n');
+d206 1
+a206 1
+  gm_BoolErrorReturn(success);
+d235 1
+a235 1
+  if (request==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d251 2
+a252 1
+  LOG ("Launch for distiller (type = " <<launchRecord->type<< ") succeeded\n");
+d259 1
+d264 1
+a264 1
+  gm_BoolErrorReturn(success);
+d274 1
+a274 1
+    LOG ("Launch of distiller (type = " << launchRecord->type << ") timed out "
+d278 1
+a278 1
+    gm_BoolErrorReturn(success);
+d281 2
+a282 2
+  LOG ("Launch of distiller (type = " << launchRecord->type 
+       << ") timed out. Trying again.\n");
+d287 2
+a288 1
+    gm_BoolErrorReturn(success);
+d292 1
+a292 1
+  gm_BoolErrorReturn(success);
+d311 1
+a311 1
+  gm_BoolErrorReturn(success);
+d322 1
+a322 1
+  if (fp==NULL) gm_BoolErrorReturn(errLaunchDBCreationError);
+d328 1
+a328 1
+    if (record==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d333 1
+a333 1
+  gm_BoolErrorReturn(success);
+d341 1
+a341 1
+    ErrorReturn(errBufferOverflow, NULL);
+d345 2
+a346 2
+  if (record==NULL) ErrorReturn(errOutOfMemory, NULL);
+  ErrorReturn(success, record);
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d4 2
+d12 1
+a12 1
+DistillerLauncher::DistillerLauncher(char *dbFilename, char *monitor)
+a19 2
+
+  strcpy(monitorMulticast, monitor);
+d148 1
+a148 1
+  char *monitor;
+d151 10
+d176 2
+a177 2
+    monitor = PTM::getInstance()->getDistillerLauncher()->getMonitor();
+    if (*monitor!='\0') {
+d182 1
+a182 1
+		       "-l", monitor,
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d12 1
+a12 1
+  if (launchDB.Create(dbFilename)==FALSE && 
+d30 1
+a30 1
+  for (idx1=pendingList.Head(); pendingList.IsDone(idx1)==FALSE;
+d36 1
+a36 1
+    while (pendingLaunch->waitingList.IsDone(idx2)==FALSE) {
+d48 1
+a48 1
+Bool
+d65 1
+a65 1
+    BoolErrorReturn(success);
+d81 1
+a81 1
+  if (pendingLaunch==NULL) return FALSE;
+d83 1
+a83 1
+  if (pendingLaunch->Append(replyObject, replyID)==FALSE) return FALSE;
+d89 1
+a89 1
+  if (pendingLaunch->launchRecord->Launch(pendingLaunch->getID())==FALSE) {
+d96 1
+a96 1
+  BoolErrorReturn(success);
+d106 1
+a106 1
+       pendingList.IsDone(idx)==FALSE; 
+d117 1
+a117 1
+/*Bool
+d121 1
+a121 1
+  Bool returnValue = TRUE;
+d126 1
+a126 1
+  while (pendingList.IsDone(idx)==FALSE) {
+d129 1
+a129 1
+    if (pendingLaunch->SameAs(&record->type)==TRUE) {
+d138 2
+a139 2
+  if (returnValue==TRUE) BoolErrorReturn(success);
+  return FALSE;
+d144 1
+a144 1
+Bool
+d153 1
+a153 1
+    BoolErrorReturn(errCouldNotLaunch);
+d195 1
+a195 1
+  BoolErrorReturn(success);
+d206 1
+a206 1
+  if (distillerLauncher->AddPendingLaunch(this)==FALSE) return;
+d213 1
+a213 1
+  while(waitingList.IsEmpty()==FALSE) {
+d220 1
+a220 1
+Bool
+d224 1
+a224 1
+  if (request==NULL) BoolErrorReturn(errOutOfMemory);
+d229 1
+a229 1
+Bool
+d235 1
+a235 1
+  if (list.InsertAtHead(newDistiller)==FALSE) {
+d237 1
+a237 1
+    return FALSE;
+d241 1
+a241 1
+  for (idx=waitingList.Head(); waitingList.IsDone(idx)==FALSE; 
+d245 1
+a245 1
+	==FALSE) {
+d251 1
+a251 1
+  BoolErrorReturn(success);
+d255 1
+a255 1
+Bool
+d265 1
+a265 1
+    BoolErrorReturn(success);
+d271 1
+a271 1
+  if (launchRecord->Launch(getID())==FALSE) {
+d274 1
+a274 1
+    BoolErrorReturn(success);
+d278 1
+a278 1
+  BoolErrorReturn(success);
+d282 1
+a282 1
+Bool 
+d287 1
+a287 1
+  for (idx=waitingList.Head(); waitingList.IsDone(idx)==FALSE; 
+d292 1
+a292 1
+			     ptmDistillerLaunchTimeout, NULL)==FALSE) {
+d297 1
+a297 1
+  BoolErrorReturn(success);
+d301 1
+a301 1
+/*Bool
+d308 1
+a308 1
+  if (fp==NULL) BoolErrorReturn(errLaunchDBCreationError);
+d314 2
+a315 2
+    if (record==NULL) BoolErrorReturn(errOutOfMemory);
+    if (Add(record)==FALSE) return FALSE;
+d319 1
+a319 1
+  BoolErrorReturn(success);
+d346 1
+a346 1
+Bool
+d352 1
+a352 1
+  if (((LaunchRecord*)record)->type.CanSatisfy(finder->distillerType)==TRUE) {
+d354 1
+a354 1
+    return FALSE;
+d357 1
+a357 1
+  return TRUE;
+@
+
+
+1.4
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d13 1
+a13 1
+      GlobalErrorCode==errLaunchDBCreationError) {
+d15 1
+a15 1
+    LOG ("Could not find launch database: " << dbFilename << "\n"
+d161 2
+a162 2
+	    PTM::getInstance()->getAddress()->ipAddress,
+	    PTM::getInstance()->getAddress()->port);
+d301 1
+a301 1
+Bool
+d320 13
+@
+
+
+1.3
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d1 1
+d10 1
+a10 1
+DistillerLauncher::DistillerLauncher(char *dbFilename)
+d18 2
+d148 1
+d166 26
+a191 10
+    char *argv[] = { executable,
+		     ptmAddressString,
+		     distillerTypeString,
+		     requestIDString,
+		     NULL
+    };
+
+    if (execv(executable, argv) < 0) {
+      LOG("Error starting process: " << executable << '\n');
+      exit(-1);
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d181 1
+a181 1
+		 LaunchTimeout_ms/1000, LaunchTimeout_ms%1000), 
+d257 1
+a257 1
+  Retry(LaunchTimeout_ms/1000, LaunchTimeout_ms%1000);
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d8 12
+d21 1
+a21 1
+DistillerLauncher::RemoveBrokenConnection(CommunicationObject *object)
+d47 1
+a47 1
+			       CommunicationObject *replyObject, 
+d60 2
+a61 2
+    Packet packet(pktNoDistiller, 0, replyID, NULL);
+    if (packet.Send(replyObject)==FALSE) return FALSE;
+a64 1
+
+d180 2
+a181 1
+  : RequestReply(PTM::getInstance()->getEventSystem(), LaunchTimeout, 0), 
+d201 1
+a201 1
+PendingLaunch::Append(CommunicationObject *replyObject, UINT32 replyID)
+d223 3
+a225 4
+    if (PTM::getInstance()->SendBeaconPacket(waitingList.Record(idx)->
+					     replyObject,
+					     waitingList.Record(idx)->replyID, 
+					     &list)==FALSE) {
+d257 1
+a257 1
+  Retry(LaunchTimeout, 0);
+d270 3
+a272 3
+    Packet packet(pktDistillerLaunchTimeout, 0, 
+		  waitingList.Record(idx)->replyID, NULL);
+    if (packet.Send(waitingList.Record(idx)->replyObject)==FALSE) {
+d314 2
+a315 1
+LaunchDatabase::MatchEachDistiller(DatabaseRecord *record, void *args)
+@

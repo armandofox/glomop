@@ -1,0 +1,232 @@
+# -*- perl -*-
+#  DistillerInit
+#  Args: none
+#  Returns: DIstillerStatus code (int)
+#
+
+use TACCutils;
+use clib;
+use LWP;
+
+sub message {
+    &MonitorClient_Send("Perl HTML Munger messages", shift @_, "Log");
+}
+
+sub DistillerInit {
+
+    $IMG_LINK = '&#164;' ;
+    foreach $q (qw(prefsFormDisplayUrl prefsFormDisplayUrl webServerName)) {
+        $$q = &Options_Find("frontend.$q");
+    }
+
+    $ICON_ONLY_STRING = <<iconOnlyString;
+          <A href="$prefsFormDisplayUrl"><IMG NOREFINE
+          ALIGN="right" BORDER=0 SRC="$webServerName/transend/logo2.gif*^i1=1^"
+          WIDTH="45" HEIGHT="25"></A><P><BR CLEAR="BOTH">
+iconOnlyString
+    ;
+    $DASHBOARD_STRING = <<dashboardString;
+          <APPLET CODE="gui.class" WIDTH="100%" HEIGHT="30"
+           CODEBASE="$webServerName/java_gui/"></APPLET>
+          <SCRIPT LANGUAGE="JavaScript1.1">
+          <!--
+              function A() {
+                  for (var i=0; i<document.images.length; i++) {
+                      document.images[i].src +=
+                         (document.images[i].src.indexOf("*^")==-1
+                          ? "*^i1=1^":"i1=1^")
+                         }
+              }
+         // -->
+         </SCRIPT>
+dashboardString
+    ;
+    $JS_STRING = <<jsString;
+<SCRIPT LANGUAGE="JavaScript">
+<!--
+var w=open("$webServerName/java_gui/gui.html*^i1=1^", "", "width=40,height=460,toolbars=0,resizable=1");
+function A() { w.S(this); }
+//--></SCRIPT>
+jsString
+    ;
+    $ON_LOAD_STRING = <<onLoadString;
+ onLoad="A()"
+onLoadString
+
+    $LOG_FIELD = "TranSend HTML munger";
+    
+    #&MonitorClient_Send($LOG_FIELD, "Started successfully", "Log");
+    0;    
+}
+
+#
+#  DistillerMain
+#  Args: distiller type (MIME string), data (scalar), %args
+#    (%args is argID,value pairs for arguments to distiller)
+#  Returns: (new data, MIME type, optional distillerStatus [default distOk])
+#
+
+sub DistillerMain {
+    my ($data,$hdrs,$type,%args) = @_;
+    my $noframes = 0;
+    my $frameset = 0;
+    my $html = 0;
+    my $body = 0;
+    my $title= 0;
+    my ($what,$thing,%attribs,$attribs);
+    my $in_link = "";
+    my ($ismap,@magic,$alltag,$fetch_orig);
+    my $userprefval;
+    my $outdata = "";
+    my %has;
+
+    if (0 && length($data) > (100<<10)) {
+        # >100Kbytes takes too long with this distiller.  Chain to the "fast"
+        # (but less accurate) text/html distiller.
+        return($data,$hdrs,'text/x-big-html',10);
+    }
+
+   while ($data) {
+        ($what,$thing,$attribs) = &next_entity($data);
+        #print "$thing\n"; flush;
+        $outdata .= $thing, next if ($what == 0); # markup/comments
+        $outdata .= $thing, next
+            if ($what == 2);                # text
+
+        # else it's a tag....
+
+        # start link
+        $outdata .= ($in_link = $attribs->{'_all_'}), next
+            if ($thing eq 'a');
+        
+        # end link
+        $outdata .= $attribs->{'_all_'}, $in_link = '', next
+            if ($thing eq '/a');
+
+        if ($thing eq 'input'
+            && defined($userprefval = $args{$attribs->{'transendid'}})) {
+            &message(join('', "Input field ", $attribs->{'name'}, " id=",
+                          $attribs->{'transendid'}, " argval=",
+                          $args{$attribs->{'transendid'}}, "\n"));
+            if ($attribs->{'type'} =~ /text/i) { # includes 'textarea'
+                $attribs->{'value'} = $userprefval;
+            } elsif ($attribs->{'type'} =~ /radio|checkbox/i
+                     && $attribs->{'transendval'} == $userprefval) {
+                $attribs->{'checked'} = "";   # make the attrib "empty but defined"
+            }
+            $outdata .= &tag_from_attribs($thing,$attribs);
+            next;
+        }
+            
+        if ($thing eq 'frame') {
+            # exclude transend icon from ref'd frames
+            $attribs->{'src'} = &tomagic($attribs->{'src'}, "i6=0");
+            $outdata .= &tag_from_attribs($thing, $attribs);
+	    next;
+	}
+
+        if ($thing eq 'img') {
+            @magic = split(',' , $attribs->{'gmmagic'});
+            delete $attribs->{'gmmagic'};
+            $ismap = 0;
+            $fetch_orig = &tomagic($attribs->{'src'}, "i1=1"); # fetch original
+            # don't distill imagemaps
+            $ismap = 1, push(@magic, "i8=1")
+                if defined ($attribs->{'usemap'}) ;
+            # don't scale image if no size hints inline
+            push(@magic, "i2=1")
+                unless (defined ($attribs->{'width'})
+                        && defined ($attribs->{'height'})) ;
+            # if inside a link, close the link then add the refine button...
+            $attribs->{'src'} = &tomagic($attribs->{'src'}, join('^',@magic))
+                if scalar @magic;
+            if (delete $attribs->{'norefine'} || $args{'i14'}) {
+                $outdata .= &tag_from_attribs($thing,$attribs);
+            } elsif ($in_link || $ismap) {
+                # don't try to make the image itself a link; instead insert
+                # a  new link next to it, to fetch original
+                $outdata .= &tag_from_attribs($thing,$attribs) 
+                    . qq!</a><a href="$fetch_orig">$IMG_LINK</a>$in_link!;
+            } else {
+                # make the image itself into a link
+                $attribs->{'border'} = '0';
+                $outdata .= join('',
+                                 qq!<a href="$fetch_orig">!,
+                                 &tag_from_attribs($thing,$attribs),
+                                 qq!</a>!);
+            }
+            next;
+	} elsif (0 && $thing =~ /^input$/i) {
+            ;
+        } else { 
+            $outdata .= $attribs->{'_all_'};
+            $has{lc $1}++ if $thing =~ /^(body|title|html|frameset|noframes)$/i ;
+        }
+    }
+
+    if (defined ($args{'i6'})) {
+        my $string = ($args{'i6'} == 2?
+                      $ON_LOAD_STRING : $ICON_ONLY_STRING);
+	# if we are using the toolbar, place the onLoad string
+	# in the proper tag and prepend the JavaScript string
+	# to the document.
+        if ($args{'i6'} == 2) {
+	    if ($has{frameset}) {
+		$outdata =~ s/(<\s*frameset[^>]*)/$1$string/is;
+	    } elsif ($has{body}) {
+		$outdata =~ s/(<\s*body[^>]*)/$1$string/is;
+	    } elsif ($has{noframes}) {
+		$outdata =~ s/(<\s*noframes[^>]*>)/$1$string/i;
+	    } elsif ($has{html}) {
+		$outdata =~ s/(<\s*html[^>]*>)/$1$string/is;
+	    } elsif ($has{title}) {
+		$outdata =~ s/(<\s*title[^>]*>)/$1$string/is;
+	    } else {
+		$outdata = <body $string> .  $outdata;
+	    }
+	    $outdata = $JS_STRING .  $outdata;
+	}
+	elsif ($args{'i6'} == 1) {
+	    if ($has{noframes}) {
+		$outdata =~ s/(<\s*noframes[^>]*>)/$1$string/i;
+	    } elsif ($has{frameset}) {
+		# do nothing if the iconString is selected
+		1
+	    } elsif ($has{body}) {
+		$outdata =~ s/(<\s*body[^>]*>)/$1$string/is;
+	    } elsif ($has{html}) {
+		$outdata =~ s/(<\s*html[^>]*>)/$1$string/is;
+	    } elsif ($has{title}) {
+		$outdata =~ s/(<\s*title[^>]*>)/$1$string/is;
+	    } else {
+		$outdata = $string .  $outdata;
+	    }	
+	}
+    }
+    return ($outdata, '', 'text/html', 0);
+}
+
+sub tomagic {
+    my $src = shift;
+    my $magic =  shift;
+    my ($m, $nm);
+
+    if ($src =~ /\*\^(.*)\^(\?.*)?$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\$1/g;
+	$nm = quotemeta ($m);
+	$src =~ s/$nm/$m\^$magic/;
+    } elsif ($src =~ /\?(.*)$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\$1/g;
+	$nm = quotemeta ($m);
+	$src =~ s/\?$nm/\*\^$magic\^\?$m/; 
+    } else {
+	$src .= "*^$magic^";	
+    }
+
+    $src;
+}
+
+1;
+

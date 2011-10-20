@@ -1,0 +1,1021 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.06;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	MimeConverters.c
+#
+#    Mime converters source code file
+#	  - this class will never be instantiated - it simply houses
+#       convenience intrinsic operations
+#     - PGMtoIMAGE converts a 2 bit PGM or a PBM stream to an image class
+#
+#	Version:	1						August 8th, 1995
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "MCindexicals.h"
+
+/*** Note no main defined - is defined in MailClient.c  ***/
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MimeConverter
+
+Private uchar
+SkipOverWhiteSpace(ObjectID stream)
+{
+	uchar c;
+	do {
+		c = ReadByte(stream);
+	} while (CharacterIsWhitespace(c));
+	return c;
+}
+
+Private uchar
+SkipUntilWhiteSpace(ObjectID stream)
+{
+	uchar c;
+	do {
+		c = ReadByte(stream);
+	} while (!CharacterIsWhitespace(c));
+	return c;
+}
+
+Private Signed
+ReadDepth(ObjectID stream)
+{
+    char     type[2];
+    
+	Log(("ReadDepth:"));
+	type[0] = SkipOverWhiteSpace(stream);
+	type[1] = ReadByte(stream);
+    Log(("Depth is [%d][%d]", type[0], type[1]));
+	if (type[0] != 'P')
+	    return -1;
+	
+	switch(type[1])
+	{
+	   case '5':    /** P5 is Raw PGM format **/
+	      return pix2Gray;
+	   case '4':    /** P4 is Raw PBM format **/
+	      return pix1Gray;
+	   default:
+	      return -1;
+	}
+}
+
+Private PixelBox
+ReadSize(ObjectID stream)
+{
+    char horiz[16], vert[16];
+	Signed theConv;
+	PixelBox theSize;
+	int i;
+	
+	theSize.left = 0;
+	theSize.top = 0;
+    
+	Log(("ReadSize:"));
+	horiz[0] = SkipOverWhiteSpace(stream);
+	for (i=0; i<15; i++)
+	{
+	   if (CharacterIsWhitespace(horiz[i]))
+	   {
+	      horiz[i] = '\0';
+		  break;
+	   }
+	   horiz[i+1] = ReadByte(stream);
+	}
+	horiz[15] = '\0';
+	Log(("horiz is: [%s]", horiz));
+	CtoPString(horiz);
+	StringToInt(horiz, (Signed *) &theConv);
+	theSize.right = (short) theConv;	
+	
+	vert[0] = SkipOverWhiteSpace(stream);
+	for (i=0; i<15; i++)
+	{
+	   if (CharacterIsWhitespace(vert[i]))
+	   {
+	      vert[i] = '\0';
+		  break;
+	   }
+	   vert[i+1] = ReadByte(stream);
+	}
+	vert[15] = '\0';
+	Log(("vert is: [%s]", vert));
+	CtoPString(vert);
+	StringToInt(vert, (Signed *) &theConv);
+	theSize.bottom = (short) theConv;
+	return theSize;
+}
+
+Private void Readpix1Gray(ObjectID stream, SignedShort logRow, ObjectID thePixelsObj, PixelBox theSize, 
+                          ObjectID theTimeST, ObjectID theTimeEND)
+{
+    long int num, i, j;
+	char     *dest;
+	short     width, height, readT=0;
+	
+	width = theSize.right;
+	height = theSize.bottom;
+	num = (long int) width;
+
+	num = num / 8L;
+	if ( (num*8L) != num)
+	   num = num + 1L;
+	for (i=0L; i< (long int) height; i+= 1L)
+	{
+	   dest = BeginModifyPixels(thePixelsObj, &theSize);
+	   for (j=0L; j< (long int) num; j+= 1L)
+	   {
+	      *(dest + (i*logRow) + j) = ReadByte(stream);
+		  if (readT == 0)
+		  {
+		     readT = 1;
+			 SetToNow(theTimeST);
+		  }
+	   }
+	   EndModifyPixels(thePixelsObj);
+       RunNext(iScheduler);
+	}
+	SetToNow(theTimeEND);
+}
+
+Private void Readpix2Gray(ObjectID stream, SignedShort logRow, ObjectID thePixelsObj, PixelBox theSize, 
+                          ObjectID theTimeST, ObjectID theTimeEND)
+{
+    /* Ok - we're presumably pointing at the right spot in the stream.  We're going to get
+	   exactly width X height bytes, each one referring to a single pixel.  In memory,
+	   pixels are worth 2 bits - this means we have to tweak individual bits in memory */
+
+   long int i, j;
+   char     nextSByte, curMemByte = 0, *curMemLoc;
+   short    pixelCount = 0;
+   char     *dest;
+   short     width, height, readT=0;
+	
+   width = theSize.right;
+   height = theSize.bottom;
+   
+   for (i=0L; i<(long int) height;  i+= 1L)   /* Once for each row in picture */
+   {
+      dest = BeginModifyPixels(thePixelsObj, &theSize);
+      curMemLoc = dest + i*logRow;   /* curMemLoc is a pointer to the byte in memory we're currently munging */
+	  curMemByte = 0;                /* curMemByte is the new value for that byte */
+	  pixelCount = 0;                /* how many pixels have we stuffed into it? */
+	  
+      for(j=0L; j<(long int) width; j+= 1L)    /* Once for each pixel in each row of picture */
+	  {
+	     nextSByte = ReadByte(stream);
+		 if (readT == 0)
+		 {
+		    readT = 1;
+			SetToNow(theTimeST);
+		 }
+		 
+		 curMemByte = curMemByte << 2;
+		 curMemByte = curMemByte | nextSByte;
+		 pixelCount++;
+		 
+		 if (pixelCount == 4)  /** ie. we've read in 4 pixels = 8 bits now;  dump into memory, move on. **/
+		 {
+		    pixelCount = 0;
+			*curMemLoc = curMemByte;
+			curMemLoc = curMemLoc + 1L;
+			curMemByte = 0;
+		 }
+	  }
+	  if (pixelCount != 0) /* Only if number of pixels per row is not a multiple of 4 */
+	     *curMemLoc = curMemByte;
+	  EndModifyPixels(thePixelsObj);
+	  RunNext(iScheduler);
+   }
+   SetToNow(theTimeEND);
+}
+
+IntrinsicMethod ObjectID
+MimeConverter_PGMtoIMAGE(ObjectID theStream)
+{
+    ObjectID newPixelMap, thePixelsObj;
+	ObjectID frootyImage;
+	Box      pixelSize;
+	PixelDot resDot, centerDot, sizeDot;
+	PixelBox theSize;
+	SignedShort logPower, logRow;
+	long int i,j, num, tDiff;
+	Signed   theDepth;
+	ObjectID stTime, endTime, grpSt, grpEnd;
+	char     timeStr[128];
+	
+	stTime = NewTransient(Time_, nil);
+	endTime = NewTransient(Time_, nil);
+    grpSt = NewTransient(Time_, nil);
+	grpEnd = NewTransient(Time_, nil);
+	
+	/* Flush the input stream */
+	Flush(theStream);
+	
+	/* Start the transfer */
+	
+	/* Send the '255' char to begin transfer */
+	WriteByte(theStream, (char) 255);
+	Flush(iModem);
+	SetToNow(stTime);
+	
+	/* Set up parameters of new Pixels_ */
+	theDepth = ReadDepth(theStream);
+	theSize = ReadSize(theStream);
+	pixelSize.left = 0.0;     /*** size of new image ***/
+	pixelSize.top = 0.0;
+	pixelSize.right = onePixel*theSize.right;
+	pixelSize.bottom = onePixel*theSize.bottom;
+	Log(("pSr is %ld, pSb is %ld", pixelSize.right, pixelSize.bottom));
+	
+	centerDot.h = theSize.right / 2;
+	centerDot.v = theSize.bottom / 2;
+	resDot.h = onePixel;      /*** resolution - microns per pixel ***/
+	resDot.v = onePixel;
+	
+	/* If is PGM, must skip depth info - we know (or hope) it will be max of 3 */
+	if (theDepth != pix1Gray)
+	{
+	   SkipOverWhiteSpace(theStream);  /* to get to depth info */
+	   SkipUntilWhiteSpace(theStream); /* to get past depth info */
+	}
+	
+	/* Go ahead and create a new Pixels_ */
+	newPixelMap = NewNear(PixelMap_, iMainAdmin, nil);
+	AllocPixels(newPixelMap, &pixelSize, resDot, theDepth, Pixels_);
+	thePixelsObj = FieldOf(newPixelMap, PixelMap_portPixels);
+
+	/* Let's dump out some information */
+	logPower = FieldOf(newPixelMap, PixelMap_portPower);
+	logRow = FieldOf(newPixelMap, PixelMap_portRow);
+	Log(("portPower: %d", logPower));
+	Log(("portRow: %d", logRow));
+	
+	/* Now start modifying the pixels */
+	sizeDot.h = theSize.right;
+	sizeDot.v = theSize.bottom;
+    
+	if (theDepth == pix1Gray)  // 8 pixels per byte
+	    Readpix1Gray(theStream, logRow, thePixelsObj, theSize, grpSt, grpEnd);
+	else if (theDepth == pix2Gray)  // 4 pixels per byte
+	    Readpix2Gray(theStream, logRow, thePixelsObj, theSize, grpSt, grpEnd);
+	
+	SetToNow(endTime);
+	
+	tDiff = Milliseconds(grpEnd) - Milliseconds(grpSt);
+	Log(("First byte received to last byte read time: %ld milliseconds\n", tDiff));
+	SPrintF(timeStr, "First byte received to last byte read time: %ld milliseconds\r", tDiff);
+	
+	tDiff = Milliseconds(endTime) - Milliseconds(stTime);
+	Log(("Round trip request to finished read - %ld milliseconds\n", tDiff));
+    SPrintF(timeStr, "Round trip request to finish of read: %ld milliseconds", tDiff);
+	
+	/* Great!  Now create the new image itself */
+	frootyImage = NewNear(Image_, iMainAdmin, nil);
+	ChangeImage(frootyImage, sizeDot, centerDot, thePixelsObj,
+	            logRow, theDepth, true);
+	
+	/*** OK - done!  destroy the pixelmap we temporarily used ***/
+	Destroy(newPixelMap);
+	Destroy(stTime);
+	Destroy(endTime);
+    Destroy(grpSt);
+	Destroy(grpEnd);
+	
+	return frootyImage;
+}
+
+/********** Now begins the GIF to bitmap converter, as I need it. ************/
+
+/* +-------------------------------------------------------------------+ */
+/* | Copyright 1990, 1991, 1993, David Koblas.  (koblas@@netcom.com)    | */
+/* |   Permission to use, copy, modify, and distribute this software   | */
+/* |   and its documentation for any purpose and without fee is hereby | */
+/* |   granted, provided that the above copyright notice appear in all | */
+/* |   copies and that both that copyright notice and this permission  | */
+/* |   notice appear in supporting documentation.  This software is    | */
+/* |   provided "as is" without express or implied warranty.           | */
+/* +-------------------------------------------------------------------+ */
+
+#define        MAXCOLORMAPSIZE         256
+#define        TRUE    					1
+#define        FALSE   					0
+
+#define MAX_LWZ_BITS 12
+
+#define INTERLACE              0x40
+#define LOCALCOLORMAP  0x80
+#define BitSet(byte, bit)      (((byte) & (bit)) == (bit))
+#define ReadOK(src,dest,len)  memcoppy(dest,src,len)
+#define LM_to_uint(a,b)                        (((b)<<8)|(a))
+
+typedef  struct {
+      unsigned int    Width;
+      unsigned int    Height;
+      unsigned char   ColorMap[3][MAXCOLORMAPSIZE];
+      unsigned int    BitPixel;
+      unsigned int    ColorResolution;
+      unsigned int    Background;
+      unsigned int    AspectRatio;
+      int             GrayScale;
+} GifScreenST;
+
+typedef struct GIF_globals_st{
+	int				 table[2][(1<<MAX_LWZ_BITS)];
+	int				 stack[(1<<(MAX_LWZ_BITS))*2];
+    int 			 zeroDataBlock;
+	unsigned char    buf[280];
+    int              curbit;
+	int				 lastbit;
+	int				 done;
+	int				 last_byte;
+	int				 fresh;
+	int				 code_size;
+	int				 set_code_size;
+	int				 max_code;
+	int				 max_code_size;
+	int				 firstcode;
+	int				 oldcode;
+	int				 clear_code;
+	int				 end_code;
+	int				*sp;
+} GIF_globals, *GIF_globals_ptr;
+
+static void ReadGIFHeader(unsigned char **fd, int imageNumber, GifScreenST *retST);
+static void ReadGIF(unsigned char **fd, int imageNumber,
+					GIF_globals_ptr theStatics, ObjectID thePixelsObj, SignedShort logRow, Signed thedepth);
+static int GetDataBlock ( unsigned char **fd, unsigned char  *buf, GIF_globals_ptr theStatics );
+static int GetCode ( unsigned char **fd, int code_size, int flag, GIF_globals_ptr theStatics );
+static int LWZReadByte ( unsigned char **fd, int flag, int input_code_size, GIF_globals_ptr theStatics );
+static void ReadImage ( unsigned char **fd, int len, int height, unsigned char cmap[3][MAXCOLORMAPSIZE], 
+                        int gray, int interlace, int ignore, 
+						GIF_globals_ptr theStatics, ObjectID thePixelsObj, SignedShort logRow, 
+						Signed theDepth );
+Private void Shovepix2Gray(SignedShort logRow, ObjectID thePixelsObj, char *source, PixelDot dimensions);
+Private void SetPictureBits(ObjectID thePixelsObj, SignedShort logRow, int len, int height, 
+                            int xpos, int ypos, Signed depth, int v);
+
+int memcoppy(unsigned char *dest, unsigned char **src, int len)
+{
+   while (len--) {
+       *dest = **src;
+       dest++, (*src)++;
+   }
+   return 1;
+}
+
+Private void SetupGifGlobals(GIF_globals_ptr setMeUp)
+{
+    setMeUp->zeroDataBlock = FALSE;
+	setMeUp->fresh = FALSE;
+}
+
+/***** Here's the guts of the GIF to Image: ******/
+IntrinsicMethod ObjectID
+MimeConverter_GIFtoIMAGE(ObjectID theStream, Unsigned GIFsize)
+{
+   unsigned char *gifBuffer, *outputBuffer, *gbCopy;
+   GifScreenST    gifInfo;
+   long int       i, lengthG, doneR = 0;
+   ObjectID       frootyImage;
+   ObjectID 	  newPixelMap, thePixelsObj;
+   Box            pixelSize;
+   PixelDot       resDot, centerDot, sizeDot;
+   SignedShort    logPower, logRow;
+   Signed   	  theDepth;
+   GIF_globals    *theGifGlobals;
+   ObjectID       stTime;
+   
+   stTime = NewTransient(Time_, nil);
+   theGifGlobals = (GIF_globals *) NewTransientBuffer(sizeof(GIF_globals));
+   SetupGifGlobals(theGifGlobals);
+   
+   /* First thing I need to do is create the GIF buffer */
+   lengthG = (long int) GIFsize;
+   gifBuffer = gbCopy = (char *) NewTransientBuffer(GIFsize);
+   
+   /* Now suck the GIF into the GIF buffer */
+   
+   *(gifBuffer) = ReadByte(theStream);
+   SetToNow(stTime);
+   Log(("Got first byte: %ld", Milliseconds(stTime)));
+   for (i=1L; i<GIFsize; i++)
+      *(gifBuffer + i) = ReadByte(theStream);
+   SetToNow(stTime);
+   Log(("Got last byte: %ld", Milliseconds(stTime)));
+   
+   /* Convert the gif (conversion allocates buffer for me, and returns GIF info) */
+   ReadGIFHeader(&gbCopy, 1, &gifInfo);
+   gbCopy = gifBuffer;
+   
+   Log(("Depth: %d", gifInfo.BitPixel));
+   
+   /* Create the new pixelmap object */   
+   if (gifInfo.BitPixel == 2)
+     theDepth = pix1Gray;
+   else
+     theDepth = pix2Gray;
+   pixelSize.left = 0.0;
+   pixelSize.top = 0.0;
+   pixelSize.right = onePixel*gifInfo.Width;
+   pixelSize.bottom = onePixel*gifInfo.Height;
+   resDot.h = onePixel;      /*** resolution - microns per pixel ***/
+   resDot.v = onePixel;
+   newPixelMap = NewTransient(PixelMap_, nil);
+   AllocPixels(newPixelMap, &pixelSize, resDot, theDepth, Pixels_);
+   thePixelsObj = FieldOf(newPixelMap, PixelMap_portPixels);
+   centerDot.h = gifInfo.Width / 2;
+   centerDot.v = gifInfo.Height / 2;
+   sizeDot.h = gifInfo.Width;
+   sizeDot.v = gifInfo.Height;
+
+   /* Let's dump out some information */
+   logPower = FieldOf(newPixelMap, PixelMap_portPower);
+   logRow = FieldOf(newPixelMap, PixelMap_portRow);
+   Log(("portPower: %d", logPower));
+   Log(("portRow: %d", logRow));
+
+   ReadGIF(&gbCopy, 1, theGifGlobals, thePixelsObj, logRow, theDepth);
+   SetToNow(stTime);
+   Log(("Finished decoding from gif: %ld", Milliseconds(stTime)));
+   Destroy(stTime);
+   
+   DestroyTransientBuffer((Pointer) theGifGlobals);
+   DestroyTransientBuffer((Pointer) gifBuffer);
+      
+   /** Now create the Magic Cap image **/
+   frootyImage = NewNear(Image_, iMainAdmin, nil);
+   ChangeImage(frootyImage, sizeDot, centerDot, thePixelsObj,
+	            logRow, theDepth, true);
+   
+   /* Destroy previously allocated buffers */
+   Destroy(newPixelMap);
+   
+   /* return the new image */
+   return frootyImage;
+}
+
+static void
+ReadGIFHeader(unsigned char **fd, int imageNumber, GifScreenST *retST)
+{
+   GifScreenST GifScreen;
+   unsigned char   buf[16];
+   char            version[4];
+
+   if (! ReadOK(fd,buf,6))
+     Log(( "error reading magic numbern\n"));
+
+   if (CompareBytes((char *)buf, "GIF", 3, NULL) != 0)
+     Log(( "not a GIF file\n"));
+
+   version[0] = *((char *) buf + 3);
+   version[1] = *((char *) buf + 4);
+   version[2] = *((char *) buf + 5);
+   version[3] = '\0';
+    
+   if ( (CompareBytes(version, "87a", 3, NULL) != 0) &&
+        (CompareBytes(version, "89a", 3, NULL) != 0) )
+     Log(( "bad version number, not '87a' or '89a'"));
+
+   if (! ReadOK(fd,buf,7))
+     Log(( "failed to read screen descriptor\n"));
+
+   GifScreen.Width           = LM_to_uint(buf[0],buf[1]);
+   GifScreen.Height          = LM_to_uint(buf[2],buf[3]);
+   GifScreen.BitPixel        = 2<<(buf[4]&0x07);
+   GifScreen.ColorResolution = (((int)(buf[4]&0x70)>>3)+1);
+   GifScreen.Background      = buf[5];
+   GifScreen.AspectRatio     = buf[6];
+   
+   *retST = GifScreen;  /* So caller knows information about gif */
+}
+
+/*
+ *  Call ReadGIF like this:
+ *  ReadGIF(unsigned char **sourcebuffer, int imagenumber=1);
+ */
+
+static void
+ReadGIF(unsigned char **fd, int imageNumber, GIF_globals_ptr theStatics,
+        ObjectID thePixelsObj, SignedShort logRow, Signed theDepth)
+{
+   GifScreenST     GifScreen;
+   unsigned char   buf[16];
+   unsigned char   c;
+   unsigned char   localColorMap[3][MAXCOLORMAPSIZE];
+   int             grayScale;
+   int             useGlobalColormap;
+   int             bitPixel;
+   int             imageCount = 0;
+   char            version[4];
+   unsigned int    Tw, Th;
+
+   if (! ReadOK(fd,buf,6))
+     Log(( "error reading magic numbern\n"));
+
+   if (CompareBytes((char *)buf, "GIF", 3, NULL) != 0)
+     Log(( "not a GIF file\n"));
+
+   version[0] = *((char *) buf + 3);
+   version[1] = *((char *) buf + 4);
+   version[2] = *((char *) buf + 5);
+   version[3] = '\0';
+    
+   if ( (CompareBytes(version, "87a", 3, NULL) != 0) &&
+        (CompareBytes(version, "89a", 3, NULL) != 0) )
+     Log(( "bad version number, not '87a' or '89a'"));
+
+   if (! ReadOK(fd,buf,7))
+     Log(( "failed to read screen descriptor\n"));
+
+   GifScreen.Width           = LM_to_uint(buf[0],buf[1]);
+   GifScreen.Height          = LM_to_uint(buf[2],buf[3]);
+   GifScreen.BitPixel        = 2<<(buf[4]&0x07);
+   GifScreen.ColorResolution = (((int)(buf[4]&0x70)>>3)+1);
+   GifScreen.Background      = buf[5];
+   GifScreen.AspectRatio     = buf[6];
+   
+   /** Now must allocate a buffer for unpacked gif **/
+   
+   Tw = GifScreen.Width * GifScreen.Height;
+
+   if (BitSet(buf[4], LOCALCOLORMAP)) { /* Global Colormap */
+      if (ReadColorMap(fd,GifScreen.BitPixel,GifScreen.ColorMap,
+                       &GifScreen.GrayScale))
+        Log(( "error reading global colormap\n"));
+   }
+
+   if (GifScreen.AspectRatio != 0 && GifScreen.AspectRatio != 49) {
+      float   r;
+      r = ( (float) GifScreen.AspectRatio + 15.0 ) / 64.0;
+   }
+
+   for (;;) {
+       unsigned char cbuf[1];
+       if (! ReadOK(fd,&cbuf[0],1))
+         Log(( "EOF / read error on image data\n"));
+       c = cbuf[0];
+       if (c == ';') {          /* GIF terminator */
+           if (imageCount < imageNumber)
+             Log(("only %d image%s found in file\n",
+                     imageCount, imageCount>1?"s":"" ));
+           return;
+       }
+
+       if (c == '!') {          /* Extension */
+           if (! ReadOK(fd,&cbuf[0],1)) {
+               Log(( "Bah!  extensions aren't handled\n"));
+               /*exit(1);*/
+           }
+       }
+       if (c != ',') {          /* Not a valid start character */
+           Log(("Bah! bogus character 0x%02x, ignoring\n", (int) c ));
+           continue;
+       }
+
+       ++imageCount;
+
+       if (! ReadOK(fd,buf,9))
+         Log(( "couldn't read left/top/width/height\n"));;
+
+       useGlobalColormap = ! BitSet(buf[8], LOCALCOLORMAP);
+
+       bitPixel = 1<<((buf[8]&0x07)+1);
+
+       if (! useGlobalColormap) {
+           if (ReadColorMap(fd, bitPixel, localColorMap, &grayScale))
+             Log(( "error reading local colormap\n"));
+           ReadImage(fd, LM_to_uint(buf[4],buf[5]),
+                     LM_to_uint(buf[6],buf[7]), 
+                     localColorMap, grayScale,
+                     BitSet(buf[8], INTERLACE), 0, theStatics, thePixelsObj,
+					 logRow, theDepth);
+       } else {
+           ReadImage(fd, LM_to_uint(buf[4],buf[5]),
+                     LM_to_uint(buf[6],buf[7]), 
+                     GifScreen.ColorMap, GifScreen.GrayScale,
+                     BitSet(buf[8], INTERLACE), 0, theStatics, thePixelsObj,
+					 logRow, theDepth);
+       }
+
+   }
+}
+
+static int
+ReadColorMap(unsigned char **fd,int number,unsigned char
+             buffer[3][MAXCOLORMAPSIZE], int *pbm_format)
+{
+   int             i;
+   unsigned char   rgb[3];
+   int             flag;
+
+   flag = TRUE;
+
+   for (i = 0; i < number; ++i) {
+      if (! ReadOK(fd, rgb, sizeof(rgb)))
+        Log(( "bad colormap\n"));
+
+   }
+   return FALSE;
+}
+
+
+static int
+GetDataBlock(unsigned char           **fd,     unsigned char  *buf, GIF_globals_ptr theStatics)
+{
+    unsigned char x[1];
+   unsigned char   count;
+
+   if (! ReadOK(fd,&x[0],1)) {
+      Log(( "error in getting DataBlock size\n"));
+      return -1;
+   }
+   count = x[0];
+   theStatics->zeroDataBlock = (count == 0);
+   
+   if (count > 278)
+     Log(("Large count - unexpected - %d", count));
+
+   if ((count != 0) && (! ReadOK(fd, buf, count))) {
+      Log(( "error in reading DataBlock\n"));
+      return -1;
+   }
+
+   return count;
+}
+
+static int
+GetCode(unsigned char **fd, int code_size, int flag, GIF_globals_ptr theStatics)
+{
+   int                     i, j, ret;
+   unsigned char           count;
+
+   if (flag) {
+      theStatics->curbit = 0;
+	  theStatics->lastbit = 0;
+	  theStatics->done = FALSE;
+      return 0;
+   }
+   
+   if ( (theStatics->curbit+code_size) >= theStatics->lastbit) {
+      if (theStatics->done) {
+         if (theStatics->curbit >= theStatics->lastbit)
+           Log(( "ran off the end of my bits\n"));
+         return -1;
+      }
+	  
+	  if ((theStatics->last_byte >= 2) && (theStatics->last_byte <= 279))
+	  {
+         (theStatics->buf)[0] = (theStatics->buf)[(theStatics->last_byte) - 2];
+         (theStatics->buf)[1] = (theStatics->buf)[(theStatics->last_byte) - 1];
+	  }
+	  else
+	  {
+	     (theStatics->buf)[0] = 0;
+         (theStatics->buf)[1] = 0;
+	  }
+
+      if ((count = GetDataBlock(fd, &((theStatics->buf)[2]), theStatics )) == 0)
+        theStatics->done = TRUE;
+
+      theStatics->last_byte = 2 + count;
+      theStatics->curbit = (theStatics->curbit - theStatics->lastbit) + 16;
+      theStatics->lastbit = (2+count)*8 ;
+   }
+
+   ret = 0;
+   for (i = theStatics->curbit, j = 0; j < code_size; ++i, ++j)
+     ret |= ((  (theStatics->buf)[ i / 8 ]   & (1 << (i % 8))) != 0) << j;
+
+   theStatics->curbit += code_size;
+
+   return ret;
+
+}
+
+static int
+LWZReadByte(unsigned char **fd, int flag, int input_code_size, GIF_globals_ptr theStatics)
+{
+   int             code, incode;
+   int    i;
+      
+   if (flag) {
+      theStatics->set_code_size = input_code_size;
+      theStatics->code_size = theStatics->set_code_size+1;
+      theStatics->clear_code = 1 << theStatics->set_code_size ;
+      theStatics->end_code = theStatics->clear_code + 1;
+      theStatics->max_code_size = 2*theStatics->clear_code;
+      theStatics->max_code = theStatics->clear_code + 2;
+      
+      GetCode(fd, 0, TRUE, theStatics);
+               
+      theStatics->fresh = TRUE;
+
+      for (i = 0; i < theStatics->clear_code; ++i) {
+         (theStatics->table)[0][i] = 0;
+         (theStatics->table)[1][i] = i;
+      }
+      for (; i < (1<<MAX_LWZ_BITS); ++i)
+        (theStatics->table)[0][i] = (theStatics->table)[1][i] = 0;  /* was [1][0] */
+
+      theStatics->sp = theStatics->stack;
+
+      return 0;
+   } else if (theStatics->fresh) {
+      theStatics->fresh = FALSE;
+      do {
+         theStatics->firstcode = theStatics->oldcode =
+           GetCode(fd, theStatics->code_size, FALSE, theStatics);
+      } while (theStatics->firstcode == theStatics->clear_code);
+      return theStatics->firstcode;
+   }
+
+   if (theStatics->sp > theStatics->stack)
+     return *--(theStatics->sp);
+
+   while ((code = GetCode(fd, theStatics->code_size, FALSE, theStatics)) >= 0) {
+      if (code == theStatics->clear_code) {
+         for (i = 0; i < theStatics->clear_code; ++i) {
+            (theStatics->table)[0][i] = 0;
+            (theStatics->table)[1][i] = i;
+         }
+         for (; i < (1<<MAX_LWZ_BITS); ++i)
+           (theStatics->table)[0][i] = (theStatics->table)[1][i] = 0;
+         (theStatics->code_size) = theStatics->set_code_size+1;
+         theStatics->max_code_size = 2*theStatics->clear_code;
+         theStatics->max_code = theStatics->clear_code+2;
+         theStatics->sp = theStatics->stack;
+         theStatics->firstcode = theStatics->oldcode =
+           GetCode(fd, theStatics->code_size, FALSE, theStatics);
+         return theStatics->firstcode;
+      } else if (code == theStatics->end_code) {
+         int             count;
+         unsigned char   buf[260];
+
+         if (theStatics->zeroDataBlock != 0)
+           return -2;
+
+         while ((count = GetDataBlock(fd, buf, theStatics)) > 0)
+           ;
+
+         if (count != 0)
+           Log(( "missing EOD in data stream (common occurence)"));
+         return -2;
+      }
+
+      incode = code;
+
+      if (code >= theStatics->max_code) {
+         *(theStatics->sp)++ = theStatics->firstcode;
+         code = theStatics->oldcode;
+      }
+
+      while (code >= theStatics->clear_code) {
+         *(theStatics->sp)++ = (theStatics->table)[1][code];
+         if (code == (theStatics->table)[0][code])
+           Log(( "circular table entry BIG ERROR\n"));;
+         code = (theStatics->table)[0][code];
+      }
+
+      *(theStatics->sp)++ = theStatics->firstcode = (theStatics->table)[1][code];
+
+      if ((code = theStatics->max_code) <(1<<MAX_LWZ_BITS)) {
+         (theStatics->table)[0][code] = theStatics->oldcode;
+         (theStatics->table)[1][code] = theStatics->firstcode;
+         ++(theStatics->max_code);
+         if (((theStatics->max_code) >= (theStatics->max_code_size)) &&
+             (theStatics->max_code_size < (1<<MAX_LWZ_BITS))) {
+            theStatics->max_code_size *= 2;
+            ++(theStatics->code_size);
+         }
+      }
+
+      theStatics->oldcode = incode;
+
+      if (theStatics->sp > theStatics->stack)
+        return *--(theStatics->sp);
+   }
+   return code;
+}
+
+static void
+ReadImage(unsigned char **fd, int len, int height, unsigned char
+          cmap[3][MAXCOLORMAPSIZE], int pbm_format, int interlace, int ignore,
+		  GIF_globals_ptr theStatics, ObjectID thePixelsObj, SignedShort logRow, Signed theDepth)
+{
+   unsigned char   c;      
+   int             v;
+   int             xpos = 0, ypos = 0, pass = 0;
+   /*
+    **  Initialize the Compression routines
+    */
+   if (! ReadOK(fd,&c,1))
+     Log(( "EOF / read error on image data\n"));
+
+   if (LWZReadByte(fd, TRUE, c, theStatics) < 0)
+     Log(( "error reading image\n"));
+
+   /*
+    **  If this is an "uninteresting picture" ignore it.
+    */
+   if (ignore) {
+
+      while (LWZReadByte(fd, FALSE, c, theStatics) >= 0)
+        ;
+      return;
+   }
+
+   while ((v = LWZReadByte(fd,FALSE,c, theStatics)) >= 0 ) {
+       /*
+        *  OUTPUT BYTES
+        */
+      /*Log(("x=%d y=%d v=%d\n", xpos,ypos,v));*/
+	  /**(outBuffer + (long int) (len*ypos) + (long int) xpos) = v;*/
+	  SetPictureBits(thePixelsObj, logRow, len, height, 
+                             xpos, ypos, theDepth, v);
+
+
+      ++xpos;
+      if (xpos == len) {
+         xpos = 0;
+         if (interlace) {
+            switch (pass) {
+             case 0:
+             case 1:
+               ypos += 8; break;
+             case 2:
+               ypos += 4; break;
+             case 3:
+               ypos += 2; break;
+            }
+
+            if (ypos >= height) {
+               ++pass;
+               switch (pass) {
+                case 1:
+                  ypos = 4; break;
+                case 2:
+                  ypos = 2; break;
+                case 3:
+                  ypos = 1; break;
+                default:
+                  goto fini;
+               }
+            }
+         } else {
+            ++ypos;
+         }
+      }
+      if (ypos >= height)
+        break;
+   }
+
+ fini:
+   if (LWZReadByte(fd,FALSE,c, theStatics)>=0)
+     Log(( "too much input data, ignoring extra..."));
+}
+
+Private void Shovepix2Gray(SignedShort logRow, ObjectID thePixelsObj, char *source, PixelDot dimensions)
+{
+    /* Ok - We're going to getexactly width X height bytes, each one referring to a single pixel.  
+	   In memory, pixels are worth 2 bits - this means we have to tweak individual bits in memory */
+
+   long int i, j;
+   char     nextSByte, curMemByte = 0, *curMemLoc;
+   short    pixelCount = 0;
+   char     *dest;
+   short     width, height;
+   PixelBox theSize;
+   
+   theSize.left = 0;
+   theSize.top = 0;
+   theSize.right = dimensions.h;
+   theSize.bottom = dimensions.v;
+   width = dimensions.h;
+   height = dimensions.v;
+   
+   dest = BeginModifyPixels(thePixelsObj, &theSize);
+   for (i=0L; i<(long int) height;  i+= 1L)   /* Once for each row in picture */
+   {
+      
+      curMemLoc = dest + i*logRow;   /* curMemLoc is a pointer to the byte in memory we're currently munging */
+	  curMemByte = 0;                /* curMemByte is the new value for that byte */
+	  pixelCount = 0;                /* how many pixels have we stuffed into it? */
+	  
+      for(j=0L; j<(long int) width; j+= 1L)    /* Once for each pixel in each row of picture */
+	  {
+	     nextSByte = *(source + i*width + j);		 
+		 curMemByte = curMemByte << 2;
+		 curMemByte = curMemByte | nextSByte;
+		 pixelCount++;
+		 
+		 if (pixelCount == 4)  /** ie. we've read in 4 pixels = 8 bits now;  dump into memory, move on. **/
+		 {
+		    pixelCount = 0;
+			*curMemLoc = curMemByte;
+			curMemLoc = curMemLoc + 1L;
+			curMemByte = 0;
+		 }
+	  }
+	  if (pixelCount != 0) /* Only if number of pixels per row is not a multiple of 4 */
+	     *curMemLoc = curMemByte;
+   }
+   EndModifyPixels(thePixelsObj);
+}
+
+Private void SetPictureBits(ObjectID thePixelsObj, SignedShort logRow, int len, int height, 
+                            int xpos, int ypos, Signed depth, int v)
+{
+   char *dest, *injByte;
+   PixelBox theSize;
+   int   rot;
+   char  setMask, clearMask, theByt;
+   
+   theSize.left = 0;
+   theSize.top = 0;
+   theSize.right = len;
+   theSize.bottom = height;
+      
+   dest = BeginModifyPixels(thePixelsObj, &theSize);
+   injByte = dest;
+   injByte += (long int) ((long int) ypos)*((long int) logRow);
+      
+   switch(depth)
+   {
+      case pix1Gray:
+	     v = 1-v;
+	     injByte += ((long int) xpos) / 8L;
+		 rot = xpos % 8;
+		 rot = 7 - rot;  /* because we're shifting from left */
+		 clearMask = (char) (1 << rot);
+		 clearMask = ~clearMask;
+		 setMask = (char) (v << rot);
+		 
+		 *injByte &= clearMask;
+		 *injByte |= setMask;
+	     break;
+	  case pix2Gray:
+	     v = 3-v;
+	     injByte += ((long int) xpos) / 4L;
+		 rot = 2*(xpos % 4);
+		 rot = 6-rot;  /* because we're shifting from left */
+		 clearMask = (char) (3 << rot);
+		 clearMask = ~clearMask;
+		 setMask = (char) (v << rot);
+		 
+		 *injByte &= clearMask;
+		 *injByte |= setMask;
+	     break;
+	  default:
+	     break;
+   }
+   
+   EndModifyPixels(thePixelsObj);
+}
+
+#undef CURRENTCLASS@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

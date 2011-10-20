@@ -1,0 +1,1717 @@
+head	1.20;
+access;
+symbols
+	Yatin-final:1.19.2.1
+	Yatin:1.19.0.2
+	pre-yatin-merge:1.19
+	transend-beta2:1.18
+	fox-dev:1.18
+	ptm-ng:1.17
+	transend-beta-latest:1.17
+	Aggregators:1.17
+	NoAggregators:1.17
+	iang:1.17.0.4
+	transend-beta:1.17.0.2
+	SOSP:1.17
+	stable_ptm:1.13
+	merged_preintegrate:1.10
+	heisenbug:1.9
+	PRE_INTEGRATION:1.9
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.20
+date	98.01.16.22.16.29;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.09.18.22.45.29;	author yatin;	state Exp;
+branches
+	1.19.2.1;
+next	1.18;
+
+1.18
+date	97.06.14.05.05.52;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.07.20.36.57;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.06.02.49.25;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.26.04.15.13;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.17.03.01.29;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.07.21.54.59;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.05.20.20.58;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.04.09.55.50;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.12.15.13.46.41;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.12.07.01.47.49;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.05.01.27.30;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.11.28.01.24.53;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.08.12.29;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.22.08.21.44;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.00.42.34;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.28.01;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.43.03;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.31;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.31;	author yatin;	state Exp;
+branches;
+next	;
+
+1.19.2.1
+date	97.11.17.22.07.11;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.20
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "log.h"
+#include "ptm.h"
+#include "distlaunch.h"
+#include <stdlib.h>
+#include <netinet/in.h>
+
+
+gm_Bool
+PrivateConnectionServer::EvConnectionReceived(EventSystem *evs, 
+					      int newSocketID)
+{
+  PrivateConnection *socket;
+  if ((socket = new PrivateConnection(newSocketID))==NULL) 
+    Return(gm_False, errOutOfMemory);
+  if (Error::getStatus()!=success) return gm_False;
+  
+  gm_Log("New connection received (socket-id " << newSocketID << ")\n");
+  return evs->AddCommunicationObject(socket);
+}
+
+
+/*gm_Bool
+PrivateConnection::EvSelect(EventSystem *evs)
+{
+  gm_Packet packet;
+  if (packet.ReceiveAndHandle(evs, (gm_PacketHandler*)
+			      PTM::getInstance()->getPacketHandler(), 
+			      this) == gm_False) {
+    packet.HandleIgnorableErrors(Log);
+
+    switch(Error::getStatus()) {
+    case success:
+      return gm_True;
+      
+    case errSocketReadEOF:
+      Error::SetStatus(success);
+      return EvConnectionBroken(evs);
+      
+    default:
+      return gm_False;
+    }
+  }
+  else {
+    return gm_True;
+  }
+}*/
+
+
+
+PrivateConnection::PrivateConnection(int socketID)
+  : TcpSocket(socketID), gm_PacketHandler(), record(NULL) 
+{
+  if (PTM::getInstance()->AddConnection(this)==gm_False) return;
+}
+
+
+PrivateConnection::~PrivateConnection() 
+{
+  PTM::getInstance()->RemoveConnection(this);
+}
+
+
+gm_Bool
+PrivateConnection::EvConnectionBroken(EventSystem *evs)
+{
+  gm_Log("Connection broken on socket-id " << getID() << '\n');
+
+  if (IsDistillerConnection()==gm_True) {
+    // this is a distiller; deregister it
+
+    DistillerRecord *distillerRecord = getDistiller();
+    PTM::getInstance()->Deregister(distillerRecord);
+    distillerRecord->EvUnnaturalDeath();
+    delete distillerRecord;
+    SetDistiller(NULL);
+  }
+  else {
+    // this is a proxy socket; check if it has any pending distiller launches 
+    // associated with it
+
+    PTM::getInstance()->getDistillerLauncher()->RemoveBrokenConnection(this);
+  }
+
+  evs->RemoveCommunicationObject(this);
+  delete this;
+  return gm_True;
+}
+
+
+SharedBus::SharedBus(RemoteID &multicast, int ttl)
+  : gm_CoordinationBus(multicast.ipAddress, multicast.port, ttl, gm_True, 
+		       gm_True)
+{
+  /*if (CreateSender(multicast.ipAddress, multicast.port, ttl)==gm_False)
+    return;*/
+}
+
+
+/* 
+ * Packet format:
+ *   "IP-Address|Port-No|Distiller-type\0"
+ */
+class RegisterDistillerHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+RegisterDistillerHandler::Handle(gm_Packet *packet, 
+				 PrivateConnection *connection)
+{
+  /*char ipAddress[MAXIP], distillerTypeString[MAXDISTILLER_TYPE_STRING];
+  Port port;*/
+  RemoteID distAddress;
+  DistillerType distillerType;
+  UINT32 sleepStatusUINT32, restartFlagUINT32;
+  
+  DistillerRecord *distillerRecord;
+
+  if (connection->IsDistillerConnection()==gm_True) {
+    // someone's already registered on this connection!
+    Return(gm_False, errOutOfContextPacket);
+  }
+
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Delimit('|') >> distAddress >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+  if (distAddress.port==0) Return(gm_False, errFormattingError);
+
+  stream >> Delimit('|') >> distillerType >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  stream >> Delimit('|') >> sleepStatusUINT32 >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  stream >> Delimit('\0') >> restartFlagUINT32 >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (stream.IsDone()==gm_False) Return(gm_False, errFormattingError);
+
+  if ((distillerRecord = new DistillerRecord(connection, distAddress, 
+					     distillerType,
+					     (DistillerSleepStatus)
+					     sleepStatusUINT32,
+					     (gm_Bool)restartFlagUINT32
+					     ))==NULL)
+    Return(gm_False, errOutOfMemory);
+
+  if (PTM::getInstance()->Register(distillerRecord)==gm_False) {
+    if (Error::getStatus()==errDuplicateIndexEntry) {
+      delete distillerRecord;
+
+      // remove the connection as well!
+      connection->EvConnectionBroken(PTM::getInstance()->getEventSystem());
+      Error::SetStatus(success);
+      return gm_True;
+    }
+    else return gm_False;
+  }
+
+  if (PTM::getInstance()->getEventSystem()->SendReplyReceivedEvent
+      (packet->getRequestReplyID(), distillerRecord)==gm_False) {
+    return gm_False;
+  }
+
+  connection->SetDistiller(distillerRecord);
+  return gm_True;
+}
+
+
+/* 
+ * Packet format:
+ *   ""
+ */
+class DeregisterDistillerHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool 
+DeregisterDistillerHandler::Handle(gm_Packet *packet, 
+				   PrivateConnection *connection)
+{
+  if (connection->IsDistillerConnection()==gm_False) {
+    // there is no distiller to deregister!
+    Return(gm_False, errOutOfContextPacket);
+  }
+  
+  // parse the packet
+  if (packet->getLength() > 0) Return(gm_False, errFormattingError);
+
+  // deregister the distiller
+  PTM::getInstance()->Deregister(connection->getDistiller());
+  delete connection->getDistiller();
+  connection->SetDistiller(NULL);
+  return gm_True;
+}
+
+
+/* 
+ * Packet format:
+ *   "Distiller-type\0"
+ */
+class ReregisterDistillerHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+ReregisterDistillerHandler::Handle(gm_Packet *packet, 
+				   PrivateConnection *connection)
+{
+  DistillerType distillerType;
+  DistillerRecord *distillerRecord;
+
+  if (connection->IsDistillerConnection()==gm_False) {
+    // there is no distiller to reregister!
+    Return(gm_False, errOutOfContextPacket);
+  }
+  
+  // parse the packet
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Delimit('\0') >> distillerType >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (stream.IsDone()==gm_False) Return(gm_False, errFormattingError);
+
+  // reregister the distiller
+  distillerRecord = connection->getDistiller();
+  PTM::getInstance()->Deregister(distillerRecord);
+  distillerRecord->type = distillerType;
+  if (PTM::getInstance()->Register(distillerRecord)==gm_False) {
+    if (Error::getStatus()==errDuplicateIndexEntry) {
+      delete distillerRecord;
+
+      // remove the connection as well!
+      connection->EvConnectionBroken(PTM::getInstance()->getEventSystem());
+      Error::SetStatus(success);
+      return gm_True;
+    }
+    else return gm_False;
+  }
+
+  connection->SetDistiller(distillerRecord);
+  return gm_True;
+}
+
+/* 
+ * Packet format:
+ *   "Distiller-type\0"
+ */
+class AskForDistillerHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+AskForDistillerHandler::Handle(gm_Packet *packet, 
+			       PrivateConnection *connection)
+{
+  char type[MAXDISTILLER_TYPE_STRING];
+
+  if (connection->IsDistillerConnection()==gm_True) {
+    // a distiller can't ask for another distiller
+    Return(gm_False, errOutOfContextPacket);
+  }
+
+  // parse the packet
+  if (packet->getLength() <= 0) Return(gm_False, errFormattingError);
+
+  IStream stream(packet->getData(), packet->getLength());
+  stream >> Delimit('\0') >> SetW(MAXDISTILLER_TYPE_STRING) >> type >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+  if (stream.IsDone()==gm_False) Return(gm_False, errFormattingError);
+
+  DistillerType distillerType(type);
+  return PTM::getInstance()->EvAskForDistiller(&distillerType, connection,
+					       packet->getRequestReplyID());
+}
+
+
+class AskForUnicastBeaconHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+AskForUnicastBeaconHandler::Handle(gm_Packet */*packet*/, 
+				   PrivateConnection *connection)
+{
+  PTM::getInstance()->Beacon(connection); // ignore return value
+  return gm_True;
+}
+
+
+/* 
+ * Packet format:
+ *   "<Load>\0"
+ */
+class DistillerLoadHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+DistillerLoadHandler::Handle(gm_Packet *packet, PrivateConnection *connection)
+{
+  Load load;
+  //MonitorClient *monitorClient;
+  IStream stream(packet->getData(), packet->getLength());
+
+  if (connection->IsDistillerConnection()==gm_False) {
+    // only a distiller can report load information
+    Return(gm_False, errOutOfContextPacket);
+  }
+
+  stream >> Delimit('\0') >> load >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+  if (stream.IsDone()==gm_False) Return(gm_False, errFormattingError);
+
+  connection->getDistiller()->Update(load);
+
+  /*monitorClient = PTM::getInstance()->getMonitorClient();
+  if (monitorClient!=NULL) {
+    char value[MAXLINE];
+    sprintf(value, "%s (%s/%d)=%lu,blue", 
+	    (char*) connection->getDistiller()->type,
+	    connection->getDistiller()->rid.ipAddress,
+	    connection->getDistiller()->rid.port, load.totalLatency);
+    monitorClient->Send("Distiller Load", value, "TimeChart");
+  }*/
+
+  return gm_True;
+}
+
+
+#define HANDLE(HandlerObjectType) \
+{ \
+  HandlerObjectType handler; \
+  return handler.Handle(packet, this); \
+}
+
+
+gm_Bool
+PrivateConnection::EvPacketReceived(EventSystem */*evs*/, gm_Packet *packet)
+{
+  switch (packet->getType()) {
+  case pktRegisterDistiller:   HANDLE(RegisterDistillerHandler);
+  case pktDeregisterDistiller: HANDLE(DeregisterDistillerHandler);
+  case pktReregisterDistiller: HANDLE(ReregisterDistillerHandler);
+  case pktAskForDistiller:     HANDLE(AskForDistillerHandler);
+  case pktAskForUnicastBeacon: HANDLE(AskForUnicastBeaconHandler);
+  case pktDistillerLoad:       HANDLE(DistillerLoadHandler);
+  default:
+    Return(gm_False, errInvalidPacketType);
+  }
+}
+
+
+static gm_Bool
+ConstructDistillerList(OStream &stream, List<DatabaseRecord> *list)
+{
+  UINT32  distillersPos; 
+  UINT32 numberOfDistillers=0;
+  ListIndex idx;
+
+  distillersPos = stream.getLength() - 1; // length includes trailing '\0'
+
+  /*if (list!=NULL) {
+    numberOfDistillers = list->getSize();
+  }*/
+
+  stream << Binary(gm_True) << htonl(numberOfDistillers) << Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (list!=NULL) {
+    idx = list->BeginTraversal();
+    for (; list->IsDone(idx)==gm_False; idx = list->getNext(idx)) {
+      if (((DistillerRecord*)(list->getData(idx)))->sleepStatus!=distWakeUp) {
+	continue;
+      }
+
+      stream << *((DistillerRecord*)list->getData(idx)) << '|';
+      if (stream.IsGood()==gm_False) return gm_False;
+      numberOfDistillers++;
+    }
+    list->EndTraversal();
+  }
+
+  char *data = stream.getData();
+  numberOfDistillers = htonl(numberOfDistillers);
+  memcpy(data + distillersPos, (char*) &numberOfDistillers, sizeof(UINT32));
+  return gm_True;
+}
+
+
+gm_Bool
+PrivateConnection::AskForDistillerReply(UINT32 replyID, 
+					AskForDistillerStatus status,
+					List<DatabaseRecord> *list)
+{
+  OStream stream;
+
+  stream << (UINT32) status << '|';
+  if (stream.IsGood()==gm_False) return gm_False;
+  if (ConstructDistillerList(stream, list)==gm_False) return gm_False;
+  gm_Packet packet(pktAskForDistillerReply, stream.getLength(), replyID, 
+		   stream.getData());
+  Write(&packet); // could not write to the socket; ignore it for now!
+  return gm_True;
+}
+
+
+static gm_Bool
+SendBeacon_(CommunicationObject *object, RemoteID &ptmAddress, 
+	    UINT32 ptmRandomID, List<DatabaseRecord> *list)
+{
+  OStream stream;
+
+  stream << ptmAddress << '|'  << Binary(gm_True) << ptmRandomID 
+	 << (Binary(gm_False)) << '|';
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (ConstructDistillerList(stream, list)==gm_False) 
+    return gm_False;
+
+  gm_Packet packet(pktPTMBeacon, stream.getLength(), stream.getData());
+  if (object->Write(&packet)==gm_False) return gm_False;
+
+  return gm_True;
+}
+
+
+
+gm_Bool
+PrivateConnection::Beacon(RemoteID &ptmAddress, 
+			  UINT32 ptmRandomID,
+			  List<DatabaseRecord> *list)
+{
+  return SendBeacon_(this, ptmAddress, ptmRandomID, list);
+}
+
+
+gm_Bool
+SharedBus::Beacon(RemoteID &ptmAddress, 
+		  UINT32 ptmRandomID,
+		  List<DatabaseRecord> *list)
+{
+  /*OStream stream;
+
+  stream << ptmAddress << '|'  << Binary(gm_True) << ptmRandomID 
+	 << (Binary(gm_False)) << '|';
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (ConstructDistillerList(stream, list)==gm_False) 
+    return gm_False;
+
+  gm_Packet packet(pktPTMBeacon, stream.getLength(), stream.getData());
+  if (getSender()->Write(&packet)==gm_False) return gm_False;
+
+  return gm_True;*/
+  return SendBeacon_(getSender(), ptmAddress, ptmRandomID, list);
+}
+
+
+
+class PTMBeaconHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet);
+};
+
+
+/*
+ * Format: <ptm-ip-address/port>|distiller-info
+ */
+gm_Bool
+PTMBeaconHandler::Handle(gm_Packet *packet)
+{
+  RemoteID rid;
+  UINT32 randomID;
+
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Delimit('|') >> rid >> Skip >> Binary(gm_True) >> randomID 
+	 >> Binary(gm_False);
+  if (stream.IsGood()==gm_False || rid.port==0) return gm_False;
+
+  // ignore the rest of the stream
+
+  switch (PTM::getInstance()->CompareBeacon(rid, randomID)) {
+  case -1:
+    // I'm the inferior PTM, so I must die
+    gm_Log("Found another PTM at " << rid 
+	   << "; so I'm going to commit suicide\n");
+    PTM::getInstance()->getEventSystem()->PostEvent(evQuit, 0, 0);
+    return gm_True;
+
+  default:
+    // I'm the superior beacon (or it's my beacon), so ignore it
+    return gm_True;
+
+  }
+}
+
+
+gm_Bool
+SharedBus::EvPacketReceived(EventSystem */*evs*/, gm_Packet *packet)
+{
+  switch (packet->getType()) {
+  case pktPTMBeacon: 
+    {
+      PTMBeaconHandler handler;
+      return handler.Handle(packet);
+    }
+  default:
+    Return(gm_False, errInvalidPacketType);
+  }  
+}
+
+
+@
+
+
+1.19
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d71 4
+a74 2
+    PTM::getInstance()->Deregister(getDistiller());
+    delete getDistiller();
+d118 1
+a118 1
+  UINT32 sleepStatusUINT32;
+d136 4
+a139 1
+  stream >> Delimit('\0') >> sleepStatusUINT32 >> Skip;
+d147 3
+a149 1
+					     sleepStatusUINT32))==NULL)
+d209 51
+d364 1
+@
+
+
+1.19.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d71 2
+a72 4
+    DistillerRecord *distillerRecord = getDistiller();
+    PTM::getInstance()->Deregister(distillerRecord);
+    distillerRecord->EvUnnaturalDeath();
+    delete distillerRecord;
+d116 1
+a116 1
+  UINT32 sleepStatusUINT32, restartFlagUINT32;
+d134 1
+a134 4
+  stream >> Delimit('|') >> sleepStatusUINT32 >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  stream >> Delimit('\0') >> restartFlagUINT32 >> Skip;
+d142 1
+a142 3
+					     sleepStatusUINT32,
+					     (gm_Bool)restartFlagUINT32
+					     ))==NULL)
+a201 51
+class ReregisterDistillerHandler {
+public:
+  gm_Bool Handle(gm_Packet *packet, PrivateConnection *connection);
+protected:
+};
+
+
+gm_Bool
+ReregisterDistillerHandler::Handle(gm_Packet *packet, 
+				   PrivateConnection *connection)
+{
+  DistillerType distillerType;
+  DistillerRecord *distillerRecord;
+
+  if (connection->IsDistillerConnection()==gm_False) {
+    // there is no distiller to reregister!
+    Return(gm_False, errOutOfContextPacket);
+  }
+  
+  // parse the packet
+  IStream stream(packet->getData(), packet->getLength());
+
+  stream >> Delimit('\0') >> distillerType >> Skip;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (stream.IsDone()==gm_False) Return(gm_False, errFormattingError);
+
+  // reregister the distiller
+  distillerRecord = connection->getDistiller();
+  PTM::getInstance()->Deregister(distillerRecord);
+  distillerRecord->type = distillerType;
+  if (PTM::getInstance()->Register(distillerRecord)==gm_False) {
+    if (Error::getStatus()==errDuplicateIndexEntry) {
+      delete distillerRecord;
+
+      // remove the connection as well!
+      connection->EvConnectionBroken(PTM::getInstance()->getEventSystem());
+      Error::SetStatus(success);
+      return gm_True;
+    }
+    else return gm_False;
+  }
+
+  connection->SetDistiller(distillerRecord);
+  return gm_True;
+}
+
+/* 
+ * Packet format:
+ *   "Distiller-type\0"
+ */
+a305 1
+  case pktReregisterDistiller: HANDLE(ReregisterDistillerHandler);
+@
+
+
+1.18
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d25 2
+a26 2
+  Packet packet;
+  if (packet.ReceiveAndHandle(evs, (PacketHandler*)
+d51 1
+a51 1
+  : TcpSocket(socketID), PacketHandler(), record(NULL) 
+d89 2
+a90 1
+  : CoordinationBus(multicast.ipAddress, multicast.port, ttl, gm_True, gm_True)
+d103 1
+a103 1
+  gm_Bool Handle(Packet *packet, PrivateConnection *connection);
+d109 2
+a110 1
+RegisterDistillerHandler::Handle(Packet *packet, PrivateConnection *connection)
+d173 1
+a173 1
+  gm_Bool Handle(Packet *packet, PrivateConnection *connection);
+d179 1
+a179 1
+DeregisterDistillerHandler::Handle(Packet *packet, 
+d204 1
+a204 1
+  gm_Bool Handle(Packet *packet, PrivateConnection *connection);
+d210 2
+a211 1
+AskForDistillerHandler::Handle(Packet *packet, PrivateConnection *connection)
+d236 1
+a236 1
+  gm_Bool Handle(Packet *packet, PrivateConnection *connection);
+d242 1
+a242 1
+AskForUnicastBeaconHandler::Handle(Packet */*packet*/, 
+d256 1
+a256 1
+  gm_Bool Handle(Packet *packet, PrivateConnection *connection);
+d262 1
+a262 1
+DistillerLoadHandler::Handle(Packet *packet, PrivateConnection *connection)
+d301 1
+a301 1
+PrivateConnection::EvPacketReceived(EventSystem */*evs*/, Packet *packet)
+d362 2
+a363 2
+  Packet packet(pktAskForDistillerReply, stream.getLength(), replyID, 
+		stream.getData());
+d382 1
+a382 1
+  Packet packet(pktPTMBeacon, stream.getLength(), stream.getData());
+d413 1
+a413 1
+  Packet packet(pktPTMBeacon, stream.getLength(), stream.getData());
+d424 1
+a424 1
+  gm_Bool Handle(Packet *packet);
+d432 1
+a432 1
+PTMBeaconHandler::Handle(Packet *packet)
+d462 1
+a462 1
+SharedBus::EvPacketReceived(EventSystem */*evs*/, Packet *packet)
+@
+
+
+1.17
+log
+@Added sleep mechanism to the distillers
+@
+text
+@d49 14
+@
+
+
+1.16
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d100 1
+d115 4
+a118 1
+  stream >> Delimit('\0') >> distillerType >> Skip;
+d123 4
+a126 1
+  if ((distillerRecord = new DistillerRecord(distAddress,distillerType))==NULL)
+d228 1
+a228 1
+  PTM::getInstance()->Beacon(connection);
+d301 1
+a301 1
+  //UINT32  distillersPos; 
+d305 1
+a305 1
+  //distillersPos = stream.getLength() - 1; // length includes trailing '\0'
+d307 1
+a307 1
+  if (list!=NULL) {
+d309 1
+a309 1
+  }
+d317 4
+d323 1
+a323 1
+      //numberOfDistillers++;
+d328 1
+a328 1
+  /*char *data = stream.getData();
+d330 1
+a330 1
+  memcpy(data + distillersPos, (char*) &numberOfDistillers, sizeof(UINT32));*/
+d347 1
+a347 1
+  if (Write(&packet)==gm_False) return gm_False;
+@
+
+
+1.15
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d210 16
+d283 1
+d294 2
+a295 1
+  UINT32  distillersPos, numberOfDistillers=0;
+d298 5
+a302 1
+  distillersPos = stream.getLength() - 1; // length includes trailing '\0'
+d304 1
+a304 1
+  stream << Binary(gm_True) << (UINT32) 0 << Binary(gm_False);
+d307 8
+a314 5
+  idx = list->BeginTraversal();
+  for (; list->IsDone(idx)==gm_False; idx = list->getNext(idx)) {
+    stream << *((DistillerRecord*)list->getData(idx)) << '|';
+    if (stream.IsGood()==gm_False) return gm_False;
+    numberOfDistillers++;
+a315 1
+  list->EndTraversal();
+d317 1
+a317 1
+  char *data = stream.getData();
+d319 1
+a319 1
+  memcpy(data + distillersPos, (char*) &numberOfDistillers, sizeof(UINT32));
+d333 1
+a333 4
+  if (list!=NULL) {
+    if (ConstructDistillerList(stream, list)==gm_False) return gm_False;
+  }
+
+d341 30
+d376 1
+a376 1
+  OStream stream;
+d388 2
+a389 1
+  return gm_True;
+@
+
+
+1.14
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d315 1
+a315 1
+  if (packet.Send(this)==gm_False) return gm_False;
+d335 1
+a335 1
+  if (packet.Send(getSender())==gm_False) return gm_False;
+@
+
+
+1.13
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d275 1
+a275 1
+ConstructDistillerList(OStream &stream, LinkedList<DatabaseRecord> *list)
+d278 1
+a278 1
+  ListIdx idx;
+d285 3
+a287 2
+  for (idx=list->Head(); list->IsDone(idx)==gm_False; idx = list->Next(idx)) {
+    stream << *((DistillerRecord*)list->Record(idx)) << '|';
+d291 1
+d303 1
+a303 1
+					LinkedList<DatabaseRecord> *list)
+d323 1
+a323 1
+		  LinkedList<DatabaseRecord> *list)
+@
+
+
+1.12
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d225 1
+a225 1
+  MonitorClient *monitorClient;
+a227 3
+  gm_Debug(dbgTmp, "Received load info from " 
+	   << (char*) connection->getDistiller()->type << '\n');
+
+d239 1
+a239 1
+  monitorClient = PTM::getInstance()->getMonitorClient();
+d247 1
+a247 1
+  }
+@
+
+
+1.11
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d228 3
+@
+
+
+1.10
+log
+@Yatin's first commit from India
+@
+text
+@d14 2
+a15 2
+    gm_BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return gm_False;
+d17 1
+a17 1
+  LOG ("New connection received (socket-id " << newSocketID << ")\n");
+d31 1
+a31 1
+    switch(GlobalErrorCode) {
+d33 1
+a33 1
+      gm_BoolErrorReturn(success);
+d36 1
+a36 1
+      SetGlobalError(success);
+d44 1
+a44 1
+    gm_BoolErrorReturn(success);
+d52 1
+a52 1
+  LOG ("Connection broken on socket-id " << getID() << '\n');
+d70 1
+a70 1
+  gm_BoolErrorReturn(success);
+d105 1
+a105 1
+    gm_BoolErrorReturn(errOutOfContextPacket);
+d112 1
+a112 1
+  if (distAddress.port==0) gm_BoolErrorReturn(errFormattingError);
+d117 1
+a117 1
+  if (stream.IsDone()==gm_False) gm_BoolErrorReturn(errFormattingError);
+d120 1
+a120 1
+    gm_BoolErrorReturn(errOutOfMemory);
+d123 1
+a123 1
+    if (GlobalErrorCode==errDuplicateIndexEntry) {
+d128 2
+a129 2
+
+      gm_BoolErrorReturn(success);
+d140 1
+a140 1
+  gm_BoolErrorReturn(success);
+d161 1
+a161 1
+    gm_BoolErrorReturn(errOutOfContextPacket);
+d165 1
+a165 1
+  if (packet->getLength() > 0) gm_BoolErrorReturn(errFormattingError);
+d171 1
+a171 1
+  gm_BoolErrorReturn(success);
+d193 1
+a193 1
+    gm_BoolErrorReturn(errOutOfContextPacket);
+d197 1
+a197 1
+  if (packet->getLength() <= 0) gm_BoolErrorReturn(errFormattingError);
+d202 1
+a202 1
+  if (stream.IsDone()==gm_False) gm_BoolErrorReturn(errFormattingError);
+d230 1
+a230 1
+    gm_BoolErrorReturn(errOutOfContextPacket);
+d235 1
+a235 1
+  if (stream.IsDone()==gm_False) gm_BoolErrorReturn(errFormattingError);
+d249 1
+a249 1
+  gm_BoolErrorReturn(success);
+d269 1
+a269 1
+    gm_BoolErrorReturn(errInvalidPacketType);
+d294 1
+a294 1
+  gm_BoolErrorReturn(success);
+d314 1
+a314 1
+  gm_BoolErrorReturn(success);
+d335 1
+a335 1
+  gm_BoolErrorReturn(success);
+d366 2
+a367 1
+    LOG("Found another PTM at " <<rid << "; so I'm going to commit suicide\n");
+d369 1
+a369 1
+    gm_BoolErrorReturn(success)
+d373 1
+a373 1
+    gm_BoolErrorReturn(success);
+d389 1
+a389 1
+    gm_BoolErrorReturn(errInvalidPacketType);
+@
+
+
+1.9
+log
+@Just doing a commit before leaving for India
+@
+text
+@a285 1
+    DEBUG("############################\n");
+a333 8
+
+  DEBUG("Sending Beacon: ");
+  char *d=packet.getData();
+  for(int i=0; i<packet.getLength(); i++) {
+    char ch = *d++;
+    DEBUG( ((ch < 32) ? '?' : (char)ch) << '(' << (int)ch << ") " );
+  }
+  DEBUG('\n');
+@
+
+
+1.8
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d286 1
+d326 2
+a327 2
+  stream << ptmAddress << '|' << Binary(gm_True) << ptmRandomID << (Binary(gm_False))
+	 << '|';
+d335 9
+@
+
+
+1.7
+log
+@Modified monitor.tcl to auto-scale the y-axis
+Modified ptmnet.cc to send distiller-load information to the monitor agent
+@
+text
+@d8 1
+a8 1
+Bool
+d14 2
+a15 2
+    BoolErrorReturn(errOutOfMemory);
+  if (GlobalErrorCode!=success) return FALSE;
+d22 1
+a22 1
+/*Bool
+d28 1
+a28 1
+			      this) == FALSE) {
+d33 1
+a33 1
+      BoolErrorReturn(success);
+d40 1
+a40 1
+      return FALSE;
+d44 1
+a44 1
+    BoolErrorReturn(success);
+d49 1
+a49 1
+Bool
+d54 1
+a54 1
+  if (IsDistillerConnection()==TRUE) {
+d70 1
+a70 1
+  BoolErrorReturn(success);
+d75 1
+a75 1
+  : CoordinationBus(multicast.ipAddress, multicast.port, ttl, TRUE, TRUE)
+d77 1
+a77 1
+  /*if (CreateSender(multicast.ipAddress, multicast.port, ttl)==FALSE)
+d88 1
+a88 1
+  Bool Handle(Packet *packet, PrivateConnection *connection);
+d93 1
+a93 1
+Bool
+d103 1
+a103 1
+  if (connection->IsDistillerConnection()==TRUE) {
+d105 1
+a105 1
+    BoolErrorReturn(errOutOfContextPacket);
+d111 2
+a112 2
+  if (stream.IsGood()==FALSE) return FALSE;
+  if (distAddress.port==0) BoolErrorReturn(errFormattingError);
+d115 1
+a115 1
+  if (stream.IsGood()==FALSE) return FALSE;
+d117 1
+a117 1
+  if (stream.IsDone()==FALSE) BoolErrorReturn(errFormattingError);
+d120 1
+a120 1
+    BoolErrorReturn(errOutOfMemory);
+d122 1
+a122 1
+  if (PTM::getInstance()->Register(distillerRecord)==FALSE) {
+d129 1
+a129 1
+      BoolErrorReturn(success);
+d131 1
+a131 1
+    else return FALSE;
+d135 2
+a136 2
+      (packet->getRequestReplyID(), distillerRecord)==FALSE) {
+    return FALSE;
+d140 1
+a140 1
+  BoolErrorReturn(success);
+d150 1
+a150 1
+  Bool Handle(Packet *packet, PrivateConnection *connection);
+d155 1
+a155 1
+Bool 
+d159 1
+a159 1
+  if (connection->IsDistillerConnection()==FALSE) {
+d161 1
+a161 1
+    BoolErrorReturn(errOutOfContextPacket);
+d165 1
+a165 1
+  if (packet->getLength() > 0) BoolErrorReturn(errFormattingError);
+d171 1
+a171 1
+  BoolErrorReturn(success);
+d181 1
+a181 1
+  Bool Handle(Packet *packet, PrivateConnection *connection);
+d186 1
+a186 1
+Bool
+d191 1
+a191 1
+  if (connection->IsDistillerConnection()==TRUE) {
+d193 1
+a193 1
+    BoolErrorReturn(errOutOfContextPacket);
+d197 1
+a197 1
+  if (packet->getLength() <= 0) BoolErrorReturn(errFormattingError);
+d201 2
+a202 2
+  if (stream.IsGood()==FALSE) return FALSE;
+  if (stream.IsDone()==FALSE) BoolErrorReturn(errFormattingError);
+d216 1
+a216 1
+  Bool Handle(Packet *packet, PrivateConnection *connection);
+d221 1
+a221 1
+Bool
+d228 1
+a228 1
+  if (connection->IsDistillerConnection()==FALSE) {
+d230 1
+a230 1
+    BoolErrorReturn(errOutOfContextPacket);
+d234 2
+a235 2
+  if (stream.IsGood()==FALSE) return FALSE;
+  if (stream.IsDone()==FALSE) BoolErrorReturn(errFormattingError);
+d249 1
+a249 1
+  BoolErrorReturn(success);
+d260 1
+a260 1
+Bool
+d269 1
+a269 1
+    BoolErrorReturn(errInvalidPacketType);
+d274 1
+a274 1
+static Bool
+d282 2
+a283 2
+  stream << Binary(TRUE) << (UINT32) 0 << Binary(FALSE);
+  if (stream.IsGood()==FALSE) return FALSE;
+d285 1
+a285 1
+  for (idx=list->Head(); list->IsDone(idx)==FALSE; idx = list->Next(idx)) {
+d287 1
+a287 1
+    if (stream.IsGood()==FALSE) return FALSE;
+d294 1
+a294 1
+  BoolErrorReturn(success);
+d298 1
+a298 1
+Bool
+d306 1
+a306 1
+  if (stream.IsGood()==FALSE) return FALSE;
+d308 1
+a308 1
+    if (ConstructDistillerList(stream, list)==FALSE) return FALSE;
+d313 2
+a314 2
+  if (packet.Send(this)==FALSE) return FALSE;
+  BoolErrorReturn(success);
+d318 1
+a318 1
+Bool
+d325 1
+a325 1
+  stream << ptmAddress << '|' << Binary(TRUE) << ptmRandomID << (Binary(FALSE))
+d327 1
+a327 1
+  if (stream.IsGood()==FALSE) return FALSE;
+d329 2
+a330 2
+  if (ConstructDistillerList(stream, list)==FALSE) 
+    return FALSE;
+d333 2
+a334 2
+  if (packet.Send(getSender())==FALSE) return FALSE;
+  BoolErrorReturn(success);
+d341 1
+a341 1
+  Bool Handle(Packet *packet);
+d348 1
+a348 1
+Bool
+d356 3
+a358 3
+  stream >> Delimit('|') >> rid >> Skip >> Binary(TRUE) >> randomID 
+	 >> Binary(FALSE);
+  if (stream.IsGood()==FALSE || rid.port==0) return FALSE;
+d367 1
+a367 1
+    BoolErrorReturn(success)
+d371 1
+a371 1
+    BoolErrorReturn(success);
+d377 1
+a377 1
+Bool
+d387 1
+a387 1
+    BoolErrorReturn(errInvalidPacketType);
+@
+
+
+1.6
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d225 1
+d238 11
+@
+
+
+1.5
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d210 31
+d255 1
+@
+
+
+1.4
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d1 1
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d74 1
+a74 1
+  : MulticastSocket()
+d76 2
+a77 2
+  if (CreateSender(multicast.ipAddress, multicast.port, ttl)==FALSE)
+    return;
+d274 3
+a276 1
+SharedBus::Beacon(RemoteID &ptmAddress, LinkedList<DatabaseRecord> *list)
+d280 2
+a281 1
+  stream << ptmAddress << '|';
+d288 1
+a288 1
+  if (packet.Send(this)==FALSE) return FALSE;
+d291 55
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d4 1
+a75 1
+  DEBUG("Creating ttl=" << ttl << '\n');
+d97 2
+d109 1
+a109 1
+  stream.Delimit('|').SetW(MAXIP) >> ipAddress;
+d111 1
+d113 1
+a113 1
+  stream.Delimit('|') >> port;
+a114 1
+  if (port==0) BoolErrorReturn(errFormattingError);
+d116 1
+a116 4
+  stream.Delimit('\0').SetW(MAXDISTILLER_TYPE_STRING) >> distillerTypeString;
+  if (stream.IsGood()==FALSE) return FALSE;
+
+  if (stream.IsDone()==FALSE) return FALSE;
+d118 1
+a118 4
+  RemoteID      rid(ipAddress, port);
+  DistillerType distillerType(distillerTypeString);
+
+  if ((distillerRecord = new DistillerRecord(rid, distillerType))==NULL)
+d178 1
+a178 1
+class FindDistillersHandler {
+d186 1
+a186 1
+FindDistillersHandler::Handle(Packet *packet, PrivateConnection *connection)
+d199 1
+a199 1
+  stream.Delimit('\0').SetW(MAXDISTILLER_TYPE_STRING) >> type;
+d204 2
+a205 3
+  return PTM::getInstance()->
+    RequestForDistillersReceived(&distillerType, connection,
+				 packet->getRequestReplyID());
+d222 1
+a222 1
+  case pktFindDistillers:      HANDLE(FindDistillersHandler);
+d228 60
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+a5 7
+static void 
+Log(char *string)
+{
+  LOG(string);
+}
+
+
+d20 1
+a20 1
+Bool
+d24 2
+a25 2
+  if (packet.ReceiveAndHandle(evs, 
+			      (PacketHandler*)PTM::ptm->getPacketHandler(), 
+d41 4
+a44 2
+  else BoolErrorReturn(success);
+}
+d54 4
+d62 2
+d72 1
+a72 1
+SharedBus::SharedBus(RemoteID &multicast)
+d75 2
+a76 1
+  if (CreateSender(multicast.ipAddress, multicast.port, DefaultTTL)==FALSE)
+d81 4
+a84 53
+class Stream {
+
+public:
+  Stream(char *d, uint32 l);
+  char *SkipBeyond(char ch);
+  char *Skip(int howMany);
+
+  Bool IsDone() 
+  { return (current!=NULL && data!=NULL && uint32(current-data) < length)
+      ? FALSE : TRUE;};
+protected:
+  char   *data;
+  uint32 length;
+  char   *current;
+};
+
+
+Stream::Stream(char *d, uint32 l) 
+  : data(d), length(l), current(NULL)
+{
+  if (data!=NULL && length>0) current = data;
+}
+
+
+char *
+Stream::SkipBeyond(char ch)
+{
+  char *original = current;
+
+  while (IsDone()==FALSE && *current!=ch) current++;
+  if (IsDone()==TRUE) { current = original; return NULL; }
+
+  current++;
+  return original;
+}
+
+
+char *
+Stream::Skip(int howMany)
+{
+  char *original = current;
+  if (IsDone()==TRUE) return NULL;
+
+  if (  int(length - (current-data)) < howMany  ) return NULL;
+  current += howMany;
+  return original;
+}
+
+
+
+
+// Packet format:
+//   "IP-Address/Port-No\0Distiller-type"
+d95 3
+a97 1
+  char            *ipAddress, *portPtr, *distillerTypeString;
+d105 8
+a112 8
+  Stream stream(packet->getData(), packet->getLength());
+  
+  if ((ipAddress = stream.SkipBeyond('/'))==NULL) 
+    BoolErrorReturn(errInvalidPacketFormat);
+  if ((portPtr = stream.SkipBeyond('\0'))==NULL)
+    BoolErrorReturn(errInvalidPacketFormat);
+  if ((distillerTypeString = stream.SkipBeyond('\0'))==NULL)
+    BoolErrorReturn(errInvalidPacketFormat);
+d114 2
+a115 1
+  if (stream.IsDone()==FALSE) BoolErrorReturn(errInvalidPacketFormat);
+d117 1
+a117 1
+  *(portPtr-1) = '\0';		// replace the '/' with a '\0'
+d119 1
+a119 1
+  RemoteID      rid(ipAddress, Port(atol(portPtr)));
+a120 1
+  if (rid.port==0) BoolErrorReturn(errInvalidPacketFormat);
+d125 1
+a125 1
+  if (PTM::ptm->Register(distillerRecord)==FALSE) {
+d130 1
+a130 1
+      connection->EvConnectionBroken(PTM::ptm->getEventSystem());
+d137 5
+d147 4
+d168 1
+a168 1
+  if (packet->getLength() > 0) BoolErrorReturn(errInvalidPacketFormat);
+d171 1
+a171 1
+  PTM::ptm->Deregister(connection->getDistiller());
+d178 4
+a181 2
+// Packet format:
+//   "Distiller-type\0"
+d192 19
+d217 1
+a217 1
+  return handler.Handle(packet, (PrivateConnection*)object); \
+d222 1
+a222 3
+PTMPacketHandler::EvPacketReceived(EventSystem */*evs*/, 
+				   Packet *packet,
+				   CommunicationObject *object)
+d227 1
+a230 5
+}
+
+
+PTMPacketHandler::PTMPacketHandler() : PacketHandler()
+{
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

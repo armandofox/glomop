@@ -1,0 +1,192 @@
+head	1.2;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	99.01.04.17.43.04;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Added the ability to choose a non-standard port.
+@
+text
+@#ifndef __SSH_H__
+#define __SSH_H__
+
+#include "erf.h"
+
+typedef enum {
+    SSH_MSG_NONE, SSH_MSG_DISCONNECT, SSH_SMSG_PUBLIC_KEY,
+    SSH_CMSG_SESSION_KEY, SSH_CMSG_USER, SSH_CMSG_AUTH_RHOSTS,
+    SSH_CMSG_AUTH_RSA, SSH_SMSG_AUTH_RSA_CHALLENGE,
+    SSH_CMSG_AUTH_RSA_RESPONSE, SSH_CMSG_AUTH_PASSWORD,
+    SSH_CMSG_REQUEST_PTY, SSH_CMSG_WINDOW_SIZE, SSH_CMSG_EXEC_SHELL,
+    SSH_CMSG_EXEC_CMD, SSH_SMSG_SUCCESS, SSH_SMSG_FAILURE,
+    SSH_CMSG_STDIN_DATA, SSH_SMSG_STDOUT_DATA, SSH_SMSG_STDERR_DATA,
+    SSH_CMSG_EOF, SSH_SMSG_EXITSTATUS,
+    SSH_MSG_CHANNEL_OPEN_CONFIRMATION, SSH_MSG_CHANNEL_OPEN_FAILURE,
+    SSH_MSG_CHANNEL_DATA, SSH_MSG_CHANNEL_CLOSE,
+    SSH_MSG_CHANNEL_CLOSE_CONFIRMATION, SSH_MSG_OBSOLETED0,
+    SSH_SMSG_X11_OPEN, SSH_CMSG_PORT_FORWARD_REQUEST, SSH_MSG_PORT_OPEN,
+    SSH_CMSG_AGENT_REQUEST_FORWARDING, SSH_SMSG_AGENT_OPEN,
+    SSH_MSG_IGNORE, SSH_CMSG_EXIT_CONFIRMATION,
+    SSH_CMSG_X11_REQUEST_FORWARDING, SSH_CMSG_AUTH_RHOSTS_RSA,
+    SSH_MSG_DEBUG, SSH_CMSG_REQUEST_COMPRESSION,
+    SSH_CMSG_MAX_PACKET_SIZE, SSH_CMSG_AUTH_TIS,
+    SSH_SMSG_AUTH_TIS_CHALLENGE, SSH_CMSG_AUTH_TIS_RESPONSE,
+    SSH_CMSG_AUTH_KERBEROS, SSH_SMSG_AUTH_KERBEROS_RESPONSE,
+} ssh_msg_type;
+
+typedef enum {
+    SSH_PHASE_NONE, SSH_PHASE_VERSION_WAIT, SSH_PHASE_GET_KEYS,
+    SSH_PHASE_AUTH, SSH_PHASE_PREP, SSH_PHASE_PREP1, SSH_PHASE_INTERACTIVE
+} ssh_phase;
+
+typedef enum {
+    SSH_CIPHER_NONE, SSH_CIPHER_IDEA, SSH_CIPHER_DES, SSH_CIPHER_3DES,
+    SSH_CIPHER_TSS, SSH_CIPHER_RC4
+} ssh_cipher_type;
+
+typedef enum {
+    SSH_AUTH_NONE, SSH_AUTH_RHOSTS, SSH_AUTH_RSA, SSH_AUTH_PASSWORD,
+    SSH_AUTH_RHOSTS_RSA
+} ssh_auth_type;
+
+typedef struct {
+    char *host;
+    unsigned short port;
+    char *username;
+    char *password;
+    unsigned long ciphers;
+    unsigned char *ttymodes;
+    int ttymodelen;
+} ssh_prefs;
+
+typedef struct ssh_state_s {
+    long (*down_write)(unsigned char *buf, long len, void *writestate,
+			Erf,void*);
+    void *down_state;
+    void (*up_dispatch)(unsigned char *data, long len, void *dispatchstate,
+			Erf,void*);
+    void (*up_setconnid)(char *connid, void *state, Erf,void*);
+    void *up_state;
+    unsigned long dispatchsize;
+    int dispatchpadamt;
+    unsigned long dispatchread;
+    unsigned char *dispatchpkt;
+    int dispatchsizeread;
+    unsigned char dispatchsizebuf[4];
+
+    ssh_prefs *sshprefs;
+    int triedpw;
+
+    ssh_phase protophase;
+
+    void (*encrypt)(unsigned char *in, unsigned char *out, long len,
+			void *encryptstate);
+    void *encryptstate;
+    void (*decrypt)(unsigned char *in, unsigned char *out, long len,
+			void *decryptstate);
+    void *decryptstate;
+    void (*cryptclean)(struct ssh_state_s *state);
+
+    char *term;
+    int termrows, termcols, termx, termy;
+    char *connid;
+
+    unsigned char sesskey[32];
+    unsigned long auth_mask;
+} ssh_state;
+
+#define MAX_SSH_PACKET_LEN 4096
+
+#define SSH_DEF_TERM "tgtelnet"
+#define SSH_DEF_TTYMODES "\x01\x03\x02\x1c\x03\x08\x04\x15\x05\x04"
+#define SSH_DEF_TTYMODELEN 11
+
+void *ssh_init(long (*down_write)(unsigned char *,long,void *,Erf,void*),
+		void *down_state, Erf,void*);
+long ssh_write(unsigned char *data, long amt, void *state, Erf,void*);
+void ssh_dispatch(unsigned char *data, long amt, void *state, Erf,void*);
+
+void ssh_setterm(char *term, int rows, int cols, int x, int y, void *state,
+		    Erf,void*);
+void ssh_setconnid(char *connid, void *state, Erf,void*);
+
+void ssh_set_prefs(ssh_prefs *prefs, void *state, Erf erf, void* erfp);
+void ssh_set_dispatch(
+	void (*up_dispatch)(unsigned char *,long,void *,Erf,void*),
+	void *up_state, void *state, Erf,void*);
+void ssh_set_setconnid(void (*up_setconnid)(char *, void *, Erf,void*),
+	void *state, Erf,void*);
+
+long ssh_write_type(ssh_msg_type type, unsigned char *data, long len,
+    void *state_, Erf,void*);
+void ssh_handle_packet_type(ssh_msg_type type, unsigned char *buf, long amt, 
+    ssh_state *state, Erf,void*);
+void ssh_crypto_setup(ssh_cipher_type cipher, ssh_state *state, Erf erf,
+    void *efp);
+
+void ssh_3des_encrypt(unsigned char *in, unsigned char *out, long len,
+    void *encryptstate);
+void ssh_3des_decrypt(unsigned char *in, unsigned char *out, long len,
+    void *decryptstate);
+void ssh_3des_clean(ssh_state *state);
+void *ssh_3des_encryptstate(ssh_state *state, Erf erf, void *erfp);
+void *ssh_3des_decryptstate(ssh_state *state, Erf erf, void *erfp);
+
+void ssh_idea_encrypt(unsigned char *in, unsigned char *out, long len,
+    void *encryptstate);
+void ssh_idea_decrypt(unsigned char *in, unsigned char *out, long len,
+    void *decryptstate);
+void ssh_idea_clean(ssh_state *state);
+void *ssh_idea_encryptstate(ssh_state *state, Erf erf, void *erfp);
+void *ssh_idea_decryptstate(ssh_state *state, Erf erf, void *erfp);
+
+#define ssh_info(reason) erf(0, "ssh", reason, __FILE__, __LINE__, erfp)
+#define ssh_fatal(reason) erf(1, "ssh", reason, __FILE__, __LINE__, erfp)
+
+void connected(Erf erf, void *erfp);
+
+#endif
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d45 1
+@
+
+
+1.1.1.1
+log
+@Top Gun ssh
+@
+text
+@@

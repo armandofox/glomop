@@ -1,0 +1,234 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.12.14.20.13.31;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<HTML>
+<HEAD>
+<TITLE>CS261 Project Report</TITLE>
+</HEAD>
+<BODY BGCOLOR=WHITE TEXT=BLACK LINK=BLUE VLINK=NAVY ALINK=FUCHSIA>
+
+<H1 ALIGN=CENTER>Active Intrusion Detection Systems</H1>
+<H2 ALIGN=CENTER>CS261 Project Report</H2>
+<H3 ALIGN=CENTER>Philip Chong</H3>
+<H3 ALIGN=CENTER>December 14, 1998</H3>
+<HR>
+
+<H4>Introduction</H4>
+
+<P>
+Intrusion Detection Systems (IDSes) are a great way to provide
+<EM>defence in depth</EM> to a network.  Their mode of operation
+is orthogonal to, say, packet filters or firewalls, and so
+IDSes help eliminate single points of failure.  Additionally, IDSes
+are relatively cheap to implement, and can be included easily into
+existing networks.  This low cost of deployment makes IDSes
+an attractive component in an overall security solution.
+
+<P>
+On the other hand,
+the actual benefits of IDSes need to be quantified.  Passive
+IDSes (sniffers/loggers) certainly perform a useful function, but 
+<EM>active IDSes</EM> promise to do more.  We hope to
+better quantify the benefits of IDSes by studying the types
+of attacks which can be countered by active IDSes and examining
+the performance of these systems.
+
+<P>
+A description and taxonomy of IDSes can be found in the following section,
+followed by a discussion on suitable attacks to cover with IDSes.
+Description of an IDS implementation, test results and overall
+discussion can be found below.
+
+<H4>Description</H4>
+
+<P>
+Intrusion Detection Systems (IDSes) are machines whose task is
+to monitor a network and perform some action if undesirable behaviour
+is seen [1].  For example, an IDS can watch for packets corresponding to
+some known attack;  a suitable action may be to log the packets for
+later analysis.  Figure 1 shows an example network with an IDS observer.
+
+<P ALIGN=CENTER>
+<IMG SRC="intro.gif">
+<P ALIGN=CENTER>
+Figure 1.  Sample IDS Configuration
+
+<P>
+[1] classifies IDSes into three categories, according to the capabilities
+of the IDS.  Type I IDSes can only watch network traffic.  Type II
+IDSes can inject packets onto a network, in addition to its observation
+capabilities.  Type III IDSes can delete packets, as well as perform
+Type II IDS functions.
+
+<P>
+Type I IDSes are generally uninteresting;  these are essentially packet
+sniffers with appropriate filters to determine what events should
+be logged.  These IDSes are too simple to provide any interesting
+interaction on the network.  On the other hand, Type III IDSes are more
+difficult to implement than Type II IDSes.  Note that a Type III IDS
+essentially performs the function of a stateful packet filter;  the setup
+shown in Figure 1 does not enable the IDS to delete packets which have
+been observed.  The most reasonable implementation of such an IDS would
+be on the router/gateway machine itself, so that incoming packets may be
+deleted as needed.  This can be costly, as we replace ordinary routers
+with IDS-capable routers.  There may even be a performance penalty,
+as the additional IDS processing (to determine attacks in progress)
+on the router may be significant.
+
+<P>
+The interesting design point here is the Type II IDS, which promises to be
+low-cost, yet at the same time more powerful than packet sniffing.
+Like the Type I IDS, installation is simple attachment as a node in the
+network.  Because of these benefits, we study implementations of
+Type II IDS here.
+
+<H4>Attacks</H4>
+
+<P>
+The question arises as to what attacks can be countered using a Type
+II IDS.  The ideal fashion to use a Type II IDS is to send RST packets
+to terminate connections before an attack can be completed (as described
+in [1]).  Unfortunately, this specifically targets TCP-based attacks;
+UDP, being connectionless, cannot be reset in this fashion.
+
+<P>
+One example attack which seems to be easily dealt with using a Type II IDS
+is the SYN flood attack [5,6];  this is described in [1].  
+The idea is that the IDS keeps track of the half-open connections
+for the server being defended.  If too many half-open connections are
+found, some of these can be reset to release the associated resources
+on the server.
+
+<P>
+On the surface, buffer overrun attacks (e.g.
+the recent IMAP buffer overrun [3,4]) seem to be difficult to defend
+against with a Type II IDS.  Often, the connection is set up
+to resemble an ordinary client, up until the packet exploiting the
+overflow.
+Thus it seems to be difficult to discover the attack until
+after the oversized packet has been sent, and it is too late.
+However, we can take advantage of <EM>TCP fragmentation</EM>
+to permit us to catch such attacks.  If the MTU on the router is
+set to a suitably low value, this guarantees that any such attack
+packet will be fragmented as it passes through the router.  This allows
+the IDS to foil the attack as soon as the first fragment is seen.
+
+<P>
+Notably, the common denial-of-service attacks which target TCP/IP
+implementation flaws (e.g. targa, nestea [7,8]) cannot be defended against
+using a Type II IDS.  Again, these attacks appear to be a valid
+connection, up to the point where a single poisoned packet is sent.
+In these cases, fragmentation can be avoided, as the packets are small
+(since no buffer is being overrun).
+Thus it is indeed too late when the exploit packet is seen.
+
+<H4>Implementation</H4>
+
+<P>
+To test the efficacy of this approach, two IDSes were written.
+The first defends against the IMAP buffer overflow attack
+as described above;  any packet received
+whose TCP length is over a specified threshold (600 bytes, for the
+purposes of this experiment) is assumed to be an attack, and the
+connection is terminated with an injected RST packet.
+The second IDS attempts to defend against SYN flooding as described
+above.
+
+<P>
+The IDS implementations were written as modules
+under IPSE, the Internet Protocol Scanning Engine [1].  
+
+<H4>Results</H4>
+
+<P>
+The test platform used here was a 10BT network of 486s and Pentium class
+machines, running Linux (a mixture of kernel versions).
+
+<P>
+For the IMAP IDS, 50 trial attacks were performed on a
+victim server.  The success rate was measured
+under varying loads on the server;  with more load, the attacks
+could presumably be easier to "hide" (as the IDS may not
+be able to keep up with the traffic).
+
+<PRE>
+Conditions                                   Successes
+No IDS                                       50 (100%)
+IDS, No additional traffic                   0  (0%)
+30kB/s IMAP traffic (1 additional client)    0  (0%)
+30kB/s UDP traffic                           0  (0%)
+45kB/s IMAP traffic (2 additional clients)   2  (4%)
+55kB/s IMAP traffic (3 additional clients)   5  (10%)
+</PRE>
+
+<P>
+Unfortunately, the IDS targeting SYN flood attacks could not
+be made to work reliably;  no results are given here.
+
+<H4>Discussion</H4>
+
+<P>
+While the test system is slow by today's standards,
+similar performance for the IDS should be obtainable on more modern
+machines.  Performance for each component (i.e. the performance of
+the server, IDS, attacker, network) should scale uniformly if
+the system were implemented on modern machines.  Of course,
+the same tests should be performed on newer hardware to properly
+verify this.
+
+<P>
+The performance of the IDS seems relatively poor;  note that an attacker
+only needs to win once to compromise a system, and the results seem
+to suggest a win is not too difficult to obtain.  We can solve this by
+distributing the traffic across several IDSes, as described in [1], since,
+in the case of the IMAP buffer overrun, no state is required to be kept.
+Thus no state needs to be shared between the distributed IDSes.
+
+<P>
+The failure of the SYN flooding IDS is unfortunate;  although the exact
+cause of this is unknown, it is suspected to be due to RST
+handling being different in the development Linux kernels (2.1.129).
+
+<H4>References</H4>
+<DL COMPACT>
+<DT>[1] <DD>Ian Goldberg.
+<EM>IPSE and the Power of Intrusion Detection Systems</EM>, Master's Project Report, UC Berkeley, May 1998.
+<DT>[2] <DD>S. Garfinkel and G. Spafford.
+<EM>Practical UNIX &amp; Internet Security</EM>, 2nd ed, 1996.
+<DT>[3] <DD>Rootshell.
+<A HREF="http://www.rootshell.com/archive-j457nxiqi3gq59dv/199807/imapd4.txt.html"><EM>http://www.rootshell.com/archive-j457nxiqi3gq59dv/199807/imapd4.txt.html</EM></A>, Jul 1998.
+<DT>[4] <DD>CERT.
+<A HREF="http://www.cert.org/advisories/CA-98.09.imapd.html"><EM>http://www.cert.org/advisories/CA-98.09.imapd.html</EM></A>, updated Nov 1998.
+<DT>[5] <DD>Rootshell.
+<A HREF="http://www.rootshell.com/archive-j457nxiqi3gq59dv/199707/synk4.c.html"><EM>http://www.rootshell.com/archive-j457nxiqi3gq59dv/199707/synk4.c.html</EM></A>, Jun 1997.
+<DT>[6] <DD>CERT.
+<A HREF="http://www.cert.org/advisories/CA-96.21.tcp_syn_flooding.html"><EM>http://www.cert.org/advisories/CA-96.21.tcp_syn_flooding.html</EM></A>, updated Aug 1998.
+<DT>[7] <DD>Rootshell.
+<A HREF="http://www.rootshell.com/archive-j457nxiqi3gq59dv/199806/targa.c.html"><EM>http://www.rootshell.com/archive-j457nxiqi3gq59dv/199806/targa.c.html</EM></A>, Jun 1998.
+<DT>[8] <DD>Rootshell.
+<A HREF="http://www.rootshell.com/archive-j457nxiqi3gq59dv/199804/nestea.c.html"><EM>http://www.rootshell.com/archive-j457nxiqi3gq59dv/199804/nestea.c.html</EM></A>, Apr 1998.
+</DL>
+
+</BODY>
+</HTML>
+@

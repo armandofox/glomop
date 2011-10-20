@@ -1,0 +1,749 @@
+head	1.4;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	99.01.04.17.43.02;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.11.11.20.40.09;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.02.20.49.09;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Added the ability to choose a non-standard port.
+@
+text
+@/* Main code for Top Gun ssh
+   See the README file for copyright/licensing terms */
+
+#include <Pilot.h>
+#include <sys/socket.h>
+
+Err errno;
+
+#include "TGsshRsc.h"
+#include "TGLogin.h"
+#include "ssh.h"
+#include "rand.h"
+#include "ui.h"
+#include "sock.h"
+#include "editmenu.h"
+#include "callback.h"
+
+#define AppNetRefnum AppNetRefnum_get()
+#define AppNetTimeout AppNetTimeout_get()
+
+#define TGLoginForm 6343
+
+#define APPTYPE 'TGss'
+
+static int cursock = -1;
+static void *sockstate = NULL;
+static void *sshstate = NULL;
+static void *uistate = NULL;
+
+typedef struct {
+    int state;
+    int *dead;
+    FieldPtr msgfield;
+} ErrP;
+
+static ErrP gerrp;
+static ssh_prefs gsshprefs;
+
+static void ssh_initprefs(ssh_prefs *p)
+{
+    p->host = NULL;
+    p->port = 22;
+    p->username = NULL;
+    p->password = NULL;
+    p->ciphers = (1 << SSH_CIPHER_3DES);
+    p->ttymodes = NULL;
+    p->ttymodelen = 0;
+}
+
+static void ssh_clearprefs(ssh_prefs *p)
+{
+    if (p->host) MemPtrFree(p->host);
+    if (p->username) MemPtrFree(p->username);
+    if (p->password) MemPtrFree(p->password);
+    if (p->ttymodes) MemPtrFree(p->ttymodes);
+    ssh_initprefs(p);
+}
+
+static void show_err(int level, char *where, char *why, char *file,
+    int line, void *erfp_)
+{
+    ErrP *erfp = erfp_;
+    CALLBACK_PROLOGUE
+
+    switch(level) {
+    case 1:
+	FrmCustomAlert(alertErrorDismiss, "", "", why);
+	if (erfp && erfp->dead) *(erfp->dead) = 1;
+	break;
+    case -1:
+	if (erfp) {
+	    erfp->state = 2;
+	    erfp->msgfield = NULL;
+	}
+	break;
+    case -2:
+	if (erfp) {
+	    erfp->state = 3;
+	}
+	break;
+
+    default:
+	if (erfp && erfp->msgfield) {
+	    /* Write the message to the field */
+	    VoidHand shand = MemHandleNew(StrLen(why)+1);
+	    CharPtr stxt = MemHandleLock(shand);
+	    StrCopy(stxt, why);
+	    MemHandleUnlock(shand);
+	    FldFreeMemory(erfp->msgfield);
+	    FldSetTextHandle(erfp->msgfield, (Handle)shand);
+	    FldDrawField(erfp->msgfield);
+	} else {
+	    FrmCustomAlert(alertInfoDismiss, "", "", why);
+	}
+	break;
+    }
+    
+    CALLBACK_EPILOGUE
+}
+
+static CharPtr TGssh_version(void)
+{
+    return "Version 1.21 alpha";
+}
+
+static void ssh_setdpy(Display *dpy, void *state)
+{
+    CALLBACK_PROLOGUE
+    gerrp.state = 3;
+    ui_setdpy(dpy, state);
+    CALLBACK_EPILOGUE
+}
+
+/* Open the net lib and start the connection */
+static int open_conn(FieldPtr progfield)
+{
+    Err err, iferr;
+    Erf erf = show_err;
+    void *erfp = &gerrp;
+    int sockfd;
+    UInt netrefnum;
+    Byte allup;
+
+    gerrp.msgfield = progfield;
+
+    err = SysLibFind("Net.lib", &netrefnum);
+    if (err) {
+	show_err(1, "Net.lib", "You do not have the required Net Library",
+	    __FILE__, __LINE__, NULL);
+	return -1;
+    }
+    AppNetRefnum_set(netrefnum);
+    err = NetLibOpen(AppNetRefnum, &iferr);
+    if ((err && err != netErrAlreadyOpen) || iferr) {
+	show_err(1, "Net.lib", "Could not establish net connection.",
+	    __FILE__, __LINE__, NULL);
+	if (!err) NetLibClose(AppNetRefnum, 0);
+	AppNetRefnum_set(0);
+	return -1;
+    }
+    AppNetTimeout_set(1000);
+    NetLibConnectionRefresh(AppNetRefnum, true, &allup, &iferr);
+    if (!allup || iferr) {
+	show_err(1, "Net.lib", "Could not establish net connection.",
+	    __FILE__, __LINE__, NULL);
+	if (!err) NetLibClose(AppNetRefnum, 0);
+	AppNetRefnum_set(0);
+	return -1;
+    }
+
+    ssh_info("Connecting to host");
+
+    /* Set up an SSH connection */
+    sockstate = sock_init(gsshprefs.host, gsshprefs.port, &sockfd, erf, erfp);
+    if (!sockstate) return -1;
+    sshstate = ssh_init(sock_write, sockstate, erf, erfp);
+    if (!sshstate) return -1;
+    uistate = ui_init(ssh_write, sshstate, erf, erfp);
+    if (!uistate) return -1;
+
+    /* Set the preferences */
+    ssh_set_prefs(&gsshprefs, sshstate, erf, erfp);
+
+    /* Set the dispatch path */
+    ssh_set_dispatch(ui_dispatch, uistate, sshstate, erf, erfp);
+    sock_set_dispatch(ssh_dispatch, sshstate, sockstate, erf, erfp);
+
+    /* Set the callback for term changes */
+    ui_set_setterm(ssh_setterm, uistate, erf, erfp);
+
+    /* Set the callback for connection info string */
+    sock_set_setconnid(ssh_setconnid, sockstate, erf, erfp);
+    ssh_set_setconnid(ui_setconnid, sshstate, erf, erfp);
+
+    TGLogin_set_setdpy(ssh_setdpy, uistate);
+
+    return sockfd;
+}
+
+void connected(Erf erf, void *erfp)
+{
+    FrmGotoForm(TGLoginForm);
+    erf(-1, NULL, NULL, NULL, 0, erfp);
+}
+
+static void close_conn(void)
+{
+    if (cursock >= 0) {
+	ui_write(NULL, -1, uistate, show_err, NULL);
+	NetLibClose(AppNetRefnum, 0);
+	cursock = -1;
+    }
+    gerrp.state = 1;
+    FrmGotoForm(MainForm);
+}
+
+static Boolean ProgressFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    int sockfd;
+    
+    CALLBACK_PROLOGUE
+
+    switch(e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	sockfd = open_conn(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm,ProgMsgField)));
+	if (sockfd >= 0) {
+	    cursock = sockfd;
+	}
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	case progCancelBtn:
+	    close_conn();
+	    handled = true;
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    CALLBACK_EPILOGUE
+    return handled;
+}
+
+static void SetFld(FieldPtr fld, void * val, ULong len) {
+  VoidHand txthand = MemHandleNew(len+1);
+  if (txthand) {
+    CharPtr txtptr = MemHandleLock(txthand);
+    if (txtptr) {
+      txtptr[0] = '\0';
+      if (val) MemMove(txtptr, val, len);
+      txtptr[len] = '\0';
+    }
+    MemHandleUnlock(txthand);
+    FldFreeMemory(fld);
+    FldSetTextHandle(fld, (Handle)txthand);
+  }
+}
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    FieldPtr fld;
+    ControlPtr ctl;
+    VoidHand vhand;
+    CharPtr vers,vtxt,colon;
+    int pwhidden;
+    
+    CALLBACK_PROLOGUE
+
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+
+	/* Load values into the version fields */
+	fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,VersionFld));
+	vers = TGssh_version();
+	vhand = MemHandleNew(StrLen(vers)+1);
+	vtxt = MemHandleLock(vhand);
+	StrCopy(vtxt, vers);
+	MemHandleUnlock(vhand);
+	FldFreeMemory(fld);
+	FldSetTextHandle(fld, (Handle)vhand);
+	fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,LibVersionFld));
+	vers = TGLogin_version();
+	vhand = MemHandleNew(StrLen(vers)+1);
+	vtxt = MemHandleLock(vhand);
+	StrCopy(vtxt, vers);
+	MemHandleUnlock(vhand);
+	FldFreeMemory(fld);
+	FldSetTextHandle(fld, (Handle)vhand);
+	pwhidden = 1;
+	ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,hidePwBtn));
+	CtlSetValue(ctl, pwhidden);
+	fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,PassFld));
+	FldSetFont(fld, pwhidden ? symbol11Font : stdFont);
+
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+	frm = FrmGetActiveForm();
+	if (EditMenuHandleEvent(e->data.menu.itemID, frm)) {
+	    handled = true;
+	} else {
+	    int bufnum;
+	    CharPtr hosttxt, usertxt, pref;
+	    UInt hostlen, userlen;
+	    SWord datasize, readsize;
+
+	    switch(e->data.menu.itemID) {
+	    case loadMenu1:
+	    case loadMenu2:
+	    case loadMenu3:
+	    case loadMenu4:
+	    case loadMenu5:
+		bufnum = e->data.menu.itemID - loadMenuBase;
+		/* Get new values for host and username from the buffer */
+		datasize = 0;
+		pref = NULL;
+		hosttxt = ""; hostlen = 0;
+		usertxt = ""; userlen = 0;
+		readsize = PrefGetAppPreferences(APPTYPE, bufnum, pref,
+						    &datasize, true);
+		if ((readsize != noPreferenceFound) && (datasize > 0)) {
+		    pref = MemPtrNew(datasize+2);
+		    ErrFatalDisplayIf(!pref, "Out of memory loading buffer");
+		    PrefGetAppPreferences(APPTYPE, bufnum, pref, &datasize,
+					    true);
+		    pref[datasize] = '\0';
+		    pref[datasize+1] = '\0';
+		    hosttxt = pref;
+		    hostlen = StrLen(hosttxt);
+		    usertxt = pref+hostlen+1;
+		    userlen = StrLen(usertxt);
+		}
+		fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,HostFld));
+		SetFld(fld, hosttxt, hostlen);
+		FldDrawField(fld);
+		fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,UserFld));
+		SetFld(fld, usertxt, userlen);
+		FldDrawField(fld);
+
+		if (pref) MemPtrFree(pref);
+		break;
+
+	    case saveMenu1:
+	    case saveMenu2:
+	    case saveMenu3:
+	    case saveMenu4:
+	    case saveMenu5:
+		bufnum = e->data.menu.itemID - saveMenuBase;
+		/* Save the current values of host and user in the buffer */
+		fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,HostFld));
+		hosttxt = FldGetTextPtr(fld);
+		if (!hosttxt) hosttxt = "";
+		hostlen = StrLen(hosttxt);
+		fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,UserFld));
+		usertxt = FldGetTextPtr(fld);
+		if (!usertxt) usertxt = "";
+		userlen = StrLen(usertxt);
+		pref = MemPtrNew(hostlen+userlen+2);
+		ErrFatalDisplayIf(!pref, "Out of memory saving buffer");
+		StrCopy(pref, hosttxt);
+		StrCopy(pref+hostlen+1, usertxt);
+		PrefSetAppPreferences(APPTYPE, bufnum, 0, pref,
+					hostlen+userlen+2, true);
+		MemPtrFree(pref);
+		break;
+	    }
+	}
+    	handled = true;
+	break;
+
+    case keyDownEvent:
+	/* We don't want people to accidentally enter newlines */
+	if (e->data.keyDown.chr == '\n') handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	case hidePwBtn:
+	    frm = FrmGetActiveForm();
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,hidePwBtn));
+	    pwhidden = CtlGetValue(ctl);
+	    fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,PassFld));
+	    FldSetFont(fld, pwhidden ? symbol11Font : stdFont);
+	    break;
+
+	case startNetBtn:
+	    frm = FrmGetActiveForm();
+	    /* Set preferences from form info */
+	    ssh_clearprefs(&gsshprefs);
+
+	    fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,HostFld));
+	    vtxt = FldGetTextPtr(fld);
+	    if (!vtxt) vtxt = "10.0.0.1";
+
+	    /* Extract the host and port from the vtxt string */
+	    for(colon=vtxt; *colon && *colon != ':'; ++colon) ;
+	    gsshprefs.host = MemPtrNew((colon-vtxt)+1);
+	    MemMove(gsshprefs.host, vtxt, colon-vtxt);
+	    gsshprefs.host[colon-vtxt] = '\0';
+	    if (*colon == ':') {
+		gsshprefs.port = StrAToI(colon+1);
+	    } else {
+		gsshprefs.port = 22;
+	    }
+
+	    fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,UserFld));
+	    vtxt = FldGetTextPtr(fld);
+	    if (!vtxt) vtxt = "pilot";
+	    gsshprefs.username = MemPtrNew(StrLen(vtxt)+1);
+	    StrCopy(gsshprefs.username, vtxt);
+
+	    fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,PassFld));
+	    vtxt = FldGetTextPtr(fld);
+	    if (!vtxt) vtxt = "pilot";
+	    gsshprefs.password = MemPtrNew(StrLen(vtxt)+1);
+	    StrCopy(gsshprefs.password, vtxt);
+
+	    gsshprefs.ciphers = ((1 << SSH_CIPHER_IDEA) |
+				 (1 << SSH_CIPHER_3DES));
+	    gsshprefs.ttymodes = NULL;
+	    gsshprefs.ttymodelen = 0;
+
+	    StrCopy(gsshprefs.password, vtxt);
+
+	    FrmGotoForm(sshProgressForm);
+	    handled = true;
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    CALLBACK_EPILOGUE
+    return handled;
+}
+
+static Boolean WrapLoginFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+
+    CALLBACK_PROLOGUE
+
+    handled = TGLoginFormHandleEvent(e);
+
+    CALLBACK_EPILOGUE
+
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e)
+{
+    FormPtr frm;
+    Word    formId;
+    Boolean handled = false;
+
+    if (e->eType == frmLoadEvent) {
+	formId = e->data.frmLoad.formID;
+	frm = FrmInitForm(formId);
+	FrmSetActiveForm(frm);
+
+	switch(formId) {
+	case MainForm:
+	    FrmSetEventHandler(frm, MainFormHandleEvent);
+	    break;
+	case TGLoginForm:
+	    FrmSetEventHandler(frm, WrapLoginFormHandleEvent);
+	    break;
+	case sshProgressForm:
+	    FrmSetEventHandler(frm, ProgressFormHandleEvent);
+	    break;
+	}
+	handled = true;
+    }
+
+    return handled;
+}
+
+/* Get preferences, open (or create) app database */
+static Word StartApplication(void)
+{
+    char randfilename[32];
+
+    ssh_initprefs(&gsshprefs);
+
+    /* Load up with some randomness; use the saved file and the memopad */
+
+    RAND_file_name(randfilename, 32);
+    RAND_load_file(randfilename, 0x7fffffffL);
+    RAND_load_file("MemoDB",  0x7fffffffL);
+
+    return 0;
+}
+
+/* Save preferences, close forms, close app database */
+static void StopApplication(void)
+{
+    char randfilename[32];
+
+    if (cursock >= 0) {
+	close_conn();
+    }
+
+    /* Save our randomness state */
+    RAND_file_name(randfilename, 32);
+    RAND_write_file(randfilename);
+
+    ssh_clearprefs(&gsshprefs);
+    FrmSaveAllForms();
+    FrmCloseAllForms();
+}
+
+/* The main event loop */
+static void EventLoop(void)
+{
+    Word err;
+    EventType e;
+    int dead = 0;
+    static unsigned char buf[1024];
+
+    gerrp.state = 1;
+    gerrp.dead = &dead;
+    gerrp.msgfield = NULL;
+
+    do {
+        Long evttimeout = 10;
+        /* See if data is available */
+	if (dead) {
+	    close_conn();
+	    dead = 0;
+	}
+        if (cursock >= 0 && gerrp.state != 2) {
+            UInt noks;
+            fd_set reads;
+            FD_ZERO(&reads);
+            FD_SET(STDIN_FILENO, &reads);
+            FD_SET(cursock, &reads);
+            noks = NetLibSelect(AppNetRefnum, cursock+1, &reads, NULL, NULL,
+                                evtWaitForever, &errno);
+            if (noks > 0 && FD_ISSET(cursock, &reads)) {
+                int amt = read(cursock, buf, 1024);
+		if (amt > 0) {
+		    sock_dispatch(buf, amt, sockstate, show_err, &gerrp);
+		} else {
+		    close_conn();
+		}
+            }
+        }
+        EvtGetEvent(&e, evttimeout);
+        if (! SysHandleEvent (&e))
+            if (! MenuHandleEvent (NULL, &e, &err))
+                if (! ApplicationHandleEvent (&e))
+                    FrmDispatchEvent (&e);
+    } while (e.eType != appStopEvent);
+}
+
+/* Main entry point; it is unlikely you will need to change this except to
+   handle other launch command codes */
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+    Word err;
+
+    if (cmd == sysAppLaunchCmdNormalLaunch) {
+
+	err = StartApplication();
+	if (err) return err;
+
+	FrmGotoForm(MainForm);
+	EventLoop();
+	StopApplication();
+
+    } else {
+	return sysErrParamErr;
+    }
+
+    return 0;
+}
+@
+
+
+1.3
+log
+@Recover from crash
+@
+text
+@d42 1
+d103 1
+a103 1
+    return "Version 1.2 beta";
+d154 1
+a154 1
+    sockstate = sock_init(gsshprefs.host, 22, &sockfd, erf, erfp);
+d264 1
+a264 1
+    CharPtr vers,vtxt;
+d398 11
+a408 2
+	    gsshprefs.host = MemPtrNew(StrLen(vtxt)+1);
+	    StrCopy(gsshprefs.host, vtxt);
+@
+
+
+1.2
+log
+@.
+@
+text
+@a4 1
+#include <sys/types.h>
+d12 1
+d15 1
+d23 2
+a29 30
+#ifdef DEBUG
+extern long data_start, bss_start;
+static void StartDebug(void)
+{
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+        lea data_start(%%a4),%%a1
+        move.l %%a1,%%d2
+        lea bss_start(%%a4),%%a1
+        move.l %%a1,%%d1
+        lea start(%%pc),%%a0
+        move.l %%a0,%%d0
+        sub.l #start, %%d0
+        move.l #0x12BEEF34, %%d3
+        trap #8
+        move.l #0, %%d3
+        move.l #0, %%d0
+        move.l #0, %%d1
+        move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+
+}
+#endif
+
+d102 1
+a102 1
+    return "version 0.7.0 alpha";
+d121 1
+d141 8
+d241 15
+d261 1
+d264 1
+d271 1
+d289 5
+d301 69
+a369 2
+
+	switch(e->data.menu.itemID) {
+d371 2
+d374 3
+a376 1
+    	handled = true;
+d381 6
+a386 4
+	case aboutBtn:
+	    frm = FrmInitForm(AboutForm);
+	    FrmDoDialog(frm);
+	    FrmDeleteForm(frm);
+d432 13
+d461 1
+a461 1
+	    FrmSetEventHandler(frm, TGLoginFormHandleEvent);
+d476 2
+d479 7
+d492 2
+d497 5
+a557 4
+
+#ifdef DEBUG
+StartDebug();
+#endif
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d20 1
+a20 1
+#define TGLoginForm 26343
+@
+
+
+1.1.1.1
+log
+@Top Gun ssh
+@
+text
+@@

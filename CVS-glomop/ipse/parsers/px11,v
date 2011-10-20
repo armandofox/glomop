@@ -1,0 +1,132 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/bin/perl -0777
+
+package px11;
+
+$protport = 6000;
+$protporthi = 6009;
+
+%esc = ("\\a" => "\a", "\\b" => "\b", "\\e" => "\e", "\\f" => "\f",
+	"\\n" => "\n", "\\r" => "\r", "\\t" => "\t", "^?" => "\x7f");
+for $i (0..31) {
+    $esc{"^".pack('C',64+$i)} = pack('C',$i);
+}
+for $i (128..255) {
+    $esc{unpack('H2',pack('C',$i))} = pack('C',$i);
+}
+
+sub px11 {
+MAIN:
+foreach $file (@@_)
+{
+    ($lhost,$lport,$hhost,$hport) = $file =~ m{
+	([\w\.-]+?)
+	:
+	(\d+)
+	-
+	([\w\.-]+?)
+	:
+	(\d+)
+	}sox;
+
+    if ($lport < $protport && $lport > $protporthi &&
+	$hport < $protport && $hport > $protporthi)
+    {
+	warn "Not on port $protport-$proporthi!\n";
+	next MAIN;
+    }
+
+    ($cli, $srv, $clihost, $cliport, $srvhost, $srvport) = 
+	($hport >= $protport && $hport <= $protporthi) ?
+	    ("\x01", "\x02", $lhost, $lport, $hhost, $hport)
+	  : ("\x02", "\x01", $hhost, $hport, $lhost, $lport);
+
+    open(F, $file) || do {warn "Cannot open $file: $!\n"; next MAIN;};
+
+    print "\n$file\n" if $main::v;
+    $sess = <F>;
+    close(F);
+    unlink($file) if $main::rm;
+
+    $dispname = $srvhost . ":" . ($srvport - 6000);
+    while ($sess =~ m{
+	    \x04				## Beginning of data
+	    ${cli}?				## Client says:
+	    ([\x42\x6c])			## big/little endian
+	    (?:[^\x01\x02\x03]|\x03..)  	## Unused
+	    ((?:[^\x01\x02\x03]|\x03..){2})  	## Protocol major
+	    ((?:[^\x01\x02\x03]|\x03..){2})  	## Protocol minor
+	    ((?:[^\x01\x02\x03]|\x03..){2})  	## Length of authname
+	    ((?:[^\x01\x02\x03]|\x03..){2})  	## Length of authdata
+	    (?:[^\x01\x02\x03]|\x03..){2}  	## Unused
+	    ((?:[^\x01\x02\x03]|\x03..)*)  	## Auth name and data
+	    ${srv}				## Server says:
+	    \x03\^A				## SUCCESS
+	}sxg)
+    {
+	## Choose the byte order
+	$byteord = (($1 eq "\x42") ? "n" : "v");
+	($protmajor, $protminor, $authnamelen, $authdatalen, $authraw) =
+	    ($2,$3,$4,$5,$6);
+	$protmajor =~ s/\x03(..)/$esc{$1}/eg;
+	$protminor =~ s/\x03(..)/$esc{$1}/eg;
+	$authnamelen =~ s/\x03(..)/$esc{$1}/eg;
+	$authdatalen =~ s/\x03(..)/$esc{$1}/eg;
+	$authraw =~ s/\x03(..)/$esc{$1}/eg;
+	$protmajor = unpack($byteord, $protmajor);
+	next if $protmajor != 11;
+	$protminor = unpack($byteord, $protminor);
+	$authnamelen = unpack($byteord, $authnamelen);
+	$authdatalen = unpack($byteord, $authdatalen);
+	$authnamepad = (4-($authnamelen % 4))%4;
+	$authdatapad = (4-($authdatalen % 4))%4;
+	$authname = substr($authraw, 0, $authnamelen);
+	$authdata = unpack("H*",substr($authraw, $authnamelen+$authnamepad, $authdatalen));
+
+	## Is it just host-based?
+	$authname = $clihost if $authnamelen == 0;
+
+	## Output the data line
+	print "X11\t$authname\@@$dispname\t$authdata\n";
+    }
+}
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

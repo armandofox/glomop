@@ -1,0 +1,495 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.5.2.1
+	Yatin:1.5.0.2
+	pre-yatin-merge:1.5
+	transend-beta2:1.5
+	fox-dev:1.5
+	transend-beta-latest:1.5
+	ptm-ng:1.5
+	Aggregators:1.5
+	NoAggregators:1.5
+	iang:1.1.0.2;
+locks; strict;
+comment	@// @;
+
+
+1.6
+date	98.01.16.22.16.32;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.11.02.08.20;	author gribble;	state Exp;
+branches
+	1.5.2.1;
+next	1.4;
+
+1.4
+date	97.05.07.06.41.26;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.07.03.53.08;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.01.02.38.55;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.30.09.04.23;	author gribble;	state Exp;
+branches;
+next	;
+
+1.5.2.1
+date	97.12.01.22.19.38;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "defines.h"
+#include "log.h"
+#include "ptmqueue.h"
+#include "utils.h"
+#include "linkedlist.h"
+#include "threads.h"
+#include <signal.h>
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+
+/*****************************
+** Producer/Consumer Queues **
+*****************************/
+gm_Bool
+ProducerConsumerQueue::Add(void *work, unsigned long /*client_ip*/)
+{
+  mutex.Lock();
+
+  if (queue.InsertAtTail(work)==gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+  workInQueue.Signal();
+  mutex.Unlock();
+  return gm_True;
+}
+
+
+void*
+ProducerConsumerQueue::Remove()
+{
+  mutex.Lock();
+
+  while (queue.IsEmpty()==gm_True) {
+    workInQueue.Wait(&mutex);
+  }
+
+  void *work = queue.RemoveFromHead();
+  mutex.Unlock();
+  return work;
+}
+
+/****************************
+**    Priority Queues      **
+*****************************/
+
+PriorityQueue::PriorityQueue(void) : mutex("*-prq")
+{
+  /* For now, we'll just hack up three queues - highest priority
+     (which will simulate Soda Hall traffic), medium priority
+     (which will simulate home-IP traffic), and lowest priority
+     (which is the rest of the world). */
+  
+  classLists = new LockingList<void>[3];
+}
+
+PriorityQueue::~PriorityQueue(void)
+{
+  delete []classLists;
+}
+
+
+gm_Bool
+PriorityQueue::Add(void *work, unsigned long client_ip)
+{
+  unsigned long h_ip = ntohl(client_ip);
+  LockingList<void>  *theList;
+  LockingList<void>  *highList, *medList, *lowList;
+  timeval now;
+  UINT32  highlen, medlen, lowlen;
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+
+  mutex.Lock();
+  if (h_ip == 2149590592) {
+    /* coming from dawn20 */
+    theList = &(classLists[0]);
+  } else if (h_ip == 2149590593) {
+    /* coming from dawn21 */
+    theList = &(classLists[1]);
+  } else {
+    /* coming from dawn22 or elsewhere */
+    theList = &(classLists[2]);
+  }
+
+  if (theList->InsertAtTail(work) == gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+
+  gettimeofday(&now, NULL);
+  highlen = highList->getSize();
+  medlen = medList->getSize();
+  lowlen = lowList->getSize();
+//  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+//	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+  workInQueue.Signal();
+  mutex.Unlock();
+  return gm_True;
+}
+
+void*
+PriorityQueue::Remove()
+{
+  LockingList<void>  *highList, *medList, *lowList;
+  UINT32  highlen, medlen, lowlen;
+  timeval now;
+
+  mutex.Lock();
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+  while ((highList->IsEmpty() == gm_True) &&
+	 (medList->IsEmpty() == gm_True) &&
+	 (lowList->IsEmpty() == gm_True))
+    workInQueue.Wait(&mutex);
+
+  void *work;
+
+  if (highList->IsEmpty() != gm_True) {
+    work = highList->RemoveFromHead();
+  } else if (medList->IsEmpty() != gm_True) {
+    work = medList->RemoveFromHead();
+  } else {
+    work = lowList->RemoveFromHead();
+  }
+  gettimeofday(&now, NULL);
+  highlen = highList->getSize();
+  medlen = medList->getSize();
+  lowlen = lowList->getSize();
+//  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+//	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+  mutex.Unlock();
+  return work;
+}
+
+UINT32
+PriorityQueue::getSize()
+{
+  UINT32 size;
+
+  LockingList<void>  *highList, *medList, *lowList;
+  mutex.Lock();
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+  
+  size = highList->getSize() + medList->getSize() + lowList->getSize();
+  mutex.Unlock();
+  return size;
+}
+
+/****************************
+**    Lottery Queues       **
+*****************************/
+
+LotteryQueue::LotteryQueue(void) : mutex("*-prq")
+{
+  /* For now, we'll just hack up three queues - highest priority
+     (which will simulate Soda Hall traffic), medium priority
+     (which will simulate home-IP traffic), and lowest priority
+     (which is the rest of the world). */
+  
+  timeval now;
+
+  classLists = new LockingList<void>[3];
+  tickets = new int[3];
+
+  tickets[0] = 80;
+  tickets[1] = 60;
+  tickets[2] = 10;
+  tickTotal = 150;
+
+  gettimeofday(&now, NULL);
+  srand48(now.tv_usec);
+}
+
+LotteryQueue::~LotteryQueue(void)
+{
+  delete []classLists;
+  delete []tickets;
+}
+
+
+gm_Bool
+LotteryQueue::Add(void *work, unsigned long client_ip)
+{
+  unsigned long h_ip = ntohl(client_ip);
+  LockingList<void>  *theList;
+  LockingList<void>  *highList, *medList, *lowList;
+  timeval now;
+  UINT32  highlen, medlen, lowlen;
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+
+  mutex.Lock();
+  if (h_ip == 2149590592) {
+    /* coming from dawn20 */
+    theList = &(classLists[0]);
+  } else if (h_ip == 2149590593) {
+    /* coming from dawn21 */
+    theList = &(classLists[1]);
+  } else {
+    /* coming from dawn22 or elsewhere */
+    theList = &(classLists[2]);
+  }
+
+  if (theList->InsertAtTail(work) == gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+
+  gettimeofday(&now, NULL);
+  highlen = highList->getSize();
+  medlen = medList->getSize();
+  lowlen = lowList->getSize();
+//  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+//	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+  workInQueue.Signal();
+  mutex.Unlock();
+  return gm_True;
+}
+
+void*
+LotteryQueue::Remove()
+{
+  LockingList<void>  *highList, *medList, *lowList;
+  UINT32  highlen, medlen, lowlen;
+  timeval now;
+  int     done = 0, which;
+  double  randnum;
+
+  mutex.Lock();
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+  while ((highList->IsEmpty() == gm_True) &&
+	 (medList->IsEmpty() == gm_True) &&
+	 (lowList->IsEmpty() == gm_True))
+    workInQueue.Wait(&mutex);
+
+  void *work;
+
+  done = 0;
+  while (!done) {
+    randnum = drand48();
+//    fprintf(stderr, "randnum is %lf\n", randnum);
+    if (randnum <= ((double)tickets[0] / (double) tickTotal)) {
+      which = 0;
+    } else if (randnum <= (((double)(tickets[0] + tickets[1])) /
+			    (double) tickTotal)) {
+      which = 1;
+    } else {
+      which = 2;
+    }
+//    fprintf(stderr, "which is: %d (%d %d %d)\n", which,
+//	    highList->IsEmpty(), medList->IsEmpty(),
+//	    lowList->IsEmpty());
+    if ((which == 0) && (highList->IsEmpty() != gm_True)) {
+//      fprintf(stderr, "getting from 0\n");
+      work = highList->RemoveFromHead();
+      done = 1;
+    } else if ((which == 1) && (medList->IsEmpty() != gm_True)) {
+//      fprintf(stderr, "getting from 1\n");
+      work = medList->RemoveFromHead();
+      done = 1;
+    } else if ((which == 2) && (lowList->IsEmpty() != gm_True)) {
+//      fprintf(stderr, "getting from 2\n");
+      work = lowList->RemoveFromHead();
+      done = 1;
+    }
+//    fprintf(stderr, "Done is %d\n", done);
+  }
+  gettimeofday(&now, NULL);
+  highlen = highList->getSize();
+  medlen = medList->getSize();
+  lowlen = lowList->getSize();
+//  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+//	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+  mutex.Unlock();
+  return work;
+}
+
+UINT32
+LotteryQueue::getSize()
+{
+  UINT32 size;
+
+  LockingList<void>  *highList, *medList, *lowList;
+  mutex.Lock();
+
+  highList = &(classLists[0]);
+  medList = &(classLists[1]);
+  lowList = &(classLists[2]);
+  
+  size = highList->getSize() + medList->getSize() + lowList->getSize();
+  mutex.Unlock();
+  return size;
+}
+@
+
+
+1.5
+log
+@Took out some printfs
+@
+text
+@d16 1
+a16 1
+ProducerConsumerQueue::Add(void *work, unsigned long client_ip)
+@
+
+
+1.5.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@d16 1
+a16 1
+ProducerConsumerQueue::Add(void *work, unsigned long /*client_ip*/)
+@
+
+
+1.4
+log
+@priority and lottery now work.
+@
+text
+@d98 2
+a99 2
+  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+d135 2
+a136 2
+  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+d174 2
+a175 2
+  tickets[0] = 10;
+  tickets[1] = 10;
+d177 1
+a177 1
+  tickTotal = 30;
+d224 2
+a225 2
+  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+d255 1
+a255 1
+    fprintf(stderr, "randnum is %lf\n", randnum);
+d264 3
+a266 3
+    fprintf(stderr, "which is: %d (%d %d %d)\n", which,
+	    highList->IsEmpty(), medList->IsEmpty(),
+	    lowList->IsEmpty());
+d268 1
+a268 1
+      fprintf(stderr, "getting from 0\n");
+d272 1
+a272 1
+      fprintf(stderr, "getting from 1\n");
+d276 1
+a276 1
+      fprintf(stderr, "getting from 2\n");
+d280 1
+a280 1
+    fprintf(stderr, "Done is %d\n", done);
+d286 2
+a287 2
+  fprintf(stderr, "%ld.%06ld\t%lu\t%lu\t%lu\n",
+	  now.tv_sec, now.tv_usec, highlen, medlen, lowlen);
+@
+
+
+1.3
+log
+@Priority queueing now works.
+@
+text
+@d10 1
+d69 7
+a80 1
+    fprintf(stderr, "Adding to class 0\n");
+a83 1
+    fprintf(stderr, "Adding to class 1\n");
+a86 1
+    fprintf(stderr, "Adding to class 2\n");
+d93 7
+d109 3
+a125 1
+    fprintf(stderr, "Removing from class 0\n");
+a127 1
+    fprintf(stderr, "Removing from class 1\n");
+a129 1
+    fprintf(stderr, "Removing from class 2\n");
+d131 6
+d143 151
+@
+
+
+1.2
+log
+@now pull out client IP address out of arg list.
+@
+text
+@d11 3
+d41 97
+@
+
+
+1.1
+log
+@finalize queue changes.
+@
+text
+@d12 1
+a12 1
+ProducerConsumerQueue::Add(void *work)
+@

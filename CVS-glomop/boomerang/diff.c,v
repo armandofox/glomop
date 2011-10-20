@@ -1,0 +1,105 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.11.08.11.33.24;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+
+uint S[256]; // (S[x]&255)==0 \forall x
+uint C; // random 32-bit constant
+
+uint phi(uint x) {
+	return x + S[x&255];
+}
+uint rol(uint x, int bits) {
+	return (x<<bits) | (x>>(32-bits));
+}
+uint g(uint x) {
+	return rol(phi(x), 11) + C;
+}
+uint f(uint x, uint k) {
+	return phi(g(x^k));
+}
+
+void init() {
+	srandom(getpid());
+}
+
+double diff(uint in, uint out) {
+	uint x, k;
+	int ii, i, j, n;
+	n = 0;
+	for (ii=0; ii<10; ii++) {
+		C = random();
+		for (i=0; i<256; i++)
+			S[i] = random()<<8;
+		for (i=0; i<100; i++) {
+			k = random();
+			for (j=0; j<100; j++) {
+				x = random();
+				if ((f(x,k)^f(x^in,k)) == out)
+					n++;
+			}
+		}
+	}
+	return ((double)n)/((double)(ii*i*j));
+}
+
+void try(uint in, uint out) {
+	uint inmask = ~0xE01FFF00;
+	uint outmask = rol(inmask, 11);
+	double p = diff(in, out);
+	if (p > 0.0 && ( (in&inmask) || (out&outmask) ))
+		printf("!!! ");
+	else if (p < 0.18 && !(in&inmask) && !(out&outmask))
+		printf("!!! ");
+	else
+		printf("    ");
+	printf("%8X->%8X: %g = 1/%g\n", in, out, p, 1.0/p);
+}
+
+int main() {
+	int i, j;
+	init();
+	for (i=0; i<32; i++)
+		for (j=i+1; j<32; j++) {
+			/* try(1<<i, 1<<j); */
+			try((1<<i)|(1<<j), (1<<((i+11)%32))|(1<<((j+11)%32)));
+		}
+	return 0;
+}
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

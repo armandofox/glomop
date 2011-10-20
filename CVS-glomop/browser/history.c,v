@@ -1,0 +1,290 @@
+head	1.7;
+access;
+symbols
+	v15b:1.7
+	v10b3:1.6
+	v10b2:1.4
+	v10b1:1.4;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	97.11.15.00.26.07;	author aspolito;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.10.29.22.07.27;	author aspolito;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.10.28.16.49.21;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.18.00.24.04;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.12.17.30.08;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.28.01.16.24;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.26;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "send.h"
+#include "history.h"
+
+/* returns true if it actually could move in the history */
+Boolean MoveInHistory(int amt) {  
+  UInt cardNo;
+  LocalID localID;
+  ULong numRecs;
+  int ch = curHistory;
+  VoidHand URL, tcurURL;
+  ULong tcurURLLength;
+  void *url;
+  void *cururl;
+
+  ch += amt;
+  if (ch < 0) ch = 0;
+  if (ch >= histSize) ch = histSize-1;
+  
+  DmOpenDatabaseInfo(historyDB, &localID, NULL, NULL, &cardNo, NULL);
+  DmDatabaseSize(cardNo, localID, &numRecs, NULL, NULL);
+
+  if ((numRecs > ch) && (!amt || (ch != curHistory)) ) {
+    int sent;
+    
+    URL = DmGetRecord(historyDB, ch);        
+    tcurURLLength = MemHandleSize(URL);
+    tcurURL = MemHandleNew(tcurURLLength);
+    cururl = MemHandleLock (tcurURL);
+    url = MemHandleLock (URL);
+    MemMove (cururl, url, tcurURLLength);
+    MemHandleUnlock(URL);
+    MemHandleUnlock(tcurURL);
+    sent = SendURL(&conID, tcurURL, false, true, false, true);
+    if (!sent) {
+      MemHandleFree(tcurURL);
+    } else if (sent == 2) {
+      curHistory = ch;
+    } else {
+      curHistory = ch;
+      tcurHistory = ch;
+    }
+    DmReleaseRecord(historyDB, ch, false);
+    return true;
+  }
+  return false;
+}
+
+void PutInHistory(VoidHand URL, Word length) {
+  ULong numRecs;
+  void * url;
+  VoidHand recH;
+  void * recP;
+  UInt index;
+  UInt cardNo;
+  LocalID localID;
+  Boolean doit;
+  
+  /* 
+  ** we start out with curHistory at -1 so you can do a back right away
+  ** and get the last page oyu visited, but we need to handle what
+  ** happens if you don't hit the back button
+  */
+  if (curHistory < 0) curHistory = 0;
+  
+  doit = true;
+
+  recH = DmQueryRecord(historyDB, curHistory);
+  if (recH) {
+    recP = MemHandleLock(recH);
+    url = MemHandleLock(URL);
+    if ((MemHandleSize(recH) == length) && !(MemCmp(recP, url, length))) {
+      doit = false;
+    }
+    MemHandleUnlock(URL);
+    MemHandleUnlock(recH);
+  }
+  
+  if (curHistory) {
+    recH = DmQueryRecord(historyDB, curHistory-1);
+    if (recH) {
+      recP = MemHandleLock(recH);
+      url = MemHandleLock(URL);
+      if ((MemHandleSize(recH) == length) && !(MemCmp(recP, url, length))) {
+	doit = false;
+	curHistory--;
+      }
+      MemHandleUnlock(URL);
+      MemHandleUnlock(recH);
+    }
+  }
+
+  if (!doit) {
+    return;
+  }
+
+  while (curHistory) {
+    DmRemoveRecord(historyDB, 0);
+    curHistory--;
+  }
+
+  index = 0;
+  recH = DmNewRecord(historyDB, &index, (ULong) length);
+  url = MemHandleLock(URL);  
+  recP = MemHandleLock(recH);
+  DmWrite(recP, 0, url, length);
+  MemHandleUnlock(recH);
+  MemHandleUnlock(URL);
+  DmReleaseRecord(historyDB, index, true);
+
+  DmOpenDatabaseInfo(historyDB, &localID, NULL, NULL, &cardNo, NULL);
+  DmDatabaseSize(cardNo, localID, &numRecs, NULL, NULL);
+
+  while (numRecs > histSize) {
+    numRecs--;
+    DmRemoveRecord(historyDB, (UInt) numRecs);
+  }
+}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d35 4
+a38 7
+    sent = SendURL(tcurURL, &hPage);
+    if (sent == 2) {
+      if (curURL) {
+	MemHandleFree(curURL);
+      }
+      curURL = tcurURL;
+      curURLLength = tcurURLLength;
+a39 6
+    } else if (sent == 1) {
+      if (transURL) {
+	MemHandleFree(transURL);
+      }
+      transURL = tcurURL;
+      transURLLength = tcurURLLength; 
+d41 2
+a42 3
+      if (tcurURL) {
+	MemHandleFree(tcurURL);
+      }
+@
+
+
+1.5
+log
+@Prepare for database downloading
+@
+text
+@d24 1
+a24 1
+  if ((numRecs > ch) /* && (ch != curHistory) */ ) {
+@
+
+
+1.4
+log
+@PutInHistory now does some sanity checking
+@
+text
+@d24 1
+a24 1
+  if ((numRecs > ch) && (ch != curHistory)) {
+d42 1
+a42 1
+    curHistory = ch;
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d68 2
+a69 2
+
+
+d77 31
+@
+
+
+1.2
+log
+@OFFLINE MODE WORKS
+@
+text
+@d25 2
+a26 1
+
+d35 2
+a36 2
+    
+    if (SendURL(tcurURL, &hPage)) {
+d43 6
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d12 2
+a13 1
+  VoidHand URL;
+a25 5
+    if (curURL) {
+      MemHandleFree(curURL);
+    }
+
+    
+d27 3
+a29 3
+    curURLLength = MemHandleSize(URL);
+    curURL = MemHandleNew(curURLLength);
+    cururl = MemHandleLock (curURL);
+d31 1
+a31 1
+    MemMove (cururl, url, curURLLength);
+d33 14
+a46 2
+    MemHandleUnlock(curURL);
+    hPage = SendURL(curURL, conID);
+a47 1
+    curHistory = ch;
+@

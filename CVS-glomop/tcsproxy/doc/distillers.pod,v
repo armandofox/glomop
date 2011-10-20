@@ -1,0 +1,674 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.7
+	Yatin:1.7.0.2
+	pre-yatin-merge:1.7
+	transend-beta2:1.2
+	fox-dev:1.2
+	transend-beta-latest:1.2
+	Aggregators:1.2
+	NoAggregators:1.2
+	iang:1.2.0.4
+	transend-beta:1.2.0.2
+	SOSP:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	98.01.24.22.51.56;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.11.18.21.59.44;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.10.26.01.52.52;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.10.24.19.29.15;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.10.02.05.45.39;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.10.02.05.26.43;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.10.02.01.18.03;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.03.05.00.30.51;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.05.03.56.58;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@Moved all browser/ files to wwwroot/ subdirs.  Added miniserver.pl to
+eliminate need for separate webserver; notes about it are attached.
+2 fixes to dispatch.c logic:
+- for server-like dispatch, correct headers are now generated when the
+server-mode worker attempts to do a redispatch. (previously, for this
+case, the returned headers would be the headers of the original
+*request*, not theserver response headers.)
+- special-casing for the Prefs form URL was eliminated because it
+interferes with the miniserver worker. (Ambiguity arises if a request
+both matches the Prefs URL *and* matches the server-mode worker, and
+it's ugly to have the miniserver worker special case this.)  Instead,
+the miniserver.pl worker does  a redispatch to transend/text/html for
+HTML documents, which should catch this case.  this is probably not the
+Right Thing long term.
+
+there is a new worker, miniserver.pl, which acts as a very simple
+httpd.  the root of its filesystem is {proxy.home}/wwwroot.  note that
+it doesn't currently handle cgi's or server-side includes or anything --
+all it can do is serve simple static files.
+
+i have made the following changes:
+
+- new submodule tcsproxy/wwwroot, to hold the "support files" for TACC
+  apps including transend and wingman.
+
+- moved the existing support files for transend and wingman, including
+  the java_gui stuff, from
+  tcsproxy/browser to tcsproxy/wwwroot/transend, tcsproxy/wwwroot/wingman,
+  and tcsproxy/wwwroot/java_gui, respectively.  tcsproxy/browser is now empty,
+  and i will eventually prune it from the tree.
+
+- updated the paths in the html munger transend.text.html to match the
+  new structure.
+
+- new perl_dir application miniserver.pl, and new toplevel file
+  mime.types (used to map file suffixes to MIME types).  the application
+  does in-memory caching and uses stat() to deduce when files need to be
+  reloaded, so for local-disk files it shouldn't be too heavy of a
+  load.  that the expectation is  that traffic to the wwwroot directory
+   will be modest - this worker would suck for running a high-traffic
+  server, since it doesn't bound the size of the in-memory cache or attempt
+  to manage memory to keep "hot" items nearby as Harvest does.
+
+
+the easiest way to make this mechanism work:
+
+- add an entry to your options file:
+
+        dist.myurl/dispatch: sbin/perl_stub -- perl_dir/miniserver.pl
+
+- set frontend.aggString to the prefix of URL's that should be served
+  from the "fake" web server.
+
+- be sure frontend.webServerName matches frontend.aggString.  (this is
+  necessary because frontend.webServerName is used by workers that want
+  to access the "support files".  keeping these two properties separate
+  leaves the option of running a separate web server if desired.)
+
+- *** IMPORTANT *** because miniserver doesn't handle forms submission
+   in any way, the frontend.prefsFormSubmitURL property must be
+   constructed so that it DOES NOT MATCH anything that might be
+   requested of miniserver.  this isn't so bad when you remember that
+   the prefsFormSubmitUrl can be a totally imaginary server.
+   UNFORTUNATELY, the file wwwroot/transend/prefs.html, which is the
+   prefs-submission form, has to have some name wired into it; i picked
+   "http://transend-prefs.cs.berkeley.edu", so that's what the config
+   files will need to say for now.  i know this is kind of hacky.
+
+-  note that for text/html files, miniserver.pl will redispatch to
+   transend/text/html; for other files it will do nothing, ie just
+   return the file.  i'm not sure this is the right thing all the time,
+   though it's certainly right for transend (causes user prefs form to
+   be filled in with existing prefs values).
+@
+text
+@=head1 How to Write a Distiller
+
+This file tries to describe how to write a distiller for the scalable
+proxy system.
+
+This file is in Pod format.  You can use the translators
+F<pod2html>, F<pod2latex>, F<pod2man>, etc. to convert it to something
+more palatable to you.
+
+You will write a file containing four functions to perform distillation
+duties.  Then you'll link this file against a front-end library, which
+connects your distiller to the rest of the proxy system.  To test the
+distiller, you can link against a "dummy" library that lets you run
+arbitrary test inputs through the distiller.
+
+If you're writing in Perl (recommended), the job is much easier.  Look
+at the sample "null" distiller F<distiller.pl> supplied with the
+distribution.  The keyword-highlighting examples (used in class) are
+also available as F<kwhilite.pl.1> thru F<kwhilite.pl.4>, in the
+F<perl_dir> subdirectory of the common area of the distribution.
+
+=head1 Distiller Operation Model
+
+Distillers receive as input:
+
+=over 4
+
+=item o
+
+The input data, in a memory buffer.
+
+=item o
+
+The MIME type of the input data, e.g. "image/gif".  The proxy can
+be set up to insure that only specific MIME types get routed to a given
+distiller, so it's OK for the distiller to throw an error if presented
+with a MIME type it doesn't understand.
+
+=item o
+
+Optionally some arguments to control distillation.  The arguments
+can come from the user's preferences or from elsewhere in the proxy
+system.  The distiller may observe the arguments, but it doesn't have to.
+
+=back
+
+The distiller provides as output:
+
+=over 4
+
+=item o
+
+The output data, again in a memory buffer.  The distiller may
+allocate its own buffer using C<DistillerMalloc>, or it may overwrite
+the input buffer if it is sure the output will be no larger than the
+input. 
+
+=item o
+
+The MIME type of the output data, which can be different for
+different requests.
+
+=back
+
+=head1 Functions You Must Provide
+
+You need to include F<distinterface.h>, which provides protos for the
+following functions that you must write.  This file is located in the
+subdirectory F<ptm/include> of the code distribution; you should poke
+around in it while reading the following.
+
+=over 3
+
+=item Initialization Function
+
+  DistillerStatus DistillerInit(C_DistillerType distType, 
+			      int argc, const char * const * argv);
+
+Perform one-time initialization, such as memory allocation, etc.
+Possible return values are distOk and distFatalError.  You may set up
+static variables, etc. here.  C<distType> has a name field that contains
+the symbolic name of this distiller (see L<"/Adding the Distiller to the
+Proxy System">.  C<argc> and C<argv> are from the command line that was
+used to start the distiller, in case it wants to parse specific
+command-line arguments; usually you shouldn't need to look at them.
+
+=item Cleanup Function
+
+  void DistillerCleanup(void);
+
+Called when distiller is about to exit.  Free memory, etc. here.  No
+more calls into your code will occur after this one returns.  Be nice
+about freeing memory, etc., since this call doesn't necessarily mean the
+whole process is exiting.
+
+=item Main Function
+
+   DistillerStatus
+   DistillerMain(Argument *args, int numberOfArgs,
+              const DistillerInput *input,             
+              DistillerOutput *output);
+
+The main routine called to perform a single distillation, with the
+following arguments:
+
+    input:  Pointer to input data structure, which is defined in
+    F<distinterface.h> as follows:
+
+    typedef struct DistillerData {
+      DistillerBuffer data;
+      DistillerBuffer metadata;
+      char mimeType[];
+    } DistillerData;
+
+    Each C<DistillerBuffer> is a data structure that holds a glob of
+    bytes, a maximum size count for the glob, and an actual size count
+    for the glob.  A variety of macros are provided in
+    F<distinterface.h> to set and access the members of C<DistillerData>
+    structures.  Note that the C<data> and C<metadata> fields typically
+    correspond to the HTTP headers and the content, respectively.
+
+    output: pointer to an output structure, which you should fill in.
+        It currently has the same definition as the input structure.
+        You should set C<data> to point to your output buffer; you can allocate
+        one yourself using DistillerMalloc() (same proto as malloc()),
+        or overwrite the input buffer if you're sure the output is
+        no larger than the input.  Set C<length> to the length of the
+        output, and C<mimeType> to the MIME type of the output.
+
+    Note that you need to use the C<DataNeedsFree()> and
+    C<MetadataNeedsFree()> macros to tell the caller of C<DistillerMain>
+    whether it should free the buffers in your output data structure.
+    You should set this to C<gm_True> if yes (e.g. because you used
+    DistillerMalloc() to allocate memory), C<gm_False> otherwise.
+    B<YOU MUST SET THIS TO SOME VALUE; IT IS NOT PRE-INITIALIZED.>
+
+    numberOfArgs: the number of arguments in the arg list.
+
+    args: the argument list.  Each arg is a (pointer to a) structure of type
+        Argument.  Each argument has a 32-bit ID and a value, which may
+        be a string, float, or 32-bit int.  Arg ID space is global, so
+        you should pick ID's that won't be likely to collide with others.
+        See L<"/Library Functions You Can Use"> below for more information.
+        
+
+=item Cost Estimation Function
+
+  DistillerStatus
+  ComputeDistillationCost(Argument *args,   int    numberOfArgs,
+           const DistillerInput *input, DistillationCost *cost);
+
+Same argument semantics as DistillerMain(), but you should just estimate
+the latency cost of performing the operation and leave that result in
+DistillationCost as a scalar (for now.)  At the moment it's safe to
+return any nonzero value.
+
+=back
+
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d28 1
+a28 1
+=item The input data, in a memory buffer.
+d30 5
+a34 1
+=item The MIME type of the input data, e.g. "image/gif".  The proxy can
+d39 3
+a41 1
+=item Optionally some arguments to control distillation.  The arguments
+d51 3
+a53 1
+=item The output data, again in a memory buffer.  The distiller may
+d58 3
+a60 1
+=item The MIME type of the output data, which can be different for
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@a148 8
+=head1 Library Functions You Can Use
+
+In C, you can use the following macros/functions to access the
+arguments passed to the distiller: 
+
+=over 3
+
+
+@
+
+
+1.6
+log
+@Added a couple of fields to 'feedback' form.  Fixed bugs and added to
+documentation for distiller writing.  Added Dispatcher that allows
+user-specified chaining of filters per mime type.  Fixed bug in harness:
+it wasn't finding LWP correctly when it lived in a nonstandard place.
+Fixed header-generation bug in TACCutils.  Added "stupid TACC tricks"
+file, content to be filled in.  safetified DistillerBufferRealloc.
+@
+text
+@d4 1
+a4 1
+proxy.
+a154 127
+
+=item Looking For a Specific Argument
+
+    Argument *getArgumentFromId(Argument *args, int numberOfArgs, UINT32 id);
+
+If an argument with the given ID is in your argument list,
+returns a pointer to it, else NULL.
+
+=item Getting Fields of an Argument
+
+    ARG_ID(arg), ARG_STRING(arg), ARG_INT(arg), ARG_DOUBLE(arg)
+
+Return an arg's ID (UINT32), string value (char *), int value (INT32),
+float value (double).  An arg may only have one value at a
+time.  It's up to you to decide which value to access, based on
+the arg ID.  This is a macro; you need to pass the argument itself, not
+a pointer.  (Yes, this is broken.)
+
+=back
+
+=head1 Building the Distiller for Testing
+
+=head1 Building the Distiller 
+
+In the Makefile, there is a default target described as c_stub. You can
+add any additional .o/.h files as you see fit.
+
+
+=head1 Building the Distiller for Testing
+
+There is also defined a 'test' target which will wrap a test 'harness' 
+around the distiller. This will allow you to run various tests, including 
+passing arguments and data (in the form of files) to the distiller. For 
+more information about using the test harness see the file HARNESS.txt.
+
+To build the distiller against the test harness you type:
+
+   gmake test
+
+It will then generate a 'test' binary which you can run with various arguments.
+
+=head1 Building the Distiller for Production
+
+To build the distiller for Production, you type:
+
+   gmake c_stub
+
+This will generate a binary of the name 'c_stub'. You should probably
+rename this to something else, 
+then configure the PTM
+to be 'aware' of the existence of this particular distiller as well
+as its associated MIME Type (see below).
+
+=head1 Using the C Test Harness
+
+The test harness is used as follows: 
+
+  ./test <inputfile> <count>
+
+Where I<inputfile> is a specially formated text file described below,
+and I<count> is the number of times to run each test described in the
+input file.
+
+The format of the input file is as follows:
+    [default args]
+    file1 [arg1=value arg2=value arg3=value]
+    ...
+    fileN [arg1=value arg2=value arg3=value]
+
+Each file is an input to the distiller, and the optional arguments are
+passed to the distiller along with the file.  Note that you have to edit
+the file containing the C stub source to get the correct MIME type
+passed to the distiller.
+
+There are three types of arguments: float, string, and integer.
+The following is an example of default arguments using a
+string, integer and float:
+
+   i400=500 f5001=5.5 s500='fubar'
+
+An example input file would be as follows:
+
+  i400=500 f5001=5.5 s500='fubar'
+  test.gif i400=50 f5002=6.0
+  test2.gif 
+
+In a case where specific run cases use the same argument ID as the
+default args, they override the default args for that test run only.
+
+=head1 Using the Perl Test Harness
+
+The Perl test harness is used as follows:
+
+  % cd perl_dir
+  % perl [-d] harness [-d] distiller.pl <URL>
+
+Where I<URL> is a URL whose contents you wished to have fetched and
+passed to the distiller.
+
+The first C<-d>, if present,  allows you to use the Perl debugger, as
+usual.  The second  causes the distiller machinery itself to print out
+some debugging information.  Be sure you read about the L<TACCutils> and
+L<clib> Perl extension libraries, containing lots of good stuff for
+writing distillers.
+
+=head1 Adding a Distiller to the Proxy System (C or Perl)
+
+Edit the F<gm_options> file and insert a line of the form:
+
+C<dist.transend/image/gif          /path/to/distiller>
+
+The first column is the I<input> MIME type the distiller accepts,
+preceded by C<dist.transend/>.
+
+Then restart the PTM (easy way to do this: using the Monitor/Control
+Panel, just press the "Kill" button next to the PTM, and the front end
+will automatically restart it).  Distillation requests of the given MIME
+type should now be directed to your distiller.  If you want, you can
+also send a HUP signal to the PTM (its pid is displayed in the
+Monitor/Control Panel), to cause it to reread the configuration file.
+
+Don't put two distillers that accept the same input type into the system
+at once!  Badness will occur if you do.
+
+See the file F<aggregators.pod> for some other tips, including how to
+chain distillers. 
+
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+proxy.  
+d16 6
+d58 3
+a60 1
+following functions that you must write:
+d66 2
+a67 1
+  DistillerStatus DistillerInit(void);
+d71 5
+a75 1
+static variables, etc. here.
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d164 1
+a164 3
+In the Makefile, set C<MYOBJS> and C<MYLIBS> to the object file names
+and library names, respectively, needed to build your code.  You can add
+any additional .o/.h dependencies as well.  
+d166 16
+a181 1
+Describe sample Makefile and building local-only test version of distiller.
+d185 25
+a209 1
+Describe sample Makefile, linking against PTM distiller stub library, etc.
+d211 4
+a214 1
+=head1 Adding the Distiller to the Proxy System
+d216 3
+a218 1
+Edit the file called F<distillers.db> and insert a line of the form:
+d220 1
+a220 1
+C<image/gif          /path/to/distiller>
+d222 33
+a254 1
+The first column is the I<input> MIME type the distiller accepts.
+d259 3
+a261 1
+type should now be directed to your distiller.
+d265 3
+@
+
+
+1.3
+log
+@updated documentation both in doc subdir and in pod stuff inside .pm files in xs
+@
+text
+@d77 2
+a78 3
+              DistillerInput *input,             
+              DistillerOutput *output,
+	      gm_Bool     *freeOutputBuffer);
+d87 3
+a89 3
+      void   *data;
+      UINT32 length;
+      char   mimeType[MAX_MIMETYPE];
+d92 6
+a97 2
+    where C<length> is length of data in buffer, C<data> is a pointer to
+    the input buffer, and C<mimeType> is the MIME type of the input file.
+d107 6
+a112 5
+    freeOutputBuffer: set to C<gm_True> (gm_False) to indicate that the
+        caller should (should not) call C<DistillerFree()> on the output
+        buffer, i.e. set to C<gm_True> if you had to C<DistillerMalloc()> the
+        output buffer yourself.  B<YOU MUST SET THIS TO SOME VALUE; IT IS
+        NOT PRE-INITIALIZED.>
+d120 1
+a120 1
+        See L<"/Functions You Can Use"> below for more information.
+a122 1
+
+d127 1
+a127 2
+			void     *input,  UINT32 inputLength, 
+			DistillationCost *cost);
+d131 2
+a132 1
+DistillationCost as a scalar (for now.)
+@
+
+
+1.2
+log
+@Added "loadavg" instrumentation in thr_mon.c, though it doesn't really
+work yet.  Broke out instrumentation into separate funcs for
+readability.  minor bug fix (malloc -> alloca) in httpgo.c.  moved
+monitor debugging macros from proxy.h into debug.h.  frontend now
+bypasses original if size is below default threshold, or if distiller
+cannot be launched.
+@
+text
+@d6 1
+a6 1
+This file is in L<perlpod> format.  You can use the translators
+d118 2
+d133 1
+a133 1
+=head1 Functions You Can Use
+d135 1
+a135 1
+You can use the following macros/functions to access the
+@
+
+
+1.1
+log
+@all "run" targets now put their programs in the background.
+run_frontend redirects stderr to "frontend.errs", but ideally we
+shouldn't have to rely on fprintf(stderr) at all.
+html and gif distillers no longer spew debugging output to stderr.
+Monitor now prints to stderr if the monitor object has the sentinel
+value MON_USE_STDERR.
+in doc directory, distillers.txt is now distillers.pod.  Use pod2* to
+make it into HTML,LaTEX, etc.
+@
+text
+@d6 4
+d12 22
+a33 1
+connects your distiller to the rest of the proxy system.
+d35 13
+a47 4
+Use the template Makefile in the gif_munger or html_munger
+subdirectories to get the appropriate magic lines for linking with the
+distiller library and to get the appropriate compiler arguments for
+finding include files, etc.
+d61 2
+a62 1
+Possible return values are distOk and distFatalError.
+d77 2
+a78 2
+	      void     *input,  UINT32 inputLength,
+	      void     **output,UINT32 *outputLength,
+d84 2
+a85 3
+    input:  Pointer to input data buffer
+
+    inputLength:  Length of data in buffer
+d87 12
+a98 1
+    output: set this to point to your output buffer.  You can allocate
+d101 2
+a102 1
+        no larger than the input.
+d104 5
+a108 7
+    outputLength: set this to the length of the output.
+
+    freeOutputBuffer: set to gm_True (gm_False) to indicate that the
+        caller should (should not) call DistillerFree() on the output
+        buffer, i.e. set to gm_True if you had to DistillerMalloc() the
+        output buffer yourself.  YOU MUST SET THIS TO SOME VALUE; IT IS
+        NOT PRE-INITIALIZED.
+d112 1
+a112 1
+    args: the arg list.  Each arg is a (pointer to a) structure of type
+d116 1
+d134 1
+a134 1
+arguments: 
+d143 1
+a143 1
+return a pointer to it, else NULL.
+d152 2
+a153 1
+the arg ID.
+d158 4
+@

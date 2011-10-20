@@ -1,0 +1,156 @@
+head	1.2;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.06.17.01.55.05;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.04;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.04;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@More updates..
+@
+text
+@#!/home/tomorrow/b/grad/fox/perl-5.004/bin/perl -0777
+
+package fhsnoop;
+
+$protport = 2049;
+$|=1;
+
+sub fhsnoop {
+MAIN:
+foreach $file (@@_)
+{
+    ($stdin,$lhost,$lport,$hhost,$hport) = $file =~ m{
+	(=?)
+	([\w\.-]+?)
+	:
+	(\d+)
+	-
+	([\w\.-]+?)
+	:
+	(\d+)
+	}sox;
+
+    if ($lport != $protport && $hport != $protport)
+    {
+	warn "Not on port $protport!\n";
+	next MAIN;
+    }
+
+    ($cli, $srv, $clihost, $cliport, $srvhost, $srvport) = 
+	($hport == $protport) ? ("\x01", "\x02", $lhost, $lport, $hhost, $hport)
+			: ("\x02", "\x01", $hhost, $hport, $lhost, $lport);
+
+    if ($stdin eq "=") {
+	open(F, "<&STDIN") || do {warn "Cannot dup STDIN: $!\n"; next MAIN;};
+    } else {
+	open(F, $file) || do {warn "Cannot open $file: $!\n"; next MAIN;};
+    }
+
+    print "\n$file\n" if $main::v;
+    while(1)
+    {
+	last if read(F, $len, 4) < 4;
+	$len = unpack('i',pack('I',unpack('N',$len)));
+	if ($len < 0) {
+	    $len = -$len;
+	}
+	last if read(F, $buf, $len) < $len;
+
+	## Parse the buffer
+	$xid = substr($buf,0,4);
+	$dir = unpack('N', substr($buf,4,4));
+	if ($dir == 0) {
+	    ## This is a RPC call; search for NFS LOOKUP calls
+
+	    ## Get the procedure number
+	    $prognum = unpack('N',substr($buf,12,4));
+	    next unless $prognum == 100003;
+	    $procnum = unpack('N',substr($buf,20,4));
+	    next unless $procnum == 4;
+
+	    ## Get the lengths of the cred fields
+	    $credlen = unpack('N',substr($buf,28,4));
+	    $credlen += unpack('N',substr($buf,36+$credlen,4));
+
+	    ## Get the name of the file
+	    $namelen = unpack('N',substr($buf,72+$credlen,4));
+	    $name = substr($buf,76+$credlen,$namelen);
+
+	    ## Stash it away
+	    $namehash{$xid} = $name;
+	    next;
+	} else {
+	    ## Do we know this one?
+	    next unless defined $namehash{$xid};
+
+	    $name = $namehash{$xid};
+	    delete $namehash{$xid};
+	    next unless unpack('N',substr($buf,8,4)) == 0;
+
+	    ## Get the cred length
+	    $credlen = unpack('N',substr($buf,16,4));
+
+	    next unless unpack('N',substr($buf,20+$credlen,4)) == 0;
+	    next unless unpack('N',substr($buf,24+$credlen,4)) == 0;
+
+	    ## Now comes the fhandle and the fattr
+	    $fdata = unpack('H*',substr($buf,28+$credlen,100));
+
+	    ## Output the data
+	    print $name,"\t",$fdata,"\n";
+
+	    next;
+	}
+    }
+    close(F);
+}
+}
+
+fhsnoop::fhsnoop(@@ARGV);
+
+1;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+#!/usr/bin/perl -0777
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

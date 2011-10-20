@@ -1,0 +1,333 @@
+head	1.3;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.3
+date	96.01.25.01.59.30;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.01.19.03.21.20;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.01.19.02.01.11;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.01.19.02.01.11;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@final edits for ipps96
+@
+text
+@
+
+% The explicit communication
+% model and SPMD structure of many scientific codes makes them
+% important candidates 
+% for the techniques we present in this paper.  Specifically, each processor
+% computes values of data that it owns (the ``owner-computes'' rule), and then
+% exchanges data with other processors in order to acquire the data it needs for
+% the following computation phase.  The main loop of such applications consists
+% of a number of iterations in which a local-computation phase is followed by
+% a communication phase.
+
+In characterizing the communication behavior of SPMD ``owner-computes''
+scientific codes,
+we distinguish {\em permutations}, in which each processor
+is sending data to exactly one other processor, from {\em
+irregular communication}, in which the communication patterns are not known
+until runtime and are not necessarily 1-on-1.
+% Permutations are common in matrix transposition and FFT, whereas
+% irregular traffic is common in parallel $N$-body simulations
+% \cite{palthesis,salmonthesis}.
+% Singh {\em et al.} \cite{nbody-implications} demonstrate that the
+% communication to computation ratio increases monotonically as problem
+% size increases, which motivates the exploration of techniques for
+% optimizing the communication phases of such applications.
+
+We now review the optimization techniques introduced by Brewer and
+Kuszmaul and discuss the implementation of these
+techniques on the Paragon and Alewife machines.
+In section \ref{tokenpass}
+we present and evaluate a new {\em token passing} technique
+that overcomes some of the limitations in earlier
+techniques.  In section
+\ref{ch4ds} we present a {\em distributed dynamic scheduling} algorithm,
+which enables us to apply Brewer and Kuszmaul's techniques to irregular
+traffic by building ``near permutations'' from irregular traffic at run
+time without global state or preprocessing.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{The Receiver Bottleneck}
+
+Brewer and Kuszmaul identified a sequence of events, resulting from
+some  fundamental properties of MPP communication facilities,
+that can produce systematic degradation of communication performance.
+The root of the problem is that on virtually all  MPPs, the primitive for
+injecting messages into the network (sending) is  cheaper than
+the primitive for extracting messages from the network (receiving).
+Reasons for the asymmetry include interrupt-driven reception
+\cite{expensive-interrupts} (as on the 
+MIT Alewife \cite{alewife,alewife-msg}), network-polling primitives
+comparable in latency to uncached memory reads,
+and housekeeping tasks such as buffer management and reordering that are
+not usually present at the  
+sender \cite{sw-overhead-mp}. Since a receiver cannot drain
+the network as fast as a sender can inject messages, 
+network congestion occurs during the communication phase of a parallel
+program.
+% Adaptive routing complicates this problem by routing new packets around
+% congestion, until a large portion of the network 
+% becomes congested.
+%  But even in non-adaptive networks, congestion between
+%two distant nodes can cause intermediate links to become saturated.
+A technique called {\it bandwidth matching} \cite{bk94}, which
+artificially limits the sender's injection rate to the receiver's
+extraction rate, has been demonstrated to alleviate this congestion.
+However, bandwidth matching does not address the more insidious
+problem of many-on-one sending.
+
+%%
+
+% \subsubsection{Effect of Many-on-One Sending}
+
+When there is no coordinated communication behavior during the
+communication phase, as is often the case, 
+% Generally, during a communication phase of a parallel program
+% there is no coordinated communication behavior between the nodes. This
+% often results in multiple nodes sending data to a single receiver during
+% the communication phase.  
+a receiver that could not keep up with a
+single sender may find itself handling incoming traffic from multiple senders.
+The inevitable congestion eventually causes  senders to
+stall on injection.
+% , so that the effective bandwidth senders see is
+% $1/S$ of the 1-on-1 bandwidth, where $S$ is the number of senders
+% ``ganging up'' on the single receiver.
+But the receiver must continue to 
+drain the network in order to prevent deadlock
+\cite{alewife-msg},
+leaving it fewer resources for sending its 
+outgoing messages, which in turn leaves the potential recipients {\em more}
+resources for injecting additional messages.
+The result is systematic
+degradation of bulk-transfer performance.
+
+The cyclic-shift communication pattern exhibits pathological behavior as
+a result of this self-reinforcing effect \cite{bk94}. Since a parallel
+program is as slow as the slowest processor, the receivers that fall
+behind limit the performance of the 
+program.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \subsection{Related Work: Choreographed Communication}
+
+% Brewer and Kuszmaul demonstrated the effectiveness of several techniques
+% to combat the above 
+% problems. 
+
+% One way to alleviate this problem is {\em interleaving}.  In naive programs,
+% nodes send a continuous (bandwidth matched) stream of packets as a long block
+% transfer to a single destination, and then move on to the next
+% destination. Interleaving instead sends small portions of multiple large data
+% blocks to different destinations in a round-robin fashion.  By sending only a
+% short burst of data to each destination there is less chance of systematically
+% overloading a single receiver, and more chance of spreading the load evenly
+% over the network.  Brewer and Kuszmaul showed that interleaving results in
+% effective-bandwidth improvements on the CM-5.
+
+% A more direct approach to solving the many-to-one problem is to
+% construct the communication phase as a sequence of permutations.
+% Recall that during each permutation there is a one-to-one matching of
+% senders to receivers. Some parallel applications, such as matrix
+% transposition, can be cast directly in this form.  Since the adjacent
+% permutations constituting the communication phase may overlap during
+% execution, barriers are placed between the permutations to enforce
+% 1-on-1 communication at all times.  The counterintuitive result is
+% that adding barriers actually increases performance dramatically. This
+% is by far the most effective technique presented in \cite{bk94} for
+% improving bulk-transfer bandwidth.
+
+% Wang, Ranka et al. \cite{syracuse-cm5,syracuse-paragon} have also attempted to
+% solve the problem of choreographing communication on the interconnection
+% networks of the CM-5 and Intel iPSC-860.  Because their approach of
+% constructing partial permutations is similar to the dynamic scheduling
+% algorithm we present in Chapter 4, we defer comparison of 
+% performance results until then.
+
+
+@
+
+
+1.2
+log
+@first round edits for IPPS96 camera-ready
+@
+text
+@d19 3
+a21 3
+Permutations are common in matrix transposition and FFT, whereas
+irregular traffic is common in parallel $N$-body simulations
+\cite{palthesis,salmonthesis}.
+d27 4
+a30 5
+In the remainder of this
+section we review the optimization techniques introduced by Brewer and
+Kuszmaul and related work that motivates our approach.  In section
+\ref{strata} we present and discuss the implementation of these
+techniques on the Paragon and Alewife machines.  In section \ref{tokenpass}
+d37 1
+a37 7
+time without global state or preprocessing.  Dynamic scheduling is
+inspired by parallel iterative matching
+\cite{pim}.  Finally, in section \ref{summary} we summarize the
+effectiveness of the techniques presented, and suggest
+mechanisms by which a communication library or coprocessor could provide
+better support for the class of applications with which we are concerned.
+
+d63 1
+a63 1
+A technique called {\it bandwidth matching} \cite{bk94},
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a1 1
+\subsection{Communication Patterns In Scientific Codes}
+d3 13
+a15 11
+The explicit communication
+model and SPMD structure of many scientific codes makes them
+important candidates 
+for the techniques we present in this paper.  Specifically, each processor
+computes values of data that it owns (the ``owner-computes'' rule), and then
+exchanges data with other processors in order to acquire the data it needs for
+the following computation phase.  The main loop of such applications consists
+of a number of iterations in which a local-computation phase is followed by
+a communication phase.
+
+We distinguish {\em permutations}, in which each processor
+d17 3
+a19 3
+irregular communication}, where the communication pairings are not known
+until runtime and are not necessarily one-on-one.
+Permutations occur in such operations as matrix transposition and FFT, whereas
+d22 9
+a30 9
+Singh {\em et al.} \cite{nbody-implications} demonstrate that the
+communication to computation ratio increases monotonically as problem
+size increases, which motivates the exploration of techniques for
+optimizing the communication phases of such applications.
+
+The rest of the paper is organized as follows.  The remainder of this
+section presents the optimization techniques introduced by Brewer and
+Kuszmaul and related work that motivates our approach.  Section
+\ref{strata} presents and discusses the implementation of these
+d32 1
+a32 1
+we present and evaluates a new {\em token passing} technique
+d38 2
+a39 1
+time.  Dynamic scheduling is inspired by parallel iterative matching
+d41 4
+a44 3
+effectiveness of the techniques presented, and discuss possible
+implications for communication library and coprocessor support for
+SPMD applications.
+a51 5
+In this section we review their findings and explain the relevance
+of these findings to our new work.
+
+\subsubsection{Receive Overhead}
+
+d55 18
+a72 25
+
+Interrupt-driven reception on the MIT Alewife
+machine \cite{alewife,alewife-msg} contributes much of this extra cost
+\cite{expensive-interrupts,bk94}.  Even in
+systems in which network polling is used, receivers remain at a
+disadvantage: obtaining data from a memory mapped network device usually
+requires the equivalent of an uncached memory read to the device's RAM. 
+
+Beyond these specific differences, the receiver may have to deal with
+buffer management, reordering, and other overhead not present at the
+sender \cite{sw-overhead-mp}. The result is that a receiver cannot drain
+the network as fast as a sender can inject messages, resulting in
+network congestion during the communication phase of a parallel program
+in which a large portion of the nodes are
+exchanging messages.
+
+Adaptive routing complicates this problem by routing new packets around
+congestion, until a large portion of the network 
+becomes congested.  But even in non-adaptive networks, congestion between
+two distant nodes can cause intermediate links to become saturated.
+
+In \cite{bk94} a technique called {\it bandwidth matching} is used to
+artificially limit the sender's injection rate to the speed at
+which the receiver can extract messages. This allows
+a receiver to keep up with incoming messages from a single source.
+d78 1
+a78 1
+\subsubsection{Pathological Degradation}
+d80 8
+a87 6
+A systematic effect causing performance degradation was observed on the
+CM-5. Generally, during a communication phase of a parallel program
+there is no coordinated communication behavior between the nodes. This
+often results in multiple nodes sending data to a single receiver during
+the communication phase.  A receiver that could not keep up with a
+single sender must now handle incoming traffic from multiple senders.
+d89 12
+a100 12
+stall on injection, so that the effective bandwidth senders see is
+$1/S$ of the one-on-one bandwidth, where $S$ is the number of senders
+``ganging up'' on the single receiver.
+
+Even though the receiver is already behind, it must continue to
+attempt to drain the network in order to prevent deadlock
+\cite{alewife-msg}. 
+This leaves the receiver fewer resources for sending its pending
+outgoing messages; as a result, there is less message extraction
+for the other nodes to perform, which in turn increases
+their ability to inject even more messages, reinforcing the
+problem.
+d105 1
+a105 1
+behind become the limiting factor in the overall running time of the
+d133 1
+a133 1
+% one-on-one communication at all times.  The counterintuitive result is
+@
+
+
+1.1.1.1
+log
+@initial import matches original submission to IPPS 96.
+@
+text
+@@

@@ -1,0 +1,540 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  caches-tag:1.1.1.1 caches-tag:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.08.11.05.36.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.08.11.05.36.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@static char rcsid[] = "$Id: put.c,v 1.2 1997/04/20 22:57:06 gribble Exp $";
+/* 
+ *  File:         put.c
+ *  Description:  state machine for CPUT peer retrieval protocol.  
+ *                Based on Anawat Chankhunthod's http retrieval module.
+ *  Author:       Steve Gribble
+ *  Created:      Tue Oct 22 17:28:37 PDT 1996
+ *  Language:     C
+ **********************************************************************
+ *  Copyright (c) 1994, 1995.  All rights reserved.
+ *  
+ *    The Harvest software was developed by the Internet Research Task
+ *    Force Research Group on Resource Discovery (IRTF-RD):
+ *  
+ *          Mic Bowman of Transarc Corporation.
+ *          Peter Danzig of the University of Southern California.
+ *          Darren R. Hardy of the University of Colorado at Boulder.
+ *          Udi Manber of the University of Arizona.
+ *          Michael F. Schwartz of the University of Colorado at Boulder.
+ *          Duane Wessels of the University of Colorado at Boulder.
+ *  
+ *    This copyright notice applies to software in the Harvest
+ *    ``src/'' directory only.  Users should consult the individual
+ *    copyright notices in the ``components/'' subdirectories for
+ *    copyright information about other software bundled with the
+ *    Harvest source code distribution.
+ *  
+ *  TERMS OF USE
+ *    
+ *    The Harvest software may be used and re-distributed without
+ *    charge, provided that the software origin and research team are
+ *    cited in any use of the system.  Most commonly this is
+ *    accomplished by including a link to the Harvest Home Page
+ *    (http://harvest.cs.colorado.edu/) from the query page of any
+ *    Broker you deploy, as well as in the query result pages.  These
+ *    links are generated automatically by the standard Broker
+ *    software distribution.
+ *    
+ *    The Harvest software is provided ``as is'', without express or
+ *    implied warranty, and with no support nor obligation to assist
+ *    in its use, correction, modification or enhancement.  We assume
+ *    no liability with respect to the infringement of copyrights,
+ *    trade secrets, or any patents, and are not responsible for
+ *    consequential damages.  Proper use of the Harvest software is
+ *    entirely the responsibility of the user.
+ *  
+ *  DERIVATIVE WORKS
+ *  
+ *    Users may make derivative works from the Harvest software, subject 
+ *    to the following constraints:
+ *  
+ *      - You must include the above copyright notice and these 
+ *        accompanying paragraphs in all forms of derivative works, 
+ *        and any documentation and other materials related to such 
+ *        distribution and use acknowledge that the software was 
+ *        developed at the above institutions.
+ *  
+ *      - You must notify IRTF-RD regarding your distribution of 
+ *        the derivative work.
+ *  
+ *      - You must clearly notify users that your are distributing 
+ *        a modified version and not the original Harvest software.
+ *  
+ *      - Any derivative product is also subject to these copyright 
+ *        and use restrictions.
+ *  
+ *    Note that the Harvest software is NOT in the public domain.  We
+ *    retain copyright, as specified above.
+ *  
+ *  HISTORY OF FREE SOFTWARE STATUS
+ *  
+ *    Originally we required sites to license the software in cases
+ *    where they were going to build commercial products/services
+ *    around Harvest.  In June 1995 we changed this policy.  We now
+ *    allow people to use the core Harvest software (the code found in
+ *    the Harvest ``src/'' directory) for free.  We made this change
+ *    in the interest of encouraging the widest possible deployment of
+ *    the technology.  The Harvest software is really a reference
+ *    implementation of a set of protocols and formats, some of which
+ *    we intend to standardize.  We encourage commercial
+ *    re-implementations of code complying to this set of standards.  
+ *  
+ *  
+ */
+#include "config.h"
+#include <sys/errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "ansihelp.h"
+#include "comm.h"
+#include "store.h"
+#include "stat.h"
+#include "url.h"
+#include "ipcache.h"
+#include "cache_cf.h"
+#include "ttl.h"
+#include "icp.h"
+#include "util.h"
+
+#define CPUT_PORT         80
+#define CPUT_DELETE_GAP   (64*1024)
+
+extern int errno;
+extern char *dns_error_message;
+extern time_t cached_curtime;
+
+typedef struct _cpudata {
+    StoreEntry *entry;
+    char host[HARVESTHOSTNAMELEN + 1];
+    int port;
+    char *type;
+    char *mime_hdr;
+    char type_id;
+    char request[MAX_URL + 1];
+    char *icp_rwd_ptr;		/* When a lifetime expires during the
+				 * middle of an icpwrite, don't lose the
+				 * icpReadWriteData */
+} CputData;
+
+extern char *tmp_error_buf;
+
+char *CPUT_OPS[] =
+{"GET", "POST", "HEAD", "CPUT", ""};
+
+int cput_url_parser(url, host, port, request)
+     char *url;
+     char *host;
+     int *port;
+     char *request;
+{
+    static char hostbuf[MAX_URL];
+    static char atypebuf[MAX_URL];
+    int t;
+
+    /* initialize everything */
+    (*port) = 0;
+    atypebuf[0] = hostbuf[0] = request[0] = host[0] = '\0';
+
+    t = sscanf(url, "%[a-zA-Z]://%[^/]%s", atypebuf, hostbuf, request);
+    if ((t < 2) || (strcasecmp(atypebuf, "http") != 0)) {
+	return -1;
+    } else if (t == 2) {
+	strcpy(request, "/");
+    }
+    if (sscanf(hostbuf, "%[^:]:%d", host, port) < 2)
+	(*port) = CPUT_PORT;
+    return 0;
+}
+
+/* This will be called when timeout on read. */
+void cputReadReplyTimeout(fd, data)
+     int fd;
+     CputData *data;
+{
+    StoreEntry *entry = NULL;
+
+    entry = data->entry;
+    debug(4, "cputReadReplyTimeout: FD %d: <URL:%s>\n", fd, entry->url);
+    sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+	entry->url,
+	entry->url,
+	"HTTP",
+	103,
+	"Read timeout",
+	"The peer site may be down.  Try again later.",
+	HARVEST_VERSION,
+	comm_hostname());
+
+    if (data->icp_rwd_ptr)
+	safe_free(data->icp_rwd_ptr);
+    storeAbort(entry, tmp_error_buf);
+    comm_set_select_handler(fd, COMM_SELECT_READ, 0, 0);
+    comm_close(fd);
+#ifdef LOG_ERRORS
+    CacheInfo->log_append(CacheInfo,
+	entry->url,
+	"0.0.0.0",
+	store_mem_obj(entry, e_current_len),
+	"ERR_103",		/* HTTP READ TIMEOUT */
+	data->type ? data->type : "NULL");
+#endif
+    safe_free(data);
+}
+
+/* This will be called when socket lifetime is expired. */
+void cputLifetimeExpire(fd, data)
+     int fd;
+     CputData *data;
+{
+    StoreEntry *entry = NULL;
+
+    entry = data->entry;
+    debug(4, "cputLifeTimeExpire: FD %d: <URL:%s>\n", fd, entry->url);
+
+    sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+	entry->url,
+	entry->url,
+	"CPUT",
+	110,
+	"Transaction Timeout",
+	"The peer client may be down or too slow.  Try again later.",
+	HARVEST_VERSION,
+	comm_hostname());
+
+    if (data->icp_rwd_ptr)
+	safe_free(data->icp_rwd_ptr);
+    storeAbort(entry, tmp_error_buf);
+    comm_set_select_handler(fd, COMM_SELECT_READ | COMM_SELECT_WRITE, 0, 0);
+    comm_close(fd);
+#ifdef LOG_ERRORS
+    CacheInfo->log_append(CacheInfo,
+	entry->url,
+	"0.0.0.0",
+	store_mem_obj(entry, e_current_len),
+	"ERR_110",		/* HTTP LIFETIME EXPIRE */
+	data->type ? data->type : "NULL");
+#endif
+    safe_free(data);
+}
+
+
+
+/* This will be called when data is ready to be read from fd.  Read until
+ * error or connection closed. */
+void cputReadReply(fd, data)
+     int fd;
+     CputData *data;
+{
+    static char buf[4096];
+    int len;
+    int clen;
+    int off;
+    StoreEntry *entry = NULL;
+
+    entry = data->entry;
+    if (entry->flag & DELETE_BEHIND) {
+	if (storeClientWaiting(entry)) {
+	    /* check if we want to defer reading */
+	    clen = store_mem_obj(entry, e_current_len);
+	    off = store_mem_obj(entry, e_lowest_offset);
+	    if ((clen - off) > CPUT_DELETE_GAP) {
+		debug(3, "cputReadReply: Read deferred for Object: %s\n",
+		    entry->key);
+		debug(3, "                Current Gap: %d bytes\n",
+		    clen - off);
+
+		/* reschedule, so it will be automatically reactivated
+		 * when Gap is big enough. */
+		comm_set_select_handler(fd,
+		    COMM_SELECT_READ,
+		    (PF) cputReadReply,
+		    (caddr_t) data);
+
+/* don't install read timeout until we are below the GAP */
+#ifdef INSTALL_READ_TIMEOUT_ABOVE_GAP
+		comm_set_select_handler_plus_timeout(fd,
+		    COMM_SELECT_TIMEOUT,
+		    (PF) cputReadReplyTimeout,
+		    (caddr_t) data,
+		    getReadTimeout());
+#else
+		comm_set_select_handler_plus_timeout(fd,
+		    COMM_SELECT_TIMEOUT,
+		    (PF) NULL,
+		    (caddr_t) NULL,
+		    (time_t) 0);
+#endif
+		return;
+	    }
+	} else {
+	    /* we can terminate connection right now */
+	    sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+		entry->url,
+		entry->url,
+		"HTTP",
+		119,
+		"No Client",
+		"All peers went away before CPUT is complete and object is too big to cache.",
+		HARVEST_VERSION,
+		comm_hostname());
+	    storeAbort(entry, tmp_error_buf);
+	    comm_close(fd);
+#ifdef LOG_ERRORS
+	    CacheInfo->log_append(CacheInfo,
+		entry->url,
+		"0.0.0.0",
+		store_mem_obj(entry, e_current_len),
+		"ERR_119",	/* HTTP NO CLIENTS, BIG OBJ */
+		data->type ? data->type : "NULL");
+#endif
+	    safe_free(data);
+	    return;
+	}
+    }
+    len = read(fd, buf, 4096);
+    debug(5, "cputReadReply: FD %d: len %d.\n", fd, len);
+
+    if (len < 0 || ((len == 0) && (store_mem_obj(entry, e_current_len) == 0))) {
+	/* XXX we we should log when len==0 and current_len==0 */
+	debug(2, "cputReadReply: FD %d: read failure: %s.\n",
+	    fd, xstrerror());
+	if (errno == ECONNRESET) {
+	    /* Connection reset by peer */
+	    /* consider it as a EOF */
+	    if (!(entry->flag & DELETE_BEHIND))
+		entry->expires = cached_curtime + ttlSet(entry);
+	    sprintf(tmp_error_buf, "\n<p>Warning: The Remote Server sent RESET at the end of transmission.\n");
+	    storeAppend(entry, tmp_error_buf, strlen(tmp_error_buf));
+	    storeComplete(entry); 
+	} else {
+	    sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+		entry->url,
+		entry->url,
+		"HTTP",
+		105,
+		"Read error",
+		"Network/Peer site is down.  Try again later.",
+		HARVEST_VERSION,
+		comm_hostname());
+	    storeAbort(entry, tmp_error_buf);
+	}
+	comm_close(fd);
+#ifdef LOG_ERRORS
+	CacheInfo->log_append(CacheInfo,
+	    entry->url,
+	    "0.0.0.0",
+	    store_mem_obj(entry, e_current_len),
+	    "ERR_105",		/* HTTP READ ERROR */
+	    data->type ? data->type : "NULL");
+#endif
+	safe_free(data);
+    } else if (len == 0) {
+	/* Connection closed; retrieval done. */
+	if (!(entry->flag & DELETE_BEHIND))
+	    entry->expires = cached_curtime + ttlSet(entry);
+	storeComplete(entry);
+/*	comm_close(fd); */  /* will be closed in icpHandleStoreComplete */
+	safe_free(data);
+    } else if (((store_mem_obj(entry, e_current_len) + len) > getHttpMax()) &&
+	!(entry->flag & DELETE_BEHIND)) {
+	/*  accept data, but start to delete behind it */
+	storeStartDeleteBehind(entry);
+
+	storeAppend(entry, buf, len);
+	comm_set_select_handler(fd, COMM_SELECT_READ,
+	    (PF) cputReadReply, (caddr_t) data);
+	comm_set_select_handler_plus_timeout(fd, COMM_SELECT_TIMEOUT,
+	    (PF) cputReadReplyTimeout, (caddr_t) data, getReadTimeout());
+
+    } else if (entry->flag & CLIENT_ABORT_REQUEST) {
+	/* append the last bit of info we get */
+	storeAppend(entry, buf, len);
+	sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+	    entry->url,
+	    entry->url,
+	    "HTTP",
+	    107,
+	    "Client Aborted",
+	    "Client/Peer(s) dropped connection before transmission is complete.\nObject fetching is aborted.\n",
+	    HARVEST_VERSION,
+	    comm_hostname());
+	storeAbort(entry, tmp_error_buf);
+	comm_close(fd);
+#ifdef LOG_ERRORS
+	CacheInfo->log_append(CacheInfo,
+	    entry->url,
+	    "0.0.0.0",
+	    store_mem_obj(entry, e_current_len),
+	    "ERR_107",		/* HTTP CLIENT ABORT */
+	    data->type ? data->type : "NULL");
+#endif
+	safe_free(data);
+    } else {
+	storeAppend(entry, buf, len);
+	comm_set_select_handler(fd, COMM_SELECT_READ,
+	    (PF) cputReadReply, (caddr_t) data);
+	comm_set_select_handler_plus_timeout(fd, COMM_SELECT_TIMEOUT,
+	    (PF) cputReadReplyTimeout, (caddr_t) data, getReadTimeout());
+    }
+}
+
+/* This will be called when request write is complete. Schedule read of
+ * reply. */
+void cputSendComplete(fd, buf, size, errflag, data)
+     int fd;
+     char *buf;
+     int size;
+     int errflag;
+     CputData *data;
+{
+    StoreEntry *entry = NULL;
+
+    entry = data->entry;
+    debug(5, "cputSendComplete: FD %d: size %d: errflag %d.\n",
+	fd, size, errflag);
+
+    data->icp_rwd_ptr = NULL;	/* Don't double free in lifetimeexpire */
+
+    if (errflag) {
+	sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+	    entry->url,
+	    entry->url,
+	    "HTTP",
+	    101,
+	    "Cannot connect to the original site",
+	    "The remote site may be down.",
+	    HARVEST_VERSION,
+	    comm_hostname());
+	storeAbort(entry, tmp_error_buf);
+	comm_close(fd);
+#ifdef LOG_ERRORS
+	CacheInfo->log_append(CacheInfo,
+	    entry->url,
+	    "0.0.0.0",
+	    store_mem_obj(entry, e_current_len),
+	    "ERR_101",		/* HTTP CONNECT FAIL */
+	    data->type ? data->type : "NULL");
+#endif
+	safe_free(data);
+	return;
+    } else {
+	/* Schedule read reply. */
+	comm_set_select_handler(fd, COMM_SELECT_READ,
+	    (PF) cputReadReply, (caddr_t) data);
+	comm_set_select_handler_plus_timeout(fd, COMM_SELECT_TIMEOUT,
+	    (PF) cputReadReplyTimeout, (caddr_t) data, getReadTimeout());
+	comm_set_fd_lifetime(fd, -1);	/* disable lifetime DPW */
+
+    }
+}
+
+/* This will be called when connect completes. Write request. */
+void cputSendRequest(fd, data)
+     int fd;
+     CputData *data;
+{
+    static char xbuf[2] = "G";
+
+    debug(5, "cputSendRequest: FD %d: data %p.\n", fd, data);
+    data->icp_rwd_ptr = icpWrite(fd, xbuf, 1, 30, cputSendComplete, data);
+}
+
+int putStart(usedfd, url, type, mime_hdr, entry)
+     int usedfd;
+     char *url;
+     char *type;
+     char *mime_hdr;
+     StoreEntry *entry;
+{
+    /* Create state structure. */
+    int sock, status;
+    CputData *data = (CputData *) xmalloc(sizeof(CputData));
+
+    debug(3, "putStart: %s <URL:%s>\n", type, url);
+    debug(10, "putStart: mime_hdr '%s'\n", mime_hdr);
+
+    memset(data, '\0', sizeof(CputData));
+    data->entry = entry;
+    data->type = type;
+    data->mime_hdr = mime_hdr;
+
+    /* Parse url. */
+    if (cput_url_parser(url, data->host, &data->port, data->request)) {
+	sprintf(tmp_error_buf, CACHED_RETRIEVE_ERROR_MSG,
+	    entry->url,
+	    entry->url,
+	    "CPUT",
+	    110,
+	    "Invalid URL syntax:  Cannot parse.",
+	    "Contact your system administrator for further help.",
+	    HARVEST_VERSION,
+	    comm_hostname());
+	storeAbort(entry, tmp_error_buf);
+#ifdef LOG_ERRORS
+	CacheInfo->log_append(CacheInfo,
+	    entry->url,
+	    "0.0.0.0",
+	    store_mem_obj(entry, e_current_len),
+	    "ERR_110",		/* CPUT INVALID URL */
+	    data->type ? data->type : "NULL");
+#endif
+	safe_free(data);
+	return COMM_ERROR;
+    }
+    /* Don't need to create socket, as am using peer instead of server */
+    sock = usedfd;
+
+    /* Don't need to explicitly open connection;  is already open */
+    debug(5, "cputStart: FD %d: Is what we're doing.\n", sock);
+
+    /* Now we call the routine that would normally write off the HTTP
+       request.  Instead, we'll just push a byte. */
+    fd_note(sock, entry->url);
+
+    comm_set_select_handler(sock, COMM_SELECT_LIFETIME,
+	(PF) cputLifetimeExpire, (caddr_t) data);
+    comm_set_select_handler(sock, COMM_SELECT_WRITE,
+	(PF) cputSendRequest, (caddr_t) data);
+    return COMM_OK;
+}
+@
+
+
+1.1.1.1
+log
+@Harvest and squid caches.
+@
+text
+@@

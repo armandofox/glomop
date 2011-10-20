@@ -1,0 +1,109 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.21.21.00.43;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@-- holes
+   -- /tmp races
+      -- in particular stat(2)/open(2) sequences;
+         generalizes to e.g. mail spools, etc.
+      -- mktemp() is bad; use mkstemp()
+      -- if you use open(), use O_EXCL!
+      -- arguably open("") should return a fd to an anonymous file
+      -- setuid shell scripts!
+   -- IFS: programs that run shell scripts as root (IFS=/)
+   -- LD_LIBRARY_PATH and variations
+      -- 1: ld was incredibly stupid and believed it on setuid programs
+      -- 2: ld was fixed to ignore it on programs that had euid != uid,
+         but that still allowed for holes in children of setuid programs
+	 -- 2.1: 'login -p' didn't clobber LD_LIBRARY_PATH, so you could
+	    'LD_LIBRARY_PATH=foo login -p sync'
+	 -- lesson: every setuid program that spawns children
+	    that spawns children needs to
+	    clobber its env, args, etc.; this is important secure coding
+	    practice
+	 -- some OSs have a flag that tracks children of setuid programs
+	 -- 2.2: telnetd didn't clobber LD_LIBRARY_PATH, so you could do
+	    something similar
+	 -- (sync is nice because it has no password)
+	 -- 2.3: program ran /bin/id to check whether it was running as root;
+	    you couldn't use LD_LIBRARY_PATH on the parent, but you could on
+	    the child
+	 -- lesson: every non-setuid program running as root needs to set
+	    its own environment
+   -- suidperl bug, on systems with saved uid (which lets you regain
+      privileges even after you've set your real uid and effective uid to
+      some non-root user)
+      -- suidperl did
+           setreuid(5700, 5700);
+	 which isn't the same as
+	   setuid(5700);
+	 The latter gives up saved uid privileges; the former does
+      -- Ian will describe this bug
+   -- trusted authentication
+      -- use getuid(), not popen("/bin/id") or getlogin()
+   -- a lot of programs trust argv[0]
+      -- e.g. sendmail had a SIGHUP handler that would re-exec argv[0]
+      -- many programs crash if argc = 0
+   -- resource limitations
+      -- (e.g. set ulimit file size to 0, then run /bin/passwd)
+   -- perror("") fd thingy
+   -- C cast woes
+      -- signed->unsigned conversion:
+           f(int x) {
+             if (x > 1000) die();
+	     g(x);
+	   }
+	   g(unsigned y) { ... }
+      -- 32bit->16bit conversion:
+           ff(int t) {
+	      if (t == 0) die();
+	      g(t);
+           }
+	   gg(uid_t u) { ... }
+      -- any others??
+   -- not zeroing memory (core dumps, etc.)
+   -- sendmail and queue files
+      -- queue files are multiple lines of saved state
+      -- it read a username via identd, and saved that to one line of the
+         queue file
+      -- bug: it read till EOF (without squishing \r or \n), which meant
+         you could stick newlines in your identd username to put bogus stuff
+	 in the queue file and trash sendmail's internal state and gain root
+-- basic principles
+   -- transitive trust
+      -- e.g. fingerd just calls finger
+         -- did the author of finger know he might have to deal with
+	    malicious arguments??
+	 -- and worse, in BSD 4.2 finger "foo|/bin/rm -f /etc/passwd"@@bar.com
+	    worked!
+      -- e.g.: root runs lots nearly everything in /usr/bin at some point,
+         so /tmp races are problematic if there are any local malicious users
+      -- library functions, libcrt.0
+   -- let the kernel do pathname parsing; it already has time-tested code
+      for that; if you try to re-invent the wheel, you'll get it wrong
+   -- narrow interfaces
+   -- shed code
+      -- shed privilege as soon as possible
+      -- don't run unnecessary code
+      -- this is what makes firewalls work
+      -- be paranoid (who'd think a bug in the divide instruction could
+         cause a security compromise!!?  also happened to system mouse code)
+@

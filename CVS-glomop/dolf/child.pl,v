@@ -1,0 +1,1241 @@
+head	1.7;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.7
+date	96.12.04.05.22.08;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.04.03.49.24;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.03.20.22.47;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.03.09.39.02;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.03.07.51.16;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.03.03.16.19;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@#  "Child process" functions for Dolf
+#  $Id: child.pl,v 1.6 1996/12/04 03:49:24 fox Exp $
+
+=head1 NAME
+
+child.pl - per-connection code for DOLF
+
+=head1 SYNOPSIS
+
+=head1 DESCRIPTION
+
+Largely stolen from Dolf.
+
+When reading this code, remember that this process is instantiated per HTTP
+connection!  So a lot of globals that look unsafe are actually safe, because
+their state is reinitialized on each new HTTP request.
+
+Remember that this code is only called if Harvest misses in its cache.  So when
+we are called, we know we have to construct a DO or fixation, or possibly
+redirect a URL.
+
+=head1 CONTROL FLOW
+
+   collect_request - collect request from client
+   handle_conn - determine what type of URL
+      DOLF DO URL: construct and return the DO
+      DOLF fixation URL: construct and return the fixation by calling shell
+        pipeline
+      DOLF candidate URL: construct DOLF DO URL and return redirect
+      Anything else: report a miss, and let Harvest fetch a "normal" URL
+
+=cut
+
+#----------------------------------------------------------------------
+#  global variables
+#----------------------------------------------------------------------
+
+%MyPrefs = ();                              # user prefs (to be looked up)
+
+#----------------------------------------------------------------------
+#  Initialization at compile time
+#----------------------------------------------------------------------
+
+$UA = new LWP::UserAgent;
+
+=head2 collect_request()
+
+Collects a 'simple' or 'full' http request.  Currently doesn't handle
+POST correctly.  The only (implicit) argument is the connection object, and only
+the B<sock> field is assumed to be valid; it should be a L<gm_sock(3)>
+object representing the client's connection.
+
+This routine returns 1 for success and undef for failure.  It sets the
+following instance variables for the connection object:
+
+ request - the original HTTP request line from client
+ URL - the complete URL from the HTTP request, initially including any
+       refinement or segmentation info (that gets stripped later)
+ proto - the protocol from the HTTP request (usually "http").  For a
+         simple request, the protocol will default to HTTP/1.0.
+ reqtype - "SimpleRequest" or "FullRequest", as per HTTP 1.0 standard.
+ client_headers - the HTTP headers from the client request, as an
+                HTTP::Headers object
+
+=cut
+
+sub collect_request {
+    my $con = shift;
+    my $client = $con->{"sock"};
+    
+    my $result = 1;
+    local($len);
+    local($request);
+    my $headers = new HTTP::Headers;
+    my($url, $method, $reqtype, $protocol);
+
+    my $request = $client->readsock();
+    &debug('http', $request);
+    if ($request =~ /^(\S+)\s+(\S+)\s*$/) {      # simple request
+        $method = $1;
+        $url = $2;
+        $reqtype = SimpleRequest;
+        $protocol = $Const{HTTPVersion};
+    } elsif ($request =~ /^(\S+)\s+(\S+)\s+(\S+)\s*$/) {
+        $reqtype = FullRequest;
+        $url = $2;
+        $method = $1;
+        $protocol = $3;
+    } else {
+        $result = 0;
+    }
+
+    # collect header lines till blank
+    while (($_ = $client->readsock()) !~ /^\s*$/) {
+        $headers->push_header($1,$2)
+            if /^(\S+):\s*(.*)/;
+    }
+
+    &util::debug('echoall', "RECV >>> ", $headers->as_string );
+
+    # if this is a POST operation, also grab the content.
+
+    if ($method =~ /^post$/i) {
+        my $cont = '';
+        $cont .= $client->readsock_raw()
+            while ((length($cont) < $headers->content_length)
+                   && !($client->eof()));
+        $con->{"post"} = new HTTP::Request "POST", $url, $headers, $cont;
+    }
+        
+    if ($result) {
+        $con->{"URL"} = $url;
+        $con->{"method"} = $method;
+        $con->{"proto"} = $protocol;
+        $con->{"reqtype"} = $reqtype;
+        $con->{"client_headers"} = $headers;
+        $con->{"request"} = $request;
+        return 1;
+    } else {
+        return undef;
+    }
+}
+
+=head2 handle_conn()
+
+This routine handles a new client connection by calling all the other
+routines that actually do the work.  When done, it exits through
+L<dolf/child_cleanup>.  The (implicit) argument to the method call
+is the connection object.
+
+=cut
+
+sub handle_conn {
+    my $con = shift;
+    my $newurl;
+    my ($content,$type,$resp);
+    
+    my $IPaddr = $con->{"IPaddr"};
+
+    #$SIG{'INT'} = child_interrupted;
+    &debug('conn',join(' ',"From", $IPaddr,$con->{"request"}));
+
+    # if this is a POST request, pass it thru and exit.
+
+    if (defined ($con->{"post"})) {
+        $con->{"resp"} = $UA->request($con->{"post"});
+        &send_status($con);
+        &forward_original($con,$res);
+        return 1;
+    }
+        
+    # if this isn't a registered user, make some default prefs.
+
+    %MyPrefs = &get_prefs($IPaddr);
+    if (0) {
+    if (keys(%MyPrefs) < 1) {
+        # access to unallowed page: create a default registration
+        # for client, and proceed.  
+        &register("", $IPaddr);
+        %MyPrefs = &get_prefs($IPaddr);
+    }}
+
+    my($origurl,$newurl,$mimetype,$path);
+
+    if (($origurl,$mimetype,$enc) = &DO::is_dolf_do_url($con->{"URL"})) {
+
+        # conjure up the DO
+        &util::debug('dolf', "getting DOLF MDO");
+
+        my $do = &create_new_do($origurl,$mimetype,$enc);
+        my $content = ($do->make_html());
+        $resp = new HTTP::Response("200", "OK (DOLF MDO)");
+        $resp->content($content);
+        $resp->header("Content-type", "text/html",
+                      "Content-length", length($content));
+
+    } elsif (($mimetype,$path,$origurl)
+             = &DO::is_dolf_fixation_url($con->{"URL"})) {
+
+        &util::debug('dolf', "getting DOLF fixation $path of $origurl");
+        my ($data) = &DO::make_fixation_from_path($path,$origurl);
+        if (ref($data) !~ /HTTP::Response/) {
+            # success, do transformation
+            $resp = new HTTP::Response("200", "OK (DOLF Fixation)");
+            $resp->header("Content-type", $mimetype);
+            #
+            #  HACK HACK HACK HACK
+            #
+            #  If this is a text/html fixation, and it is the identity
+            #  fixation, then it's probably just
+            #  a regular web page.  So we should embed <BASE HREF="foo"> to
+            #  make relative URL's in the page resolve correctly. (The "Base"
+            #  header is ignored by NS 3.0)
+            if ($mimetype eq 'text/html'
+                && $path eq '') {
+                $origurl =~ s![^/]+$!!;
+                $data =~ s/\A/<BASE HREF="$origurl">/;
+            }
+            $resp->content($data);
+            $resp->header("Content-length", length($data));
+            # if there was a content-encoding, it's gone by now.
+            $resp->remove_header("Content-encoding");
+            &util::debug('dolf', "Final headers:\n" . $resp->headers_as_string);
+        }
+
+    } elsif ($newurl = &DO::is_dolf_candidate_url($con->{"URL"}, \%MyPrefs)) {
+
+        $con->{"URL"} = $newurl;
+        &bypass($con, 1);
+        goto CHILD_DONE;
+        
+    } else {
+
+        &util::debug('dolf', "Bypassing " . $con->{"URL"});
+        &bypass($con, 0);
+        goto CHILD_DONE;
+    }
+    #&relay_reply($con,$resp)
+    $con->{"resp"} = $resp;
+    &forward_original($con)
+        || &http_error($con,"500 Internal forward-original failed");
+  CHILD_DONE:
+    $con->{"sock"}->closesock();
+    &child_cleanup($con);
+}
+
+sub bypass {
+    my $con = shift;
+    my $dolf_redirect = shift;
+    
+    # pass thru unmodified
+    # forward request to http server.
+    &main::debug("http", "Sending to server: " . $con->{"URL"});
+    my $hdrs = $con->{"client_headers"};
+    $hdrs->header("User-agent",
+                  join(' for ', "$main::Const{Proxy}/$main::Const{Rev}",
+                       $hdrs->user_agent));
+    my $request = new HTTP::Request (uc $con->{"method"}, $con->{"URL"},
+                                     $hdrs);
+    $UA->use_eval(1-$main::gb{neverfork});
+    my $resp = $UA->request($request);
+    if ($resp->is_success) {
+        &util::debug('http', "Success " . $con->{"URL"});
+        my $z;
+        # If this was a redirect, just send the headers (including the
+        # status "302 Found") back to the client.  THis is necessary in
+        # order for the client to get the proper base URL -- simply
+        # including the new "Location:" in the headers of a "200 OK"
+        # response will NOT work.  This isn't as bad as it sounds since the
+        # client's request to get the real URL will hit the cache.
+        if (($z = $resp->request->url->as_string) ne $con->{"URL"}) {
+            &main::debug('http', "Redirection: $z");
+            $con->{"resp"} = $resp;
+            $con->{"URL"} = $z;
+            $resp->header("Location", $z);
+            $con->send_status("302 Found");
+            $con->send_client($resp->headers_as_string);
+            $con->send_client("\r\012");
+            return;
+        }
+    } else {
+        &util::debug('http', "Forwarding error status ".$resp->code().
+                     " to client");
+        $con->{"resp"} = $resp;
+        &forward_original($con,$resp);
+        return;
+    }
+    $con->{"resp"} = $resp;
+
+    # is this a DOLFifiable URL?
+
+    my $type = $resp->header("Content-type");
+    my $encoding = $resp->header("Content-encoding") || '';
+    if ($Dolf::TGConfig->is_source_type($type)
+        &&  (&DO::user_prefs_allow(\%MyPrefs, $type) || $dolf_redirect)) {
+        # perform redirect
+        $resp = new HTTP::Response("302", "Found (DOLF Redirect)");
+        my $do_url = &DO::make_do_url_from_url($con->{"URL"}, $type, $encoding);
+        &util::debug('dolf', "doing DOLF redirect to $do_url");
+        $resp->header("Location", $do_url);
+        $resp->content('');
+        $con->{"resp"} = $resp;
+    } else {
+        &util::debug('dolf', "Forwarding original " . $con->{"URL"});
+    }
+    &forward_original($con,$resp);
+}
+
+=head2 $con->send_html($html [,$headers])
+
+Sends the supplied content as text/html, providing all necessary headers, HTTP
+status line, etc.  $headers should be an HTTP::Headers object (or
+subclass); if not given, minimal headers are created.  (The content-length
+and content-type headers are always created to match the HTML being output.)
+After this returns, the client won't be expecting any more
+input, but the client connection is not closed by this function.
+
+=cut
+
+sub send_html {
+    my ($con, $html, $hdrs) = @@_;
+    $hdrs = new HTTP::Headers unless defined $hdrs;
+    $hdrs->header("Content-type" => "text/html",
+                  "Content-length" => length($html));
+    if (ref($hdrs) eq 'HTTP::Headers') {
+        $con->send_client($hdrs->as_string("\r\012"));
+    } else {
+        $con->send_client($hdrs->headers_as_string("\r\012"));
+    }
+    $con->send_client("\r\012");
+    $con->send_client($html);
+}
+
+=item  $con->send_client(@@stuff)
+
+Sends @@stuff to the client.  If debug flag 'echoall' is set, @@stuff is also
+echoed to debugging output.
+
+=cut
+
+sub send_client {
+    local($,) = '';
+    local($") = '';                         #"
+    shift->{"sock"}->writesock(@@_);
+    &debug('echoall',"SEND >>>@@_<<<");
+}
+
+sub forward_original {
+    my $con = shift;
+    my $resp = shift || ($con->{"resp"});
+    $con->{"resp"} = $resp;
+    $con->send_status();
+    $resp->header("Content-Length", length($resp->content))
+        unless $resp->header("Content-Length");
+    &send_client($con, $resp->headers_as_string("\r\012"));
+    &send_client($con, "\r\012");
+    &send_client($con,$resp->content);
+    return 1;
+}
+
+=item $con->send_status([$status])
+
+Sends HTTP status line to the client.  $status should be an HTTP
+response string, i.e. a code number followed by a space and a textual
+response description.  If it is not given, the connection object's I<resp>
+field, which should be an L<HTTP::Headers(3)> object, is used to determine the
+code and response from the connection's last HTTP operation.
+
+=cut
+
+sub send_status {
+    my $con = shift;
+    #my $stat = shift || join(' ', $con->resp->code, $con->resp->message);
+    my $stat = shift || join(' ', $con->{"resp"}->code, $con->{"resp"}->message);
+    &send_client($con,"$Const{HTTPVersion} $stat\r\012");
+}
+
+
+=item $con->send_headers_to_client(\%hdrs)
+
+Sends the given headers followed by a blank line to the client.
+
+=cut
+
+sub send_headers_to_client {
+    my $con = shift;
+    my %headers = % {shift @@_};
+    foreach $k (keys %headers) {
+        &send_client($con,"$k: $headers{$k}$Const{Crlf}");
+        &main::debug('client', "-->client: $k: $headers{$k}");
+    }
+    &send_client($con,$Const{Crlf});
+}
+
+
+=back
+
+=cut
+
+1;
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d2 1
+a2 1
+#  $Id: child.pl,v 1.5 1996/12/03 20:22:47 fox Exp $
+d99 1
+a99 1
+    &debug('echoall', "RECV >>> ", %headers );
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d2 1
+a2 1
+#  $Id: child.pl,v 1.4 1996/12/03 09:39:02 fox Exp $
+d163 1
+a163 1
+    my($origurl,$path);
+d165 1
+a165 1
+    if ($origurl = &DO::is_dolf_do_url($con->{"URL"})) {
+d169 2
+a170 1
+        my $do = &create_new_do($origurl);
+d177 2
+a178 1
+    } elsif (($path,$origurl) = &DO::is_dolf_fixation_url($con->{"URL"})) {
+d181 1
+a181 1
+        my ($data,$type) = &DO::make_fixation_from_path($path,$origurl);
+d185 14
+d200 4
+a203 1
+            $resp->header("Content-type", $type);
+d206 1
+a206 8
+    } elsif (&DO::is_dolf_candidate_url($con->{"URL"}, \%MyPrefs)) {
+
+        # perform redirect
+        $resp = new HTTP::Response("302", "Found (DOLF Redirect)");
+        my $do_url = &DO::make_do_url_from_url($con->{"URL"});
+        &util::debug('dolf', "doing DOLF redirect to $do_url");
+        $resp->header("Location", $do_url);
+        $resp->content('');
+d208 4
+d215 1
+a215 1
+        &bypass($con);
+d229 2
+d243 1
+d253 1
+d255 1
+a256 1
+            $resp->header("Location", $z);
+d262 1
+a262 1
+        &main::debug('http', "Forwarding error status ".$resp->code().
+d272 2
+a273 1
+    my $type = $resp->header("Content-type") || $resp->header("Content-Type");
+d275 1
+a275 1
+        &&  &DO::user_prefs_allow(\%MyPrefs, $type)) {
+d277 2
+a278 3
+        $con->{"resp"} = $resp =
+            new HTTP::Response("302", "Found (DOLF Redirect)");
+        my $do_url = &DO::make_do_url_from_url($con->{"URL"});
+d282 3
+d331 1
+d333 2
+d338 1
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d1 2
+a2 2
+#  "Child process" functions for Pythia
+#  $Id: child.pl,v 1.3 1996/12/03 07:51:16 fox Exp $
+d12 1
+a12 1
+Largely stolen from Pythia.
+d128 1
+a128 1
+L<pythia/child_cleanup>.  The (implicit) argument to the method call
+d164 1
+d166 1
+d175 1
+d177 1
+d186 3
+a188 1
+    } elsif (&DO::is_dolf_candidate_url($con->{"URL"})) {
+d195 1
+d197 1
+d200 1
+d244 3
+d249 14
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 1
+a2 1
+#  $Id: child.pl,v 1.2 1996/12/03 03:16:19 fox Exp $
+d175 7
+a181 1
+        ;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d2 1
+a2 1
+#  $Id: child.pl,v 1.1.1.1 1996/11/27 21:34:52 fox Exp $
+a130 42
+B<handle_conn> sets or change the values of the following connection
+instance variables:
+
+ refine - the refinement info, if present; interpreted later by other
+        parts of the code if refinement is indicated
+ URL - if refinement or segmentation info was present, the URL is
+        stripped of this information.  The resulting URL is a "real" URL.
+ client - a reference to a hash containing the characteristics of the user's
+        client device, as described in the pythia.clients file.  The
+        correct value is computed by examining the headers to determine
+        what kind of client this appears to be.
+
+Handle_conn first calls L<prefs/get_prefs> to get user's preferences,
+based on the IP address to username mapping (which is established via
+the "login" form).  It then determines whether the requested URL
+corresponds to a refinement, a segment, or a new object:
+
+=over 3
+
+=item *
+
+In case of a
+segment, we call L</send_segment> to deliver it from the segment cache, and then
+L<pythia/child_cleanup>.  
+
+=item *
+
+In case of a refined object, we extract the
+refinement info from the object's URL and set the B<refine> field of the
+connection object to hold it; this field is used later by L<relay_reply>
+to determine whether refinement is needed.  
+
+=item *
+
+In case of a refined or new
+object, we then fetch the original object URL (either from the cache or
+from the remote server), call L<relay_reply> to determine how to forward
+it to the client (send original, do distillation, etc.), and finally
+exit through L<pythia/child_cleanup>.
+
+=back
+
+d155 1
+d161 1
+a161 1
+    }
+d163 2
+a164 1
+    if (&DO::is_dolf_do_url($con->{"URL"})) {
+d166 2
+a167 1
+        my $do = &create_new_do($con->{"URL"});
+d169 1
+a169 1
+        $resp = new HTTP::Response("200", "OK (DOLF DO)");
+d173 2
+a174 1
+    } elsif (&DO::is_dolf_fixation_url($con->{"URL"})) {
+d180 1
+d184 1
+d187 4
+a190 2
+    &relay_reply($con,$resp)
+        || &http_error($con,"500 Internal relay-reply failed");
+d224 1
+a224 1
+            goto CHILD_DONE;
+a228 5
+        $con->{"resp"} = $resp;
+        $con->send_status();
+        #$con->send_client($resp->error_as_HTML);
+        &forward_original($con,$resp);
+        goto CHILD_DONE;
+d230 2
+a231 1
+  CHILD_DONE:
+a272 60
+=head2 $con->relay_reply([$data])
+
+If $data is defined, process it for return to client (see below); 
+otherwise, wait for reply from remote http server.
+If any condition other than "200 OK"
+is indicated, forward server headers only to client and immediately
+close the connection and return.  Otherwise, wait for Content-type and
+Content-length lines, decide whether to do distillation by calling the
+appropriate distillation decision function for the object's MIME type,
+and call one of
+L<forward_original>, L<forward_via_distill_server>, or
+L<forward_via_pipeline> to do the work.  If internal errors occur, exits through
+L<http_error>; otherwise returns 1.  The only (implicit) argument is the
+connection object.
+
+The following instance variables are set or modified by this routine:
+
+ data - the original content from remote server
+
+The following instance variables are used by this routine:
+
+ refine - to pass refinement parameters to the appropriate routine
+
+=cut
+
+
+sub relay_reply {
+    my ($con,$resp) = @@_;
+
+    my $URL = $con->{"URL"};
+    
+    # wait for reply, and send everything back to orig. client
+    #  Use line-at-a-time buffering until we see the Content-Type.
+
+    local($") = '';                         # "
+
+    my $pkg;
+    my $mime;
+        
+    # slurp rest of data
+    
+    # send client the HTTP status line, and save it.
+
+    &send_status($con);
+    
+    # If server reply was anything but 'OK', send the headers now, and
+    # immediately exit.
+
+    unless ($resp->is_success) {
+        &main::debug("http", "Error status ". $resp->code);
+        &forward_original($con,$resp);
+        return 1;
+    }
+            
+    &main::debug('refine', "Forwarding original $URL");
+    &send_client($con, $resp->headers_as_string("\r\012"));
+    &send_client($con, "\r\012");
+    &send_client($con,$resp->content);
+}
+
+d276 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+a2 1
+#  $Id: child.pl,v 1.8 1996/11/17 01:50:18 fox Exp $
+d6 1
+a6 1
+child.pl - per-connection code for Pythia
+d12 2
+d18 4
+a23 11
+The main object manipulated by this code is the I<con> or connection
+object, which corresponds to the handling of a single HTTP request from
+the client.  This section describes the control flow from the time an HTTP
+request is received from the client until the result is delivered back
+to the client.  We note which instance variables are set by which
+subroutines during the control flow.  (That information is reproduced in
+the description of each subroutine.)
+
+The flow for requesting anything other than a segment of a
+previously-segmented page is as follows (indentation indicates calling stack):
+
+d25 6
+a30 13
+   handle_conn -  fetch original (maybe from cache)
+      relay_reply - determines how to send reply to client
+        forward_original - send original content
+        forward_via_pipeline - call external distiller
+        forward_via_distill_server - call distill server
+      child_cleanup - clean up state for this connection
+
+The flow for requesting a segment is as follows:
+
+   collect_request - collect request from client
+   handle_conn - fetch segment (should be in segment cache)
+      send_segment
+      child_cleanup
+a34 11
+#  global constants
+#----------------------------------------------------------------------
+
+# BUG: the key should include a magic cookie unlikely to have been generated at
+# random.  Not clear what kind of magic cookie value would work well.  Should
+# it be preserved across sessions?
+
+$SubblockKey = ';(\d+)$';                   # for detecting refine tag 
+$Const{SubblockKeyPrint} = ';%s';                  # for generating refine tag
+
+#----------------------------------------------------------------------
+a37 1
+$MaxRefine = 4;                             # indicates max refinement level
+a38 5
+$URL = '';                                  # full URL of request
+%ClientHeaders = ();                        # headers from client req
+$Protocol = $Const{HTTPVersion};            # def protocol for svr request
+$Method = "GET";                            # req method, if not present
+$Socket = '';                               # socket back to client
+a44 6
+# Read the little internal icons.
+     local($/) = undef;
+     open(F, "./4.gif") or die $!;
+     $Icons[4] = <F>;
+     close F;
+
+d204 5
+a208 78
+    # get the user's client device type characteristics.
+
+    $con->{"client"} =
+        &client::client_prefs_from_headers($con->{"client_headers"});
+
+    #
+    #  If this is a click on a server-side imagemap, construct the real URL
+    #  that will be passed on to the server, and immediately jump (ugh) to the
+    #  forward-to-server code.
+    #
+
+    my ($unmapified,$anchor);
+    my $newrequest;
+    
+    #
+    #  If this is a request for refinement, sock away the refinement info and
+    #  un-munge the URL to get the URL to the original version of the thing
+    #  being refined.
+    #
+    
+    ($con->{"URL"}, $con->{"refine"})
+        = &ismap_icon::is_refinement($con->{"URL"});
+    if (defined $con->{"refine"}) {
+        &debug('refine',join(' ', "Refine code ", $con->{"refine"}, "for",
+                             $con->{"URL"}));
+        goto FETCH;
+    }
+
+    #
+    #  take care not to confuse "legitimate" imgmap requests with refinement
+    #  requests, which are also delivered as clicks on an imagemap.
+    #
+    $newrequest = &imgmap::modify_request($con->{"URL"},$main::Cache);
+    if ($newrequest ne $con->{"URL"}) {
+        &main::debug('imgmap', "Scaled imagemap coords URL: $newrequest");
+        $con->{"URL"} = $newrequest;
+    } else {
+
+        #
+        #  If this is a request for an imagemap image, "unmapify" the munged URL and
+        #  remember for later that this is a munged imagemap.  (After distillation
+        #  of the image itself, we'll need to store the information about how much
+        #  it was shrunk.)
+        #
+
+        ($unmapified,$anchor) = &imgmap::unmapify($con->{"URL"});
+        if ($unmapified) {
+            # this is an imagemap. Remember for later
+            $con->{"URL"} = $unmapified;
+            $con->{"ismap"} = $anchor;
+        }
+
+        #
+        # If this looks like a request for an HTML page segment that was previously
+        # fetched, intercept it here.
+        # BUG::the race condition is currently not handled.  If user
+        # requests a segment before that segment has been computed and
+        # stored, this code will barf ("segment file not found").  That
+        # condition, though, should be rare.
+
+        if ($con->{"URL"} =~ m#$html::HtmlSeg#o) {
+            &debug('seg', "Sending previous segment file $1");
+            $con->send_segment($1);
+            &child_cleanup($con);
+            return;
+        }
+    }
+    # is it in the cache, or is it a URL corresponding to a Pythia internal
+    # icon (for refinement, etc.)?
+
+  FETCH:
+    if ((($con->{"URL"} eq &ismap_icon::refine_icon_url)
+         && ($content = &ismap_icon::refine_icon))
+        || (($con->{"URL"} =~ m!/%(\d)%/?$!)
+            && ($content = $Icons[$1]))) {
+        # internal icon
+        $type = "image/gif";
+        $resp = new HTTP::Response("200", "OK (Pythia icon)");
+d210 1
+a210 1
+        $resp->header("Content-type", "image/gif",
+d212 8
+a219 17
+        #
+        #  Immediately shortcut to forward_original.
+        #
+        $con->{"resp"} = $resp;
+        $con->send_status();
+        &forward_original($con,$resp);
+        goto CHILD_DONE;
+    } elsif ( (($content,$type) = $main::Cache->get($con->{"URL"}))
+             && (defined $content)) {
+        #
+        #  Get something from cache
+        #
+        $resp = new HTTP::Response("200", "OK (Pythia Cache)");
+        $resp->content($content);
+        $resp->header("Content-type", $type);
+        $resp->header("Content-length", length($content));
+        $resp->request(new HTTP::Request "GET",$con->{"URL"});
+d221 1
+a221 39
+        # forward request to http server.
+        &main::debug("http", "Sending to server: " . $con->{"URL"});
+        my $hdrs = $con->{"client_headers"};
+        $hdrs->header("User-agent",
+                      join(' for ', "$main::Const{Proxy}/$main::Const{Rev}",
+                           $hdrs->user_agent));
+        my $request = new HTTP::Request (uc $con->{"method"}, $con->{"URL"},
+                                         $hdrs);
+        $UA->use_eval(1-$main::gb{neverfork});
+        $resp = $UA->request($request);
+        if ($resp->is_success) {
+            my $z;
+            $main::Cache->store($resp->request->url->as_string,
+                                $resp->content,
+                                $resp->content_type);
+            # If this was a redirect, just send the headers (including the
+            # status "302 Found") back to the client.  THis is necessary in
+            # order for the client to get the proper base URL -- simply
+            # including the new "Location:" in the headers of a "200 OK"
+            # response will NOT work.  This isn't as bad as it sounds since the
+            # client's request to get the real URL will hit the cache.
+            if (($z = $resp->request->url->as_string) ne $con->{"URL"}) {
+                &main::debug('http', "Redirection: $z");
+                $con->{"URL"} = $z;
+                $con->send_status("302 Found");
+                $resp->header("Location", $z);
+                $con->send_client($resp->headers_as_string);
+                $con->send_client("\r\012");
+                goto CHILD_DONE;
+            }
+        } else {
+            &main::debug('http', "Forwarding error status ".$resp->code().
+                         " to client");
+            $con->{"resp"} = $resp;
+            $con->send_status();
+            #$con->send_client($resp->error_as_HTML);
+            &forward_original($con,$resp);
+            goto CHILD_DONE;
+        }
+a222 5
+
+    $con->{"resp"} = $resp;
+                                    
+    # relay the headers and the content, possibly after distilling it.
+
+a224 3
+
+
+    # all done. clean up after ourselves (close sockets, etc.)
+d230 40
+a269 17
+=head2  $con->send_segment($seg_id)
+
+User has requested a segment of a previously segmented page.  We get the
+connection object and unique ID of the segment
+as computed by L<munge_html/html_new_page>.  Construct some
+simple headers, send client the segment as text/html, and return.
+
+=cut
+
+sub send_segment {
+    my ($con,$seg_id) = @@_;
+    my $file = &html::filename_from_hash($seg_id);
+    open(F, $file) or $con->http_error("501 Seg file not found: $file");
+    local($/) = undef;
+    $con->send_status("200 OK (Pythia segment)");
+    &send_html($con,<F>);
+    close F;
+d365 4
+a368 103
+    # Determine content-type to see how to proceed.
+
+    if ($resp->content_type =~ m!^(\S+/\S+)! ) {
+        $mime = lc $1;
+    } else {
+        &main::log("*** Bad Content-type `$_' from $URL; ".
+                   "assuming text/plain");
+        $mime = 'text/plain';
+    }
+
+    # If this is HTML, munge it separately, and return.
+    
+    if ($mime eq 'text/html') {
+        &debug('refine', "Munging HTML");
+        &forward_html($con, $resp, \%MyPrefs);
+        return 1;
+    }
+    
+    # It's not HTML. See if we know a distiller for this content-type.
+
+    unless ($distiller = &distiller::get_distiller($mime)) {
+        # 
+        # No distiller found -- forward original.
+        #
+        &debug('refine',"Forwarding original $mime (no distiller)");
+        &forward_original($con,$resp);
+        return 1;
+    }
+
+    $pkg = $distiller->pkg . "::decide_distill";
+
+    #  If request for refinement, do that.
+    
+    if (defined $con->{"refine"}) {
+        my $proc = $distiller->pkg . "::refine";
+        if  ($con->{"refine"} < $MaxRefine && defined(&$proc)) {
+            &main::debug('refine',
+                         join(' ', "Forwarding refinelevel", $con->{"refine"},
+                              "for", $con->{"URL"}));
+            &forward_refinement($con,$resp,$distiller->pkg . "::refine");
+        } else {
+            &main::debug('refine',
+                         join(' ', "Forwarding original $URL",
+                              "(max refine=", $con->{"refine"}));
+            &forward_original($con,$resp);
+        }
+        return 1;
+    }
+
+    # Not a refinement.
+    # Get parameters for distillation, or determine that none is needed.
+    
+    $params = &$pkg($resp, \%MyPrefs, $con->{"client"},
+                    $distiller->path, $distiller->args);
+    if (! $params) {
+        &main::debug('refine', "Forwarding original $URL (null params)");
+        &forward_original($con,$resp);
+        return 1;
+    }
+
+    # Distillation is needed. Determine whether the distiller for this type is
+    # external or server.
+
+    if ($distiller->is_server) {
+        #
+        #  forward via distillation server
+        #
+        my $host = $distiller->host;
+        my $port = $distiller->port;
+        &main::debug('refine',
+                     "Distilling $URL via $host:$port: $params");
+        &forward_via_distill_server($host,$port,$params,$con,$resp);
+    } else {
+        #
+        #  forward by distilling via a shell pipeline. The actual
+        #  pipeline command was returned in $params, above.  
+        #
+        &main::debug('refine',
+                     "Distilling $URL via external pipeline");
+        &forward_via_pipeline($params,$con,$resp);
+    }
+    return 1;
+}
+
+sub forward_refinement {
+    my ($con,$resp,$proc) = @@_;
+    #
+    #  Do refinement.
+    #
+    #
+    # Refinement routine will modify the content in place, and return
+    # true iff success
+    #
+    my $cmd = &$proc($resp, \%MyPrefs, $con->{"client"},
+                       $con->{"refine"});
+    unless ($cmd) {
+        &http_error($con, "503 Refinement crapped out!");
+        &main::log(join("*** Refinement failed for", $con->{"URL"},
+                        $con->{"refine"}));
+        return;
+    }
+    # Now use forward_via_pipeline to do the refinement!
+    &forward_via_pipeline($cmd,$con,$resp);
+a413 168
+
+#---------------------------------------------------------------------------
+#  forward distillation by getting it from a running distillation server.
+#
+#  ARGS:
+#     hostname & port number of the distill server
+#     params to pass before data content
+#     headers from server (hash table)
+#  ACTION:
+#     open socket to distill server
+#     write params to socket
+#     read content data from server (socket $Svr), and write to distiller
+#     read output from distiller and use send_client to return it to client
+#---------------------------------------------------------------------------
+
+sub forward_via_distill_server {
+    my ($host,$port,$params,$con,$resp) = @@_;
+    
+    my $data = $resp->content;
+
+    my $newdata = '';
+    my ($sock, $contenttype);
+    my $osz = length($data);
+    my $nsz;
+    unless ($sock = connectsock gm_sock $host,$port) {
+        &main::log("*** Warning: connectsock failed to $host:$port, ".
+                   "deleting it from service registry");
+        # BUG: do it!
+        &http_error($con, "502 Couldn't contact distiller ("
+                    . &gm_sock::lasterror() . ")");
+        return;
+    }
+    #
+    #  write source document to distill server
+    #
+    $sock->writesock("d $params $data");
+    #
+    #  read new content-type line
+    #
+    if (($_ = $sock->readsock()) =~ m!(\S+)/(\S+)!) {
+        $contenttype = $_;
+    } else {
+        &main::log("*** Warning! Bad Content-type `$_' received from " .
+                   "distiller at $host:$port");
+        &http_error($con, "502 Distiller failed; bad content type?");
+        return;
+    }
+    $newdata .= $_ while ($_ = $sock->readsock_raw());
+    $sock->closesock();
+    $nsz = length($newdata);
+
+    # If this is an imagemap image, store the information about how severely we
+    # distilled it.
+
+    &imgmap::store_img_info($con->{"ismap"}, \$data, \$newdata,
+                            $main::Cache)
+        if defined ($con->{"ismap"});
+
+    # If new data is in fact smaller, send it.  Otherwise send original.
+
+    if ($nsz < $osz) {
+        $resp->header("Content-type" => $contenttype)
+            if $contenttype;
+        $resp->header("Content-length" => $nsz);
+        $resp->content($data = $newdata);
+    }
+    my $diff = $nsz-$osz;
+    &main::debug('stats', sprintf("Bytes saved: %d-%d=%d", $osz,$nsz,$osz-$nsz));
+    &send_client($con, $resp->headers_as_string("\r\012"));
+    &send_client($con, "\r\012");
+    &send_client($con,$data);
+    &send_client($con,"\r\012"); # BUG::needed?
+}
+
+#---------------------------------------------------------------------------
+#  forward distillation by sending it thru a pipeline.
+#---------------------------------------------------------------------------
+
+sub forward_via_pipeline {
+    my ($params,$con,$resp) = @@_;
+
+    my $data = $resp->content;
+    my $URL = $con->{"URL"};
+
+    my $new_content_type;
+    my $osz = length($data);
+    my $writes_stdout = 1;
+    
+    my $refineurl = "${URL};$MaxRefine";
+
+    # create temporary filenames for input and output files.
+    my ($ifile,$ofile,$errfile);
+
+    $errfile =  $resp->content_type;
+    $errfile =~ s!/!_!g;
+
+    $ifile = "/tmp/${errfile}_i_$$";
+    $ofile = "/tmp/${errfile}_o_$$";
+    $errfile = "/tmp/${errfile}_err_$$";
+
+    # Does the pipeline write to STDOUT (in which case we can suck up the
+    # output), or to a filename (in which case we should wait for the pipeline
+    # to complete and then read its results from the file)?
+    
+    $writes_stdout = 0 if ($params =~ s/%o/$ofile/g);
+
+    $params =~ s/%a/$main::Const{Arch}/go;
+    $params =~ s/%i/$ifile/g;
+    $params =~ s/%u/$refineurl/g;
+    $params =~ s/%b/$main::Bin/g;
+    unless (open(IFILE, ">$ifile")) {
+        &main::log("*** $URL: can't write $ifile: $!");
+        goto DONE_PIPELINE;
+    }
+    print IFILE $data;
+    close IFILE;
+
+    # run the pipeline.  if the pipeline writes to STDOUT, pipe the output
+    # directly to the client as it becomes available; otherwise wait for the
+    # pipeline to complete, and then send the output file.
+
+    &main::debug('refine', "Distilling $URL: `$params'");
+
+    if ($writes_stdout) {
+        unless (open(PIPE, "$params 2> $errfile |")) {
+            &main::log("$URL: popen `$params': $!");
+            goto DONE_PIPELINE;
+        }
+        $data = '';
+        chomp($new_content_type = <PIPE>);
+        $data .= $_ while <PIPE>;
+        close PIPE;
+    } else {
+        my $err;
+        if (system("$params 2> $errfile")) {
+            # error occurred during pipeline execution!
+            open(ER, $errfile) 
+                and $err = join ('', (<ER>)) 
+                    and close ER;
+            &main::log("$URL: `$params' ==> exit $? [$err]");
+            goto DONE_PIPELINE;
+        }
+        # if new version wasn't
+        # written, send original
+        unless (open(OFILE, $ofile)) {
+            &main::log("*** $URL: can't read $ofile: $!");
+            goto DONE_PIPELINE;
+        }
+        chomp($new_content_type = <OFILE>);
+        $data = '';
+        $data .= $_ while <OFILE>;
+        close OFILE;
+    }
+    $resp->header("Content-length" => length($data));
+    $resp->header("Content-type" => $new_content_type);
+    &main::debug('stats', sprintf("Bytes saved: %d-%d=%d", $osz,
+                                  length($data),$osz-length($data)));
+    &send_client($con, $resp->headers_as_string("\r\012"));
+    &send_client($con, "\r\012");
+    &send_client($con,$data);
+    unlink $ifile,$ofile,$errfile;
+    return 1;
+  DONE_PIPELINE:
+    unlink $ifile,$ofile,$errfile;
+    &http_error($con,"500 Internal error");
+}
+
+    
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

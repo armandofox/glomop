@@ -1,0 +1,1920 @@
+head	1.16;
+access;
+symbols
+	v1_2:1.15
+	v1_1:1.11
+	v1_0:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.16
+date	98.07.24.02.55.43;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.07.07.02.27.35;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.07.06.00.27.21;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.07.05.23.10.50;	author iang;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.07.04.00.54.09;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.07.02.06.26.48;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.07.02.05.49.58;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.02.05.15.01;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.02.05.01.20;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.02.01.14.59;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.01.19.53.56;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.01.09.39.48;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.01.07.48.41;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.01.01.01.03;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.30.20.40.21;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.30.17.13.02;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.16
+log
+@took out duplicate #include <sys/types.h> so it wouldnt break with new gcc
+@
+text
+@#include <Pilot.h>
+// #include <sys/types.h>
+#include <sys/socket.h>
+#include "TGpostman.h"
+#include "pop.h"
+#include "popquery.h"
+#include "822date.h"
+#include "md5.h"
+
+static ULong StrAToL(CharPtr string)
+{
+  ULong total = 0L;
+
+  while ( (*string != '\0') &&
+	  (*string <= '9') &&
+	  (*string >= '0')) {
+    total = (10L*total) + (ULong) ((*string - '0'));
+    string++;
+  }
+  return total;
+}
+
+static void add_field_to_record(CharPtr field, UCharPtr *tempptr,
+				UCharPtr recptr)
+{
+  UChar tmpchar = 0;
+
+  if (field != NULL) {
+    DmWrite(recptr, (ULong) ((*tempptr)-recptr), field,
+	    (ULong) (StrLen(field)+1) );
+    *tempptr = *tempptr + StrLen(*tempptr) + 1;
+  } else {
+    DmWrite(recptr, (ULong) ((*tempptr)-recptr), &tmpchar,
+	    (ULong) 1);
+    *tempptr = *tempptr + 1;
+  }
+}
+static int file_msg(struct popdata *pdata)
+{
+  UInt recordsize = 0, at, hdrLen;
+  VoidHand newRecord;
+  UCharPtr recptr, tempptr;
+  UChar tmpchar;
+  int year, month, dayofmonth, hour, minute, tmpint;
+
+  /* Do we have a status field?  If so, does it contain the letter
+     'R'?  If so, this message has been read before. */
+  if (pdata->msg.status != NULL) {
+    if (StrChr(pdata->msg.status, 'R') != NULL) {
+      pdata->msg.status_read = 1;
+    }
+  }
+
+  /* Figure out the size of the new record */
+  recordsize = 6 +   /* date + flag + NULL? */
+    (pdata->msg.subject == NULL ? 0 : StrLen(pdata->msg.subject)) + 1 +
+    (pdata->msg.from == NULL ? 0 : StrLen(pdata->msg.from)) + 1 +
+    (pdata->msg.to == NULL ? 0 : StrLen(pdata->msg.to)) + 1 +
+    (pdata->msg.cc == NULL ? 0 : StrLen(pdata->msg.cc)) + 1 +
+    (pdata->msg.bcc == NULL ? 0 : StrLen(pdata->msg.bcc)) + 1 +
+    (pdata->msg.replyTo == NULL ? 0 : StrLen(pdata->msg.replyTo)) + 1 +
+    (pdata->msg.sentTo == NULL ? 0 : StrLen(pdata->msg.sentTo)) + 1;
+  /* body will get added later */
+  pdata->msg.headerlen = recordsize;
+
+  /* Allocate a new record, grab a lock on it */
+  at = pdata->nummsgs;
+  newRecord = DmNewHandle(pdata->maildb, recordsize);
+  if (newRecord == 0)
+    return 1;
+  pdata->newRecord = newRecord;
+  pdata->bodyfull = 0;
+
+  recptr = (UCharPtr) MemHandleLock(newRecord);
+  if (!recptr) {
+    MemHandleFree(newRecord);
+    pdata->newRecord = NULL;
+    return 1;
+  }
+  
+  /* Start writing out the message */
+
+  /* Date */
+  tmpchar = 0;
+  if ((pdata->msg.date == NULL) ||
+      (MailStore_ExtractRFC822Date(pdata->msg.date, &year, &month,
+				   &dayofmonth, &hour, &minute))) {
+    DmWrite(recptr, (ULong) 0, &tmpchar, (ULong) 1);
+    DmWrite(recptr, (ULong) 1, &tmpchar, (ULong) 1);
+    DmWrite(recptr, (ULong) 2, &tmpchar, (ULong) 1);
+    DmWrite(recptr, (ULong) 3, &tmpchar, (ULong) 1);
+  } else {
+    tmpint = (year << 9) | (month << 5) | dayofmonth;
+    DmWrite(recptr, (ULong) 0, &tmpint, (ULong) 2);
+    tmpchar = hour;
+    DmWrite(recptr, (ULong) 2, &tmpchar, (ULong) 1);
+    tmpchar = minute;
+    DmWrite(recptr, (ULong) 3, &tmpchar, (ULong) 1);
+  }
+  tmpchar = 0;
+  /* flags */
+  tmpchar = (1 << 2);
+  DmWrite(recptr, (ULong) 4, &tmpchar, (ULong) 1);
+  /* unknown 5th byte */
+  tmpchar = 0;
+  DmWrite(recptr, (ULong) 5, &tmpchar, (ULong) 1);
+  DmWrite(recptr, (ULong) 6, &tmpchar, (ULong) 1);
+
+  tempptr = &(recptr[6]);
+
+  add_field_to_record(pdata->msg.subject, &tempptr, recptr);
+  add_field_to_record(pdata->msg.from, &tempptr, recptr);
+  add_field_to_record(pdata->msg.to, &tempptr, recptr);
+  add_field_to_record(pdata->msg.cc, &tempptr, recptr);
+  add_field_to_record(pdata->msg.bcc, &tempptr, recptr);
+  add_field_to_record(pdata->msg.replyTo, &tempptr, recptr);
+  add_field_to_record(pdata->msg.sentTo, &tempptr, recptr);
+
+  /* Unlock the message */
+  MemHandleUnlock(newRecord);
+
+  /* Add any extra headers to the start of body */
+  if (!(pdata->bodyfull) && (pdata->prefflags & POPPrefsPasteHeadersFlag) &&
+    pdata->msg.have_headers != 0) {
+    hdrLen = StrLen(pdata->msg.headers);
+    if (MemHandleResize(pdata->newRecord, pdata->msg.headerlen + hdrLen + 1 + 3 + 1)) {
+      pdata->bodyfull = 1;
+      return 0;
+    }
+    tempptr = MemHandleLock(pdata->newRecord);
+    if (!tempptr) {
+      show_error("MemHandleLock failed in file_msg", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+    }
+    DmWrite(tempptr, pdata->msg.headerlen, "##\n", 3);
+    DmWrite(tempptr, pdata->msg.headerlen+3, pdata->msg.headers, hdrLen);
+    DmWrite(tempptr, pdata->msg.headerlen+3+hdrLen, "\n", 2);
+    MemHandleUnlock(pdata->newRecord);
+    pdata->msg.bodylen += hdrLen+1+3+1;
+  }
+  return 0;
+}
+
+static void clean_msg(struct popdata *pdata)
+{
+  pdata->msg.read = 0;
+  pdata->msg.sig = 0;
+  pdata->msg.confRead = 0;
+  pdata->msg.confDeliv = 0;
+  pdata->msg.prio = 0;
+  pdata->msg.addressing = 0;
+  pdata->parse_header = 1;
+  pdata->which_header = POP_NONE;
+  if (pdata->msg.subject != NULL) {
+    MemPtrFree(pdata->msg.subject);
+    pdata->msg.subject = NULL;
+  }
+  if (pdata->msg.from != NULL) {
+    MemPtrFree(pdata->msg.from);
+    pdata->msg.from = NULL;
+  }
+  if (pdata->msg.to != NULL) {
+    MemPtrFree(pdata->msg.to);
+    pdata->msg.to = NULL;
+  }
+  if (pdata->msg.cc != NULL) {
+    MemPtrFree(pdata->msg.cc);
+    pdata->msg.cc = NULL;
+  }
+  if (pdata->msg.bcc != NULL) {
+    MemPtrFree(pdata->msg.bcc);
+    pdata->msg.bcc = NULL;
+  }
+  if (pdata->msg.replyTo != NULL) {
+    MemPtrFree(pdata->msg.replyTo);
+    pdata->msg.replyTo = NULL;
+  }
+  if (pdata->msg.sentTo != NULL) {
+    MemPtrFree(pdata->msg.sentTo);
+    pdata->msg.sentTo = NULL;
+  }
+  if (pdata->msg.date != NULL) {
+    MemPtrFree(pdata->msg.date);
+    pdata->msg.date = NULL;
+  }
+  if (pdata->msg.status != NULL) {
+    MemPtrFree(pdata->msg.status);
+    pdata->msg.status = NULL;
+  }
+  if (pdata->msg.headers != NULL) {
+    MemPtrFree(pdata->msg.headers);
+    pdata->msg.headers = NULL;
+  }
+  pdata->msg.have_headers = 0;
+  pdata->msg.bodylen = 0;
+  pdata->msg.headerlen = 0;
+  pdata->msg.tobedeleted = 0;
+  pdata->msg.status_read = 0;
+  pdata->bytesread = 0;
+  if (pdata->newRecord != NULL) {
+    MemHandleFree(pdata->newRecord);
+    pdata->newRecord = NULL;
+  }
+  pdata->bodyfull = 0;
+  return;
+}
+
+static void eliminate_crlf(CharPtr data, UInt len)
+{
+  int i;
+
+  for (i=0; i<(int) len; i++) {
+    if ((data[i] == '\r') || (data[i] == '\n'))
+      data[i] = '\0';
+  }
+}
+
+static CharPtr add_strings(CharPtr orig, CharPtr addme)
+{
+  UInt newlen;
+  CharPtr combined;
+  int ws = 0, i, len, comblen = 0;
+
+  if (addme == NULL) {
+    show_error("NULL string in add_strings", "", "");
+    return NULL;
+  }
+
+  len = StrLen(addme);
+  if (orig == NULL)
+    comblen = 0;
+  else
+    comblen = StrLen(orig);
+  /* Allocate space pessimistically for combined strings */
+  newlen = comblen + len + 1;
+  combined = MemPtrNew(newlen);
+  if (!combined) {
+    show_error("Out of memory", "", "");
+    return NULL;
+  }
+
+  /* Add in old string */
+  if (orig != NULL) 
+    StrCopy(combined, orig);
+  else
+    *combined = '\0';
+
+  /* Scan through and add in new string, collapsing extra whitespace */
+  for (i=0; i<len; i++) {
+    if ((addme[i] == ' ') || (addme[i] == '\t')) {
+      if (ws == 0) {
+	ws = 1;
+	combined[comblen] = addme[i];
+	comblen++;
+      }
+    } else {
+      ws = 0;
+      combined[comblen] = addme[i];
+      comblen++;
+    }
+  }
+  combined[comblen] = '\0';
+  return combined;
+}
+
+static int clean_rn(CharPtr cleanme, UInt len)
+{
+  UInt i;
+
+  for (i=0; i<len-1; i++) {
+    if (cleanme[i] == '\r') {
+      if ((cleanme[i+1] == '\n') && (cleanme[i+2] == '\0')) {
+	cleanme[i] = '\n';
+	cleanme[i+1] = '\0';
+	len -= 1;
+      }
+    }
+  }
+  return len;
+}
+static int add_to_body(struct popdata *pdata, CharPtr addme, UInt len)
+{
+  CharPtr tmpptr;
+
+  /* First, run through string and change \r\n\0 to \n\0 */
+  len = clean_rn(addme, len);
+
+  /* Strip leading . */
+  if (addme[0] == '.') {
+    ++addme;
+    --len;
+  }
+
+  /* Don't add if the body is full */
+  if (pdata->bodyfull) return 0;
+
+  /* We want to keep writing data and keeping one NUL at the end of
+     the body.  If this is the first write (pdata->msg.bodylen == 0)
+     then want to allocate len + 1 bytes.  If this is a subsequent
+     write, want to allocate len + pdata->msg.bodylen bytes, and
+     write over the last byte and write and extra \0 */
+  if (pdata->msg.bodylen == 0) {
+    if (MemHandleResize(pdata->newRecord, pdata->msg.headerlen+len+1)) {
+      pdata->bodyfull = 1;
+      return 0;
+    }
+    tmpptr = MemHandleLock(pdata->newRecord);
+    if (!tmpptr) {
+      show_error("MemHandleLock failed in add_to_body", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+    }
+    DmWrite(tmpptr, 0+(pdata->msg.headerlen), addme, len+1);
+    MemHandleUnlock(pdata->newRecord);
+    pdata->msg.bodylen += len+1;
+    if (pdata->truncsize && (pdata->msg.headerlen+len+1 > pdata->truncsize)) {
+	pdata->bodyfull = 1;
+    }
+    return 0;
+  } else {
+    if (MemHandleResize(pdata->newRecord, pdata->msg.headerlen +
+			pdata->msg.bodylen + len)) {
+      pdata->bodyfull = 1;
+      return 0;
+    }
+    tmpptr = MemHandleLock(pdata->newRecord);
+    if (!tmpptr) {
+      show_error("MemHandleLock failed in add_to_body", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+    }
+    DmWrite(tmpptr, pdata->msg.headerlen + pdata->msg.bodylen-1, addme, len+1);
+    MemHandleUnlock(pdata->newRecord);
+    pdata->msg.bodylen += len;
+    if (pdata->truncsize &&
+	(pdata->msg.headerlen+pdata->msg.bodylen+len > pdata->truncsize)) {
+	pdata->bodyfull = 1;
+    }
+    return 0;
+  }
+  
+  return 0;
+}
+
+static int add_line_to_msg(struct popdata *pdata, CharPtr data, UInt datalen)
+{
+  CharPtr tmpstr, tmpstr2;
+
+  /* OK - we're into parsing the message.  Test to see if we're still
+     header parsing */
+
+  if (pdata->parse_header) {
+    /* We're parsing the message headers.  First see if this terminates the
+       message headers */
+    if ((data[0] == '\r') || (data[0] == '\n')) {
+      pdata->parse_header = 0;
+      /* Add these headers to the database. */
+      if (file_msg(pdata) != 0) {
+	clean_msg(pdata);
+	show_error("Couldn't file email message.  Aborting.\r\n", "", "");
+	return 1;
+      }
+      return 0;
+    }
+
+    /* Now see if this is a continuation of the previous header line. */
+    if ((data[0] == ' ') || (data[0] == '\t')) {
+      /* Split line continuation - append to previous header */
+      tmpstr = data;
+      if (pdata->which_header != POP_OTHER)
+	eliminate_crlf(data, datalen);
+      switch(pdata->which_header) {
+        case POP_SUBJECT:
+	  tmpstr2 = add_strings(pdata->msg.subject, tmpstr);
+	  if (pdata->msg.subject != NULL)
+	    MemPtrFree(pdata->msg.subject);
+	  pdata->msg.subject = tmpstr2;
+	  break;
+        case POP_FROM:
+	  tmpstr2 = add_strings(pdata->msg.from, tmpstr);
+	  if (pdata->msg.from != NULL)
+	    MemPtrFree(pdata->msg.from);
+	  pdata->msg.from = tmpstr2;
+	  break;
+        case POP_TO:
+	  tmpstr2 = add_strings(pdata->msg.to, tmpstr);
+	  if (pdata->msg.to != NULL)
+	    MemPtrFree(pdata->msg.to);
+	  pdata->msg.to = tmpstr2;
+	  break;
+        case POP_CC:
+	  tmpstr2 = add_strings(pdata->msg.cc, tmpstr);
+	  if (pdata->msg.cc != NULL)
+	    MemPtrFree(pdata->msg.cc);
+	  pdata->msg.cc = tmpstr2;
+	  break;
+        case POP_BCC:
+	  tmpstr2 = add_strings(pdata->msg.bcc, tmpstr);
+	  if (pdata->msg.bcc != NULL)
+	    MemPtrFree(pdata->msg.bcc);
+	  pdata->msg.bcc = tmpstr2;
+	  break;
+        case POP_REPLYTO:
+	  tmpstr2 = add_strings(pdata->msg.replyTo, tmpstr);
+	  if (pdata->msg.replyTo != NULL)
+	    MemPtrFree(pdata->msg.replyTo);
+	  pdata->msg.replyTo = tmpstr2;
+	  break;
+        case POP_SENTTO:
+	  tmpstr2 = add_strings(pdata->msg.sentTo, tmpstr);
+	  if (pdata->msg.sentTo != NULL)
+	    MemPtrFree(pdata->msg.sentTo);
+	  pdata->msg.sentTo = tmpstr2;
+	  break;
+        case POP_DATE:
+	  tmpstr2 = add_strings(pdata->msg.date, tmpstr);
+	  if (pdata->msg.date != NULL)
+	    MemPtrFree(pdata->msg.date);
+	  pdata->msg.date = tmpstr2;
+	  break;
+        case POP_STATUS:
+	  tmpstr2 = add_strings(pdata->msg.status, tmpstr);
+	  if (pdata->msg.status != NULL)
+	    MemPtrFree(pdata->msg.status);
+	  pdata->msg.status = tmpstr2;
+        case POP_OTHER:
+ 	  clean_rn(tmpstr, StrLen(tmpstr));
+	  tmpstr2 = add_strings(pdata->msg.headers, tmpstr);
+	  if (pdata->msg.headers != NULL)
+	    MemPtrFree(pdata->msg.headers);
+	  pdata->msg.headers = tmpstr2;
+        case POP_NONE:
+        default:
+	  return 0;
+      }
+      if (tmpstr2 == NULL) {
+	return 1;
+      }
+    } else {
+      /* Brand new header - What kind is it? */
+      tmpstr = StrChr(data, ':');
+      if (tmpstr == NULL) {
+	/* No ':' character - bum line - so ignore */
+	pdata->which_header = POP_NONE;
+	return 0;
+      }
+      *tmpstr = '\0';
+      if (StrCaselessCompare(data, "subject") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.subject, tmpstr+1);
+	sleep(2);
+	if (pdata->msg.subject != NULL)
+	  MemPtrFree(pdata->msg.subject);
+	pdata->msg.subject = tmpstr2;
+	pdata->which_header = POP_SUBJECT;
+      } else if (StrCaselessCompare(data, "from") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.from, tmpstr+1);
+	if (pdata->msg.from != NULL)
+	  MemPtrFree(pdata->msg.from);
+	pdata->msg.from = tmpstr2;
+	pdata->which_header = POP_FROM;
+      } else if (StrCaselessCompare(data, "to") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.to, tmpstr+1);
+	if (pdata->msg.to != NULL)
+	  MemPtrFree(pdata->msg.to);
+	pdata->msg.to = tmpstr2;
+	pdata->which_header = POP_TO;
+      } else if (StrCaselessCompare(data, "cc") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.cc, tmpstr+1);
+	if (pdata->msg.cc != NULL)
+	  MemPtrFree(pdata->msg.cc);
+	pdata->msg.cc = tmpstr2;
+	pdata->which_header = POP_CC;
+      } else if (StrCaselessCompare(data, "bcc") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.bcc, tmpstr+1);
+	if (pdata->msg.bcc != NULL)
+	  MemPtrFree(pdata->msg.bcc);
+	pdata->msg.bcc = tmpstr2;
+	pdata->which_header = POP_BCC;
+      } else if (StrCaselessCompare(data, "reply-to") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.replyTo, tmpstr+1);
+	if (pdata->msg.replyTo != NULL)
+	  MemPtrFree(pdata->msg.replyTo);
+	pdata->msg.replyTo = tmpstr2;
+	pdata->which_header = POP_REPLYTO;
+      } else if (StrCaselessCompare(data, "sent-to") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.sentTo, tmpstr+1);
+	if (pdata->msg.sentTo != NULL)
+	  MemPtrFree(pdata->msg.sentTo);
+	pdata->msg.sentTo = tmpstr2;
+	pdata->which_header = POP_SENTTO;
+      } else if (StrCaselessCompare(data, "date") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.date, tmpstr+1);
+	if (pdata->msg.date != NULL)
+	  MemPtrFree(pdata->msg.date);
+	pdata->msg.date = tmpstr2;
+	pdata->which_header = POP_DATE;
+      } else if (StrCaselessCompare(data, "status") == 0) {
+	eliminate_crlf(data, datalen);
+	tmpstr2 = add_strings(pdata->msg.status, tmpstr+1);
+	if (pdata->msg.status != NULL)
+	  MemPtrFree(pdata->msg.status);
+	pdata->msg.status = tmpstr2;
+	pdata->which_header = POP_STATUS;
+      } else {
+	/* Unknown header - add to "header" field */
+	*tmpstr = ':';
+	clean_rn(data, StrLen(data));
+	tmpstr2 = add_strings(pdata->msg.headers, data);
+	if (pdata->msg.headers != NULL)
+	  MemPtrFree(pdata->msg.headers);
+	pdata->msg.headers = tmpstr2;
+	pdata->which_header = POP_OTHER;
+	pdata->msg.have_headers = 1;
+      }
+      if (tmpstr2 == NULL) {
+	/* Out of memory in add_strings */
+	return 1;
+      }
+    }  /* finished brand new header */
+  } else {
+    /* We're parsing the message body */
+    return add_to_body(pdata, data, datalen);
+  }
+  return 0;
+}
+
+static void update_window(struct popdata *pdata)
+{
+  StrPrintF(pdata->outmsg, "Retrieving message %d of %d%s%s", pdata->seqno,
+	    pdata->msgnum, ((pdata->prefflags & POPPrefsUnreadOnlyFlag) &&
+	    pdata->msg.status_read) ? " (read)" : "",
+	    pdata->bodyfull ? " (message truncated)" : "");
+  
+    /* Status bar in terms of bytes */
+    pdata->disphand(pdata->outmsg, pdata->bytesread, pdata->bytesinmsg,
+	pdata->diH);
+}
+
+/* Arrange for data to be written, and go to wstate when it is */
+static int pop_writen(CharPtr data, UInt len, VoidHand cbH,
+    enum popstate wstate)
+{
+    struct popdata *pdata;
+    int amt;
+
+    pdata = MemHandleLock(cbH);
+    if (!pdata) {
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    while(len) {
+	amt = send(pdata->s, data, len, 0);
+	if (amt <= 0) return -1;
+	data += amt;
+	len -= amt;
+    }
+
+    pdata->state = wstate;
+    MemHandleUnlock(cbH);
+    return 0;
+}
+
+static int pop_write(CharPtr data, VoidHand cbH, enum popstate wstate)
+{
+    return pop_writen(data, StrLen(data), cbH, wstate);
+}
+
+/* Query the user for what to do about the current message */
+static int pop_query(struct popdata *pdata, VoidHand cbH)
+{
+    int ret = 0;
+    enum popquery_ans answer;
+
+    if ((pdata->prefflags & POPPrefsUnreadOnlyFlag) && 
+	(pdata->msg.status_read)) {
+      answer = POPQUERY_WANTS_NONE;
+    } else {
+      answer = popquery_doquery(pdata);
+    }
+
+    /* Clean out the bits of the header we've already seen; we'll get them
+       again, if necessary. */
+    clean_msg(pdata);
+
+    if (answer == POPQUERY_WANTS_ALL || answer == POPQUERY_WANTS_ALL_DELE ||
+	answer == POPQUERY_WANTS_ALL_DELC) {
+	/* Write out RETR command */
+	StrPrintF(pdata->outmsg, "RETR %d\r\n", pdata->seqno);
+	ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+	pdata->disphand(NULL, 0, 0, pdata->diH);
+	pdata->msg.tobedeleted = (answer == POPQUERY_WANTS_ALL_DELE) ? 1 :
+	    ((answer == POPQUERY_WANTS_ALL_DELC) ? 2 : 0);
+    } else if (answer == POPQUERY_WANTS_NONE ||
+		answer == POPQUERY_WANTS_NONE_DELC) {
+	ret = pop_write("NOOP\r\n", cbH, POP_DELE);
+    } else if (answer == POPQUERY_WANTS_NONE_DELE) {
+	StrPrintF(pdata->outmsg, "Deleting message %d", pdata->seqno);
+	pdata->disphand(pdata->outmsg, 0, 0, pdata->diH);
+	StrPrintF(pdata->outmsg, "DELE %d\r\n", pdata->seqno);
+	ret = pop_write(pdata->outmsg, cbH, POP_DELE);
+    }
+
+    return ret;
+}
+
+/* Handle an incoming line */
+static int pop_line_handler(CharPtr data, UInt datalen, VoidHand cbH)
+{
+    struct popdata *pdata;
+    int ret = 0;
+    Int nummsg;
+    CharPtr tmpstr, tmpstr2;
+    UInt at, attr;
+
+    pdata = MemHandleLock(cbH);
+    if (!pdata) {
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    switch(pdata->state) {
+      case POP_WAIT4_BANNER:
+
+	/* Wait for end of initial telnet banner */
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("POP server refuses to serve mail", "", "");
+	  ret = 1;
+	  break;
+	}
+	pdata->disphand("Sending username", 0, 0, pdata->diH);
+
+	/* Do either USER or APOP, depending on user prefs */
+	if (pdata->prefflags & POPPrefsUseAPOPFlag) {
+	    static MD5_CTX md5;
+	    CharPtr cookie, endcookie;
+	    unsigned char hash[MD5_DIGEST_LENGTH];
+	    char *hs = "0123456789abcdef";
+	    int i;
+
+	    /* Find the cookie */
+	    cookie = data;
+	    while (*cookie && *cookie != '<') ++cookie;
+	    if (*cookie != '<') {
+		/* There was no cookie */
+		show_error("POP server does not speak APOP", "", "");
+		ret = 1;
+		break;
+	    }
+	    /* Find the end of the cookie */
+	    endcookie = cookie;
+	    while(*endcookie && *endcookie != '>') ++endcookie;
+	    if (*endcookie != '>') {
+		/* No end of cookie? */
+		show_error("POP server does not speak APOP", "", "");
+		ret = 1;
+		break;
+	    }
+
+	    /* Calculate MD5(cookie || password) */
+	    MD5_Init(&md5);
+	    MD5_Update(&md5, cookie, endcookie-cookie+1);
+	    tmpstr = MemHandleLock(pdata->passwordH);
+	    if (tmpstr && *tmpstr) {
+		MD5_Update(&md5, tmpstr, StrLen(tmpstr));
+	    } else {
+		MD5_Update(&md5, "nopass", 6);
+	    }
+	    if (tmpstr) {
+		MemHandleUnlock(pdata->passwordH);
+	    }
+	    MD5_Final(hash, &md5);
+
+	    /* Send the APOP and wait for reply */
+	    StrCopy(pdata->outmsg, "APOP ");
+	    tmpstr = MemHandleLock(pdata->useridH);
+	    if (tmpstr && *tmpstr) {
+	      StrCat(pdata->outmsg, tmpstr);
+	    } else {
+	      StrCat(pdata->outmsg, "nobody");
+	    }
+	    if (tmpstr) {
+	      MemHandleUnlock(pdata->useridH);
+	    }
+	    tmpstr = pdata->outmsg + StrLen(pdata->outmsg);
+	    *(tmpstr++) = ' ';
+	    for(i=0;i<MD5_DIGEST_LENGTH;++i) {
+		*(tmpstr++) = hs[(hash[i])>>4];
+		*(tmpstr++) = hs[(hash[i])&0x0f];
+	    }
+	    *(tmpstr++) = '\r';
+	    *(tmpstr++) = '\n';
+	    *tmpstr = '\0';
+	    ret = pop_write(pdata->outmsg, cbH, POP_STAT);
+	} else {
+	    /* Send USER and wait for reply */
+	    StrCopy(pdata->outmsg, "USER ");
+	    tmpstr = MemHandleLock(pdata->useridH);
+	    if (tmpstr && *tmpstr) {
+	      StrCat(pdata->outmsg, tmpstr);
+	    } else {
+	      StrCat(pdata->outmsg, "nobody");
+	    }
+	    if (tmpstr) {
+	      MemHandleUnlock(pdata->useridH);
+	    }
+	    StrCat(pdata->outmsg, "\r\n");
+	    ret = pop_write(pdata->outmsg, cbH, POP_AUTH);
+	}
+        break;
+      case POP_AUTH:
+	/* Wait for response to previous USER */
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("POP server refused USER command", "", "");
+	  ret = 1;
+	  break;
+	}
+	pdata->disphand("Sending password", 0, 0, pdata->diH);	
+	/* Alright, now let's send the password */
+	StrCopy(pdata->outmsg, "PASS ");
+	tmpstr = MemHandleLock(pdata->passwordH);
+	if (tmpstr && *tmpstr) {
+	  StrCat(pdata->outmsg, tmpstr);
+	} else {
+	  StrCat(pdata->outmsg, "nopass");
+	}
+	if (tmpstr) {
+	  MemHandleUnlock(pdata->passwordH);
+	}
+	StrCat(pdata->outmsg, "\r\n");
+	ret = pop_write(pdata->outmsg, cbH, POP_STAT);	
+	break;
+      case POP_STAT:
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("Authentication failed (bad username / password)", "", "");
+	  ret = 1;
+	  break;
+	}
+
+	pdata->disphand("Scanning mailbox", 0, 0, pdata->diH);
+	ret = pop_write("STAT\r\n", cbH, POP_TRANS);
+	break;
+      case POP_TRANS:
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("STAT operation failed", "", "");
+	  ret = 1;
+	  break;
+	}
+
+	/* Now suck down the number of messages outstanding */
+	nummsg = (Int) StrAToI(&(data[4]));
+	if (nummsg > 0) {
+	  pdata->msgnum = nummsg;
+	  pdata->seqno = 1;
+	} else {
+	  pdata->msgnum = pdata->seqno = 0;
+	  pdata->disphand("Closing POP session", 0, 0, pdata->diH);	
+	  ret = pop_write("QUIT\r\n", cbH, POP_QUIT);
+	  break;
+	}
+
+	/* And the number of bytes outstanding */
+	tmpstr2 = StrChr(&(data[4]), ' ');
+	if (tmpstr2 == NULL) {
+	  show_error("Badly formatted result from STAT", "", "");
+	  ret = 1;
+	  break;
+	}
+	pdata->bytesread = 0;
+
+	/* Update status window */
+	update_window(pdata);
+
+	StrPrintF(pdata->outmsg, "LIST %d\r\n", pdata->seqno);
+	ret = pop_write(pdata->outmsg, cbH, POP_LIST);
+	break;
+
+      case POP_LIST:
+        /* Wait for response to previous LIST */
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("Error performing LIST", "", "");
+	  ret = 1;
+	  break;
+	}
+
+	/* Get the number of bytes */
+	tmpstr = StrChr(&(data[4]), ' ');
+	if (tmpstr == NULL) {
+	  show_error("Badly formatted result from LIST", "", "");
+	  ret = 1;
+	  break;
+	}
+	pdata->bytesinmsg = StrAToL(tmpstr+1);
+
+	if (pdata->prefflags & POPPrefsQueryFlag) {
+	    /* We need to find out how big the message is, and get the
+	       headers, so that we can prompt the user */
+	    StrPrintF(pdata->outmsg, "TOP %d 1\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_HEAD);
+	} else {
+	    /* Write out RETR command */
+	    StrPrintF(pdata->outmsg, "RETR %d\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+	    pdata->msg.tobedeleted = (pdata->prefflags & POPPrefsDeleteFlag) ?
+		    ((pdata->prefflags & POPPrefsDeleteNotTruncFlag) ? 2 : 1)
+		    : 0;
+	}
+        break;
+
+      case POP_HEAD:
+	/* Wait for response to previous TOP */
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	    /* Not supporting TOP is not fatal, as it's not required; just
+	       show the selection form. */
+	    ret = pop_query(pdata, cbH);
+	    break;
+	}
+	pdata->state = POP_HEADDATA;
+        break;
+
+      case POP_RETR:
+	/* Wait for response to previous RETR */
+	if ((data[0] != '+') && (data[0] != '-')) break;
+
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("Error performing RETR", "", "");
+	  ret = 1;
+	  break;
+	}
+	pdata->state = POP_DATA;
+	break;
+	
+      case POP_DATA:
+      case POP_HEADDATA:
+	if (!StrCompare(data, ".\r\n")) {
+	  if (pdata->state == POP_DATA) {
+	    if ((pdata->prefflags & POPPrefsUnreadOnlyFlag) &&
+		pdata->msg.status_read) {
+	      /* We got the whole message, but it was already read and the
+	         user doesn't want us to store those. */
+	      MemHandleFree(pdata->newRecord);
+	      pdata->newRecord = NULL;
+	      pdata->bodyfull = 0;
+	      ret = pop_write("NOOP\r\n", cbH, POP_DELE);
+	    } else {
+	      int wascomplete = !(pdata->bodyfull);
+
+	      /* Add any extra headers to the bottom of the body */
+	      if (!(pdata->bodyfull) &&
+		(pdata->prefflags & POPPrefsPasteHeadersBottomFlag) &&
+		pdata->msg.have_headers != 0) {
+		  int hdrLen;
+		  CharPtr tmpptr;
+
+		  /* First add the separator line */
+		  if (add_to_body(pdata, "===== Extra headers =====\n", 26)) {
+		    return 1;
+		  }
+		  /* Now add the other headers */
+		  hdrLen = StrLen(pdata->msg.headers);
+		  if (MemHandleResize(pdata->newRecord, pdata->msg.headerlen +
+		    pdata->msg.bodylen + hdrLen)) {
+		    pdata->bodyfull = 1;
+		  } else {
+		    tmpptr = MemHandleLock(pdata->newRecord);
+		    if (!tmpptr) {
+		      show_error("MemHandleLock failed appending headers",
+				    "", "");
+		      MemHandleFree(pdata->newRecord);
+		      pdata->newRecord = NULL;
+		      return 1;
+		    }
+		    DmWrite(tmpptr, pdata->msg.headerlen +
+			    pdata->msg.bodylen-1, pdata->msg.headers,
+			    hdrLen+1);
+		    MemHandleUnlock(pdata->newRecord);
+		    pdata->msg.bodylen += hdrLen;
+		  }
+	      }
+	      /* Finished with this message. File it. */
+	      at = pdata->nummsgs;
+	      if (DmAttachRecord(pdata->maildb, &at, (Handle) pdata->newRecord,
+				 NULL)) {
+		MemHandleFree(pdata->newRecord);
+		pdata->newRecord = NULL;
+		pdata->bodyfull = 0;
+		show_error("Failure while attaching record", "", "");
+		return 1;
+	      }
+	      pdata->bodyfull = 0;
+	      pdata->newRecord = NULL; /* So it doesn't get freed later 
+					  in clean_msg() */
+	      if (!DmRecordInfo(pdata->maildb, at, &attr, NULL, NULL)) {
+		attr &= ~dmRecAttrCategoryMask;
+		attr |= 0;  /* Inbox */
+		DmSetRecordInfo(pdata->maildb, at, &attr, NULL);
+	      }
+	      /* OK, we've added the message! */
+	      pdata->nummsgs += 1;
+
+	      /* See whether to delete this message from the server */
+	      if (pdata->msg.tobedeleted == 1 || (pdata->msg.tobedeleted == 2
+		&& wascomplete)) {
+		StrPrintF(pdata->outmsg, "Deleting message %d", pdata->seqno);
+		pdata->disphand(pdata->outmsg, 0, 0, pdata->diH);
+		StrPrintF(pdata->outmsg, "DELE %d\r\n", pdata->seqno);
+		ret = pop_write(pdata->outmsg, cbH, POP_DELE);
+	      } else {
+		ret = pop_write("NOOP\r\n", cbH, POP_DELE);
+		break;
+	      }
+	    }
+	  } else {
+	    ret = pop_query(pdata, cbH);
+	    break;
+	  }
+	} else {
+	  pdata->bytesread += datalen;
+	  /* Update status window */
+	  update_window(pdata);
+	  if (add_line_to_msg(pdata, data, datalen) == 1) {
+	    ret = 1;
+	    break;
+	  }
+	}
+	break;
+
+      case POP_DELE:
+	if ((data[0] != '+') && (data[0] != '-')) break;
+	
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("POP server refused DELE command", "", "");
+	  ret = 1;
+	  break;
+	}
+
+	clean_msg(pdata);
+
+	/* Get next message, if available */
+	if (pdata->seqno < pdata->msgnum) {
+	    pdata->seqno++;
+
+	    /* Update status window */
+	    update_window(pdata);
+
+	    /* We need to find out how big the next message is */
+	    StrPrintF(pdata->outmsg, "LIST %d\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_LIST);
+	    break;
+	} else {
+	    pdata->disphand("Closing POP session", 0, 0, pdata->diH);	
+	    ret = pop_write("QUIT\r\n", cbH, POP_QUIT);
+	    break;
+	}
+        break;
+
+      case POP_QUIT:
+	if ((data[0] != '+') && (data[0] != '-')) break;
+	
+	/* Check for +OK case insensitively */
+	if ((datalen < 3) || (data[0] != '+') || 
+	    ((data[1] != 'O') && (data[1] != 'o')) ||
+	    ((data[2] != 'K') && (data[2] != 'k'))) {
+	  show_error("POP server refused QUIT command", "", "");
+	  ret = 1;
+	  break;
+	}
+	
+	/* OK, close connection */
+	ret = 1;
+	break;
+      default:
+	break;
+    }
+    MemHandleUnlock(cbH);
+    return ret;
+}
+
+/* Handle incoming data */
+static int pop_handler(CharPtr data, UInt len, VoidHand cbH)
+{
+    static Char linebuf[MAXLINESIZE+1] = { "" };
+    static UInt linebuflen = 0;
+    int ret;
+
+    /* Accumulate buffers full of lines */
+    while(len) {
+	/* Find the length of the next segment */
+	int sawnl = 0;
+	UInt seglen;
+
+	for(seglen = 0; seglen < len; ++seglen) {
+	    if (data[seglen] == '\n') {
+		sawnl = 1;
+		++seglen;
+		break;
+	    }
+	}
+	if (seglen > MAXLINESIZE - linebuflen) {
+	    seglen = MAXLINESIZE - linebuflen;
+	}
+	MemMove(linebuf+linebuflen, data, seglen);
+	data += seglen;
+	len -= seglen;
+	linebuflen += seglen;
+	linebuf[linebuflen] = '\0';
+
+	if (sawnl || linebuflen == MAXLINESIZE) {
+	    /* Handle a line of data */
+	    ret = pop_line_handler(linebuf, linebuflen, cbH);
+	    linebuflen = 0;
+	    if (ret) return ret;
+	}
+    }
+    return 0;
+}
+
+/* Close a POP connection */
+static void pop_finish(struct sockhandler *sh)
+{
+    struct popdata *pdata;
+
+    close(sh->s);
+    sh->s = -1;
+    sh->handler = NULL;
+    sh->finish = NULL;
+    pdata = MemHandleLock(sh->cbH);
+    if (pdata) {
+	pdata->disphand("Done", 0, 0, pdata->diH);
+	if (pdata->useridH) MemHandleFree(pdata->useridH);
+	if (pdata->passwordH) MemHandleFree(pdata->passwordH);
+	DmCloseDatabase(pdata->maildb);
+	clean_msg(pdata);
+    }
+    MemHandleUnlock(sh->cbH);
+    MemHandleFree(sh->cbH);
+    sh->cbH = NULL;
+}
+
+/* Start up a POP connection. */
+int pop_start(struct sockhandler *sh,
+    void (*disphand)(CharPtr, ULong, ULong, VoidHand), VoidHand diH,
+    CharPtr popserver, CharPtr userid, CharPtr password,
+    unsigned char prefflags, unsigned int truncsize)
+{
+    Err err;
+    struct hostent *hres;
+    ULong **addrp;
+    UInt popport = 110;
+    struct sockaddr_in sockaddr;
+    LocalID maildbID;
+    DmOpenRef maildb;
+    NetSocketRef s;
+    VoidHand pdataH;
+    struct popdata *pdata;
+    VoidHand theuseridH, thepasswordH;
+    CharPtr  theuserid, thepassword;
+
+    /* Store the userid and password */
+    theuseridH = MemHandleNew(userid ? StrLen(userid)+1 : 7);
+    theuserid = MemHandleLock(theuseridH);
+    StrCopy(theuserid, userid ? userid : "nobody");
+    MemHandleUnlock(theuseridH);
+    thepasswordH = MemHandleNew(password ? StrLen(password)+1 : 7);
+    thepassword = MemHandleLock(thepasswordH);
+    StrCopy(thepassword, password ? password : "nopass");
+    MemHandleUnlock(thepasswordH);
+
+    /* Get some info from the database */
+    maildbID = DmFindDatabase (0, "MailDB" );
+    if (!maildbID) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	return -1;
+    }
+
+    maildb = DmOpenDatabase(0, maildbID, dmModeReadWrite);
+    if (!maildb) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	return -1;
+    }
+
+    /* Look up the IP address of the POP server */
+    hres = gethostbyname(popserver ? popserver : "popserver");
+    if (!hres) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	DmCloseDatabase(maildb);
+	show_error("Unable to resolve POP server hostname \"",
+	    popserver ? popserver : "popserver", "\"");
+	return -1;
+    }
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_port = htons(popport);
+    sockaddr.sin_addr.s_addr = INADDR_ANY;
+    for(addrp=(ULong **)hres->h_addr_list;*addrp;++addrp) {
+	ULong a = htonl(**addrp);
+	if (a != INADDR_ANY) {
+	    sockaddr.sin_addr.s_addr = a;
+	    break;
+	}
+    }
+
+    s = socket(PF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	DmCloseDatabase(maildb);
+	show_error("Cannot create socket", "", "");
+	return -1;
+    }
+
+    err = connect(s, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
+    if (err) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	DmCloseDatabase(maildb);
+	close(s);
+	show_error("Could not connect to POP server", "", "");
+	return -1;
+    }
+    
+    /* We are connected.  Set up the callbacks. */
+    pdataH = MemHandleNew(sizeof(struct popdata));
+    if (!pdataH) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	DmCloseDatabase(maildb);
+	close(s);
+	show_error("Out of memory", "", "");
+	return -1;
+    }
+    pdata = (struct popdata *)MemHandleLock(pdataH);
+    if (!pdata) {
+	MemHandleFree(theuseridH);
+	MemHandleFree(thepasswordH);
+	DmCloseDatabase(maildb);
+	close(s);
+	MemHandleFree(pdataH);
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    /* Initialize the POP data state */
+    pdata->s = s;
+    pdata->state = POP_WAIT4_BANNER;
+    pdata->useridH = theuseridH;
+    pdata->passwordH = thepasswordH;
+    pdata->prefflags = prefflags;
+    pdata->truncsize = truncsize;
+    pdata->maildb = maildb;
+    pdata->seqno = 0;
+    pdata->msgnum = 0;
+    pdata->nummsgs = DmNumRecords(maildb);
+    pdata->bytesread = 0;
+    pdata->bytesinmsg = 0;
+    pdata->parse_header = 1;
+    pdata->which_header = POP_NONE;
+    pdata->disphand = disphand;
+    pdata->diH = diH;
+    pdata->disphand("Connected to POP server", 0, 0, pdata->diH);
+    pdata->newRecord = NULL;
+    pdata->bodyfull = 0;
+
+    /* Initialize the Mail structure */
+    pdata->msg.read = 0;
+    pdata->msg.sig = 0;
+    pdata->msg.confRead = 0;
+    pdata->msg.confDeliv = 0;
+    pdata->msg.prio = 0;
+    pdata->msg.addressing = 0;
+    pdata->msg.subject = NULL;
+    pdata->msg.from = NULL;
+    pdata->msg.to = NULL;
+    pdata->msg.cc = NULL;
+    pdata->msg.bcc = NULL;
+    pdata->msg.replyTo = NULL;
+    pdata->msg.sentTo = NULL;
+    pdata->msg.date = NULL;
+    pdata->msg.status = NULL;
+    pdata->msg.headers = NULL;
+    pdata->msg.bodylen = 0;
+    pdata->msg.headerlen = 0;
+    pdata->msg.have_headers = 0;
+    pdata->msg.tobedeleted = 0;
+    pdata->msg.status_read = 0;
+
+    MemHandleUnlock(pdataH);
+    sh->s = s;
+    sh->handler = pop_handler;
+    sh->finish = pop_finish;
+    sh->cbH = pdataH;
+
+    return 0;
+}
+@
+
+
+1.15
+log
+@o Added message truncation size selection to POP options
+@
+text
+@d2 1
+a2 1
+#include <sys/types.h>
+@
+
+
+1.14
+log
+@o Added option for deleting meesages from the server only if the message
+  was completely downloaded
+@
+text
+@d319 3
+d339 4
+d1092 1
+a1092 1
+    unsigned char prefflags)
+d1199 1
+@
+
+
+1.13
+log
+@o Edit menu in Prefs screens
+o To: and Cc: displayed in query form
+o Ability to paste headers at bottom of message
+@
+text
+@d591 2
+a592 1
+    if (answer == POPQUERY_WANTS_ALL || answer == POPQUERY_WANTS_ALL_DELE) {
+d597 4
+a600 2
+	pdata->msg.tobedeleted = (answer == POPQUERY_WANTS_ALL_DELE);
+    } else if (answer == POPQUERY_WANTS_NONE) {
+d835 2
+a836 1
+				    1 : 0;
+d884 2
+d940 2
+a941 1
+	      if (pdata->msg.tobedeleted) {
+@
+
+
+1.12
+log
+@o Fixed PPP up/down confusion problem
+o Removed call to FrmCustomAlert(), as it tends to crash the Pilot
+o Fixed memory leak if connect() fails
+o Fixed bug wherein "Send mail" sometimes acts like "Both"
+@
+text
+@d880 32
+@
+
+
+1.11
+log
+@Save only unread option
+@
+text
+@d1074 2
+d1081 2
+d1087 1
+a1087 1
+    hres = gethostbyname(popserver ? popserver : "10.0.0.1");
+d1089 3
+d1093 1
+a1093 1
+	    popserver ? popserver : "10.0.0.1", "\"");
+d1109 3
+d1118 4
+d1129 4
+d1138 5
+@
+
+
+1.10
+log
+@Getting there..
+@
+text
+@d534 4
+a537 2
+  StrPrintF(pdata->outmsg, "Retrieving message %d of %d%s", pdata->seqno,
+	    pdata->msgnum, pdata->bodyfull ? " (message truncated)" : "");
+a538 4
+  if (pdata->totbytes == 0) {
+    /* Status bar in terms of messages */
+    pdata->disphand(pdata->outmsg, (pdata->seqno)-1, pdata->msgnum, pdata->diH);
+  } else {
+d540 2
+a541 2
+    pdata->disphand(pdata->outmsg, pdata->bytesread, pdata->bytesinmsg, pdata->diH);
+  }
+d614 1
+a614 1
+    Int nummsg, numbyte;
+d791 1
+a791 8
+	numbyte = (Int) StrAToI(tmpstr2+1);
+	if (numbyte > 0) {
+	  pdata->totbytes = numbyte;
+	  pdata->bytesread = 0;
+	} else {
+	  pdata->totbytes = 0;
+	  pdata->bytesread = 0;
+	}
+a870 1
+	    /* Finished with this message. File it. */
+d873 2
+d880 1
+a1133 1
+    pdata->totbytes = 0;
+@
+
+
+1.9
+log
+@Whoops.
+@
+text
+@d46 8
+d582 6
+a587 1
+    answer = popquery_doquery(pdata);
+d879 9
+a887 2
+	    if (pdata->state == POP_DATA) {
+	      /* Finished with this message. File it. */
+d890 1
+a890 1
+		    NULL)) {
+a917 3
+	    } else {
+		ret = pop_query(pdata, cbH);
+		break;
+d919 4
+@
+
+
+1.8
+log
+@Status header being captured, moved #define TGPOSTMAN_VERSION to TGpostman.h.
+@
+text
+@d1146 1
+@
+
+
+1.7
+log
+@bug fixes?
+@
+text
+@d180 4
+d192 1
+d410 6
+a415 1
+      case POP_OTHER:
+d494 7
+d1151 1
+@
+
+
+1.6
+log
+@Couple of bug fixes - bytesinmsg now read from StrAToL, and TOP command
+issues TOP <msg> 1 instead of TOP <msg> 0 to get around Linux bug.
+@
+text
+@d64 1
+d115 1
+a115 1
+  if ((pdata->prefflags & POPPrefsPasteHeadersFlag) &&
+d119 2
+a120 4
+      show_error("Out of memory adding to body of message", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+d193 1
+d283 4
+a286 1
+  /* We want to keep writing data and keeping one NULL at the end of
+d293 2
+a294 4
+      show_error("Out of memory adding body to message", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+d310 2
+a311 4
+      show_error("Out of memory adding body to message", "", "");
+      MemHandleFree(pdata->newRecord);
+      pdata->newRecord = NULL;
+      return 1;
+d509 2
+a510 2
+  StrPrintF(pdata->outmsg, "Retrieving message %d of %d", pdata->seqno,
+	    pdata->msgnum);
+d856 1
+d860 1
+d1111 2
+@
+
+
+1.5
+log
+@DELE now works.  That should be it, folks!
+@
+text
+@d10 13
+d68 1
+d120 1
+d127 1
+d190 4
+d292 1
+d299 1
+d311 1
+d318 1
+d800 1
+a800 1
+	pdata->bytesinmsg = (Int) StrAToI(tmpstr+1);
+d805 1
+a805 1
+	    StrPrintF(pdata->outmsg, "TOP %d 0\r\n", pdata->seqno);
+d856 1
+d860 2
+@
+
+
+1.4
+log
+@Whoa momma
+@
+text
+@d172 1
+d540 1
+a540 1
+    if (answer == POPQUERY_WANTS_ALL) {
+d544 2
+d547 6
+a552 14
+	/* Get next message, if available */
+	if (pdata->seqno < pdata->msgnum) {
+	    pdata->seqno++;
+
+	    /* Update status window */
+	    update_window(pdata);
+	    
+	    /* Write out the next LIST command */
+	    StrPrintF(pdata->outmsg, "LIST %d\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_LIST);
+        } else {
+	    pdata->disphand("Closing POP session", 0, 0, pdata->diH);	
+	    ret = pop_write("QUIT\r\n", cbH, POP_QUIT);
+	}
+d752 2
+a753 10
+	if (pdata->prefflags & POPPrefsQueryFlag) {
+	    /* We need to find out how big the message is, and get the
+	       headers, so that we can prompt the user */
+	    StrPrintF(pdata->outmsg, "LIST %d\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_LIST);
+	} else {
+	    /* Write out RETR command */
+	    StrPrintF(pdata->outmsg, "RETR %d\r\n", pdata->seqno);
+	    ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+	}
+d778 12
+a789 3
+	/* Now (heh heh) try to get _just_ the headers */
+	StrPrintF(pdata->outmsg, "TOQ %d 0\r\n", pdata->seqno);
+	ret = pop_write(pdata->outmsg, cbH, POP_HEAD);
+a841 1
+	      clean_msg(pdata);
+d843 6
+a848 18
+	      /* Get next message, if available */
+	      if (pdata->seqno < pdata->msgnum) {
+		pdata->seqno++;
+
+		/* Update status window */
+		update_window(pdata);
+		
+		if (pdata->prefflags & POPPrefsQueryFlag) {
+		    /* We need to find out how big the next message is,
+			and get the headers, so that we can prompt the user */
+		    StrPrintF(pdata->outmsg, "LIST %d\r\n", pdata->seqno);
+		    ret = pop_write(pdata->outmsg, cbH, POP_LIST);
+		} else {
+		    /* Write out RETR command */
+		    StrPrintF(pdata->outmsg, "RETR %d\r\n", pdata->seqno);
+		    ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+		}
+		break;
+d850 1
+a850 2
+		pdata->disphand("Closing POP session", 0, 0, pdata->diH);	
+		ret = pop_write("QUIT\r\n", cbH, POP_QUIT);
+d867 33
+d1103 1
+@
+
+
+1.3
+log
+@APOP, header pasting selection
+@
+text
+@d6 1
+a9 59
+enum popstate { POP_WAIT4_BANNER, POP_AUTH, POP_STAT, POP_TRANS, POP_RETR, 
+		POP_DATA, POP_QUIT};
+
+enum popheaders { POP_SUBJECT, POP_FROM, POP_TO, POP_CC, POP_BCC,
+		  POP_REPLYTO, POP_SENTTO, POP_DATE, POP_OTHER, 
+		  POP_NONE };
+
+#define MAXLINESIZE 256
+
+typedef struct Mail {
+    int read;
+    int sig;
+    int confRead;
+    int confDeliv;    /* Becomes Return-Receipt-To: */
+    int prio;         /* Becomes Priority: */
+    int addressing;
+
+    /* Headers from the mail message */
+    CharPtr subject;
+    CharPtr from;
+    CharPtr to;
+    CharPtr cc;
+    CharPtr bcc;
+    CharPtr replyTo;
+    CharPtr sentTo;
+    CharPtr date;
+
+    /* All other headers from the mail body */
+    CharPtr headers;
+    UInt    have_headers;
+
+    /* The rest of the body */
+    UInt    bodylen;
+    UInt    headerlen;
+
+} MailMsg;
+
+struct popdata {
+    NetSocketRef s;
+    enum popstate state;
+    DmOpenRef maildb;
+    int msgnum;    /* how many messages are there to process in total? */
+    int seqno;     /* which message are we processing? */
+    int nummsgs;   /* number of messages in inbox now */
+    int totbytes;  /* total number of bytes to read */
+    int bytesread; /* bytes read so far */
+    char parse_header;  /* are we still parsing the header? */
+    enum popheaders which_header;  /* which header are we parsing? */
+    VoidHand HELOnameH;
+    VoidHand useridH;
+    VoidHand passwordH;
+    unsigned char prefflags;
+    void (*disphand)(CharPtr, UInt, UInt, VoidHand);
+    VoidHand diH;
+    MailMsg msg;
+    Char outmsg[MAXLINESIZE+1];
+    VoidHand newRecord;
+};
+
+d172 1
+d256 6
+d485 2
+a486 4
+  StrCopy(pdata->outmsg, "Retrieving message ");
+  StrIToA(&((pdata->outmsg)[StrLen(pdata->outmsg)]), pdata->seqno);
+  StrCat(pdata->outmsg, " of ");
+  StrIToA(&((pdata->outmsg)[StrLen(pdata->outmsg)]), pdata->msgnum);
+d493 1
+a493 1
+    pdata->disphand(pdata->outmsg, pdata->bytesread, pdata->totbytes, pdata->diH);
+d527 35
+d733 2
+a734 2
+	  show_error("No messages to retrieve", "", "");
+	  ret = 1;
+d757 10
+a766 5
+	/* Write out RETR command */
+	StrCopy(pdata->outmsg, "RETR ");
+	StrIToA(&((pdata->outmsg)[5]), pdata->seqno);
+	StrCat(pdata->outmsg, "\r\n");
+	ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+d768 44
+d826 1
+d828 47
+a874 37
+	
+	if ((data[0] == '.') && (data[1] == '\r')) {
+
+	  /* Finished with this message. File it. */
+	  at = pdata->nummsgs;
+	  if (DmAttachRecord(pdata->maildb, &at, (Handle) pdata->newRecord, NULL)) {
+	    MemHandleFree(pdata->newRecord);
+	    show_error("Failure while attaching record", "", "");
+	    return 1;
+	  }
+	  if (!DmRecordInfo(pdata->maildb, at, &attr, NULL, NULL)) {
+	    attr &= ~dmRecAttrCategoryMask;
+	    attr |= 0;  /* Inbox */
+	    DmSetRecordInfo(pdata->maildb, at, &attr, NULL);
+	  }
+	  /* OK, we've added the message! */
+	  pdata->nummsgs += 1;
+	  clean_msg(pdata);
+
+	  /* Get next message, if available */
+	  if (pdata->seqno < pdata->msgnum) {
+	    pdata->seqno++;
+
+	    /* Update status window */
+	    update_window(pdata);
+	    
+	    /* Write out RETR command */
+	    StrCopy(pdata->outmsg, "RETR ");
+	    StrIToA(&((pdata->outmsg)[5]), pdata->seqno);
+	    StrCat(pdata->outmsg, "\r\n");
+	    ret = pop_write(pdata->outmsg, cbH, POP_RETR);
+	    break;
+	  } else {
+	    pdata->disphand("Closing POP session", 0, 0, pdata->diH);	
+	    ret = pop_write("QUIT\r\n", cbH, POP_QUIT);
+	    break;
+	  }
+a957 1
+	if (pdata->HELOnameH) MemHandleFree(pdata->HELOnameH);
+d970 1
+a970 1
+    void (*disphand)(CharPtr, UInt, UInt, VoidHand), VoidHand diH,
+a978 1
+    SWord socklen;
+d984 2
+a985 2
+    VoidHand theHELOnameH, theuseridH, thepasswordH;
+    CharPtr  theHELOname, theuserid, thepassword;
+a1037 10
+    /* Now try to figure out our IP address, and construct the HELOnameH */
+    socklen = sizeof(sockaddr);
+    getsockname(s, &sockaddr, &socklen);
+    theHELOnameH = MemHandleNew(16);
+    theHELOname = MemHandleLock(theHELOnameH);
+    StrPrintF(theHELOname, "%d.%d.%d.%d", sockaddr.sin_addr.S_un.S_un_b.s_b1,
+	sockaddr.sin_addr.S_un.S_un_b.s_b2, sockaddr.sin_addr.S_un.S_un_b.s_b3,
+	sockaddr.sin_addr.S_un.S_un_b.s_b4);
+    MemHandleUnlock(theHELOnameH);
+
+a1052 1
+    pdata->HELOnameH = theHELOnameH;
+d1062 1
+@
+
+
+1.2
+log
+@Headers work.
+@
+text
+@d5 1
+d7 1
+d60 1
+d158 2
+a159 1
+  if (pdata->msg.have_headers != 0) {
+d490 1
+a490 1
+      } else if (StrCaselessCompare(data, "replyto") == 0) {
+d497 1
+a497 1
+      } else if (StrCaselessCompare(data, "sentto") == 0) {
+d612 62
+a673 5
+	/* OK, send USER and wait for reply */
+	StrCopy(pdata->outmsg, "USER ");
+	tmpstr = MemHandleLock(pdata->useridH);
+	if (tmpstr && *tmpstr) {
+	  StrCat(pdata->outmsg, tmpstr);
+d675 13
+a687 4
+	  StrCat(pdata->outmsg, "nobody");
+	}
+	if (tmpstr) {
+	  MemHandleUnlock(pdata->useridH);
+a688 2
+	StrCat(pdata->outmsg, "\r\n");
+	ret = pop_write(pdata->outmsg, cbH, POP_AUTH);
+d930 2
+a931 1
+    CharPtr popserver, CharPtr userid, CharPtr password)
+d1026 1
+@
+
+
+1.1
+log
+@POP code.
+@
+text
+@d11 2
+a12 1
+		  POP_REPLYTO, POP_SENTTO, POP_DATE, POP_NONE };
+d34 1
+a34 1
+    /* Headers from the mail body */
+d36 1
+a36 2
+    /* Which of the message headers were overridden in the body headers */
+    UInt hdroverride;
+d82 1
+a82 1
+  UInt recordsize = 0, at;
+a150 1
+/* Body will get filled in bit by bit, later */
+d153 21
+d223 1
+a223 1
+  pdata->msg.hdroverride = 0;
+d287 1
+a287 1
+static int add_to_body(struct popdata *pdata, CharPtr addme, UInt len)
+d289 1
+a289 2
+  CharPtr tmpptr;
+  UInt    i;
+a290 1
+  /* First, run through string and change \r\n\0 to \n\0 */
+d292 4
+a295 4
+    if (addme[i] == '\r') {
+      if ((addme[i+1] == '\n') && (addme[i+2] == '\0')) {
+	addme[i] = '\n';
+	addme[i+1] = '\0';
+d300 8
+a373 1
+    eliminate_crlf(data, datalen);
+d377 2
+d428 6
+a442 1
+
+d451 1
+d459 1
+d466 1
+d473 1
+d480 1
+d487 1
+d494 1
+d501 1
+d508 9
+a516 3
+	/* Unknown header - ignore */
+	pdata->which_header = POP_NONE;
+	return 0;
+a984 1
+    pdata->msg.hdroverride = 0;
+d987 1
+@

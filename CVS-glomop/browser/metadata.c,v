@@ -1,0 +1,383 @@
+head	1.9;
+access;
+symbols
+	v15b:1.9
+	v10b3:1.9
+	v10b2:1.9
+	v10b1:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	97.10.22.00.34.13;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.10.22.00.11.29;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.10.21.21.08.11;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.10.21.03.30.30;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.11.23.37.45;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.11.19.59.30;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.11.16.59.41;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.09.11.00.47.18;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.09.10.05.50.52;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@.
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "metadata.h"
+#include "aggform.h"
+
+/* 
+ * THE FORMAT OF THE METADATA IS...
+ * WORD TYPE, WORD SIZE, SIZE*BYTE DATA...
+ * IN NETWORK ORDER OF COURSE.
+ */
+
+/* 
+ * trys to find the metaData tag with type type in the metadata data.
+ * if it put that size in size and return a pointer to the start
+ * of the data (if size is non NULL).
+ */
+static void * FindType(void * data, ULong dataSize, MetaType type, 
+		       Word *size) {
+  Word t;
+  Word s;
+  Word seen;
+
+  seen = 0;  
+  while (seen+(2*sizeof(Word)) <= dataSize) {    
+    t =  *((Word *) ((void *) data+seen));
+    s = *((Word *) ((void *) data+seen+sizeof(Word)) );
+    
+    if ((t == type) && (seen+s+2*sizeof(Word) <= dataSize)) {
+      if (size) {*size = s;}
+      return (data + seen + 2*sizeof(Word));
+    }
+    seen += s + 2*sizeof(Word);
+  }
+    
+  if (size) {*size = 0;}
+  return NULL;
+}
+
+/* 
+ * returns expr time for the page.  If no expr time returns 0.
+ */
+ULong ExprTime(VoidHand metaData) {
+  ULong dataSize;
+  ULong exprtime = 0;
+  Word size;
+  void * data;
+  void * info;
+  
+  if (metaData) {
+    data = MemHandleLock(metaData);
+    dataSize = MemHandleSize(metaData);
+    
+    if ((info = FindType(data, dataSize, MetaCacheExpr, &size)) != NULL) {
+	exprtime = *((ULong *)info);
+    }
+
+    MemHandleUnlock(metaData);
+  }
+
+  return exprtime;
+}
+
+/* 
+ * returns page type for the page
+ */
+PageType GetPageType(VoidHand metaData) {
+  ULong dataSize;
+  PageType type = PageTypeRegular;
+  Word size;
+  void * data;
+  void * info;
+  
+  if (metaData) {
+    data = MemHandleLock(metaData);
+    dataSize = MemHandleSize(metaData);
+    
+    if ((info = FindType(data, dataSize, MetaPageType, &size)) != NULL) {
+	type = *((Word *)info);
+    }
+
+    MemHandleUnlock(metaData);
+  }
+
+  return type;
+}
+
+/* 
+ * check to see if there's a new agglist in the metadata
+ */
+void CheckAggList(VoidHand metaData) {
+  ULong dataSize;
+  Word size;
+  void * data;
+  void * info;
+  
+  if (metaData) {
+    data = MemHandleLock(metaData);
+    dataSize = MemHandleSize(metaData);
+    
+    if ((info = FindType(data, dataSize, MetaAggList, &size)) != NULL) {
+        /* We have a new agg list; install it */
+	GotAggList(info, size);
+    }
+
+    MemHandleUnlock(metaData);
+  }
+}
+
+/* Construct a handle to a newly-created metadata block, consisting of
+   "num" fields, with values taken from the array "fields".  The length of
+   the result is stored in *rlen */
+VoidHand MakeMetaData(MetaField *fields, int num, DWord *rlen)
+{
+    int i;
+    DWord totlen = 0;
+    VoidHand hnd;
+    CharPtr metadata, curptr;
+
+    /* Calculate the total length of the metadata */
+    for(i=0;i<num;++i) {
+	totlen += fields[i].len + 2*sizeof(Word);
+    }
+    if (rlen) *rlen = totlen;
+
+    /* Bail early if there's nothing to do */
+    if (totlen == 0) {
+	return NULL;
+    }
+
+    /* Allocate that amount */
+    hnd = MemHandleNew(totlen);
+    if (!hnd) {
+	/* Bail; *rlen != 0 && hnd == NULL implies error */
+	return NULL;
+    }
+
+    metadata = MemHandleLock(hnd);
+    if (!metadata) {
+	MemHandleFree(hnd);
+	return NULL;
+    }
+
+    /* Construct the metadata */
+    curptr = metadata;
+    for (i=0;i<num;++i) {
+	*(Word *)curptr = fields[i].type; curptr += 2;
+	*(Word *)curptr = fields[i].len; curptr += 2;
+	if (fields[i].len) MemMove(curptr, fields[i].data, fields[i].len);
+	curptr += fields[i].len;
+    }
+
+    /* That's all */
+    MemHandleUnlock(hnd);
+    return hnd;
+}
+@
+
+
+1.8
+log
+@All the agglist retrieval seems to work now! :-)
+@
+text
+@d4 1
+@
+
+
+1.7
+log
+@Store the received agglist in preferences.  _Using_ those prefs still doesn't
+work...
+@
+text
+@a3 1
+#include "aggform.h"
+d101 1
+a101 1
+	PrefSetAppPreferences(APPTYPE, AGG_LIST_PREF, 0, info, size, 1);
+@
+
+
+1.6
+log
+@Added support for non-page pages (agglists and prcs)
+@
+text
+@d4 1
+d85 22
+@
+
+
+1.5
+log
+@o FlushCache was causing a fatal error.  The problem was the following:
+
+  for (i = numRecs-1; i >= 0; i--) {
+
+  where i was an _unsigned_ long.
+  Note that the i >= 0 test can never fail. (D'oh!)
+
+o Error pages were _still_ being cached.  I tracked the problem down to the
+  following line (in metadata.c):
+
+  if (info == FindType(data, dataSize, CacheExpr, &size)) {
+
+  That == should have been = (Double D'oh!)
+
+o This morning, Anthony told me about a memory handle fatal error he found
+  but couldn't replicate.  I found it, replicated it, and fixed it.  The
+  bug occured when you fetch a non-error page after fetching an error page.
+  The problem was that a metadata handle wasn't being set to NULL if there
+  was no metadata; instead it kept its previous value.
+@
+text
+@d39 1
+a39 1
+ * returns expr time for the mage.  If no expr time returns 0.
+d52 1
+a52 1
+    if ((info = FindType(data, dataSize, CacheExpr, &size)) != NULL) {
+d55 2
+d60 24
+@
+
+
+1.4
+log
+@Added ability for browser to send "Pragma: no-cache" is the user hits "Reload"
+@
+text
+@d43 1
+a49 1
+    
+d52 2
+a53 5
+    if (info == FindType(data, dataSize, CacheExpr, &size)) {
+      if (*((ULong*) info)) {
+	MemHandleUnlock(metaData);
+	return *((ULong*) info);	
+      }
+a54 1
+    MemHandleUnlock(metaData);
+d57 1
+a57 1
+  return 0;
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d7 1
+a7 1
+ * SWORD TYPE, SWORD SIZE, SIZE*BYTE DATA...
+d17 3
+a19 3
+		       SWord *size) {
+  SWord t;
+  SWord s;
+d23 3
+a25 3
+  while (seen <= dataSize-(2*sizeof(SWord))) {    
+    t =  *((SWord *) ((void *) data+seen));
+    s = *((SWord *) ((void *) data+seen+sizeof(SWord)) );
+d27 1
+a27 1
+    if ((t == type) && (seen+s+2*sizeof(SWord) <= dataSize)) {
+d29 1
+a29 1
+      return (data + seen + 2*sizeof(SWord));
+d31 1
+a31 1
+    seen += s + 2*sizeof(SWord);
+d43 1
+a43 1
+  SWord size;
+d62 48
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d22 4
+a25 4
+  seen = 0;
+  while (seen < dataSize-(2*sizeof(SWord))) {
+    t =  *((SWord *) data+seen);
+    s = *((SWord *) data+seen+sizeof(SWord));
+d30 1
+a30 1
+    } 
+d33 1
+a33 1
+  
+d55 1
+a55 1
+	return *((ULong*) info);
+@
+
+
+1.1
+log
+@Added metadata.c and metadata.h
+@
+text
+@d23 1
+a23 1
+  while (seen < dataSize) {
+d27 1
+a27 1
+    if (t == type) {
+@

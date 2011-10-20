@@ -1,0 +1,468 @@
+head	1.4;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	96.05.02.03.31.47;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.26.10.10.51;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.09.04.24.21;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.08.23.00.45;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.04.08.23.00.45;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Added save_credentials
+@
+text
+@package KerberosIV;
+
+=head1 NAME
+
+KerberosIV, Rcmd - provide the KerberosIV libkrb.a and KerberosIV rcmd authentication protocol to Perl5
+
+=head1 SYNOPSIS
+       
+       use KerberosIV;
+
+       ($krb_result,$credentials) = &krb_get_cred($service,$instance,$realm);
+       ($krb_result,$msg_data,$cred,$key_schedule) = &krb_sendauth($options, $fd, $ticket, $service, $inst, $realm, $checksum, $laddr, $faddr, $version)
+       $krb_result = &krb_sendauth_nomutual($options, $fd, $ticket, $service, $inst, $realm, $version)
+       
+=head2 Administration
+
+=item $error_text = &krb_strerror($krb_result)
+
+Return the error text corresponding to the given Kerberos result code.
+
+=item ($krb_result,$host) = &krb_get_admhst($realm,$n)
+      ($krb_result,$host) = &krb_get_krbhst($realm,$n)
+      
+Given a realm, return the n'th entry in the Kerberos hosts file naming
+the host running the authentication server or the administrative host,
+respectively, for that realm. 
+
+=item $krb_realm = &krb_realmofhost($hostname)
+
+Given a host, return its Kerberos realm.
+
+=item ($krb_result,$realm) = &krb_get_lrealm($n)
+
+Returns the name of the nth realm specified on the
+first line of the kerberos config file (_PATH_KRB_CONF, defined in
+"krb_paths.h").  It returns 0 (KSUCCESS) on success, and KFAILURE on
+failure.  If the config file does not exist, and if n=1, a successful
+return will occurwith r = KRB_REALM (also defined in "krb.h").
+NOTE: for archaic & compatibility reasons, this routine will only return
+valid results when n = 1.
+
+For the format of the _PATH_KRB_CONF file, see comments describing the
+routine krb_get_krbhst().
+
+=item $host = &krb_get_phost($alias)
+
+This routine takes an alias for a host name and returns the first
+field, lower case, of its domain name.  For example, if "menel" is
+an alias for host officially named "menelaus" (in /etc/hosts), for
+the host whose official name is "MENELAUS.MIT.EDU", the name "menelaus"
+is returned.
+
+This is done for historical Athena reasons: the Kerberos name of
+rcmd servers (rlogin, rsh, rcp) is of the form "rcmd.host@@realm"
+where "host"is the lowercase for of the host name ("menelaus").
+This should go away: the instance should be the domain name
+(MENELAUS.MIT.EDU).  But for now we need this routine...
+
+=item ($krb_result,$name,$inst,$realm) = &krb_get_tf_fullname($tktfile)
+
+Given a ticket file name, return the user's fullname, instance, and the
+realm of the (first ticket in the) ticket file.
+
+=head2 Utility Functions
+
+These functions are not part of the KerberosIV library but are provided
+for convenience.
+
+=item $ktext = &Kutil::make_ktext($scalar)
+
+Takes an arbitrary binary glob of data and packs it into a KTEXT_ST
+structure, which is necessary for calling some routines (e.g. krb_decomp_ticket).
+
+=item
+($svc,$inst,$realm,$skey,$life,$krb_version,$ticket,$issue_date,$pname
+        ,$pinst) = &Kutil::decomp_cred($credentials)
+
+Returns the components of the CREDENTIALS structure; see krb.h.
+
+=item ($krb_version,$msgtype,$aname,$ainst,$arealm,$time_ws,$no_req,
+      $xdate,$errcode) = &Kutil::decomp_rpkt($pkt)
+
+Returns the components of a packet returned from the KDC; see prot.h.
+Use pkt_cipher to get the ciphertext component of an rpkt.
+
+=item $cip = &KerberosIV::pkt_cipher($pkt)
+
+Returns the ciphertext of a packet from the KDC or TGS.  Note that this
+is in package KerberosIV, since it is a true Kerberos function.
+
+=item
+($krb_result,$flags,$pname,$pinst,$prealm,$paddr,$session_key,$life,
+        $time_sec,$sname,$sinst) = &KerberosIV::decomp_ticket($tkt,$key,$key_sch)
+
+Given a key and key schedule (which could be generated e.g. using
+read_service_key and des_key_sched), returns the components of the (encrypted) ticket,
+which must be a KTEXT structure (use make_ktext if necessary).  Paddr is
+returned as a packed struct sockaddr_in, which can be passed to
+Socket::inet_ntoa.  Life is returned in 5-minute intervals.
+
+=head2 Basic Kerberos Authentication
+
+=item $krb_result = &krb_get_pw_in_tkt($user, $instance, $realm, $service, $sinstance, $life, $password)
+
+      $krb_result = &krb_get_in_tkt($user, $instance, $realm, $service, $sinstance, $life, $decrypt_proc, $arg)
+
+Both of these get a Kerberos ticket for the given user (principal) and instance to
+use the given service and service instance in the given realm.  The
+lifetime of the ticket is specified as a number of 5-minute intervals. The
+ticket is encrypted using the principal's secret key.  krb_get_pw_in_tkt
+takes the principal's password as an argument to decrypt the ticket and
+store it; krb_get_in_tkt takes instead the name of a Perl subroutine
+that will be called to decrypt the ticket, and an optional argument to
+pass to it.
+
+The subroutine will be called with the arguments: user, instance, realm,
+ciphertext (which may contain arbitrary 8-bit characters, up to a
+maximum length of &MAX_KTXT_LEN), and the optional argument.  The
+subroutine must return a single scalar, the decrypted text.
+
+=item $krb_result = &get_ad_tkt($service,$sinstance,$realm,$lifetime)
+
+Using the ticket-granting ticket which must already be in the ticket
+file (see krb_get_pw_in_tkt), obtain a ticket for the given service,
+instance and realm.
+
+=item ($krb_result,$pkt) = &krb_mk_req($svc,$instance,$realm,$cksum)
+
+Given a service, instance and realm, retrieve the ticket for the service
+(by calling get_ad_tkt if necessary) and also construct a req-id (what
+the KerberosIV literature calls an "authenticator").  Return them
+together in $pkt, a structure ready to send to the KDC to request a
+ticket for the given service.  See send_to_kdc.  (Normally you can
+create additional tickets just by calling get_ad_tkt directly.)
+
+=item ($krb_result,$key,$found_inst) = &KerberosIV::read_service_key($service,
+      $instance,$realm,$kvno,$filename)
+
+Read the key for service and instance from local key table (usually
+/etc/krb.srvtab).  Kvno is Kerberos version number to try; 0 means
+any. Filename can be &KerberosIV::_PATH_KRB_SRVTAB.  If the instance
+supplied contains "*", any instance will be found.  The actual instance
+found is returned in found_inst.
+
+=item ($krb_result,$msg_data,$cred,$key_schedule) = &krb_sendauth($options, $fd, $ticket, $service, $inst, $realm, $checksum, $laddr, $faddr, $version)
+
+Performs authentication across network to a remote Kerberized server,
+given options, a file descriptor that represents the open connection to the
+remote server, a ticket (which may not be valid; see KOPT_DONT_MK_REQ
+below), service name, instance name, realm name (see krb_realmofhost).
+If mutual authentication is desired, KOPT_DO_MUTUAL must be set in
+options; checksum must be a nonce that the server will increment to
+prove its identity; laddr and faddr must be struct sockaddr_in's for the
+client and server addresses respectively.  Version is the application
+protocol version number.
+
+Note that checksum, laddr and faddr must be provided even if mutual
+authentication is not desired.  For an easier interface to non-mutual
+authentication, use krb_sendauth_nomutual instead.
+
+Krb_result is the KerberosIV error code for the result.  For mutual
+authentication, msg_data is the encrypted response from the server, cred
+is the session key required to decrypt it, and key_schedule is the
+schedule for that key.  Note that server authentication happens
+<B>inside<B> krb_sendauth, which returns an appropriate failure code
+when necessary.  
+
+If mutual authentication is not used, only krb_result is returned.
+
+If KOPT_DONT_MK_REQ is set in options, the ticket is assumed to be
+valid.  If not set, Kerberos searches the ticket file for the
+approrpiate ticket, and if one is not found, calls krb_mk_req to create
+one.  In the latter case, the newly-created ticket is returned in
+$ticket (which is modified in place - ugh).
+
+=item $krb_result = &krb_sendauth_nomutual($options, $fd, $ticket, $service, $inst, $realm, $version)
+
+This is a simpler interface to use when non-mutual authentication is
+needed.  Arguments and behavior are the same as for krb_sendauth.
+
+=head2 Kerberos Rcmd Protocol
+
+=item ($sockfd,$dupfd,$cred,$sched) = &Krcmd::krcmd_mutual($host,$port,$remuser,$cmd,$fd2p,$realm)
+
+Perform mutual authentication to the given remote host and port using
+the <I>rcmd<I> protocol.  $remuser is the Kerberos principal of the user
+who wants to authenticate himself. $cmd is the application-specific
+command; e.g. for krlogin it is terminal/speed, as in "network/9600".
+$fd2p, if nonzero, means "in case of success, also duplicate the socket
+using accept() to create an authenticated back channel".
+$realm is the Kerberos realm.
+
+The $sockfd return value is the file descriptor for the authenticated
+socket.  If $fd2p was nonzero in the call, $dupfd is the file descriptor
+of the duplicate "back channel"; otherwise $dupfd is zero.  $cred and
+$sched are the credentials and key schedule, respectively, returned by
+the remote server to authenticate itself.
+
+=cut 
+
+
+require Exporter;
+require DynaLoader;
+require AutoLoader;
+
+@@ISA = qw(Exporter DynaLoader);
+# Items to export into callers namespace by default. Note: do not export
+# names by default without a very good reason. Use EXPORT_OK instead.
+# Do not simply export all your public functions/methods/constants.
+@@EXPORT = qw(
+	AD_NOTGT
+	AD_OK
+	ANAME_SZ
+	CLIENT_KRB_BUFLEN
+	CLIENT_KRB_RETRY
+	CLIENT_KRB_TIMEOUT
+	CLOCK_SKEW
+	DATE_SZ
+	DEFAULT_TKT_LIFE
+	GC_NOTKT
+	GC_OK
+	GC_TKFIL
+	GT_PW_BADPW
+	GT_PW_KDCERR
+	GT_PW_NULL
+	GT_PW_NULLTKT
+	GT_PW_OK
+	GT_PW_PROT
+	INST_SZ
+	INTK_BADPW
+	INTK_ERR
+	INTK_OK
+	INTK_PROT
+	INTK_W_NOTALL
+	KDC_AUTH_EXP
+	KDC_BYTE_ORDER
+	KDC_GEN_ERR
+	KDC_NAME_EXP
+	KDC_NULL_KEY
+	KDC_OK
+	KDC_PKT_VER
+	KDC_PR_N_UNIQUE
+	KDC_PR_UNKNOWN
+	KDC_P_MKEY_VER
+	KDC_SERVICE_EXP
+	KDC_S_MKEY_VER
+	KFAILURE
+	KKEY_SZ
+	KNAME_FMT
+	KOPT_DONT_CANON
+	KOPT_DONT_MK_REQ
+	KOPT_DO_MUTUAL
+	KOPT_DO_OLDSTYLE
+	KRB_DEFS
+	KRB_HOST
+	KRB_MASTER
+	KRB_REALM
+	KRB_SENDAUTH_VLEN
+	KSUCCESS
+	K_FLAG_1
+	K_FLAG_2
+	K_FLAG_3
+	K_FLAG_4
+	K_FLAG_5
+	K_FLAG_6
+	K_FLAG_7
+	K_FLAG_ORDER
+	MAX_HSTNM
+	MAX_KRB_ERRORS
+	MAX_KTXT_LEN
+	MAX_K_NAME_SZ
+	MK_AP_OK
+	MK_AP_TGTEXP
+	MSG_TYPE_SZ
+	NO_TKT_FIL
+	RD_AP_BADD
+	RD_AP_EXP
+	RD_AP_INCON
+	RD_AP_MODIFIED
+	RD_AP_MSG_TYPE
+	RD_AP_NOT_US
+	RD_AP_NYV
+	RD_AP_OK
+	RD_AP_ORDER
+	RD_AP_REPEAT
+	RD_AP_TIME
+	RD_AP_UNAUTHOR
+	RD_AP_UNDEC
+	RD_AP_VERSION
+	REALM_SZ
+	RET_NOTKT
+	RET_OK
+	RET_TKFIL
+	R_TKT_FIL
+	SAFE_PRIV_ERROR
+	SKDC_CANT
+	SKDC_OK
+	SKDC_RETRY
+	SNAME_SZ
+	TKT_FILE
+	TKT_FIL_ACC
+	TKT_FIL_FMT
+	TKT_FIL_INI
+	TKT_FIL_LCK
+	TKT_ROOT
+	VERSION_SZ
+	W_TKT_FIL
+        get_ad_tkt
+        get_pw_tkt
+        get_request
+        krb_get_admhst
+	krb_ck_repl
+	krb_get_cred
+	krb_get_krbhst
+	krb_get_lrealm
+	krb_get_phost
+	krb_get_pw_in_tkt
+	krb_get_pw_tkt
+	krb_get_svc_in_tkt
+        krb_get_tf_fullname
+        krb_get_tf_realm
+        in_tkt
+	krb_kntoln
+        krb_get_in_tkt
+	krb_mk_err
+	krb_mk_priv
+	krb_mk_req
+	krb_mk_safe
+        krb_net_read
+        krb_net_write
+        pkt_cipher
+        pkt_clen
+	krb_rd_err
+	krb_rd_priv
+	krb_rd_req
+	krb_rd_safe
+	krb_realmofhost
+	krb_set_key
+        read_service_key
+        krb_recvauth
+        krb_strerror    
+);
+sub AUTOLOAD {
+    # This AUTOLOAD is used to 'autoload' constants from the constant()
+    # XS function.  If a constant is not found then control is passed
+    # to the AUTOLOAD in AutoLoader.
+
+    local($constname);
+    ($constname = $AUTOLOAD) =~ s/.*:://;
+    $val = constant($constname, @@_ ? $_[0] : 0);
+    if ($! != 0) {
+	if ($! =~ /Invalid/) {
+	    $AutoLoader::AUTOLOAD = $AUTOLOAD;
+	    goto &AutoLoader::AUTOLOAD;
+	}
+	else {
+	    ($pack,$file,$line) = caller;
+	    die "Your vendor has not defined KerberosIV macro $constname, used at $file line $line.
+";
+	}
+    }
+    eval "sub $AUTOLOAD { $val }";
+    goto &$AUTOLOAD;
+}
+
+bootstrap KerberosIV;
+
+# Preloaded methods go here.
+
+# Autoload methods go after __END__, and are processed by the autosplit program.
+
+1;
+__END__
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d69 5
+d90 10
+@
+
+
+1.2
+log
+@Sort of works with callback proc for krb_get_in_tkt
+@
+text
+@d64 22
+d111 18
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d15 74
+a88 1
+       $krb_result = &krb_get_pw_in_tkt($user, $instance, $realm, $service, $sinstance, $life, $password)
+a89 3
+       $error_text = &krb_strerror($krb_result)
+       $krb_realm = &krb_realmofhost($hostname)
+       
+d126 18
+d253 4
+d265 3
+d269 1
+d274 4
+d284 2
+@
+
+
+1.1.1.1
+log
+@KerberosIV for Perl5 sources
+@
+text
+@@

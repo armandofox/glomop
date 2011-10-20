@@ -1,0 +1,815 @@
+head	1.17;
+access;
+symbols
+	Yatin-final:1.16.2.1
+	Yatin:1.16.0.2
+	pre-yatin-merge:1.16
+	transend-beta2:1.16
+	fox-dev:1.16
+	ptm-ng:1.15
+	transend-beta-latest:1.15
+	Aggregators:1.15
+	NoAggregators:1.15
+	iang:1.15.0.2
+	transend-beta:1.14.0.2
+	SOSP:1.13
+	stable_ptm:1.8
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4;
+locks; strict;
+comment	@ * @;
+
+
+1.17
+date	98.01.16.22.16.09;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.06.14.05.05.38;	author yatin;	state Exp;
+branches
+	1.16.2.1;
+next	1.15;
+
+1.15
+date	97.04.28.18.46.33;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.07.00.26.27;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.03.09.05.51.01;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.03.04.17.59.23;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.27.01.13.53;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.26.04.14.44;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.17.03.00.58;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.05.20.20.46;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.05.03.49.00;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.29.06.00.46;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.04.09.55.31;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.05.01.27.04;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.24.08.12.04;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.40;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.22;	author yatin;	state Exp;
+branches;
+next	;
+
+1.16.2.1
+date	97.12.01.22.19.27;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __CACHE_H__
+#define __CACHE_H__
+
+#include "distdb.h"
+#include "cachenet.h"
+#include "garbage.h"
+
+
+class NegativeCache {
+public:
+  NegativeCache() : touchCounter(0), mutex("*-nc") { };
+  ~NegativeCache();
+  gm_Bool Add(DistillerType *type);
+  gm_Bool IsThere(DistillerType *type);
+  void Flush();
+
+protected:
+  struct NegativeCacheEntry : public DatabaseRecord {
+    NegativeCacheEntry(DistillerType *type_) 
+      : type(*type_), lastTouched(0) { };
+    DistillerType type;
+    UINT32 lastTouched;
+  };
+
+  class NCIndex : public Index {
+  public:
+
+  protected:
+    IndexKey *getIndexKey(DatabaseRecord *record) 
+    { return &((NegativeCacheEntry*)record)->type; }
+  };
+
+  void Touch_(NegativeCacheEntry *record) {
+    if (record->lastTouched==touchCounter && touchCounter!=0) 
+      return; // don't bother!
+    touchCounter++;
+    record->lastTouched = touchCounter;
+  }
+  void Evict_();
+
+  LockingList<NegativeCacheEntry> list;
+  UINT32 touchCounter;
+  NCIndex index;
+  Mutex mutex;
+};
+
+
+
+
+struct CachedDistiller;
+
+
+class DistillerTypeIndex : public Index {
+public:
+  DistillerTypeIndex(gm_Bool dupsAllowed=gm_True,
+		     int numberOfBuckets=DefaultNumberOfBuckets)
+    : Index(dupsAllowed, numberOfBuckets) { };
+protected:
+  IndexKey *getIndexKey(DatabaseRecord *record) 
+  { return &((BasicDistiller*)record)->type; }
+};
+
+
+class DistillerCache : public BasicDistillerDatabase {
+public:
+  DistillerCache();
+  ~DistillerCache();
+
+  CachedDistiller *getDistiller(DistillerType *type, DistillerStatus &status);
+  gm_Bool Update(DistillerInfoHandler *handler);
+  void    Remove__(CachedDistiller *dist) {
+    cacheMutex.Lock();
+    Remove_(dist);
+    cacheMutex.Unlock();
+  }
+  void FlushNCache() { negativeCache.Flush(); }
+
+private:
+  // all private functions assume that you've already grabbed the mutex
+  CachedDistiller *Find_(DistillerType *type) { return Find_Lottery_(type); }
+  CachedDistiller *Find_Lottery_(DistillerType *type);
+  CachedDistiller *Find_Random_ (DistillerType *type);
+  CachedDistiller *Find_(RemoteID *rid);
+  gm_Bool         Add_(CachedDistiller *dist);
+  void            Remove_(CachedDistiller *dist);
+  gm_Bool         Update_(BasicDistiller *newRecord);
+  void            Sweep_();
+  void            MarkAsValid_(gm_Bool flag=gm_True) 
+  { ForEach(Validate_, &flag); };
+  
+  static gm_Bool Validate_(Database* db,  DatabaseRecord* record, void* flag);
+  static gm_Bool SweepFunction_(Database*,DatabaseRecord* record, void* dummy);
+
+  // these definition are in place only to make sure no one is calling
+  // the underlying Database::Add/Remove
+  gm_Bool Add(CachedDistiller *dist);
+  void    Remove(CachedDistiller *dist);
+
+  Mutex cacheMutex;
+  DistillerTypeIndex *typeIndex;
+
+  NegativeCache negativeCache;
+};
+
+
+#define LOCK1(call) \
+  distMutex.Lock(); \
+  call; \
+  distMutex.Unlock();
+
+#define LOCK2(return_type, call) \
+  return_type returnValue; \
+  distMutex.Lock(); \
+  returnValue = call; \
+  distMutex.Unlock(); \
+  return returnValue;
+
+
+//#define __INSTRUMENT__
+#ifdef __INSTRUMENT__
+extern FILE *instFile;
+#endif
+
+struct CachedDistiller : public BasicDistiller, GarbageCollectedObject {
+public:
+  CachedDistiller(RemoteID& rid, DistillerType& type)
+    : BasicDistiller(rid, type), connection(NULL), validFlag(gm_True),
+      distMutex(type.c_struct.string), pendingCount(0) { };
+  CachedDistiller() 
+    : BasicDistiller(), connection(NULL), validFlag(gm_True), 
+      distMutex("unknown-dist"), pendingCount(0) { };
+  ~CachedDistiller() {
+    Disconnect_();
+  }
+  DistillerStatus Distill(Argument *args, int numberOfArgs, 
+			  DistillerInput *input, DistillerOutput *output);
+  DistillerStatus DistillAsync(Argument *args, int numberOfArgs, 
+			  DistillerInput *input,
+			  DistillerRequest *& newrequest);
+	
+  gm_Bool IsConnected__() {
+    gm_Bool returnValue;
+    distMutex.Lock();
+    returnValue = IsConnected_();
+    distMutex.Unlock();
+    return returnValue;
+  }
+  /*gm_Bool Connect__() {
+    gm_Bool returnValue;
+    distMutex.Lock();
+    returnValue = Connect_();
+    distMutex.Unlock();
+    return returnValue;
+  }*/
+  void Disconnect__() {
+    distMutex.Lock();
+    Disconnect_();
+    distMutex.Unlock();
+  }
+
+  void EvConnectionBroken() {
+    distMutex.Lock();
+    //RemoveAllRequests_();
+    Disconnect_();
+    distMutex.Unlock();
+  }
+
+  void IncrPendingCount() {
+    distMutex.Lock();
+    pendingCount++;
+    distMutex.Unlock();
+  }
+  void DecrPendingCount() {
+    distMutex.Lock();
+    pendingCount--;
+    distMutex.Unlock();
+  }
+
+  UINT32 getTickets() { 
+    UINT32 ql = load.totalLatency_ms;
+#ifdef __INSTRUMENT__
+    UINT32 qlOld=ql;
+#endif
+    int correction = pendingCount;
+    ql = (( (int(ql)) < -correction) ? (0) : (ql+correction));
+#ifdef __INSTRUMENT__
+    if (instFile!=NULL) {
+      time_t now;
+      tm *tm_;
+      time(&now);
+      tm_ = localtime(&now);
+      fprintf(instFile, "%02d:%02d:%02d(%p): %lu %d %lu\n", tm_->tm_hour, 
+	      tm_->tm_min, tm_->tm_sec, this, qlOld, correction, ql);
+    }
+#endif
+    return (100/((ql>>2)+1)) + 1; 
+  };
+  gm_Bool ShouldIgnore() { 
+    /*return (totalLatency_ms >= ignoreThreshold_ms && ignoreThreshold_ms!=0) ?
+      gm_True : gm_False; */
+    // don't ever ignore!
+    return gm_False;
+  };
+
+  void SetName() { distMutex.SetName(type.c_struct.string); };
+
+private:
+  // these functions assume that the mutex has already been locked before 
+  // they are called
+  gm_Bool IsConnected_() { return (connection==NULL) ? gm_False:gm_True; };
+  gm_Bool Connect_();
+  void    Disconnect_();
+
+  void    Update(BasicDistiller *newRecord) { 
+    LOCK1(load = newRecord->load; pendingCount = 0); 
+  };
+  void    MarkAsValid(gm_Bool flag=gm_True) { LOCK1(validFlag = flag); };
+  gm_Bool IsValid() { LOCK2(gm_Bool, validFlag); };
+
+  gm_Bool AddRequest_(DistillerRequest *request) {
+    return pendingRequests.InsertAtHead(request);
+  }
+  void RemoveRequest_(DistillerRequest *request) {
+    pendingRequests.Remove(request);
+  }
+  void RemoveAllRequests_();
+
+  /*Mutex *getMutex() { return &distMutex; };
+    gm_Bool Send_(Packet *packet) { 
+    gm_Bool returnValue;
+    DistillerConnection *conn = connection;
+    // use 'conn' instead of connection, since we don't want to use an 
+    // instance variable while the mutex in unlocked!
+    if (conn==NULL) 
+      Return(gm_False, errGenericError); // this shouldn't happen
+    
+    // release the mutex before sending
+    conn->IncrReference();
+    distMutex.Unlock(); // unlock the mutex before sending
+    
+    Mutex::Log_("sending data", "", NULL);
+    returnValue = conn->Write(packet);
+    Mutex::Log_("done sending data", "", NULL);
+    
+    distMutex.Lock();
+    conn->DecrReference();
+    return returnValue;
+  }*/
+  DistillerConnection *getConnection_() { return connection; };
+
+  DistillerConnection *connection;
+  gm_Bool validFlag;
+  Mutex   distMutex;
+  LockingList<DistillerRequest> pendingRequests;
+  int     pendingCount;
+
+  /*friend DistillerStatus DistillerCache::Distill(DistillerType *type, 
+         Argument *args, int numberOfArgs, DistillerInput *input, 
+         DistillerOutput *output, gm_Bool *freeOutputBuffer);*/
+  friend class DistillerCache;
+  friend class DistillerRequest;
+};
+
+
+#undef LOCK1
+#undef LOCK2
+
+#endif // __CACHE_H__
+@
+
+
+1.16
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d137 4
+@
+
+
+1.16.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@a136 4
+  DistillerStatus DistillAsync(Argument *args, int numberOfArgs, 
+			  DistillerInput *input,
+			  DistillerRequest *& newrequest);
+	
+@
+
+
+1.15
+log
+@Added the DistillerBuffer data structure to provide a more elegant way of
+freeing buffers between the library and the main program
+@
+text
+@d76 1
+@
+
+
+1.14
+log
+@Removed debugging information from the PTM code.
+Removed the setspecific/getspecific calls from frontend code
+@
+text
+@d135 1
+a135 2
+			  DistillerInput *input, DistillerOutput *output,
+			  gm_Bool *freeOutputBuffer);
+@
+
+
+1.13
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d176 4
+a179 1
+    UINT32 ql = load.totalLatency_ms, qlOld=ql;
+a262 10
+
+/*extern "C" {
+#include "thr_cntl.h"
+}
+inline void set_thread_state(thread_state_t state) {
+  extern pthread_key_t thridxKey;
+  set_thread_state((int)pthread_getspecific(thridxKey), state);
+}*/
+
+
+@
+
+
+1.12
+log
+@Minor modifications to the PTM
+@
+text
+@d118 5
+d127 1
+a127 1
+      distMutex(type.c_struct.string) { };
+d130 1
+a130 1
+      distMutex("unknown-dist") { };
+d163 35
+d207 3
+a209 1
+  void    Update(BasicDistiller *newRecord) { LOCK1(load = newRecord->load); };
+d248 1
+@
+
+
+1.11
+log
+@Added priorities to remote execution
+Added FE_getDistillerStatusString to cacheman.cc
+Modified PTM invocation from the frontend to use the gm_options file rather
+than pass all options via the command line
+@
+text
+@d146 1
+a146 1
+  /*void Disconnect__() {
+d150 1
+a150 1
+  }*/
+d154 1
+a154 1
+    RemoveAllRequests_();
+@
+
+
+1.10
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d9 41
+d100 2
+d225 1
+@
+
+
+1.9
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d38 3
+a40 1
+  CachedDistiller *Find_(DistillerType *type);
+d78 2
+a79 1
+    : BasicDistiller(rid, type), connection(NULL), validFlag(gm_True) { };
+d81 5
+a85 1
+    : BasicDistiller(), connection(NULL), validFlag(gm_True) { };
+d103 1
+a103 1
+  void Disconnect__() {
+d107 1
+a107 1
+  }
+d115 1
+d136 7
+a142 3
+  Mutex   *getMutex() { return &distMutex; };
+  gm_Bool Send_(Packet *packet) { 
+    if (connection==NULL) 
+d144 14
+a157 2
+    return packet->Send(connection);
+  }
+d175 7
+a181 85
+
+
+#if 0
+struct CachedDistiller : public BasicDistiller {
+  CachedDistiller(RemoteID& _rid, DistillerType& _type)
+    : BasicDistiller(_rid, _type), connection(NULL), validFlag(gm_True) { };
+  CachedDistiller() : BasicDistiller(), connection(NULL), validFlag(gm_True) { };
+  ~CachedDistiller() { if (connection!=NULL) delete connection; };
+
+  DistillerStatus Distill(Argument *args, int numberOfArgs,
+			  DistillerInput *input, DistillerOutput *output,
+			  gm_Bool *freeOutputBuffer);
+  gm_Bool Connect();
+  void    Disconnect();
+  gm_Bool IsConnected() { return (connection==NULL) ? gm_False:gm_True; };
+  gm_Bool IsValid() { return validFlag; };
+  void MarkAsValid(gm_Bool flag=gm_True) { validFlag = flag; };
+  void Update(CachedDistiller *newRecord) { load = newRecord->load; };
+
+protected:
+  DistillerConnection *connection;
+  gm_Bool validFlag;
+};
+
+
+class DistillerTypeIndex : public Index {
+public:
+  DistillerTypeIndex(gm_Bool dupsAllowed=gm_True,
+		     int numberOfBuckets=DefaultNumberOfBuckets)
+    : Index(dupsAllowed, numberOfBuckets) { };
+
+protected:
+  IndexKey *getIndexKey(DatabaseRecord *record) 
+  { return &((BasicDistiller*)record)->type; }
+};
+
+
+class DistillerCache : public BasicDistillerDatabase {
+public:
+  DistillerCache();
+  ~DistillerCache();
+
+
+private:
+  gm_Bool         Add   (CachedDistiller *dist);
+  gm_Bool         Remove(CachedDistiller *dist);
+  CachedDistiller *Find (RemoteID *rid);
+  CachedDistiller *Find (DistillerType *type);
+
+  void MarkAsValid(gm_Bool flag=gm_True) {
+    gm_Bool locked=gm_False;
+    if (DidILock()==gm_False) { locked=gm_True; Lock(); }
+    ForEach(Validate,&flag);
+    if (locked==gm_True) Unlock();
+  };
+  gm_Bool Update(CachedDistiller *newRecord);
+  void Sweep();
+  void Print() {
+    gm_Bool locked=gm_False;
+    if (DidILock()==gm_False) { locked=gm_True; Lock(); }
+    ForEach(PrintFunction, 0);
+    if (locked==gm_True) Unlock();
+  };
+protected:
+  struct MatchingDistillerFinder {
+    MatchingDistillerFinder(DistillerType *type)
+      : distillerType(type), distiller(NULL) { };
+
+    DistillerType   *distillerType;
+    CachedDistiller *distiller;
+  };
+
+  //CachedDistiller* DoLottery(LinkedList<DatabaseRecord> *list);
+
+  static gm_Bool   MatchEachDistiller(Database *db, DatabaseRecord *record,
+				     void *args);
+  static gm_Bool   Validate(Database* db, DatabaseRecord* record, void* flag);
+  static gm_Bool   SweepFunction(Database*,DatabaseRecord* record,void* dummy);
+  static gm_Bool   PrintFunction(Database*,DatabaseRecord* record,void* dummy);
+
+  Mutex cacheMutex;
+  DistillerTypeIndex *typeIndex;
+};
+#endif
+
+@
+
+
+1.8
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d6 1
+d9 1
+d11 143
+d164 1
+a164 1
+  gm_Bool Disconnect();
+d183 1
+a183 1
+  IndexKey *GetIndexKey(DatabaseRecord *record) 
+d192 3
+d200 14
+a213 8
+  gm_Bool         Lock()     { return mutex.Lock();    };
+  gm_Bool         Unlock()   { return mutex.Unlock();  };
+  gm_Bool         DidILock() { return mutex.DidILock();};
+
+  void            MarkAsValid(gm_Bool flag=gm_True) {ForEach(Validate,&flag);};
+  gm_Bool         Update(CachedDistiller *newRecord);
+  void            Sweep() { ForEach(SweepFunction, 0); };
+  void            Print() { ForEach(PrintFunction, 0); };
+d231 1
+a231 1
+  OwnerMutex mutex;
+d234 1
+@
+
+
+1.7
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@d31 12
+d45 2
+a46 1
+  DistillerCache() : BasicDistillerDatabase(), mutex() { };
+d78 1
+@
+
+
+1.6
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d56 1
+a56 1
+  CachedDistiller* DoLottery(LinkedList<DatabaseRecord> *list);
+@
+
+
+1.5
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d16 2
+a17 2
+			  void *input,   UINT32 inputLength,
+			  void **output, UINT32 *outputLength);
+@
+
+
+1.4
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d19 1
+d25 1
+d34 2
+a35 2
+  gm_Bool            Add   (CachedDistiller *dist);
+  void            Remove(CachedDistiller *dist);
+d39 6
+a44 2
+  void            MarkAsValid(gm_Bool flag=gm_True) { ForEach(Validate, &flag); };
+  gm_Bool            Update(CachedDistiller *newRecord);
+d58 1
+a58 1
+  static gm_Bool     MatchEachDistiller(Database *db, DatabaseRecord *record,
+d60 3
+a62 3
+  static gm_Bool     Validate(Database* db, DatabaseRecord* record, void* flag);
+  static gm_Bool     SweepFunction(Database*, DatabaseRecord* record,void* dummy);
+  static gm_Bool     PrintFunction(Database*, DatabaseRecord* record,void* dummy);
+d64 1
+a64 1
+  Mutex mutex;
+@
+
+
+1.3
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d11 2
+a12 2
+    : BasicDistiller(_rid, _type), connection(NULL), validFlag(TRUE) { };
+  CachedDistiller() : BasicDistiller(), connection(NULL), validFlag(TRUE) { };
+d18 4
+a21 4
+  Bool Connect();
+  Bool IsConnected() { return (connection==NULL) ? FALSE:TRUE; };
+  Bool IsValid() { return validFlag; };
+  void MarkAsValid(Bool flag=TRUE) { validFlag = flag; };
+d25 1
+a25 1
+  Bool validFlag;
+d32 1
+a32 1
+  Bool            Add   (CachedDistiller *dist);
+d37 2
+a38 2
+  void            MarkAsValid(Bool flag=TRUE) { ForEach(Validate, &flag); };
+  Bool            Update(CachedDistiller *newRecord);
+d52 1
+a52 1
+  static Bool     MatchEachDistiller(Database *db, DatabaseRecord *record,
+d54 3
+a56 3
+  static Bool     Validate(Database* db, DatabaseRecord* record, void* flag);
+  static Bool     SweepFunction(Database*, DatabaseRecord* record,void* dummy);
+  static Bool     PrintFunction(Database*, DatabaseRecord* record,void* dummy);
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d50 2
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d5 2
+d11 12
+a22 1
+    : BasicDistiller(_rid, _type) { };
+d24 2
+a25 1
+  CommunicationObject *privateConnection;
+d35 1
+d37 4
+a40 1
+  CachedDistiller *Find (DistillerType *type);
+d42 14
+@

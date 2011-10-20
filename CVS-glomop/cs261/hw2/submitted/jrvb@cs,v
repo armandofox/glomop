@@ -1,0 +1,236 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.30.21.23.25;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From jrvb@@CS.Berkeley.EDU  Fri Oct 30 12:38:50 1998
+Return-Path: jrvb@@CS.Berkeley.EDU
+Received: from bamako.CS.Berkeley.EDU (bamako.CS.Berkeley.EDU [128.32.34.138]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id MAA13771 for <cs261-homeworks@@joseph.CS.Berkeley.EDU>; Fri, 30 Oct 1998 12:38:50 -0800
+Received: from localhost (jrvb@@localhost) by bamako.CS.Berkeley.EDU (8.8.3/8.6.9) with SMTP id MAA24468 for <cs261-homeworks@@joseph>; Fri, 30 Oct 1998 12:39:04 -0800 (PST)
+X-Authentication-Warning: bamako.CS.Berkeley.EDU: jrvb owned process doing -bs
+Date: Fri, 30 Oct 1998 12:39:03 -0800 (PST)
+From: James Robert von Behren <jrvb@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.CS.Berkeley.EDU
+Subject: Homework 2
+Message-ID: <Pine.GHP.4.02A.9810301238230.24127-100000@@bamako.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+
+
+
+QUESTION 1:  Stateful packet inspection firewalls
+
+For this question, I will use the following (presumably non-standard)
+abbreviations:
+
+        SPIF = Stateful Packet Inspection Firewall
+        ALPF = Application Level Proxying Firewall
+        NIDS = Network Intrusion Detection Systems
+
+Part 1: SPIFs vs ALPFs
+
+The basic difference between SPIFs and ALPFs is that SPIFs allow
+direct network connections between inside and outside machines, while
+with ALPFs you must create separate network connections to both
+parties in the communication and explicitly forward things back and
+forth between them.  This difference leads to a number of
+consequences:
+  
+  * Because ALPFs must maintain state information for two network
+    connections, they may be more easily overloaded under heavy work
+    loads.  On the other hand a SPIF could dynamically dumb-down its
+    checks if necessary to deal with brief load spikes.  
+
+  * The types of attacks you can detect and prevent are very similar
+    with an ALPF and a SPIF.  However, the languages you use do
+    describe them are very different.  Since SPIFs operate at the
+    packet level they can describe higher-level events, but the user
+    will generally have to do more custom configuration to do so.  On
+    the other hand, since ALPFs generally use the built-in network
+    stack to bring connections up to the application level first,
+    it is easier to deal with high-level protocols.
+
+  * Because an ALPF creates different network connections for the
+    inside and the outside, its job is to forward appropriate DATA
+    from one side to the other, rather than forwarding specific
+    PACKETS.  Hence, an ALPF can sanitize incoming data streams by
+    making sure that (among other things) the packets aren't
+    fragmented, too large, or have other properties that are known to
+    cause problems with some broken network stacks.  Since SPIFs can
+    simply drop packets, they don't have this flexibility.
+
+  * Along the same lines as the above, the dual connection scheme of
+    an ALPF allows an organization to hide its internal IP addresses
+    from the outside world.  This allows for convenient networking
+    tricks, like using 10.X.X.X addresses for internal machines.
+
+  * Because SPIFs allow direct connections to inside machines, it is
+    much easier to then allow inside machines to provide network
+    services (such as HTTP, FTP, SMTP, etc.) to outside machines.
+    This is difficult for an ALPF, since you need to establish some
+    non-standard way of demultiplexing the accesses on the firewall
+    machine to the correct inside machine.  (For example, this could
+    be done with an extra step in a telnet machine, by forwarding a
+    specific port on the firewall to a specific port on an inside
+    machine, etc.)
+
+
+Part 2: SPIFs vs NIDSs
+
+Functionally, SPIFs and NIDSs are equivalent in the types of
+computations they can do, and the cost of maintaining state
+information about the traffic they observe.  There are two key
+differences, however:
+
+  * With the standard definition, NIDSs can only attempt to DETECT
+    network intrusions - the can't actually decide to drop packets.
+    This has the advantage that you can install a NIDS anywhere on the
+    network that can effectively observe traffic.  A SPIF, on the
+    other hand, has to actually be installed someplace that it can
+    actually remove packets from the network.  This probably means
+    that the SPIF needs to be on a gateway machine, while someone
+    could run a NIDS on any workstation on the local network.
+ 
+  * As a result of the topological requirements of the functionality
+    of NIDSs and SPIFs, if a SPIF could be a single point of failure
+    that could bring down your network connection to the outside
+    world.  On the other hand, since NIDS are passive monitors,
+    problems with your NIDS should not effect the rest of the network.
+
+
+
+QUESTION 2:  How would an upward-growing stack change things?
+
+If the stack grows upward, a buffer overflow may overwrite automatic
+data in the same call as the buffer, and can overwrite stack frames
+and automatic data for any functions called by the function with the
+target buffer.  For example, if you allocate a buffer in one function
+and then call another function to place data in that buffer (as is the
+case with gets()) you can overwrite the stack for the function that is
+doing the filling.  Given this, here is a more specific description of
+how the various buffer overrun attacks differ with upward-growing
+versus downward-growing stacks:
+
+a.  Overwrite automatic variables.  For downward-growing stacks, we can
+overwrite data from any function in the call stack previous to the one
+that contains the buffer.  Since this would mess up the stack frame to
+tell where to return after we exit the function with the buffer, this
+will probably not help much.  The only useful internal state to
+overwrite in the downward-growing case would be data in the function that
+allocated the buffer.  On the other hand, for stacks that grow down,
+we could overwrite internal data for a function AFTER the one with the
+buffer.  This means that we could change the data for this function
+WHILE it is executing, which would be more useful.  (As with the
+downward-growing case, however, this would still mess up the return from
+that function - however, by that time the damage may already be done.)
+
+a2. As a special case of overwriting automatic variables, you could
+overwrite a function pointer (for example in an object-oriented
+language), and wait for the application to call that function.  Since
+upward-growing stacks allow you to mess up data in functions AFTER the
+one with the buffer overflow, you could potentially overwrite function
+pointers in any of the functions in the closure of the functions
+called by the function with the buffer overrun problem (depending on
+who actually fills in the buffer).  Hence, this attack may be more
+successful with upward-growing stacks than with downward-growing ones.
+
+
+b.  Overrun global buffers.  This has nothing to do with the stack,
+and so will work the same way in both cases.  (I mention this only for
+completeness.)
+
+c.  Stack smashing.  Stack smashing with downward-growing stacks
+allows you to overwrite the return address on the function that
+contains the target buffer.  For upward-growing stacks, you would
+instead overwrite the return address of a function after the one with
+the buffer.  This means that you can only accomplish stack smashing
+with upward-growing stacks IF the function that allocated the buffer
+calls someone else to fill it.  In practice, this is actually quite
+common, however (gets(), etc.), so changing the direction of stack
+growth doesn't help much.  In either case, once you have compromised
+the call stack, you can get the program to jump to any place you like,
+whether its some additional code you have written to the stack, a
+particular system call, a pre-existing function in the program, etc.
+
+
+
+QUESTION 3: Changing the C-compiler to protect against buffer overflows
+
+Essentially, you could modify the C-compiler to add runtime bounds
+checking (and pointer checking) for you, to make sure that buffer
+overflows did not occur.  (As I understand it, this is in essence what
+purify and similar tools do for debugging purposes.)  Things you could
+modify to accomplish this include the following:
+
+* retain size information for all statically allocated arrays, and
+  make sure that all accesses to those arrays with the array[i] syntax
+  use an "i" in the right range.
+
+* create a special wrapper for memory allocation calls (such as
+  malloc(), realloc(), etc.) that also keeps track of the current size
+  of the buffer.  This allows similar checks as above.  Unfortunately,
+  there are some complications here, since many applications allocate
+  large chucks of memory, and do internal management of these pieces.
+  In fact, it is not even clear where to put the wrappers for the
+  standard C memory allocation functions.  One could put them around
+  the brk() system call, which would give you at least some minimal
+  protection even for third party libraries.  However, since some stdc
+  libraries use brk() to allocate large chunks of memory, you would
+  also need to wrap malloc() and realloc(), calloc(), etc.
+
+* Rather than trying to limit memory accesses to the correct
+  boundaries for internal data, the C compiler could add code that
+  would restrict memory writes to valid program data.  This would
+  involve checking that memory accesses did NOT effect any of the
+  following:  
+
+        1.  Unallocated heap memory.
+        2.  Stack memory that is not part of an automatic variable.
+
+  The later in particular would be useful, since this would at least
+  prevent jumps to arbitrary places in the code through stack frame
+  munging.  
+
+* The compiler could also add some code to check all updates to the
+  program counter.  This would give you the power to prevent the
+  execution of code from the stack or heap segments, even if the
+  architecture didn't have hardware-controllable execution permissions
+  for pages.  (This of course would not help if the buffer overflow
+  could be used to cause the program to jump directly to a dangerous
+  program routine or library function.)
+
+
+NOTE: The biggest problem with runtime bounds checking in C (the
+first two cases) is that pointer arithmetic is difficult to get right
+without having strongly-typed pointers.  For example, since the C
+semantics allow a void* to point into ANY part of memory, incrementing
+a void pointer past the end of an array might be perfectly valid - if
+you INTENDED to access the piece of memory that had been allocated
+after it.  Hence, general array bounds checking in C without strongly
+typed pointers is probably a lost cause.  The example of 2-tier memory
+allocation is particularly tricky, since in order to trap overwrites,
+you would need to know ahead of time how the data was INTENDED to be
+used - something that the C spec doesn't let you specify.
+
+
+
+@

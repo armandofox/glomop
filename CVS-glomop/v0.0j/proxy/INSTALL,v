@@ -1,0 +1,128 @@
+head	1.4;
+access;
+symbols
+	release:1.4;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	95.10.25.04.54.15;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.19.20.48.20;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.19.20.44.49;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.19.20.38.46;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@INSTALL now removes security hole (debuggin) in glomop.cf.  gm_mail is
+now conservative about determining how many msgs to send over.
+@
+text
+@#!/usr/sww/bin/perl5
+# The proxy has to be run as root, which means it needs to be checked out
+# in a local filesystem.  This script must be run as root.
+#
+
+die "You're not root\n" unless ($< == 0) && ($> == 0);
+
+die "This doesn't appear to be the correct directory.\n"
+    unless -e 'gmproxyd';
+
+# First make sure root owns all the files
+
+warn "Changing files to root ownership\n";
+chown 0,0,glob('*') or die "Chown failed: $!";
+
+# Make everything world-readable and world-executable.
+
+warn "Making executables world-readable\n";
+chmod 0555,glob('*') or die "Chmod 0555 failed: $!";
+
+# Now change gmproxyd to suid and take away permissions for it.
+
+warn "Making gmproxyd setuid-root\n";
+chmod 04500, 'gmproxyd' or die "Chmod 4500 gmproxyd: $!";
+
+# Make sure the path to this executable is also 0555.
+
+warn "Making path to this directory world-traversable\n";
+chomp($cwd=`/bin/pwd`);
+chmod 0555, '.' or die "Can't chmod this dir to 0555: $!";
+chmod 0555, '..' or die "Can't chmod parent dir to 0555: $!";
+
+# change 'home'
+
+warn "Modifying 'home' variable in glomop.cf to point to this directory\n";
+$seen = 0;
+open(CFG, "glomop.cf") or die "Opening glomop.cf: $!\n";
+@@cfg = <CFG>;
+close CFG;
+open(CFG, ">glomop.cf") or die "Rewriting glomop.cf: $!\n";
+foreach (@@cfg) {
+    (print CFG "# $_"), warn ("Changing to run securely"),
+    next if /^\s*[^#].*debugging.*pythia/;
+    
+    (print CFG $_), next unless /^\s*home\s*/;
+    $seen = 1;
+    print CFG "# Following 2 lines changed by $0 script\n";
+    print CFG "# $_";
+    print CFG "home \"$cwd\"\n";
+}
+close CFG;
+die "'home' line not found in glomop.cf\n" unless $seen;
+
+warn "All done.\n";
+exit 0;
+@
+
+
+1.3
+log
+@Works!
+@
+text
+@d33 2
+d42 3
+@
+
+
+1.2
+log
+@change
+@
+text
+@d40 1
+a40 1
+    next, print CFG unless /^\s*home\s*/;
+@
+
+
+1.1
+log
+@Install script to setup proxy running as suid-root
+@
+text
+@d24 1
+a24 1
+chmod 4500, 'gmproxyd' or die "Chmod 4500 gmproxyd: $!";
+d32 16
+@

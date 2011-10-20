@@ -1,0 +1,245 @@
+head	1.5;
+access;
+symbols
+	release:1.4
+	geoworks:1.4.2.1
+	pregeo:1.4
+	geoworks-0701:1.4.2.1
+	geoworks-062696:1.4;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	96.07.04.02.38.47;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.04.01.46.34;	author fox;	state Exp;
+branches
+	1.4.2.1;
+next	1.3;
+
+1.3
+date	96.03.12.22.25.24;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.02.26.19.30.23;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.21.22.35.06;	author fox;	state Exp;
+branches;
+next	;
+
+1.4.2.1
+date	96.07.04.03.18.46;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#  Decision function that determines whether gif distillation is needed, and
+#  supplies parameters for distiller.
+#
+#  ARGS:
+#    - Pointer to HTTP headers from server reply.  This is an associative array
+#      where the keys are all-lowercase HTTP header field names,
+#      e.g. "content-length" 
+#    - Pointer to User prefs assoc array
+#    - Pointer to content data; data may be NULL if this data type can make the
+#    distillation decision based solely on header info.
+#  RETURNS: 
+#    - List or string of args to pass to distiller; empty or undef to indicate
+#      that source should be passed thru unaltered (no distillation).
+
+package gif;
+
+#
+#  Arguments to gifmunch should be:
+#  new target size in bytes; <=0 means just target the dimensions
+#  minimum x dimension in pixels
+#  minimum y dimension in pixels
+#  num of colors (negative means grayscale, 0 means same as original)
+#  background color as "#rrggbb"
+
+$maxX = 540;
+$maxY = 200;                                # viewable area for browser
+$maxGrays = 4;
+
+sub decide_distill
+{
+    my(%hdrs) = %{shift @@_};                # http headers, including
+                                            # content-length
+    my(%prefs) = %{shift @@_};               # user prefs
+    my($data) = $ {shift @@_};                # content, may be null
+    my $params;
+    
+    # determine x,y dimensions of original image
+
+    my $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+    my $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+    my ($nx,$ny);
+    # we always need to convert to grayscale.  we may also need to scale down.
+
+    # if y is too big, must definitely scale...
+    if ($oy > $maxY || length($data)>3000 || $hdrs{"Content-length"} > 3000) {
+        $ny = $maxY;
+        $nx = int($ox * $ny/$oy);
+        #my $newsize = $prefs{t} << 10;
+        #$params = "0 $nx $ny -$maxGrays \#00ffff";
+        $params = "0 $nx $ny -$maxGrays nopad";
+        &main::debug('gif', "Returning $params");
+        return $params;
+    } else {
+        # pass thru unmodified
+        &main::debug('gif', "Returning undef");
+        return undef;
+    }
+}
+
+1;
+
+@
+
+
+1.4
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@d18 12
+d38 14
+a51 13
+    if ($hdrs{"Content-length"} >= int($prefs{"t"} << 10)) {
+        # must distill - use user's target size (from prefs)
+        my $cols = ($prefs{'g'} eq 'g' ?  -$prefs{c} : $prefs{c});
+        my $newsize = $prefs{t} << 10;
+        $params = "$newsize 10 10 $cols \#00ffff";
+        &main::debug('gif', "Returning $params");
+        return $params;
+    } elsif ($prefs{"g"} eq 'g') {
+        # need to do grayscale conversion, even if no distillation
+        my $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+        my $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+        my $len = length($data);
+        $params = "$len $ox $oy -254 \#00ffff";
+@
+
+
+1.4.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@a17 12
+#
+#  Arguments to gifmunch should be:
+#  new target size in bytes; <=0 means just target the dimensions
+#  minimum x dimension in pixels
+#  minimum y dimension in pixels
+#  num of colors (negative means grayscale, 0 means same as original)
+#  background color as "#rrggbb"
+
+$maxX = 540;
+$maxY = 200;                                # viewable area for browser
+$maxGrays = 4;
+
+d26 13
+a38 14
+    # determine x,y dimensions of original image
+
+    my $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+    my $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+    my ($nx,$ny);
+    # we always need to convert to grayscale.  we may also need to scale down.
+
+    # if y is too big, must definitely scale...
+    if ($oy > $maxY || length($data)>3000 || $hdrs{"Content-length"} > 3000) {
+        $ny = $maxY;
+        $nx = int($ox * $ny/$oy);
+        #my $newsize = $prefs{t} << 10;
+        #$params = "0 $nx $ny -$maxGrays \#00ffff";
+        $params = "0 $nx $ny -$maxGrays nopad";
+d42 3
+a44 2
+        # keep size, but grayify
+        return "0 $ox $oy -$maxGrays nopad";
+@
+
+
+1.3
+log
+@grayscale now works for gifs and jpegs.  handoff behavior is
+considerably less boneheaded (accounted for in prefs dialogs).
+NetCondom now works.
+@
+text
+@d24 2
+a25 2
+    my ($ox,$oy,$r,$osz,$log_ent,$s);
+
+d27 14
+a40 22
+        # compute desired compression ratio.
+        $r = ($prefs{"t"} << 10) / $hdrs{"Content-length"};
+        # assume compression ratio is prop. to area; compute new area
+        $ox = ord(substr($data,6,1))+(ord(substr($data,7,1))<<8);
+        $oy = ord(substr($data,8,1))+(ord(substr($data,9,1)) << 8);
+
+        # fudge factor of 2 in below eqn seems to work....gif compression is hard
+        # to characterize
+
+        $a = 2*$r * $ox * $oy;
+        
+        # compute aspect ratio of original
+        $alpha = $ox/$oy;
+        # determine new dimensions.  we have (newx)*(newy)=(newA),
+        # (newx)/(newy) = (alpha).
+        $newx = sqrt($a * $alpha);
+        $newy = $newx / $alpha;
+        $newx = int($newx); $newy = int($newy);
+
+        my $cols = ($prefs{g} eq 'c' ? $prefs{c} : -$prefs{c});
+        &main::debug('gif', "Returning: $newx $newy $cols #00ffff");
+        return "$newx $newy $cols #00ffff";
+d42 1
+@
+
+
+1.2
+log
+@at last, a semi-uniform architecture for adding distill servers and
+distillation pipelines....see pythia.cf for details of how to do it.
+@
+text
+@d46 3
+a48 2
+        &main::debug('gif', "Returning: $newx $newy $prefs{c} #00ffff");
+        return "$newx $newy $prefs{c} #00ffff";
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d46 2
+a47 2
+        &main::debug('gif', "Returning: $newx $newy $prefs{c} #ffffff");
+        return "$newx $newy $prefs{c} #ffffff";
+@

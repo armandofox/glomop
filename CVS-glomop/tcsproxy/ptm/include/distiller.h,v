@@ -1,0 +1,1507 @@
+head	1.27;
+access;
+symbols
+	Yatin-final:1.26.2.1
+	Yatin:1.26.0.2
+	pre-yatin-merge:1.26
+	transend-beta2:1.24
+	fox-dev:1.24
+	ptm-ng:1.22
+	transend-beta-latest:1.22
+	Aggregators:1.22
+	NoAggregators:1.22
+	iang:1.20.0.2
+	transend-beta:1.18.0.2
+	SOSP:1.17
+	stable_ptm:1.12
+	merged_preintegrate:1.7
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.27
+date	98.01.16.22.16.11;	author yatin;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	97.09.18.22.45.18;	author yatin;	state Exp;
+branches
+	1.26.2.1;
+next	1.25;
+
+1.25
+date	97.09.15.03.09.30;	author yatin;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.07.23.23.54.43;	author yatin;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.06.14.05.05.40;	author yatin;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.05.11.10.24.33;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.05.07.03.53.04;	author gribble;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.30.09.04.19;	author gribble;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.04.28.18.46.36;	author yatin;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.04.07.00.26.28;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.09.05.51.02;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.07.20.36.51;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.03.06.02.49.12;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.26.04.14.48;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.17.03.01.03;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.08.02.13.59;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.07.21.54.46;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.05.20.20.48;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.29.06.00.48;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.04.09.55.34;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.05.01.27.07;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.08.12.07;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.22.08.21.32;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.00.42.24;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.43;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.29;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+1.26.2.1
+date	97.11.17.22.06.58;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.27
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __DISTILLER_H__
+#define __DISTILLER_H__
+
+#include "distinterface.h"
+#include "defines.h"
+#include "linkedlist.h"
+#include "threads.h"
+#include "eventhan.h"
+#include "distdb.h"
+#include "packet.h"
+#include "ptmqueue.h"
+
+//#define __INSTRUMENT__
+
+class  CommunicationObject;
+class  ProxyServer;
+class  ProxyConnection;
+class  PTMConnection;
+class  Listener;
+class  LoadNotificationTimer;
+class  OptionDatabase;
+struct Work;
+
+
+static const EventType evDistillerReply      = evUserDefinedEvent+1;
+static const EventType evDistillerReregister = evUserDefinedEvent+2;
+
+
+#define _REPORT_STATS
+#ifdef _REPORT_STATS
+
+#define No_Of_QLengthWindows       10
+#define Size_Of_QLengthWindow_usec 10000000
+
+struct Statistics {
+public:
+  Statistics(EventSystem *evs);
+  ~Statistics() {
+    DELETE(timer);
+  }
+  void IncrementTotalRequests() {
+    mutex.Lock();
+    totalRequests++;
+    mutex.Unlock();
+  }
+  void IncrementDoneRequests() {
+    mutex.Lock();
+    doneRequests++;
+    mutex.Unlock();
+  }
+  void IncrementBadRequests() {
+    mutex.Lock();
+    badRequests++;
+    mutex.Unlock();
+  }
+  /*void   AdjustAvgQLength(UINT32 length);
+  double getAvgQLength();*/
+  void   Report();
+
+private:
+  class StatsTimer : public gm_Timer {
+  public:
+    StatsTimer(EventSystem *evs) : gm_Timer(evs, SECONDS(ReportStats_ms),
+					    USECONDS(ReportStats_ms)) { };
+  protected:
+    gm_Bool EvTimer(EventSystem *evs);
+  };
+
+  /*struct QLengthWindow {
+    QLengthWindow() { Reset(); };
+    void Reset() {
+      lengthTimeProduct = 0;
+      totalTime  = 0;
+      gettimeofday(&lastUpdate, NULL);
+    };
+    void   AdjustAvgQLength(UINT32 length);
+
+    UINT32  lengthTimeProduct;
+    UINT32  totalTime;
+    timeval lastUpdate;
+  };
+  QLengthWindow windows[No_Of_QLengthWindows];
+  int currentQLengthWindow;*/
+
+  UINT32  totalRequests;
+  UINT32  doneRequests;
+  UINT32  badRequests;
+
+  StatsTimer *timer;
+  Mutex mutex;
+};
+#define Stats(x) Distiller::getInstance()->getStats()->x
+#endif
+
+
+class LoadReporter {
+public:
+#ifndef __INSTRUMENT__
+  LoadReporter(EventSystem *evs);
+#else
+  LoadReporter(EventSystem *evs, DistillerType *type);
+#endif
+  ~LoadReporter() {
+#ifdef __INSTRUMENT__
+    if (instFile!=NULL) fclose(instFile);
+#endif
+  }
+
+  void    Report(Load *load);
+  void    NewWork (Work *work);
+  void    WorkDone(Work *work);
+  gm_Bool IsThereWork() {
+    // if the instTotalLatency_ms is zero, that means there is no more 
+    // work to do
+    return ((instTotalLatency_ms==0) ? gm_False : gm_True);
+  }
+  UINT32 getAvgLatency();
+private:
+  void AdjustAvgLatency();
+
+
+  class NoLoadTimer : public gm_Timer {
+  public:
+    NoLoadTimer(EventSystem *evs, long seconds)
+      : gm_Timer(evs, seconds, 0), workReceived(gm_False) { };
+    gm_Bool EvTimer(EventSystem *evs);
+    gm_Bool workReceived;
+  };
+
+
+  UINT32 instTotalLatency_ms, area;
+  timeval lastUpdate, start;
+  NoLoadTimer *noLoadTimer;
+#ifdef __INSTRUMENT__
+  FILE *instFile;
+#endif
+};
+
+class MyDistiller : public EventHandler {
+public:
+  /*Distiller(RemoteID &ptm, RemoteID &multicast,
+	    RemoteID &monitorAddr, int monitorTTL, DistillerType &type, 
+	    UINT32 notificationTimeout_ms, gm_Bool sleepOnStartup,
+	    char *optionsDBfile, UINT32 requestID, 
+	    int argc, const char*const* argv);*/
+  MyDistiller(OptionDatabase *options_, int argc, const char * const *argv);
+  virtual ~MyDistiller();
+  
+  gm_Bool IsPTMFound() { return (strcmp(ptmUnicast.ipAddress, "")==0) ?
+			gm_False : gm_True; };
+  void NoPTM() { strcpy(ptmUnicast.ipAddress, ""); ptmUnicast.port = 0; };
+  gm_Bool PTMLocationReceived(RemoteID &newPtmAddress);
+  gm_Bool WorkReceived(Work *work);
+
+  gm_Bool ConnectToPTM();
+  void    ClosePTMConnection();
+  gm_Bool ListenOnSharedBus();
+  gm_Bool Register(UINT32 requestID);
+  void    Deregister();
+  gm_Bool Reregister(DistillerType *type);
+  void    ConsumerMain();
+  gm_Bool Run();
+  gm_Bool SendLoadInformation();
+  EventSystem *getEventSystem() { return evs; };
+  OptionDatabase *getOptions() { return options; };
+  MonitorClient *getMonitorClient() { return monitorClient; };
+
+  gm_Bool Sleep_WakeUp(DistillerSleepStatus status);
+  void Die(const char *message);
+
+#ifdef _REPORT_STATS
+  void ReportStats();
+  Statistics *getStats() { return stats; };
+#endif
+
+  static void *ForkHelper(void *args);
+  static void Abort(char *string);
+  static void Usage(char *programPath);
+  static void SigInt(int sig);
+  static void SigTerm(int sig);
+  static MyDistiller *getInstance() { return instance; };
+  static gm_Bool ExpandOptions(OptionDatabase *optDB);
+  static gm_Bool CreateInstance(OptionDatabase *options, int argc, 
+				const char * const * argv);
+  /*static gm_Bool CreateInstance(RemoteID &ptmAddress, RemoteID &multicast,
+				RemoteID &monitorAddr, int monitorTTL,
+				DistillerType &distillerType, 
+				UINT32 notificationTimeout_ms,
+				gm_Bool sleepStatus,
+                                char *optionsDBfile,
+				UINT32 requestID,
+				int argc, const char*const* argv);*/
+
+protected:
+  DistillerStatus DefaultDistillationCost(DistillationCost *cost) {
+    cost->estimatedTime_ms = 1;
+    return distOk;
+  }
+  virtual gm_Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+  
+  LoadReporter *reporter;
+  Thread *consumer;
+  Queue *workQueue;
+  
+  RemoteID      ptmUnicast, ptmMulticast;
+  EventSystem   *evs;
+  ProxyServer   *server;
+  PTMConnection *ptmConnection;
+  Listener      *listener;
+  MonitorClient *monitorClient;
+  LoadNotificationTimer *loadNotificationTimer;
+  DistillerSleepStatus   sleepStatus;
+  OptionDatabase         *options;
+#ifdef _REPORT_STATS
+  Statistics    *stats;
+#endif
+
+  static MyDistiller *instance;
+};
+
+
+class ProxyServer : public TcpServer {
+public:
+  ProxyServer() : TcpServer(0) { }; 
+  // let the system pick a port number
+protected:
+  gm_Bool EvConnectionReceived(EventSystem *evs, int newSocketID);
+  
+};
+
+
+class GarbageCollectedObject {
+public:
+  GarbageCollectedObject() : numberOfRefs(0), isDeleted(gm_False) { };
+  virtual ~GarbageCollectedObject() { };
+
+  gm_Bool IsDeleted() { return isDeleted; };
+  void MarkForDeletion()
+  { if (numberOfRefs==0) delete this; else isDeleted = gm_True; }
+  void AddReference()    { numberOfRefs++; };
+  void RemoveReference() 
+  { numberOfRefs--; if (isDeleted==gm_True && numberOfRefs==0) delete this; };
+protected:
+  UINT32 numberOfRefs;
+  gm_Bool   isDeleted;
+};
+
+
+class ProxyConnection 
+  : public TcpSocket,
+    public gm_PacketHandler,
+    public GarbageCollectedObject
+{
+public:
+  ProxyConnection(int newSocketID) 
+    : TcpSocket(newSocketID), gm_PacketHandler() { };
+  gm_Bool SendReply(DistillerStatus status, DistillerOutput *output,
+		    UINT32 replyID);
+  
+protected:
+  gm_Bool EvSelect(EventSystem *evs) {return gm_PacketHandler::EvSelect(evs);};
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+  
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+  gm_Bool ReadPacket(gm_Packet *packet) { return Read(packet); };
+  void ErrorOutput(const char *string) { gm_Log(string); };
+
+  gm_Bool UnmarshallDistillerInput(Work *work, gm_Packet *packet);
+};
+
+
+class PTMConnection 
+  : public TcpSocket,
+    public gm_PacketHandler
+{
+public:
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+protected:
+  gm_Bool EvSelect(EventSystem *evs)
+  { return gm_PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return Read(packet); };
+  void ErrorOutput(const char *string) { gm_Log(string); };
+};
+
+
+class Listener 
+  : public MulticastSocket,
+    public gm_PacketHandler
+{
+public:
+  Listener(char *ip, Port port) : MulticastSocket(), gm_PacketHandler()
+  { if (CreateListener(ip, port)==gm_False) return; };
+  
+protected:
+  gm_Bool EvSelect(EventSystem *evs)
+  { return gm_PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, gm_Packet *packet);
+
+  gm_Bool ReadPacket(gm_Packet *packet) { return Read(packet); };
+  void ErrorOutput(const char *string) { gm_Log(string); };
+};
+
+
+class LoadNotificationTimer : public gm_Timer {
+public:
+  LoadNotificationTimer(EventSystem *evs, UINT32 notificationTimeout_ms) 
+    : gm_Timer(evs, SECONDS(notificationTimeout_ms), 
+	       USECONDS(notificationTimeout_ms)){};
+protected:
+  gm_Bool EvTimer(EventSystem *evs);
+};
+
+
+struct Work {
+  Work(ProxyConnection *replyObj) 
+    : args(0), numberOfArgs(0), 
+      //freeOutputBuffer(gm_True),
+      status(distOk), replyObject(replyObj), 
+      replyID(0) { 
+	cost.estimatedTime_ms = 0; 
+	replyObject->AddReference(); 
+#ifdef __INSTRUMENT__
+	distillTime.tv_sec  = 0;
+	distillTime.tv_usec = 0;
+#endif
+  };
+  ~Work();
+
+  Argument         *args;
+  UINT32           numberOfArgs;
+
+  DistillerInput   input;
+  DistillerOutput  output;
+  //gm_Bool          freeOutputBuffer;
+
+  DistillerStatus  status;
+  DistillationCost cost;
+
+  ProxyConnection  *replyObject;
+  UINT32           replyID;
+
+#ifdef __INSTRUMENT__
+  timeval          distillTime;
+#endif
+};
+
+
+#endif // __DISTILLER_H__
+@
+
+
+1.26
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d25 2
+a26 1
+static const EventType evDistillerReply = evUserDefinedEvent+1;
+d124 2
+a125 2
+    NoLoadTimer(EventSystem *evs)
+      : gm_Timer(evs, NoLoadTimeout_sec, 0), workReceived(gm_False) { };
+d133 1
+a133 1
+  NoLoadTimer noLoadTimer;
+d159 2
+d169 1
+a169 3
+  void Die() {
+    evs->PostEvent(evQuit, NULL, NULL);
+  }
+d179 2
+a180 1
+  static void CtlCPressed(int sig);
+d276 2
+a282 1
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+@
+
+
+1.26.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d25 1
+a25 2
+static const EventType evDistillerReply      = evUserDefinedEvent+1;
+static const EventType evDistillerReregister = evUserDefinedEvent+2;
+d123 2
+a124 2
+    NoLoadTimer(EventSystem *evs, long seconds)
+      : gm_Timer(evs, seconds, 0), workReceived(gm_False) { };
+d132 1
+a132 1
+  NoLoadTimer *noLoadTimer;
+a157 2
+  void    Deregister();
+  gm_Bool Reregister(DistillerType *type);
+d166 3
+a168 1
+  void Die(const char *message);
+d178 1
+a178 2
+  static void SigInt(int sig);
+  static void SigTerm(int sig);
+a273 2
+public:
+  gm_Bool EvConnectionBroken(EventSystem *evs);
+d279 1
+@
+
+
+1.25
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d60 1
+a60 1
+  class StatsTimer : public Timer {
+d62 2
+a63 2
+    StatsTimer(EventSystem *evs) : Timer(evs, SECONDS(ReportStats_ms),
+					 USECONDS(ReportStats_ms)) { };
+d121 1
+a121 1
+  class NoLoadTimer : public Timer {
+d124 1
+a124 1
+      : Timer(evs, NoLoadTimeout_sec, 0), workReceived(gm_False) { };
+d249 1
+a249 1
+    public PacketHandler,
+d254 1
+a254 1
+    : TcpSocket(newSocketID), PacketHandler() { };
+d259 2
+a260 2
+  gm_Bool EvSelect(EventSystem *evs) { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d263 1
+a263 1
+  gm_Bool ReadPacket(Packet *packet) { return Read(packet); };
+d266 1
+a266 1
+  gm_Bool UnmarshallDistillerInput(Work *work, Packet *packet);
+d272 1
+a272 1
+    public PacketHandler
+d276 2
+a277 2
+  { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d280 1
+a280 1
+  gm_Bool ReadPacket(Packet *packet) { return Read(packet); };
+d287 1
+a287 1
+    public PacketHandler
+d290 1
+a290 1
+  Listener(char *ip, Port port) : MulticastSocket(), PacketHandler()
+d295 2
+a296 2
+  { return PacketHandler::EvSelect(evs); };
+  gm_Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d298 1
+a298 1
+  gm_Bool ReadPacket(Packet *packet) { return Read(packet); };
+d303 1
+a303 1
+class LoadNotificationTimer : public Timer {
+d306 2
+a307 2
+    : Timer(evs, SECONDS(notificationTimeout_ms), 
+	    USECONDS(notificationTimeout_ms)){};
+@
+
+
+1.24
+log
+@modified distiller stub and ptm to handle "--" correctly for additional
+distiller arguments
+
+modified distiller stubs to read the multicast addresses from the options
+file instead of accepting them on the command line
+
+added run targets for html, gig and jpg mungers
+@
+text
+@d138 1
+a138 1
+class Distiller : public EventHandler {
+d145 2
+a146 2
+  Distiller(OptionDatabase *options_, int argc, const char * const *argv);
+  virtual ~Distiller();
+d162 1
+d179 1
+a179 1
+  static Distiller *getInstance() { return instance; };
+d216 1
+a216 1
+  static Distiller *instance;
+@
+
+
+1.23
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d21 1
+d140 1
+a140 1
+  Distiller(RemoteID &ptm, RemoteID &multicast,
+d144 2
+a145 1
+	    int argc, const char*const* argv);
+d148 1
+a148 1
+  gm_Bool IsPTMFound() { return (strcmp(ptmAddress.ipAddress, "")==0) ?
+d150 1
+a150 1
+  void NoPTM() { strcpy(ptmAddress.ipAddress, ""); ptmAddress.port = 0; };
+d179 4
+a182 1
+  static gm_Bool CreateInstance(RemoteID &ptmAddress, RemoteID &multicast,
+d189 2
+a190 1
+				int argc, const char*const* argv);
+d202 1
+a202 2
+  RemoteID      ptmAddress, multicastAddress;
+  DistillerType distillerType;
+a208 1
+  UINT32                 notificationTimeout_ms;
+d210 1
+a210 1
+
+@
+
+
+1.22
+log
+@added distAsyncBegin to distiller return code.  modified ptm and distiller stubs to allow passing of options file name on distiller cmd line with -o
+@
+text
+@d142 2
+a143 1
+	    char *optionsDBfile, UINT32 requestID);
+d183 2
+a184 1
+				UINT32 requestID);
+@
+
+
+1.21
+log
+@Priority queueing now works.
+@
+text
+@d142 1
+a142 1
+	    UINT32 requestID);
+d181 1
+@
+
+
+1.20
+log
+@finalize queue changes.
+@
+text
+@d191 1
+a191 1
+  ProducerConsumerQueue *workQueue;
+@
+
+
+1.19
+log
+@Added the DistillerBuffer data structure to provide a more elegant way of
+freeing buffers between the library and the main program
+@
+text
+@d11 1
+a11 1
+
+a136 15
+
+class ProducerConsumerQueue {
+public:
+  ProducerConsumerQueue() : mutex("*-pcq") { };
+  gm_Bool Add(Work *work);
+  Work*   Remove();
+  UINT32  getSize() { return queue.getSize(); };
+
+protected:
+  LockingList<Work> queue;
+  Mutex             mutex;
+  Condition         workInQueue;
+};
+
+
+d191 1
+a191 1
+  ProducerConsumerQueue workQueue;
+a311 8
+	/*input.data = NULL;
+	input.length = 0;
+	strcpy(input.mimeType, "");*/
+	
+	/*output.data = NULL;
+	output.length = 0;
+	strcpy(output.mimeType, "");*/
+	
+@
+
+
+1.18
+log
+@Removed debugging information from the PTM code.
+Removed the setspecific/getspecific calls from frontend code
+@
+text
+@d323 1
+a323 1
+      freeOutputBuffer(gm_True),
+d327 1
+a327 1
+	input.data = NULL;
+d329 1
+a329 1
+	strcpy(input.mimeType, "");
+d331 1
+a331 1
+	output.data = NULL;
+d333 1
+a333 1
+	strcpy(output.mimeType, "");
+d348 1
+a348 1
+  gm_Bool          freeOutputBuffer;
+@
+
+
+1.17
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d13 1
+a13 1
+#define __INSTRUMENT__
+@
+
+
+1.16
+log
+@Added sleep mechanism to the distillers
+@
+text
+@d13 2
+d96 1
+d98 9
+d108 2
+a109 2
+  void    NewWork (DistillationCost *cost);
+  void    WorkDone(DistillationCost *cost);
+d132 3
+d330 1
+a330 1
+
+d336 4
+d355 4
+@
+
+
+1.15
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d94 9
+a102 4
+  LoadReporter();
+  void   Report(Load *load);
+  void   NewWork (DistillationCost *cost);
+  void   WorkDone(DistillationCost *cost);
+d107 10
+d119 1
+d141 2
+a142 1
+	    UINT32 notificationTimeout_ms, UINT32 requestID);
+d161 5
+d180 1
+d189 1
+a189 1
+  LoadReporter reporter;
+d201 2
+d269 1
+@
+
+
+1.14
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d124 2
+a125 2
+	    RemoteID &monitorAddr, int monitorTTL,
+	    DistillerType &type, UINT32 requestID);
+d155 4
+a158 2
+			     RemoteID &monitorAddr, int monitorTTL,
+			     DistillerType &distillerType, UINT32 requestID);
+d271 3
+a273 3
+  LoadNotificationTimer(EventSystem *evs) 
+    : Timer(evs, SECONDS(NotificationTimeout_ms), 
+	    USECONDS(NotificationTimeout_ms)){};
+@
+
+
+1.13
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d52 2
+a53 2
+  void   AdjustAvgQLength(UINT32 length);
+  double getAvgQLength();
+d65 1
+a65 1
+  struct QLengthWindow {
+d79 1
+a79 1
+  int currentQLengthWindow;
+d92 15
+d109 1
+a109 1
+  ProducerConsumerQueue() { };
+d158 4
+d164 1
+a164 1
+  Load   load;
+d228 1
+a228 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d244 1
+a244 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d262 1
+a262 1
+  gm_Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d283 1
+a283 1
+	cost.estimatedTime = 0; 
+@
+
+
+1.12
+log
+@Committing changes before going in to modify the linked list routines
+@
+text
+@d25 1
+a25 1
+//#define _REPORT_STATS
+d27 4
+d32 1
+a32 8
+  class StatsTimer : public Timer {
+  public:
+    StatsTimer(EventSystem *evs) : Timer(evs, SECONDS(ReportStats_ms),
+					 USECONDS(ReportStats_ms)) { };
+  protected:
+    gm_Bool EvTimer(EventSystem *evs);
+  };
+
+d42 5
+d56 25
+d82 1
+a84 3
+  UINT32  lengthTimeProduct;
+  UINT32  totalTime;
+  timeval lastUpdate;
+a85 1
+
+d100 3
+a102 3
+  LinkedList<Work> queue;
+  Mutex     mutex;
+  Condition workInQueue;
+d260 3
+a262 1
+    : args(0), numberOfArgs(0), status(distOk), replyObject(replyObj), 
+@
+
+
+1.11
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d25 1
+a25 1
+
+d36 1
+a36 1
+  Statistics();
+d50 3
+a52 1
+  void AdjustAvgQLength();
+d54 2
+a55 2
+  UINT32 totalRequests;
+  UINT32 badRequests;
+@
+
+
+1.10
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d25 41
+d68 1
+a68 1
+  ProducerConsumerQueue() : totalRequests(0) { };
+d72 1
+a72 1
+  UINT32  getTotalRequests() { return totalRequests; };
+a74 1
+  UINT32    totalRequests;
+d103 5
+d130 6
+a135 2
+  LoadNotificationTimer  *loadNotificationTimer;
+  
+@
+
+
+1.9
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d27 5
+a31 4
+  ProducerConsumerQueue() : numberOfItems(0) { };
+  gm_Bool   Add(Work *work);
+  Work*  Remove();
+  UINT32 getNumberOfItems() { return numberOfItems; };
+d34 1
+a34 1
+  UINT32    numberOfItems;
+@
+
+
+1.8
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d53 1
+a53 1
+  void ClosePTMConnection();
+d56 1
+a56 1
+  void ConsumerMain();
+d60 2
+a61 1
+  
+d125 2
+a126 2
+  gm_Bool SendReply(DistillerStatus status, void *reply, 
+		 UINT32 replyLen, UINT32 replyID);
+d129 2
+a130 1
+  gm_Bool EvSelect(EventSystem *evs);
+d136 1
+a136 2
+  gm_Bool UnmarshallArguments(Work *work, Packet *argsPacket);
+  gm_Bool UnmarshallData     (Work *work, Packet *dataPacket);
+d184 13
+a196 3
+    : args(0), numberOfArgs(0), input(0), inputLength(0), output(0),
+      outputLength(0), status(distOk), replyObject(replyObj), replyID(0) 
+  { cost.estimatedTime = 0; replyObject->AddReference(); };
+d201 5
+a205 5
+  void             *input;
+  UINT32           inputLength;
+  void             *output;
+  UINT32           outputLength;
+  gm_Bool             freeOutputBuffer;
+@
+
+
+1.7
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d132 1
+a132 1
+  void ErrorOutput(const char *string) { LOG(string); };
+d149 1
+a149 1
+  void ErrorOutput(const char *string) { LOG(string); };
+d167 1
+a167 1
+  void ErrorOutput(const char *string) { LOG(string); };
+@
+
+
+1.6
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d28 1
+a28 1
+  Bool   Add(Work *work);
+d46 2
+a47 2
+  Bool IsPTMFound() { return (strcmp(ptmAddress.ipAddress, "")==0) ?
+			FALSE : TRUE; };
+d49 2
+a50 2
+  Bool PTMLocationReceived(RemoteID &newPtmAddress);
+  Bool WorkReceived(Work *work);
+d52 1
+a52 1
+  Bool ConnectToPTM();
+d54 2
+a55 2
+  Bool ListenOnSharedBus();
+  Bool Register(UINT32 requestID);
+d57 2
+a58 2
+  Bool Run();
+  Bool SendLoadInformation();
+d66 1
+a66 1
+  static Bool CreateInstance(RemoteID &ptmAddress, RemoteID &multicast,
+d70 1
+a70 1
+  virtual Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+d94 1
+a94 1
+  Bool EvConnectionReceived(EventSystem *evs, int newSocketID);
+d101 1
+a101 1
+  GarbageCollectedObject() : numberOfRefs(0), isDeleted(FALSE) { };
+d104 1
+a104 1
+  Bool IsDeleted() { return isDeleted; };
+d106 1
+a106 1
+  { if (numberOfRefs==0) delete this; else isDeleted = TRUE; }
+d109 1
+a109 1
+  { numberOfRefs--; if (isDeleted==TRUE && numberOfRefs==0) delete this; };
+d112 1
+a112 1
+  Bool   isDeleted;
+d124 1
+a124 1
+  Bool SendReply(DistillerStatus status, void *reply, 
+d128 1
+a128 1
+  Bool EvSelect(EventSystem *evs);
+d130 2
+a131 2
+  Bool EvConnectionBroken(EventSystem *evs);
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d134 2
+a135 2
+  Bool UnmarshallArguments(Work *work, Packet *argsPacket);
+  Bool UnmarshallData     (Work *work, Packet *dataPacket);
+d144 1
+a144 1
+  Bool EvSelect(EventSystem *evs)
+d147 2
+a148 2
+  Bool EvConnectionBroken(EventSystem *evs);
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d159 1
+a159 1
+  { if (CreateListener(ip, port)==FALSE) return; };
+d162 1
+a162 1
+  Bool EvSelect(EventSystem *evs)
+d164 1
+a164 1
+  Bool EvPacketReceived(EventSystem *evs, Packet *packet);
+d166 1
+a166 1
+  Bool ReadPacket(Packet *packet) { return packet->Receive(this); };
+d177 1
+a177 1
+  Bool EvTimer(EventSystem *evs);
+d194 1
+a194 1
+  Bool             freeOutputBuffer;
+@
+
+
+1.5
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d50 1
+a50 1
+  Bool WorkReceived(Work *work) { return workQueue.Add(work); };
+d58 1
+a58 1
+  
+d132 1
+a132 1
+  void ErrorOutput(char *string) { LOG(string); };
+d149 1
+a149 1
+  void ErrorOutput(char *string) { LOG(string); };
+d167 1
+a167 1
+  void ErrorOutput(char *string) { LOG(string); };
+d176 2
+d185 1
+a185 1
+  { replyObject->AddReference(); };
+d196 1
+@
+
+
+1.4
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d42 1
+d66 2
+a67 1
+  static Bool CreateInstance(RemoteID &ptmAddress, RemoteID &multicast, 
+d82 1
+d192 1
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d171 2
+a172 1
+    : Timer(evs, NotificationTimeout_ms/1000, NotificationTimeout_ms % 1000){};
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d9 1
+a9 1
+#include "commondb.h"
+d13 7
+a19 7
+class CommunicationObject;
+class ProxyServer;
+class ProxyConnection;
+class PTMConnection;
+class Listener;
+class LoadNotificationTimer;
+
+a24 18
+struct Work {
+  Work() : args(0), numberOfArgs(0), input(0), inputLength(0), output(0),
+    outputLength(0), status(distOk), replyObject(0), replyID(0) { };
+  ~Work();
+
+  Argument         *args;
+  UINT32           numberOfArgs;
+  void             *input;
+  UINT32           inputLength;
+  void             *output;
+  UINT32           outputLength;
+  DistillerStatus  status;
+
+  ProxyConnection  *replyObject;
+  UINT32           replyID;
+};
+
+
+d96 17
+d115 2
+a116 1
+    public PacketHandler
+d175 18
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 15
+a19 4
+#include "database.h"
+#include "communication.h"
+#include "cacheinterface.h"
+#include <iostream.h>
+d22 15
+a36 4
+struct RemoteID : public IndexKey {
+  RemoteID(char *ip, Port p) : port(p) { strcpy(ipAddress, ip); };
+  RemoteID(RemoteID &id) { strcpy(ipAddress, id.ipAddress); port = id.port; };
+  RemoteID() { strcpy(ipAddress, ""); port = 0; };
+d38 3
+a40 6
+  Bool Equal(IndexKey *key) {
+    RemoteID *ridKey = (RemoteID*) key;
+    return (strcmp(ridKey->ipAddress, ipAddress)==0 && ridKey->port==port) ? 
+      TRUE : FALSE; 
+  };
+  uint32 Hash() { return port + HashString(ipAddress); }
+a41 2
+  friend class ostream& operator << (ostream& out, RemoteID& rid) 
+  { return out << rid.ipAddress << '/' << rid.port; }
+d43 11
+a53 2
+  char ipAddress[MAXIP];
+  Port port;
+d57 45
+a101 6
+struct DistillerType {
+  DistillerType(char *type) { strcpy(c_struct.string, type); };
+  DistillerType(C_DistillerType &type)
+  { strcpy(c_struct.string, type.string); };
+  DistillerType(DistillerType &type)   
+  { strcpy(c_struct.string, type.c_struct.string); };
+a102 5
+  Bool Equal(DistillerType *key) 
+  {
+    return ((strcmp(c_struct.string, key->c_struct.string)==0) ? TRUE:FALSE); 
+  }
+  Bool CanSatisfy(DistillerType *request);
+d104 7
+a110 1
+  C_DistillerType c_struct;
+d114 16
+a129 4
+struct BasicDistiller : public DatabaseRecord {
+  BasicDistiller(RemoteID& _rid, DistillerType& _type)
+    : rid(_rid), type(_type) { };
+  virtual ~BasicDistiller() { };
+d131 2
+a132 2
+  RemoteID      rid;
+  DistillerType type;
+d136 4
+a139 5
+class DistillerIndex : public Index {
+public:
+  DistillerIndex(Bool dupsAllowed=FALSE,
+		 int numberOfBuckets=DefaultNumberOfBuckets)
+    : Index(dupsAllowed, numberOfBuckets) { };
+d141 6
+a146 2
+  IndexKey *GetIndexKey(DatabaseRecord *record) 
+  { return &((BasicDistiller*)record)->rid; }
+d150 4
+a153 1
+class BasicDistillerDatabase : public Database {
+d155 7
+a161 2
+  BasicDistillerDatabase();
+  virtual ~BasicDistillerDatabase();
+d163 3
+a165 1
+  DistillerIndex     *getMainIndex() { return mainIndex; }
+d167 5
+a171 2
+protected:
+  DistillerIndex     *mainIndex;
+d176 2
+a177 1
+#endif __DISTILLER_H__
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

@@ -1,0 +1,188 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	V1_1_2:1.1.1.1
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#
+#  support for scaling and coord transformation for image maps
+#  $Id: imagemap.pl,v 1.1 1996/09/09 23:04:17 fox Exp $
+#
+
+package imgmap;
+use strict 'vars';
+
+=head1 NAME
+
+imagemap.pl - support for scaling/coord transformations for image maps
+
+=head1 SYNOPSIS
+
+  $newurl = &imgmap::mapify($url,$anchor);
+  $origurl = &imgmap::unmapify($munged_url);
+
+  &imgmap::store_imgmap_info($orig_url, $orig_ref, $dist_ref, $cache);
+  $newurl = &imgmap::modify_request($munged_url);
+
+=head1 DESCRIPTION
+
+Imagemap coordinate transformation works as follows.
+
+=over 3
+
+=item 1.
+
+When an ISMAP IMG tag is seen in HTML, the image's URL is mapified.
+
+=item 2.
+
+When an IMG tag is requested that unmapify believes was a mapified URL,
+the unmapified version is fetched and distilled, and the fetched and
+distilled versions are passed to store_imgmap_info to remember the
+ratios in the x and y dimensions of the distilled to the original.
+
+=item 3.
+
+When an IMGMAP request is seen (i.e. http://img_url?x,y), if img_url was
+a mapified URL, then get_imgmap_info is used to retrieve the X and Y
+ratios by which x,y need to be multiplied before passing them on to the
+server.  If img_url was I<not> a mapified URL, the request is passed
+verbatim.
+
+=back
+
+=head1 FUNCTIONS
+
+=item $newurl = &imgmap::mapify($url,$anchor)
+
+Given an original IMG SRC URL for the imagemap's image, and the anchor URL for
+the 
+imagemaps' server-side CGI program, return a "mapified" IMG SRC URL suitable
+for inclusion in the client's HTML.
+
+=cut
+
+$imgmap::Mapify = "%s%%%%MAP%%%%%s";
+$imgmap::Unmapify = '(.*)%%MAP%%(.*)$';
+
+sub mapify {
+    my ($url,$anchor) = @@_;
+    $anchor =~ s![:/]!_$&!g;
+    sprintf($imgmap::Mapify, $url, $anchor);
+}
+
+=item ($origurl,$anchor) = &imgmap::unmapify($url)
+
+Given a munged URL, return the original ("unmapified") version and the embedded
+anchor for the server-side imagemap program.  If the
+supplied URL doesn't look like one that was mapified, return the empty list.
+
+=cut
+
+sub unmapify {
+    my $url = shift;
+    my ($result,$anchor) = ($url =~ m/$imgmap::Unmapify/o
+                            ? ($1,$2)
+                            : ());
+    &main::debug('imgmap', "$url unmapified to $result")
+        if $result;
+    $anchor =~ s!_([:/])!$1!g if defined $anchor;
+    return ($result,$anchor);
+}
+
+=item &imgmap::store_img_info($origurl, $origref, $distref, $cache)
+
+For the image whose unmapified URL is $origurl, compute and store the
+ratio of the X and Y sizes of the original and distilled images.
+$origref and $distref are B<references to> the content of those images
+respectively.  $cache should be a cache object that can handle this operation. 
+
+=cut
+
+sub store_img_info {
+    my($anchor, $origref, $distref, $cache) = @@_;
+    my($ox,$oy,$nx,$ny);
+    my($rx,$ry);
+    # compute original and new x and y sizes, and the ratios.
+    $ox = ord(substr($$origref,6,1))+(ord(substr($$origref,7,1))<<8);
+    $oy = ord(substr($$origref,8,1))+(ord(substr($$origref,9,1)) << 8);
+    $nx = ord(substr($$distref,6,1))+(ord(substr($$distref,7,1))<<8);
+    $ny = ord(substr($$distref,8,1))+(ord(substr($$distref,9,1)) << 8);
+    $rx = $ox/$nx;
+    $ry = $oy/$ny;
+    &main::debug('imgmap',
+                 "Storing scale coords $rx,$ry for anchor $anchor");
+    $cache->store($anchor, "$rx $ry",
+                  "application/pythia-imgmap-ref", 0);
+}
+
+=item $newreq = &imgmap::modify_request($url,$cache)
+
+If $url appears to be a "mapified" URL encoding an imagemap click
+request, returns a new URL suitable for passing to the server.  The new
+URL is generated based on information previously stored by
+L</"store_img_info">; if this information is not found, or if $url does
+not appear to be mapified, the original URL is returned verbatim.  $cache
+should be the same cache object passed to L</"store_imgmap_info">.
+
+=cut    
+
+sub modify_request {
+    my ($url,$cache) = @@_;
+    my ($urlpart,$x,$y,$rx,$ry);
+
+    if ($url =~ /(.*)\?(\d+),(\d+)$/) {
+        ($urlpart,$x,$y) = ($1,$2,$3);
+    } else {
+        # doesn't even look like an imagemap click request!
+        return $url;
+    }
+
+    # do the coord scaling
+    ($rx,$ry) = split(/\s+/, $cache->get($urlpart));
+    my ($nx,$ny);
+    $x = int($rx * $x);
+    $y = int($ry * $y);
+    $urlpart .= "?$x,$y";
+    &main::debug('imgmap', sprintf("Scaling by %.2f,%.2f --> $urlpart", $rx,$ry));
+    return $urlpart;
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@New, distribution version of Pythia with a real directory structure and
+real documentation
+@
+text
+@@

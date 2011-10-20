@@ -1,0 +1,413 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.9
+	Yatin:1.9.0.6
+	pre-yatin-merge:1.9
+	transend-beta2:1.9
+	fox-dev:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.9;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	97.02.14.21.24.16;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.05.03.57.04;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.01.29.21.59.24;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.29.04.56.58;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.29.00.34.31;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.01.29.00.28.08;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.01.29.00.26.46;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.28.03.55.22;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.08.03.39.18;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@fixed killbutton bug in monitor
+@
+text
+@/*
+ *  C Library for talking to GUI monitor
+ */
+
+#include "libmon.h"
+
+typedef void (*sigproc)(int);
+
+#ifndef MALLOC
+#  include <stdlib.h>
+#  define MALLOC malloc
+#  ifndef FREE
+#    define FREE free
+#  endif
+#endif
+
+#ifndef MSG
+#  define MSG(x)
+#endif
+
+static Monitor *gmon_gasp = NULL;
+
+Monitor *
+MonitorClient_Create(const char *unitname, const char *ipaddr, int port,
+                     int ttl)
+{
+  Monitor *m;
+  struct utsname un;
+  
+  if ((m = (Monitor *)MALLOC(sizeof(Monitor))) == NULL) {
+    MSG("client_create: malloc failed");
+    return NULL;
+  }
+  if (strlen(unitname) > MON_MAXUNITNAME-1) {
+    MSG("unit name too long");
+    FREE(m);
+    return NULL;
+  }
+  strcpy(m->unitname, unitname);
+
+  (void)uname(&un);
+  strncpy(m->myhostname, un.nodename, SYS_NMLN-1);
+  if ((m->sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    MSG("socket failed");
+    FREE(m);
+    return NULL;
+  }
+
+  m->pid = (int)getpid();
+  
+  memset((char *)&(m->sin), 0, sizeof(m->sin));
+  m->sin.sin_family = AF_INET;
+  m->sin.sin_addr.s_addr = inet_addr(ipaddr);
+  if (port > 0 && port < 65535)
+    m->sin.sin_port = htons((u_short)port);
+  else
+    m->sin.sin_port = (u_short)0;
+
+  if (connect(m->sock, (struct sockaddr *)&(m->sin), sizeof(m->sin)) < 0) {
+    MSG("connect failed");
+    FREE(m);
+    return NULL;
+  }
+
+  /*
+   *  If multicast socket, set that option.
+   */
+
+  if (IN_CLASSD(ntohl(m->sin.sin_addr.s_addr))) {
+    u_char t = (ttl > 255? 255 : ttl < 0? 0: ttl);
+    if (setsockopt(m->sock, IPPROTO_IP, IP_MULTICAST_TTL, (char*)&t,
+                   sizeof(t)) < 0) {
+      MSG("setsockopt TTL failed");
+      FREE(m);
+      return NULL;
+    }
+  }
+
+  return (gmon_gasp = m);
+}
+
+int
+MonitorClient_UnitSend(Monitor *m, const char *unit,
+                       const char *field, const char *value,
+                       const char *script)
+{
+  int len;
+  int result;
+
+  char *buf;
+
+  if (m == NULL)
+    return 0;
+
+  if (m == MON_USE_STDERR) {
+    fprintf(stderr, "%15s:%-20s  %s   | {%s}\n", unit, field, value, script);
+    return 0;
+  }
+  buf = (char *)MALLOC(strlen(m->myhostname)
+                       + 5        /* for pid+separator */
+                       + strlen(unit)
+                       + strlen(field)
+                       + strlen(value)
+                       + strlen(script)
+                       + (5 * strlen(MON_SEPARATOR))
+                       + 1);    /* for eos */
+
+  if (buf == NULL) {
+    result = -2;
+    goto SEND_RETURN;
+  }
+
+  len = sprintf(buf, "%s%s%d%s%s%s%s%s%s%s%s",
+                m->myhostname, MON_SEPARATOR,
+                m->pid, MON_SEPARATOR,
+                unit, MON_SEPARATOR,
+                field, MON_SEPARATOR,
+                value, MON_SEPARATOR,
+                script);
+  result = (sendto(m->sock, (const char *)buf, len, 0,
+                   (const struct sockaddr *)&(m->sin), sizeof(m->sin)));
+SEND_RETURN:
+  FREE(buf);
+  return(result);
+}
+
+void
+MonitorClient_SetAsDefault(Monitor *m)
+{
+  gmon_gasp = m;
+}
+
+void
+MonitorClient_Gasp(int sig)
+{
+  if (gmon_gasp == NULL) {
+    /* nothing */
+  } else if (gmon_gasp == MON_USE_STDERR) {
+    fprintf(stderr, "MONITOR: Process %d gasps its last breath\n",
+            (int)getpid());
+  } else {
+    char sigstring[10];
+    sprintf(sigstring, "%d", sig);
+    (void)MonitorClient_Send(gmon_gasp, "%DEATH%", sigstring, "");
+  }
+}
+
+
+    
+  
+    
+  
+@
+
+
+1.8
+log
+@all "run" targets now put their programs in the background.
+run_frontend redirects stderr to "frontend.errs", but ideally we
+shouldn't have to rely on fprintf(stderr) at all.
+html and gif distillers no longer spew debugging output to stderr.
+Monitor now prints to stderr if the monitor object has the sentinel
+value MON_USE_STDERR.
+in doc directory, distillers.txt is now distillers.pod.  Use pod2* to
+make it into HTML,LaTEX, etc.
+@
+text
+@d21 1
+a21 1
+static Monitor *gasp = NULL;
+d79 1
+a79 1
+  return (gasp = m);
+d108 4
+a111 2
+  if (buf == NULL)
+    return -2;
+d122 1
+d130 1
+a130 1
+  gasp = m;
+d136 1
+a136 1
+  if (gasp == NULL) {
+d138 1
+a138 1
+  } else if (gasp == MON_USE_STDERR) {
+d142 1
+a142 1
+    char sigstring[5];
+d144 1
+a144 1
+    (void)MonitorClient_Send(gasp, "%DEATH%", sigstring, "");
+@
+
+
+1.7
+log
+@renamed mon.h to libmon.h - clientlib was not compiling correctly
+(though it would have if its includepath had been right) since solaris
+has a /usr/include/mon.h file.  minor monitor interface changes in
+monitor.c.
+@
+text
+@a5 2
+#include <stdio.h>
+#include <assert.h>
+d95 4
+d133 6
+a138 1
+  if (gasp != NULL) {
+@
+
+
+1.6
+log
+@rearranged some code to fix an uninitialized variable.
+@
+text
+@d5 1
+a5 1
+#include "mon.h"
+d30 1
+d43 2
+d50 2
+d97 8
+a104 6
+  buf = (char *)MALLOC(strlen(unit) +
+                       strlen(field) +
+                       strlen(value) +
+                       strlen(script) +
+                       (3 * strlen(MON_SEPARATOR)) +
+                       1);
+d109 3
+a111 1
+  len = sprintf(buf, "%s%s%s%s%s%s%s",
+d132 3
+a134 1
+    (void)MonitorClient_Send(gasp, "", "%DEATH%", "");
+@
+
+
+1.5
+log
+@BUG FIX TO monitor routines now check if monitor is non-null before proceeding
+@
+text
+@a91 3
+  if (buf == NULL)
+    return -2;
+
+d98 3
+@
+
+
+1.4
+log
+@monitor routines now check if monitor is non-null before proceeding
+@
+text
+@d87 2
+a88 6
+  char *buf = (char *)MALLOC(strlen(unit) +
+                             strlen(field) +
+                             strlen(value) +
+                             strlen(script) +
+                             (3 * strlen(MON_SEPARATOR)) +
+                             1);
+d94 7
+@
+
+
+1.3
+log
+@monitor routines now check if monitor is non-null before proceeding
+@
+text
+@a86 3
+  if (m == NULL)
+    return 0;
+
+d93 3
+@
+
+
+1.2
+log
+@bug fix to tudp.so, usability fixes to libmon
+@
+text
+@d86 4
+a89 1
+  
+@
+
+
+1.1
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@a6 1
+#include <signal.h>
+d50 1
+d76 1
+a76 1
+  return m;
+d80 3
+a82 2
+MonitorClient_Send(Monitor *m, const char *field, const char *value,
+                   const char *script)
+d85 3
+a87 1
+  char *buf = (char *)MALLOC(strlen(m->unitname) +
+d91 1
+a91 1
+                             (4 * strlen(MON_SEPARATOR)) +
+d97 1
+a97 1
+                m->unitname, MON_SEPARATOR,
+d101 4
+a104 2
+  return (sendto(m->sock, (const char *)buf, len, 0,
+                 (const struct sockaddr *)&(m->sin), sizeof(m->sin)));
+@

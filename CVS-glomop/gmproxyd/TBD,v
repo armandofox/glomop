@@ -1,0 +1,268 @@
+head	1.9;
+access;
+symbols
+	prewink:1.8
+	stable:1.4
+	release:1.4
+	current:1.9;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	96.07.07.00.03.16;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.28.03.39.42;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.16.01.41.27;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.15.02.39.01;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.15.01.49.11;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.28.01.07.35;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.28.00.41.36;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.27.02.24.14;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.26.10.12.01;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@---add stuff---
+
+need refine URL that means "non-refinable object"
+client profile: need client object to pass around to distillers etc
+distillers should take doc objcet, not doc id, to get info like original
+           DL, etc.
+
+---noncritical but annoying---
+"unitialized value" warnings spurious
+modularized tm modules
+cleanup of tmp files from event dispatcher
+caching in doc->fetch; should really be an interface to Harvest.
+caching in doc->fetch
+pointer to dir with approved binaries
+
+
+---delegatable---
+
+how to get ppmquant to quant down to "K out of N"?
+
+---- bugs---
+doc_delete broken in mon
+scrollbar broken in mon
+
+
+--enhancements--
+set up "charon" as a user and kdc principal
+put more stuff in config file
+remove debugging echos from KerberosIV.xs
+move kerberos-specific stuff out of accept.pl?
+0 should be KSUCCESS
+decomp_rpkt should use prot.h macros
+need to rerun xsubpp to get stuff from krb_paths.h and krb_conf.h
+
+---nonblocking useragent---
+Call chain:
+
+UserAgent->request {
+   # Creates protocol object of the right type, which provides its own
+   # 'request' method
+   protocol->request {
+       # Request method creates an LWP::Socket.
+       socket->read_until
+          # blocking read from socket until a particular
+          # delimiter (or eof) is seen.  
+          LWP::IO::read: calls select() and sysread().
+          <-- number of bytes read; they're put into buffer passed by
+              reference as $_[0]
+       <-- returns 1; buffer was passed by reference as data_ref
+
+          
+
+LWP::IO:read effectively becomes nonblocking if undef is passed as
+       timeout (the last arg).
+
+STRATEGY:
+
+1. Protocol-level request_nb
+
+Add a "request_nb" method to the packages that will support nonblocking
+request.  This method must NOT call socket->read_until; instead it must
+internally implement this functionality by calling socket->read with an
+undef timeout (which will cause LWP::IO::read to return immediately as
+soon as there is no more data).
+
+request_nb will be called like this:
+
+   undef $state;
+   $state = 
+      $protocol->request_nb($request_object,$proxy,$arg,$size,$timeout,$state) 
+          until $state eq 'done';
+
+The routine will nonblockingly continue to read stuff, finally returning
+'done' when it is finished.  In the meantime it returns a state object
+that can be passed to it on subsequent entries.  This means the routine
+must be reentrant and able to keep all of its local state in $state; in
+practice, $state will probably be a reference to a hash of the
+request_nb procedure's local variables.
+
+For protocols that don't support request_nb, the useragent will just
+call request instead.
+
+2. User agent additional argument
+
+We'll add semantics for nonblocking calls to UserAgent::simple_request
+and UserAgent::request methods:
+
+OLD WAY -->    $response = $useragent->request(....);
+               $response = $useragent->simple_request(...);
+
+NEW WAY -->    $response = undef;
+               $response = $useragent->request(...., $response)
+                     until ref($response) eq 'HTTP::Response';
+               $response = $useragent->simple_request(...., $response)
+                     until ref($response) eq 'HTTP::Response';
+
+@
+
+
+1.8
+log
+@added plan for nonblocking UA to TBD.  mime_type_of_file function in
+util.pl now also tries calling LWP::MediaTypes::guess_media_type, and
+only shells out to the 'file' command as a fallback.
+@
+text
+@d1 21
+a21 1
+close doc?
+a23 5
+need better mime_type_of_file function!!!!
+in Image module, rather than always converting back and forth to PPM,
+    shoudl keep state in file object indicating its type, etc, and its
+    compression ratio (so that for refeinemnet, an existing PPM can be used
+    to predict whether the GIF would be too large, etc.)  
+d27 1
+a28 1
+running as root - what a pain
+@
+
+
+1.7
+log
+@minimal refinement seems to work, albeit bad management of ppm's and
+gifs results in lots of wasteful shell processes to determinme simple
+properties of the orig file. Lesson: need to keep properties with each
+file/chunk.
+@
+text
+@d10 1
+d19 63
+@
+
+
+1.6
+log
+@skeletal refinement is working, but D'OH!  it returns the specified
+chunk at the distilled size, not the original size! D'OH!
+@
+text
+@d5 4
+@
+
+
+1.5
+log
+@Fixed 'bad htype' bug on every other fetch (lesson: don't do a 'return'
+or far jump out a 'while each()' loop!).  Fixed error behavior: was
+trying to set error field in self->resp instead of self (an
+HTTP::Headers object rather than a proxy object).  Still tbd: Image
+module does not call gifmunch if distillation isn't needed or would
+increase e2e latency. (Hook in place, but no fxnality yet.)
+@
+text
+@d4 1
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d1 5
+@
+
+
+1.3
+log
+@Kerberos handshake works.  Need to put in code to actually check fields
+of received packets, timestamps, etc., and remove debugging printf's.
+@
+text
+@a2 1
+use uname instead of `hostname` in gm_sock.pl
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d4 5
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 3
+a3 5
+Kerberos functions to implement
+------------------------------
+
+Perl version of get_ad_tkt
+read_service_key
+@

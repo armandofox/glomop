@@ -1,0 +1,192 @@
+head	1.2;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.09.13.00.39.19;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.23.00.41.54;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.23.00.41.54;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Fixed turning b&w images into 2-bit
+@
+text
+@/* ppmtoTbmp.c - read a portable pixmap and write a pilot Tbmp file
+ *
+ * Program by Ian Goldberg <iang@@cs.berkeley.edu>
+ *
+ * Based on ppmtopuzz.c by Jef Paskanzer, from the netpbm-1mar1994 package.
+ */
+
+#include "ppm.h"
+#include "ppmcmap.h"
+
+static int colcompare(const void *a, const void *b)
+{
+    colorhist_vector ch1 = (colorhist_vector)a;
+    colorhist_vector ch2 = (colorhist_vector)b;
+    return
+	(int) PPM_GETR(ch1->color) - (int) PPM_GETR(ch2->color) +
+	(int) PPM_GETG(ch1->color) - (int) PPM_GETG(ch2->color) +
+	(int) PPM_GETB(ch1->color) - (int) PPM_GETB(ch2->color);
+}
+
+int
+main( int argc, char **argv )
+{
+    FILE* ifp;
+    pixel** pixels;
+    register pixel* pP;
+    colorhist_vector chv;
+    colorhash_table cht;
+    int rows, cols, row, colors;
+    register int col;
+    pixval maxval;
+    unsigned char outbyte, outbit;
+    int twobit = 0;
+
+    /* Parse default params */
+    ppm_init( &argc, argv );
+
+    if (argc > 1 && !strcmp(argv[1], "-2bit")) {
+	twobit = 1;
+	--argc; ++argv;
+    }
+    if ( argc > 2 || (argc == 2 && argv[1][0] == '-')) {
+	pm_usage( "[-2bit] [ppmfile]" );
+    }
+
+    if ( argc == 2 )
+	ifp = pm_openr( argv[1] );
+    else
+	ifp = stdin;
+
+    pixels = ppm_readppm( ifp, &cols, &rows, &maxval );
+    pm_close( ifp );
+
+    pm_message( "computing colormap..." );
+    chv = ppm_computecolorhist( pixels, cols, rows, twobit ? 4 : 2, &colors );
+    if ( chv == (colorhist_vector) 0 )
+	{
+	pm_message(
+	    "too many colors - try doing a 'ppmquant %d'", twobit ? 4 : 2 );
+	exit( 1 );
+	}
+    qsort((char *)chv, colors, sizeof(struct colorhist_item), colcompare);
+    pm_message( "%d colors found", colors );
+
+    /* Write Tbmp header. */
+    (void) pm_writebigshort( stdout, cols*(twobit ? 2 : 1) );   /* width */
+    (void) pm_writebigshort( stdout, rows );                    /* height */
+    if (twobit) {
+	(void) pm_writebigshort( stdout, ((cols+7)/8)*2 );      /* chars/row */
+    } else {
+	(void) pm_writebigshort( stdout, ((cols+15)/16)*2 );    /* chars/row */
+    }
+    (void) pm_writebigshort( stdout, 0 );                       /* flags */
+    (void) pm_writebiglong( stdout, 0 );                        /* pad */
+    (void) pm_writebiglong( stdout, 0 );                        /* pad */
+
+    /* Convert color vector to color hash table, for fast lookup. */
+    cht = ppm_colorhisttocolorhash( chv, colors );
+    ppm_freecolorhist( chv );
+
+    /* And write out the data. */
+    for ( row = 0; row < rows; ++row ) {
+	outbyte = 0x00;
+	outbit = twobit ? 6 : 7;
+	for ( col = 0, pP = pixels[row]; col < cols; ++col, ++pP ) {
+	    register int color;
+
+	    color = ppm_lookupcolor( cht, pP );
+	    if ( color == -1 )
+		pm_error(
+		    "color not found?!?  row=%d col=%d  r=%d g=%d b=%d",
+		    row, col, PPM_GETR(*pP), PPM_GETG(*pP), PPM_GETB(*pP) );
+	    if (twobit) {
+		if (color == 0) {
+		    outbyte |= (3 << outbit);
+		} else if (color == 1 && colors != 2) {
+		    outbyte |= (2 << outbit);
+		} else if (color == 2 && colors == 4) {
+		    outbyte |= (1 << outbit);
+		}
+	    } else {
+		if (color == 0) {
+		    outbyte |= (1 << outbit);
+		}
+	    }
+	    if (!outbit) {
+		(void) putchar(outbyte);
+		outbyte = 0x00;
+		outbit = (twobit ? 6 : 7);
+	    } else {
+		outbit -= (twobit ? 2 : 1);
+	    }
+	}
+	if (twobit) {
+	    /* Output any partial byte remaining */
+	    if (cols & 0x03) {
+		(void) putchar(outbyte);
+	    }
+	    if (!((cols+7) & 0x04)) {
+		(void) putchar(0x00);
+	    }
+	} else {
+	    /* Output any partial byte remaining */
+	    if (cols & 0x07) {
+		(void) putchar(outbyte);
+	    }
+	    if (!((cols+15) & 0x08)) {
+		(void) putchar(0x00);
+	    }
+	}
+    }
+
+    exit( 0 );
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d96 1
+a96 1
+		} else if (color == 1) {
+d98 1
+a98 1
+		} else if (color == 2) {
+@
+
+
+1.1.1.1
+log
+@A tool for converting ppm's to pilot Tbmp's
+@
+text
+@@

@@ -1,0 +1,373 @@
+head	1.10;
+access;
+symbols
+	Yatin-final:1.10
+	Yatin:1.10.0.2
+	pre-yatin-merge:1.10
+	transend-beta2:1.10
+	fox-dev:1.10
+	ptm-ng:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.9
+	stable_ptm:1.5
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	97.07.15.18.38.29;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.03.09.05.51.01;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.03.06.02.49.11;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.26.04.14.47;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.17.03.01.02;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.05.20.20.48;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.05.01.27.06;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.24.08.12.07;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.42;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.28;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Modified DistillerType::CanSatisfy to accept wildcards between slashes
+
+Changed the thread-unsafe gethostbyname/getprotobyname to the corresponding
+thread safe version
+@
+text
+@#ifndef __DISTDB_H__
+#define __DISTDB_H__
+
+
+#include "database.h"
+#include "communication.h"
+#include "proxyinterface.h"
+#include "distinterface.h"
+#include <iostream.h>
+
+
+class IStream;
+class OStream;
+
+
+struct Load {
+  UINT32 totalLatency_ms, ignoreThreshold_ms;
+
+  Load() : totalLatency_ms(0), ignoreThreshold_ms(0) { };
+  /*Load& operator = (Load& newLoad) 
+  { totalLatency_ms = newLoad.totalLatency_ms; return *this; };*/
+  Load& operator += (Load &add) { 
+    totalLatency_ms += add.totalLatency_ms; return *this; 
+  }
+  Load& operator -= (Load &sub) { 
+    totalLatency_ms -= sub.totalLatency_ms; return *this; 
+  }
+  Load& Average(Load &sum, int total) { 
+    totalLatency_ms = ((total==0) ? 0 : sum.totalLatency_ms/total); 
+    return *this;
+  }
+
+  friend OStream& operator << (OStream& out, Load& load);
+  friend IStream& operator >> (IStream& out, Load& load);
+};
+
+
+struct RemoteID : public IndexKey {
+  RemoteID(const char *ip, Port p) : port(p) { strcpy(ipAddress, ip); };
+  RemoteID(RemoteID &id) { strcpy(ipAddress, id.ipAddress); port = id.port; };
+  RemoteID() { strcpy(ipAddress, ""); port = 0; };
+
+  gm_Bool Equal(IndexKey *key) {
+    RemoteID *ridKey = (RemoteID*) key;
+    return (strcmp(ridKey->ipAddress, ipAddress)==0 && ridKey->port==port) ? 
+      gm_True : gm_False; 
+  };
+  UINT32 Hash() { return port + HashString(ipAddress); }
+
+  friend class ostream& operator << (ostream& out, RemoteID& rid) 
+  { return out << rid.ipAddress << '/' << rid.port; }
+
+  friend OStream& operator << (OStream& out, RemoteID& rid);
+  friend IStream& operator >> (IStream& out, RemoteID& rid);
+
+  char ipAddress[MAXIP];
+  Port port;
+};
+
+
+struct DistillerType : public IndexKey {
+  DistillerType() { strcpy(c_struct.string, ""); };
+  DistillerType(const char *type) { strcpy(c_struct.string, type); };
+  DistillerType(C_DistillerType &type)
+  { strcpy(c_struct.string, type.string); };
+  DistillerType(DistillerType &type)   
+  { strcpy(c_struct.string, type.c_struct.string); };
+
+  gm_Bool Equal(IndexKey *key) { 
+    DistillerType *typeKey = (DistillerType*) key;
+    return ((strcmp(c_struct.string, typeKey->c_struct.string)==0) ? 
+	    gm_True:gm_False);
+  };
+  UINT32 Hash() { return HashString(c_struct.string); }
+  
+  gm_Bool CanSatisfy(DistillerType *request);
+
+  friend ostream& operator<< (ostream& out, DistillerType& type) 
+  { return out << type.c_struct.string; };
+
+  friend OStream& operator << (OStream& out, DistillerType& type);
+  friend IStream& operator >> (IStream& out, DistillerType& type);
+
+  operator char * () { return c_struct.string; };
+
+  C_DistillerType c_struct;
+};
+
+
+struct BasicDistiller : public DatabaseRecord {
+  BasicDistiller(RemoteID& _rid, DistillerType& _type)
+    : rid(_rid), type(_type) { };
+  BasicDistiller() : rid("", 0), type("") { };
+  virtual ~BasicDistiller() { };
+
+  friend OStream& operator << (OStream& out, BasicDistiller& dist);
+  friend IStream& operator >> (IStream& out, BasicDistiller& dist);
+
+  RemoteID      rid;
+  DistillerType type;
+  Load          load;
+};
+
+
+class DistillerIndex : public Index {
+public:
+  DistillerIndex(gm_Bool dupsAllowed=gm_False,
+		 int numberOfBuckets=DefaultNumberOfBuckets)
+    : Index(dupsAllowed, numberOfBuckets) { };
+protected:
+  IndexKey *getIndexKey(DatabaseRecord *record) 
+  { return &((BasicDistiller*)record)->rid; }
+};
+
+
+class BasicDistillerDatabase : public Database {
+public:
+  BasicDistillerDatabase();
+  virtual ~BasicDistillerDatabase();
+
+  DistillerIndex     *getMainIndex() { return mainIndex; }
+
+protected:
+  DistillerIndex     *mainIndex;
+};
+
+
+
+#endif // __DISTDB_H__
+@
+
+
+1.9
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d76 1
+a76 1
+  gm_Bool CanSatisfy(DistillerType *request) { return Equal(request); };
+@
+
+
+1.8
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@a31 5
+  gm_Bool ShouldIgnore() { 
+    return (totalLatency_ms >= ignoreThreshold_ms && ignoreThreshold_ms!=0) ?
+      gm_True : gm_False; 
+  };
+  UINT32 getTickets() { return (100/((totalLatency_ms>>2)+1)) + 1; };
+@
+
+
+1.7
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d17 1
+a17 1
+  UINT32 totalLatency_ms;
+d19 3
+a21 3
+  Load() : totalLatency_ms(0) { };
+  Load& operator = (Load& newLoad) 
+  { totalLatency_ms = newLoad.totalLatency_ms; return *this; };
+d32 4
+@
+
+
+1.6
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d17 1
+a17 1
+  UINT32 totalLatency;
+d19 1
+a19 1
+  Load() : totalLatency(0) { };
+d21 12
+a32 3
+  { totalLatency = newLoad.totalLatency; return *this; };
+  void NewWork (DistillationCost *cost) { totalLatency+=cost->estimatedTime; };
+  void WorkDone(DistillationCost *cost) { totalLatency-=cost->estimatedTime; };
+@
+
+
+1.5
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d103 1
+a103 1
+  IndexKey *GetIndexKey(DatabaseRecord *record) 
+@
+
+
+1.4
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d53 1
+a53 1
+struct DistillerType {
+d61 7
+a67 2
+  gm_Bool Equal(DistillerType *key) 
+  { return ((strcmp(c_struct.string, key->c_struct.string)==0) ? gm_True:gm_False);};
+@
+
+
+1.3
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d35 1
+a35 1
+  Bool Equal(IndexKey *key) {
+d38 1
+a38 1
+      TRUE : FALSE; 
+d61 3
+a63 3
+  Bool Equal(DistillerType *key) 
+  { return ((strcmp(c_struct.string, key->c_struct.string)==0) ? TRUE:FALSE);};
+  Bool CanSatisfy(DistillerType *request) { return Equal(request); };
+d94 1
+a94 1
+  DistillerIndex(Bool dupsAllowed=FALSE,
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d8 1
+d17 7
+a23 1
+  int value;
+a24 1
+  Load& operator = (Load& newLoad) { value = newLoad.value; return *this; };
+d31 1
+a31 1
+  RemoteID(char *ip, Port p) : port(p) { strcpy(ipAddress, ip); };
+d55 1
+a55 1
+  DistillerType(char *type) { strcpy(c_struct.string, type); };
+d71 1
+a71 1
+  operator char* () { return c_struct.string; };
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d11 4
+d18 1
+d48 1
+d74 1
+@

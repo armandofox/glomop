@@ -1,0 +1,588 @@
+head	1.14;
+access;
+symbols
+	Yatin-final:1.14
+	Yatin:1.14.0.2
+	pre-yatin-merge:1.14
+	transend-beta2:1.11
+	fox-dev:1.11;
+locks; strict;
+comment	@# @;
+
+
+1.14
+date	97.09.10.05.00.04;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.06.01.37.02;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.04.03.43.40;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.07.24.03.18.59;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.07.16.03.59.51;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.10.23.52.06;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.10.06.14.49;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.09.03.59.43;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.09.02.46.05;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.08.03.14.22;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.08.00.43.18;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.03.19.47.48;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.07.03.03.32.34;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.28.03.36.21;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.14
+log
+@Fixes for bugs 44 & 61 in transend.text.piml.  Changes to layout.tcl to
+improve fidelity (red and blue are now used to indicate <i> and links,
+respectively) and unpack_tstr.pl.
+@
+text
+@#!/opt/bin/wish -f
+
+# break_string should be a unique expression (ie that should "never occur" in
+# the body text of an html page) that this script will use to denote where it
+# thinks line breaks are indicated in the output.  
+
+set break_string "<//>"
+
+# check for fonts first....
+
+if [catch {label .ll -font pilot-small} err] {
+    error "Error: $err (did you remember to 'xset +fp ../pilotFonts'?)"
+}
+
+proc newwin {w h} {
+    wm resizable . 1 1
+    global status currFile
+    frame .view
+    scrollbar .view.s -orient vertical \
+            -width 10 -command ".view.f yview"
+    pack .view.s -side right -expand 1 -fill y -padx 0
+
+    canvas .view.f \
+            -width $w \
+            -scrollregion "0 0 $w $h" \
+            -relief flat \
+            -yscrollcommand ".view.s set"
+    global c
+    set c ".view.f"
+    clearCanv
+    pack .view.f -side left -expand 1 -fill y -padx 0
+
+    # control buttons
+    frame .ctrl
+    label .ctrl.status -font pilot-small \
+            -height 2 -wraplength 160 \
+            -textvariable status -anchor w \
+            -text "Red=italics  Blue=link"
+    pack .ctrl.status -side top -fill x -expand 0
+    button .ctrl.open -text "Open..." -command { 
+        if [openFile [set  f [tk_getOpenFile]]] {
+            set currFile $f
+        }
+    }
+    button .ctrl.reload -text "Reload" -command {openFile $currFile}
+    button .ctrl.quit -text "Quit" -command exit
+    pack .ctrl.open .ctrl.reload .ctrl.quit -side left -fill x -expand 1
+
+    $c bind link <Enter> \
+            "$c configure -cursor hand2"
+    $c bind link <Leave> \
+            "set status {} ; $c configure -cursor {}"
+
+    pack .view -side top -fill y -expand 1
+    pack .ctrl -side bottom -fill none -expand 1
+    update
+    return $c
+}
+
+proc openFile {file} {
+    global currFile c
+    if {[set f [open $file "r"]] != ""} {
+        clearCanv
+        readfile $f $c
+        return 1
+    } else {
+        tk_dialog .dialog "File Open Error" "Unable to open '$file'"
+        return 0
+    }
+}
+
+proc clearCanv {} {
+    global c
+    global cnt maxY
+    set cnt 0
+    $c delete all
+    set maxY 0
+}
+
+# this routine expects the format:
+# x y xextent yextent tag
+
+proc add {c x y xe ye attrs link tag} {
+    global tags
+    global cnt
+    global status
+    global maxY
+    global break_string
+    
+    if {! [info exists cnt]} {
+        set cnt 0
+    }
+    #puts stderr "Got $x $y $xe $ye $tag"
+    if {[expr $y+$ye] > $maxY} {
+        set maxY [expr $y+$ye]
+    }
+    regsub -all "{|}" $tag "\\&" tag
+    if [regexp {\[image ([^ ]+)\]} $tag dummy imgfile] {
+        # image item
+        image create photo img$cnt -file $imgfile
+        set img [$c create image $x $y -image img$cnt -anchor nw -tags link]
+        if [expr $attrs & 0x40] { 
+            # this is a link
+            set item [$c create rectangle $x $y [expr $x+$xe] [expr $y+$ye] \
+                    -outline blue -tags link]
+            $c bind $img <Enter> "set status {$link}"
+        }
+        incr cnt
+    } else {
+        # text item:  draw rect & pick font
+        regsub -all $break_string $tag "\n" tag
+        set fn "pilot-small"
+        if [expr $attrs & 1] {
+            # bold
+            set fn "pilot-bold"
+        }
+        if [expr $attrs & 8] {
+            # could be FONT_BIG1 or FONT_BIG2, but for now we map both
+            # of these to the single font "pilot-large"
+            set fn "pilot-large"
+        }
+        set txt [$c create text $x $y -anchor nw -font $fn -text $tag]
+        set item [$c create rectangle $x $y [expr $x+$xe-1] [expr $y+$ye-1] \
+                -tags txt -stipple gray50 -outline {}]
+        if [expr $attrs & 0x4] {
+            # underline
+            #$c create line $x [expr $y+$ye] [expr $x+$xe-1] [expr $y+$ye] \
+                    # -stipple gray50
+            $c itemconfigure $txt -fill red
+        }
+        if [expr $attrs & 0x40] {
+            # link
+            $c bind $item <Enter> "set status {$link}"
+            $c itemconfigure $item -tags link
+            $c itemconfigure $txt -fill blue
+            #$c create line $x [expr $y+$ye] [expr $x+$xe-1] [expr $y+$ye] \
+                    #-fill blue
+        } else {
+            $c bind $item <Button-1> "puts {$tag}"
+        }
+    }
+}
+
+proc readfile {fh canv} {
+    while {[gets $fh s] != -1} {
+        if [regexp \
+                {([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +([^ ]+ +)?{(.*)}} $s dummy \
+                x y xe ye attrs link tag] {
+            add $canv $x $y $xe $ye $attrs $link $tag
+        } else {
+            tkerror "File format error: bad line '$s'"
+            exit 1
+        }
+    }
+    close $fh
+    global maxY c
+    $c configure -scrollregion "0 0 160 [expr 5+$maxY]"
+}
+
+global currFile
+if {[set currFile [lindex $argv 0]] != ""} {
+    set fh [open $currFile "r"]
+} else {
+    set fh "stdin"
+}
+
+set canv [newwin 160 3000]
+readfile $fh $canv
+tkwait window .
+@
+
+
+1.13
+log
+@added robustness checking to various execs, which should aid error behavior
+@
+text
+@d37 2
+a38 1
+            -textvariable status -anchor w
+d114 1
+d118 2
+d122 1
+a122 1
+        $c create text $x $y -anchor nw -font $fn -text $tag
+d125 6
+d135 3
+a137 2
+            $c create line $x [expr $y+$ye] [expr $x+$xe-1] [expr $y+$ye] \
+                    -fill blue
+@
+
+
+1.12
+log
+@fixes for bug 57
+@
+text
+@d9 6
+@
+
+
+1.11
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d3 6
+d81 1
+d104 1
+a104 1
+        regsub -all {//} $tag "\n" tag
+@
+
+
+1.10
+log
+@various fixes to layout.  still not perfect:  <BR> is always treated as <BR CLEAR=LEFT> but fixing this requires giving the layout engine some notion of the current left margin.  this could probably be done by detecting when the current packing region is split, as is done in Layout.pm line 209.
+@
+text
+@d1 1
+a1 1
+#! wish
+d5 1
+a5 1
+    global status
+d14 1
+d16 3
+a19 1
+    set c ".view.f"
+d27 6
+a32 2
+    button .ctrl.open -text "Open..." -command openFile
+    button .ctrl.reload -text "Reload" -command reopenFile
+d47 20
+d74 1
+d80 3
+d84 1
+a84 1
+    if {$tag == {[image]}} {
+d86 1
+a86 1
+        image create photo img$cnt -file "/tmp/img${cnt}.ppm"
+d122 8
+a129 3
+        regexp {([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +([^ ]+ +)?{(.*)}} $s dummy \
+                x y xe ye attrs link tag
+        add $canv $x $y $xe $ye $attrs $link $tag
+d131 10
+d144 2
+a145 3
+readfile stdin $canv
+
+    
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d20 3
+a22 1
+    label .ctrl.status -font pilot-small -textvariable status -anchor w
+d56 1
+a56 1
+        $c create image $x $y -image img$cnt -anchor nw
+d61 1
+a61 1
+            $c bind $item <Enter> "set status {$link}"
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d5 5
+a9 3
+    scrollbar .s -orient vertical \
+            -width 10 -command ".f yview"
+    pack .s -side right -expand 1 -fill y -padx 0
+d11 1
+a11 1
+    canvas .f \
+d14 22
+a35 8
+            -yscrollcommand ".s set"
+    pack .f -side left -expand 1 -fill y -padx 0
+    set wid [expr $w+[.s cget -width]+[.f cget -borderwidth]]
+    #wm geometry . ${wid}x200
+    .f bind txt <Enter> ".f itemconfigure current -fill red"
+    .f bind txt <Leave> ".f itemconfigure current -fill {}"
+    
+    return .f
+d41 1
+a41 1
+proc add {x y xe ye attrs link tag} {
+d44 2
+d54 1
+a54 1
+        set item [.f create image $x $y -image img$cnt -anchor nw -tags pic]
+d57 3
+a59 1
+            .f bind $item <Button-1> "puts {LINK: $link}"
+d72 2
+a73 2
+        .f create text $x $y -anchor nw -font $fn -text $tag
+        set item [.f create rectangle $x $y [expr $x+$xe-1] [expr $y+$ye-1] \
+d77 3
+a79 2
+            .f bind $item <Button-1> "puts {$tag\nLINK: $link}"
+            .f create line $x [expr $y+$ye] [expr $x+$xe-1] [expr $y+$ye] \
+d82 1
+a82 1
+            .f bind $item <Button-1> "puts {$tag}"
+d87 1
+a87 1
+proc readfile {fh} {
+d91 1
+a91 1
+        add $x $y $xe $ye $attrs $link $tag
+d95 2
+a96 2
+newwin 160 3000
+readfile stdin
+@
+
+
+1.7
+log
+@layout works, fixed bugs in transend.text.piml
+@
+text
+@d25 1
+a25 1
+proc add {x y xe ye attrs tag} {
+d37 4
+a43 2
+        set item [.f create rectangle $x $y [expr $x+$xe-1] [expr $y+$ye-1] \
+                -tags txt -stipple gray50 -outline {}]
+d53 10
+a62 1
+        .f bind $item <Button-1> "puts {$tag}"
+d68 3
+a70 3
+        regexp {([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +([0-9]+) +{(.*)}} $s dummy \
+                x y xe ye attrs tag
+        add $x $y $xe $ye $attrs $tag
+@
+
+
+1.6
+log
+@minor changes to Layout to fix line break problems - still significant breakage in flowing text aroudn images.  HTML regexp is more robust now
+@
+text
+@d51 1
+a51 1
+        #.f bind $item <Button-1> "puts {$tag}"
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d4 1
+a4 1
+    wm resizable . 0 1
+d10 1
+a10 1
+            -width $w -height $h \
+d15 1
+a15 1
+    wm geometry . ${wid}x$h
+d25 1
+a25 1
+proc add {x y xe ye tag} {
+d34 1
+d39 1
+d41 11
+a51 2
+                -tags txt -stipple gray50]
+        .f bind $item <Button-1> "puts {$tag}"
+d59 1
+a59 1
+        add $x $y $xe $ye $tag
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@a3 1
+    wm geometry . 160x160
+d7 1
+a7 1
+    pack .s -side right -expand 1 -fill y
+d13 5
+a17 3
+    pack .f -side left -expand 1 -fill y
+    .f bind all <Enter> ".f itemconfigure current -fill red"
+    .f bind all <Leave> ".f itemconfigure current -fill {}"
+d27 4
+d33 9
+a41 3
+    set item [.f create rectangle $x $y [expr $x+$xe-1] [expr $y+$ye-1] \
+            -stipple gray50]
+    .f bind $item <Button-1> "puts {$tag}"
+d52 1
+a52 1
+newwin 160 1000
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d4 2
+a5 1
+    #wm geometry . 160x320
+d7 1
+a7 1
+            -command ".f yview"
+d10 5
+a14 2
+    canvas .f -width $w -height 3200
+    pack .f -side left -expand 1 -fill none
+a23 1
+set ct 1
+d28 2
+a29 1
+    set item [.f create rectangle $x $y [expr $x+$xe] [expr $y+$ye]]
+a37 1
+        update
+d41 1
+a41 1
+newwin 160 320
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d4 10
+a13 2
+    frame .f -width $w -height $h
+    place .f -x 0 -y 0
+d22 1
+a22 1
+    global ct
+d24 3
+a26 5
+    button .f.f$ct -width $xe -height $ye -text $tag -anchor nw -relief sunken \
+            -activebackground red \
+            -command "puts {$tag}"
+    place .f.f$ct -x $x -y $y -width $xe -height $ye -anchor nw
+    incr ct
+a37 1
+wm geometry . 160x320
+@
+
+
+1.1
+log
+@layout works!
+@
+text
+@d15 1
+a15 1
+    puts stderr "Got $x $y $xe $ye $tag"
+d25 2
+a26 2
+        regexp {([0-9]+) ([0-9]+) ([0-9]+) ([0-9]+) (.*)} $s dummy \
+                x y xe ye tag
+@

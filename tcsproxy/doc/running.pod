@@ -1,0 +1,216 @@
+=head1 Configuration Files
+
+BUG: THIS SECTION OUT OF DATE
+
+To run the system, you first need to have several config files in
+place.  Each config file name should be suffixed with F<.yourusername>,
+e.g. if you are user I<joe>, the F<distillers.db> file should actually
+be called F<distillers.db.joe>.  The best strategy is to copy someone
+else's configuration file, and then 'cvs add' your file so it will
+always be present.  B<NOTE:> You can't make exact copies of other
+people's files, or you will cause irritating behavior: read this section
+carefully to see why.
+
+=head2 F<ptm/gm_options>
+
+This file specifies a number of parameters:
+
+=over 4
+
+=item ptm.executable
+
+The PTM executable name.  You shouldn't change this unless you're doing
+development of the PTM and want to use a different binary.
+
+=item ptm.multicast
+
+The multicast IP address, port number, and packet TTL (time-to-live)
+used for communication between the PTM and the distillers.  B<No two
+people should have the same value for this.> The easiest way to
+"perturb" the value is to change the port number.
+
+=item monitor.multicast
+
+The multicast channel that the monitor will listen on for status reports
+from other components in the system.  B<No two
+people should have the same value for this.> The easiest way to
+"perturb" the value is to change the port number.  Note that it must
+also be different from the I<ptm.multicast> option value.
+
+=item distiller.db
+
+The name of the database specifying how to start up distillers for each
+MIME type (see description of the file format below).  This should just
+be F<../ptm/distillers.db.>I<yourusername>.
+
+=item rexec.rsh
+
+Name of the program used for remote execution.  To disable remote
+execution (i.e. to run all components of the proxy on  a single
+workstation, which is useful for debugging purposes), leave
+this blank.
+
+=item rexec.hosts
+
+If remote execution is enabled, the comma-separated list of hosts that
+it's OK to spawn jobs onto.  If remote execution is disabled, this is
+ignored. 
+
+=back
+
+=head2 F<ptm/distillers.db>
+
+Each line in this file contains a MIME type specification, and the name of
+the distiller that handles that MIME type.  You can probably make a
+verbatim copy of this file.
+
+=head2 F<gui/monitor.options>
+
+This file contains resource information that controls the appearance and
+behavior of the system control panel (monitor).  Read the comments in
+the file to learn more.  You can probably make a verbatim copy of this
+file. 
+
+=head1 Running the System
+
+Once your configuration files are in place, the easiest way to run the
+system is to type 
+(from the toplevel directory of the source tree):
+
+      gmake run
+
+You can also start the three main components (PTM, Front End, GUI
+monitor) separately by typing:
+
+      gmake run_ptm
+      gmake run_frontend
+      gmake run_monitor
+
+which is what the 'gmake run' target actually does.
+
+You can specify the following arguments right on the command line for
+the 'gmake run' target:
+
+=over 4
+
+=item PORT=nnnn
+
+Listen for HTTP requests on port I<nnnn>.  The default is 4444, which
+should be fine unless someone else is running a proxy system on the same
+machine as you and using that same port.  Multiple proxy systems can
+coexist on the same machine if different ports are used.
+
+When you configure the "HTTP Proxy" option in Netscape or your favorite
+browser, you should set the host to be the machine you're running the
+system on, and the port to be whatever you specify to the 'gmake run'
+target (or 4444 if you're using the default).
+
+=item NTHREADS=nnnn
+
+Allocate I<nnnn> threads in the front end for simultaneous request
+handling.  The default is 50, which is fine for a small system.  The
+production system will use about 500-700 front-end threads.
+
+=back
+
+Once the system is running, you should see the Tcl/Tk window for the GUI
+monitor appear.  Each row of this window represents the logging output
+of a particular component of the system.  Initially you'll see only the
+Front End and PTM, but when you start to use the system, it will
+automatically launch distillers, and you'll see them appear in the
+monitor window.
+
+The Kill button kills the associated component, by sending it F<kill
+-HUP>, then waiting 5 seconds and sending it F<kill -9>.
+
+You should now be able to surf the Web via the proxy system you just
+started.
+
+=head1 Stopping the System
+
+Generally, the only way to stop the system is by killing each component
+separately.  A "Kill All" button will soon be added to the monitor to
+make this easier.  
+
+You may also want to say F<ps -efl|grep >I<yourusername> to make sure
+all the kills actually worked.
+
+=head1 Starting Distillers Manually
+
+You need -l and -t.
+
+=head1 Restarting the caches
+
+First, telnet to port 3128 of the cache node(s) to verify that the caches are
+indeed down.  If so, then log into each of the cache machines,
+go into the cache binary directory (e.g. harvest.solaris/bin), and say:
+
+  unlimit descriptors
+  ./runharvest.pl
+
+=head1 Using the Trace Playback Engine
+
+BUG: there is a "make blast" toplevel target, but it's slightly out of
+date with respect to command line args.
+
+We have a trace playback engine that you can use to play the Web traces
+against the proxy, in order to generate enough load to observe
+interesting behavior (hard to do this interactively by yourself).
+
+To run it:
+
+=over 4
+
+=item 1.
+
+Go into the F<playback> subdirectory.
+
+=item 2.
+
+Say:  F<unlimit descriptors>
+
+This is necessary to remove OS restrictions on how many file descriptors
+a given process can have open.
+
+=item 3.
+
+Say:  F<./bp_engine> I<ipaddr port rate>  F< <>  I<filename> 
+
+where:
+
+I<ipaddr> is the IP address (not the name!) of the machine running the
+proxy;
+
+I<port> is the port number (what you specified in PORT=I<nnnn> when you
+started the system, or 4444 if you used the default);
+
+I<rate> is the number of requests per second to generate (typically, a
+50-thread system can keep up with 5-7 requests per second, and we've
+found the playback engine tops out around 50 requests per second);
+
+I<filename>  is the name of a trace file.  Currently, these are named
+F<~gribble/working/tcsproxy/playback/*.log.univ>.
+
+=back
+
+To change the trace playback rate while the playback engine is running:
+
+=over 4
+
+=item 1.
+
+Telnet to port 4321 of the machine where the playback engine is
+running.
+
+=item 2.
+
+Type the new number of requests per second and press Return.
+
+=item 3.
+
+Exercise: Write a Tk program that does this with a nice slider.  :)
+
+=back
+
+You can control-C the trace when you're tired of it.
+

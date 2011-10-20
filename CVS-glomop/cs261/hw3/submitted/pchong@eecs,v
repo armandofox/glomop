@@ -1,0 +1,240 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.20.26.25;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From pchong@@boopsie.ml.org  Sat Nov 21 00:16:02 1998
+Return-Path: pchong@@boopsie.ml.org
+Received: from zonker.waldenet.berkeley.edu (r-491a.IHouse.Berkeley.EDU [169.229.54.154]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id AAA18110 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Sat, 21 Nov 1998 00:16:01 -0800
+Received: (from pchong@@localhost)
+	by zonker.waldenet.berkeley.edu (8.9.1/8.9.1) id AAA24701
+	for cs261-homeworks@@joseph.cs.berkeley.edu; Sat, 21 Nov 1998 00:17:49 -0800
+From: Philip Chong <pchong@@boopsie.ml.org>
+Message-Id: <199811210817.AAA24701@@zonker.waldenet.berkeley.edu>
+Subject: HW3
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Date: Sat, 21 Nov 1998 00:17:49 -0800 (PST)
+Reply-To: pchong@@eecs.berkeley.edu
+X-Mailer: ELM [version 2.4 PL25]
+Content-Type: text
+Status: RO
+
+
+CS261 HW3
+Philip Chong
+
+
+
+Q1)
+
+The most glaring hole is the fact that vi is run with euid root;  this
+allows any user to read and write any file on the system (/etc/passwd
+is probably a good target).
+
+Another problem is that the temporary file generated in main() is
+referenced by name (rather than by some file descriptor);  this leads
+to a whole bunch of races as the file is opened, closed and reopened
+successively.  For example, a race exists between the looksok() and
+rename() calls, where a symlink change could introduce a potentially bad
+moderators file, since the looksok() would be run on a different file
+than the rename() operation.  Essentially, there is a race between any
+two references to the tmpf variable.
+
+copyfile() copies the moderators file as root.  Together with the tmpf
+race described above, this can be used to clobber an arbitrary existing
+file.  Note that tmpnam() is usually predictable in its filename choice,
+so an attacker can race to create a symlink after the tmpnam() call but
+before the copyfile() call.  The copyfile() will follow the symlink,
+effectively copying the moderators file to whatever the symlink
+points to.  This could be a way to replace /etc/passwd, for instance.
+
+In debug(), a fixed-length buffer is used to store the debugging line.
+An attacker can force a buffer overrun by changing argv[0] (by making
+a symlink or series of symlinks to the target program) to some really
+huge string.  Most operating systems will limit the filename and path
+to some limit, so this might not be exploitable everywhere, but this
+instantly becomes a problem if this program is ever ported to a system
+which allows arbitrarily long paths and/or filenames, or has some
+limit larger than the buffer size.
+
+The sprintf() to the msg string suffers from a buffer overflow as well,
+but this cannot be exploited unless the user is able to change his/her
+pw_name, and the system in question allows arbitrarily long names
+(or longer than the buffer size).
+
+The O_EXCL flag for open() was described in class as a source of
+"portability woes";  the Linux man page for open() even indicates that
+this is not a good way to do lockfiles.  Although I can't think of
+any exploits, this just seems like bad code.
+
+A user can force abnormal termination of the program (through signals),
+leaving the lockfiles intact and preventing other people from using
+the program.
+
+
+
+Q2)
+
+1.
+
+An attacker can use the same games here as with source routing (discussed
+in class);  one is able to specify arbitrary routes for packets.
+
+2.
+
+An attacker may be able to piggyback malicious packets onto an
+existing flow.  This may be useful to get packets past a filter,
+for example, if the filter only validates the initial connection and
+forwards subsequent packets in the flow based solely on the
+routing for that flow.
+
+3.
+
+An attacker can perform denial of service attacks by inserting
+infinite loops into their routing code;  a router which gets stuck in
+such a loop will then be useless.  One can counter this by allowing
+packets to be processed in parallel (so that the looping packet will
+only use up some fraction of the router's resources) or killing packets
+after a certain number of cycles of computation.  In either case, the
+bad packets will degrade the performance of the router and some number
+of bad packets may be sufficient to bring the router down.
+
+4.
+
+An attacker may be able to pass arbitrary packets through a 
+packet filter or firewall.  A malicious packet may first be formed to
+appear acceptable to a packet filter;  once inside, it can rewrite itself
+to perform the desired attack.  (Firewalls may be tricky, as an
+application-level proxy will consume the original packet and create
+a new one instead;  however, if there is some necessity for the mobile
+code to be preserved, the malicious code will be copied onto the new
+packet.)
+
+An attacker may be able to steal routing or host information normally
+hidden behind a packet filter;  a malicious packet can sneak inside
+the filter using the technique above, bounce around the internal network
+gathering information about the internal network or potential targets,
+and finally return to the attacker with that information as the packet
+payload.
+
+5.
+
+(How does out-of-order processing of packets take place in this case?
+Beats me, I didn't come up with the question;  I'd guess no out-of-order
+processing would be allowed.)
+
+An attacker may try to insert a rogue packet into someone else's
+flow;  this packet can then read the saved state of the flow from
+the associated memory chunk, copy the state to itself, and return to the
+attacker.  This may be effective to snoop on the original flow, capturing
+passwords or other data.
+
+Denial of service can be attempted by exhausting the available memory
+for state;  this will probably only be an issue for poorly designed
+routers.  The total memory available should be the product of the
+memory allocated to a single packet, times the maximum packet rate,
+times the maximum time a packet stays at the router.  With looping
+constructs allowed in the mobile code, the last term in the product
+becomes difficult to gauge.
+
+6.
+
+An attacker can use a router as a jump-off point for further attacks;
+attack packets can be generated on the jump-off router and sent to the
+final target.  This may bypass packet filters or firewalls, for example,
+if the jump-off is located behind the filter.
+
+The attack can also be denial-of-service, where the jump-off router
+is instructed to flood the target with bad packets, making ping flooding,
+SYN flooding, smurfing, etc. easier/less traceable.
+
+If looping constructs and memory chunks are still somehow allowable,
+an attacker can insert a listening packet into a target flow;  the
+listener can then sit looping on a router, while copying the allocated
+memory chunk and sending this data back to the attacker, effectively
+allowing him/her to snoop on the flow.
+
+7.
+
+This extension allows arbitrary code to be executed on a router;  an
+attacker can generate packets that go to the target machine, perform
+some computation, and route the results back to him/herself.  Thus an
+attacker can crack passwd files, compute the next Mersenne prime, etc.
+
+
+
+Q3)
+
+1.
+
+The application-level proxy on the firewall can scan the data stream
+for any mobile code and remove or disable it.  As a more concrete
+example, an HTTP proxy can parse the incoming HTML and remove <APPLET>
+tags to prevent Java applets from being run inside the firewall.
+
+For the case of HTTP and Java, removing <APPLET> tags is fairly
+straightforward;  other implementations of mobile code may not be so
+easily recognizable.
+
+For example, web browsers allow you to open MS Word documents found on the
+web with MS Word itself;  how will Word macros (essentially mobile code)
+be filtered?  Fortunately, the MS Word file format is openly specified,
+so a web proxy can parse incoming Word documents and search for (and
+delete) macros.  However, if the Word format is not openly known, this
+task becomes quite difficult.
+
+Thus there is the possibility of mistaken identity (false positives,
+where mobile code is identified in the data but does not truly exist,
+and false negatives, where mobile code is not recognized).
+
+Also there will be some performance degradation, as scanning for
+mobile code will eat up cycles.
+
+2.
+
+For this case, the mobile code cannot just be blindly removed;  the code
+must be verified to see if it meets the criteria for acceptability.
+As an example, Java applets could be passed through a Java byte code
+verifier on the proxy, and the <APPLET> tags in the associated HTML
+would only be deleted if the verification failed.
+
+As described, this example system doesn't seem to do much, since the
+client inside the firewall performs bytecode verification anyways.
+One could have the verifier on the proxy modified to only allow some
+acceptable subset of Java, or perhaps a different implementation
+of the verifier could be used, to try and prevent exploitation of
+implementation errors in the client verifier ("defence in depth").
+Of course, for other instances of mobile code, there may not be
+any verification done at the client.
+
+One problem that arises is in the complexity of the verifier;  this
+will certainly be a tricky piece of code to write.  As well, verification
+of the mobile code will certainly be time consuming.
+
+3.
+
+The problems listed in Part 1 are all primarily associated with the
+firewall.  Mistaken identity is the result of a poorly written ("poorly"
+may be unavoidable) proxy, and any performance loss seen is a function
+of the speed of the firewall.
+
+The problems in Part 2 are also associated with the firewall.
+
+@

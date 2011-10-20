@@ -1,0 +1,175 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.05.01.17.27.44;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@datacube summary modified, array summary added.
+@
+text
+@<html>
+<title>
+Array-Based Algorithm for N-d Aggregates
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+An Array-Based Algorithm for Simultaneous Multidimensional Aggregates
+</h1>
+<strong>
+Yihong Zhao, Prasad M. Deshpande, and Jeffrey F. Naughton
+</strong>
+
+<P><i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Efficent relational on-line analytical processing (ROLAP) algorithms for
+computing the data cube have been developed;  this paper presents a
+detailed analysis of an efficient multidimensional on-line analytical
+processing (MOLAP) algorithm for gleaming the cube.
+</p>
+
+<h2>Relevance</h2>
+Data cubes are relevant, ergo efficient data cube computation is relevant,
+and this algorithm seems to work quite well.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> this paper is a bear to read - they could do much better with
+	  more diagrams and less text
+     <li> I'd like to see an analysis which results in the number of I/Os
+	  as a function of memory size, data size, dimension size, and
+	  number of dimensions.  This seems like it should be possible
+	  (although not easy), and it would give me a better idea of the
+	  tradeoffs in this algorithm.
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> Check out the <a href="datacube.html">data cube</a> summary to
+	  read all about data cubes.
+     <li> ROLAP:  use relational tables as data structure.  Thus, a cell in
+	  a multidimensional space is a tuple, with some attributes
+	  representing location in the space, and one or more representing
+	  the value of that cell.  Efficient ways to compute the cube given
+	  this structure:
+	  <ul>
+	       <li> use grouping operation on the dimension attributes to
+		    cluster related tuples (e.g. sorting or hashing)
+	       <li> use grouping performed on behalf of sub-aggregate as
+		    partial grouping to speed computation of another
+		    sub-aggregate
+	       <li> compute an aggregate from another aggregate, rather
+		    than from the much larger base table.  (e.g. compute
+		    1-d aggregate from one of the 2-d aggregates rather
+		    than the N-d data.)
+	  </ul>
+     <li> MOLAP: stores data as sparse arrays.  The position of the value
+	  within the sparse array encodes the position of the value in the
+	  multidimensional space.
+     <li> <B>All about arrays:</B>
+	  <ul>
+	       <li> array is most likely far too big to fit in memory.
+		    Must therefore split array into chunks.  Row-major or
+		    column-major is not efficient;  each chunk should be a
+		    small N-d piece of the N-d space, and chunk size should
+		    correspond to block size of disk.
+	       <li> even with chunking, many cells of chunks will be empty
+		    - use compression for these sparse arrays
+	       <li> array may need to be built from non-array (e.g. table)
+		    data.  Use a 2-pass algorithm:  first pass assigns
+		    chunk numbers to tuples, second pass clusters together
+		    tuples by their chunk number.
+	  </ul>
+     <li> Simple data cube computing algorithm
+	  <ul>
+	       <li> Let's say we have a 3-D cube (dimensions labelled A, B,
+		    C) and we want to compute the aggregation across
+		    dimension C, which corresponds to a plane of size |A| *
+		    |B| of aggregate values.
+	       <li> One possibility is to sweep the entire plane down the C
+		    dimension.  Better to use chunking:  sweep a chunk of
+		    size |Ac|*|Bc| (where Ac is the chunk size in the A
+		    dimension and Bc is the chunk size in the Bc dimension)
+		    down, then that chunks neighbor, etc., until have
+		    slowly built up the aggregation plane in patchwork
+		    fashion.  Less memory is required for this.
+	       <li> For a data cube, we need multiple aggregates (AB plane,
+		    BC plane, AC plane, A edge, B edge, C edge, and the total
+		    aggregation point).  Far better to compute A from AB
+		    than A from entire data set ABC, etc.  <b>Think of
+		    aggregates in cube computation as a lattice, with ABC
+		    as the root, and ABC having children AB, BC, and AC;
+		    AC has children A and C, etc.</B>  Goal is to embed a
+		    tree in this lattice, and compute each aggregate from
+		    its parent in the tree.  Trick is to find the most
+		    efficient tree.
+	       <li> array algorithm: be sure to compute any
+		    lower-dimensional group-by from the higher-dimensional
+		    parent.  For example, read in each chunk of ABC and use
+		    to produce an aggregate chunk of AB.  Once this chunk
+		    of AB is finished, output to disk, and repeat for next
+		    chunk of AB.
+	       <li> This algorithm is careful to use parent aggregates to
+		    save computation for child subaggregates, but it
+		    computes subaggregats independently (e.g. scan entire
+		    ABC to make AB, then rescan ABC entirely to produce
+		    BC.)  Can do better.
+	  </ul>
+     <li> multi-way algorithm
+	  <ul>
+	       <li> n-d data cube has 2^n group bys, one for each subset in
+		    the power set of the cube.
+	       <li> ideally, have large enough memory to store all
+		    group-bys, and finish cube in one scan. Unfortunately
+		    this is usually not possible; goal is then to minimize
+		    memory needed
+		    for each computation to achieve maxmimum overlap in
+		    aggregation computations.
+	       <li> single-pass algorithm: define an order over which you
+		    will scan the entire cube (row major order, scanned
+		    across each dimension in some order, e.g for 2-d table
+		    AB, scan
+		    a0b0,a1b0,a2b0,a0b1,a1b1,a2b1,a0b2,a1b2,a2b2).  Can
+		    compute how much memory is required to compute
+		    aggregates across each dimension.  If memory order is ABC,
+		    only need 1 chunk for the BC aggregate (as we always
+		    scan down the A dimension), but need 4 for the B
+		    dimension, and 16 for the C dimension.  Still need
+		    structure to coordinate overlapping computation - use a
+		    lattice with a minimum spanning tree.  Nasty formulae
+		    are given for computing memory required for a given
+		    dimension order and resulting minimum spanning tree,
+		    from which one can deduce the optimal dimension order.
+	       <li> If don't have enough memory for optimal dimension
+		    order, need to split up aggregation into multiple
+		    passes using the multi-way algorithm.  End up storing
+		    incomplete trees, then filling them in on subsequent
+		    passes.
+	  </ul>
+     <li> Performance studies show that array based algorithm does better
+	  than the ROLAP algorithms, even!  Factors that affect performance
+	  are # of valid data entries, the dimension size (how many
+	  elements in each dimension), and number of dimensions.
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

@@ -1,0 +1,539 @@
+head	1.18;
+access;
+symbols
+	v15b:1.18
+	v10b3:1.16
+	v10b2:1.14
+	v10b1:1.14;
+locks; strict;
+comment	@ * @;
+
+
+1.18
+date	97.11.18.00.59.21;	author aspolito;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.11.15.00.26.13;	author aspolito;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.25.19.50.31;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.10.24.16.02.42;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.10.06.17.57.20;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.22.23.38.27;	author iang;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.19.22.23.02;	author aspolito;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.18.21.48.21;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.17.00.34.48;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.14.23.41.15;	author lcddave;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.12.17.30.11;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.08.20.31.57;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.08.19.36.45;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.08.00.24.35;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.08.28.01.16.33;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.08.26.23.03.57;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.26.00.39.32;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.35;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@bug fixes!
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "callback.h"
+#include "send.h"
+#include "urlform.h"
+#include "history.h"
+#include "editmenu.h"
+
+Boolean URLFormHandleEvent (EventPtr e) {
+  Boolean handled = false;
+  FormPtr frm;
+  CharPtr urlOutSet;
+  CharPtr url = NULL;
+  FieldPtr URLField;
+  char c;
+  int send;
+
+  CALLBACK_PROLOGUE
+
+  switch (e->eType) {
+  case frmOpenEvent:
+    frm = FrmGetActiveForm();
+
+    if (curURL) {
+      CharPtr RefreshChk = MemHandleLock(curURL);
+      VoidHand hRefreshedURLFld = MemHandleNew(StrLen(RefreshChk) + 1);
+      CharPtr RefreshedURLFld = MemHandleLock(hRefreshedURLFld);
+      FormPtr pURLForm = FrmGetFormPtr(URLForm);
+      FieldPtr pURL = FrmGetObjectPtr(pURLForm, FrmGetObjectIndex(pURLForm,
+								  URLFormFld));
+      StrCopy (RefreshedURLFld, RefreshChk);
+      MemHandleUnlock(curURL);
+      MemHandleUnlock(hRefreshedURLFld);
+      FldFreeMemory(pURL);
+      FldSetTextHandle(pURL, (Handle) hRefreshedURLFld);
+    }
+
+    FrmDrawForm(frm);
+    FrmSetFocus(frm, FrmGetObjectIndex(frm, URLFormFld));
+
+    handled = true;
+    break;
+
+  case menuEvent:
+    MenuEraseStatus(NULL);
+    if (EditMenuHandleEvent(e->data.menu.itemID, FrmGetActiveForm())) {
+	handled = true;
+    } else {
+	switch(e->data.menu.itemID) {
+	}
+    }
+    handled = true;
+    break;
+
+  case keyDownEvent:
+    c = e->data.keyDown.chr;
+    if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+	/* Don't allow obvious whitespace in the URL field.  Right now,
+	   this is the only field in the form, so don't allow it in the
+	   form at all.  - Ian */
+	handled = true;
+    }
+    break;
+
+  case ctlSelectEvent:
+    switch(e->data.ctlEnter.controlID) {
+      VoidHand tcurURL;
+      ULong tcurURLLength;
+      int newopen;
+      
+    case URLFormOK:
+      frm = FrmGetActiveForm();
+      newopen = 0;
+      URLField = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, URLFormFld));
+      /* get the text and the length */
+      if(FldGetTextPtr(URLField)) {
+	url = FldGetTextPtr(URLField);
+	tcurURLLength = FldGetTextLength(URLField) + 1;
+	/* create the handle and the copy point */
+	tcurURL = MemHandleNew((ULong) tcurURLLength);
+	if (tcurURL) {
+	  urlOutSet = MemHandleLock(tcurURL);
+	  /* copy it */
+	  StrCopy (urlOutSet, url);
+	} else {
+	  /* if we needed space and didn't get it we have a problem */
+	  ErrFatalDisplayIf(tcurURLLength, "Out of memory!");
+	}
+	MemHandleUnlock(tcurURL);	
+	send = SendURL(&conID, tcurURL, true, true, false, true);
+	if (!send) {
+	  if (tcurURL) {
+	    MemHandleFree(tcurURL);
+	  }
+	  newopen = 1;
+	} 
+      }
+      if (firstOpen == 1) {
+	if (!newopen) {
+	  FrmGotoForm(MainForm); 
+	  firstOpen = 0;
+	} else {
+	  FrmGotoForm(SplashForm); 
+	}
+      } else {
+	FrmReturnToForm(0); 
+      }
+      break;
+    case URLFormCan:
+      if (firstOpen == 1) {
+	FrmGotoForm(SplashForm);	
+      } else {
+	FrmReturnToForm(0); 
+      }
+      break;
+    }
+    handled = true;
+    break;
+  default:
+    break;
+  }
+
+  CALLBACK_EPILOGUE
+
+  return handled;
+}
+@
+
+
+1.17
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@d73 1
+a73 1
+      newopen = 1;
+d95 2
+a96 1
+	}	  
+d99 6
+a104 2
+	FrmGotoForm(MainForm); 
+	firstOpen = 0;
+a107 1
+      firstOpen = newopen;
+@
+
+
+1.16
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@d90 2
+a91 20
+	send = SendURL(tcurURL, &hPage);
+	if (send == 2) {
+	  if (curURL) {
+	    MemHandleFree(curURL);
+	  }
+	  curURL = tcurURL;
+	  curURLLength = tcurURLLength;
+	  PutInHistory(curURL, curURLLength);
+	  newopen = 0;
+	} else if (send == 1) {
+	  if (transURL) {
+	    MemHandleFree(transURL);
+	  }
+	  transURL = tcurURL;
+	  transURLLength = tcurURLLength;
+	  /* PutInHistory(transURL, transURLLength); */
+	  /* currYPosOffset = 0; */
+	  newopen = 0;	  
+	}
+	  else {
+d98 2
+a99 1
+	  FrmGotoForm(MainForm); 
+d101 1
+a101 1
+	  FrmReturnToForm(0); 
+d107 1
+a107 1
+	FrmGotoForm(SplashForm);
+@
+
+
+1.15
+log
+@Added some missing "handled = true;"s
+@
+text
+@a97 1
+	  currYPosOffset = 0;
+@
+
+
+1.14
+log
+@Added the aggregator form
+@
+text
+@d46 3
+a48 1
+    if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+@
+
+
+1.13
+log
+@o When loading a page with the Open form, the yoffset would incorrectly
+  be set to 0 (top) when the request was _sent_.  This caused a ghost
+  image to appear, overlaid on the real one.  Fixed.
+o If a download was canceled in the middle, and then you "Open" a URL in
+  your cache, the partway-done status bar would remain on the screen.  Fixed.
+@
+text
+@a22 2
+    FrmDrawForm(frm);
+    FrmSetFocus(frm, FrmGetObjectIndex(frm, URLFormFld));
+a35 1
+      FldDrawField(pURL);
+d37 3
+@
+
+
+1.12
+log
+@FIXED UGLY BUG
+@
+text
+@d105 1
+a105 1
+	  currYPosOffset = 0;
+@
+
+
+1.11
+log
+@This time I actually WIL LTEST MY FIXES!
+@
+text
+@d117 1
+a117 1
+	  FrmReturnToForm(MainForm); 
+d122 6
+a127 5
+    }
+    if (firstOpen == 1) {
+      FrmGotoForm(SplashForm);
+    } else {
+      FrmGotoForm(MainForm); 
+@
+
+
+1.10
+log
+@o Clicking in status bar no longer follows links drawn under it
+o URLForm is now a popup form
+@
+text
+@d126 1
+a126 1
+      FrmReturnToForm(MainForm); 
+@
+
+
+1.9
+log
+@Following has been added
+
+1. Stop/cancel load functionality (but buggy, transport layer state not reset)
+
+2. Moved PutInHistory to only when a new page is loaded
+   (this is a consequence of the cancel function/otherwise URL is
+    put in history even if cancel is hit; this lead to history
+    errors.)
+
+3. changed event loop to drop every 200 ticks; my pilot batteries go dead
+   way to fast
+
+4. can now move back and forward by backspace/space
+@
+text
+@d67 1
+d71 1
+d97 1
+a97 1
+	  firstOpen = 0;
+d106 1
+a106 1
+	  firstOpen = 0;	  
+d114 6
+a119 1
+      FrmGotoForm(MainForm); 
+d126 1
+a126 1
+      FrmGotoForm(MainForm); 
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d102 1
+a102 1
+	  PutInHistory(transURL, transURLLength);
+@
+
+
+1.7
+log
+@About menu
+@
+text
+@d16 1
+d85 3
+a87 2
+	MemHandleUnlock(tcurURL);
+	if (SendURL(tcurURL, &hPage)) {
+d96 11
+a106 1
+	} else {
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@a67 1
+      firstOpen = 0;
+d92 2
+a98 1
+	currYPosOffset = 0;
+@
+
+
+1.5
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@d100 2
+@
+
+
+1.4
+log
+@OFFLINE MODE WORKS
+@
+text
+@d68 1
+a68 1
+      
+d102 5
+a106 1
+    FrmGotoForm(MainForm); 
+@
+
+
+1.3
+log
+@- disabled proxy menu item (still not ready)
+- open dialog box now displays current URL
+@
+text
+@d64 3
+d68 1
+a68 1
+
+d74 1
+a74 1
+	curURLLength = FldGetTextLength(URLField) + 1;
+d76 3
+a78 6
+	if (curURL) {
+	  MemHandleFree(curURL);
+	}
+	curURL = MemHandleNew((ULong) curURLLength);
+	if (curURL) {
+	  urlOutSet = MemHandleLock(curURL);
+d83 1
+a83 1
+	  ErrFatalDisplayIf(curURLLength, "Out of memory!");
+d85 13
+a97 4
+	MemHandleUnlock(curURL);
+	PutInHistory(curURL, curURLLength);
+	hPage = SendURL(curURL, conID);
+	  
+a101 1
+    ignoreUp = true;
+@
+
+
+1.2
+log
+@o Added Edit menu in URL form
+o Disallowed obvious whitespace (though it can still be "Paste"d) in URL Form
+@
+text
+@d12 2
+a13 2
+  char * urlOutSet;
+  char * url = NULL;
+d24 16
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@d7 1
+d15 1
+d25 19
+@

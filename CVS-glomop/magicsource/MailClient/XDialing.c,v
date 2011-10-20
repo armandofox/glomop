@@ -1,0 +1,786 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.08;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	Dialing
+#
+#	A simple example of how to use the Telenumber class
+#
+#	General Magic Developer Technical Support
+#	Copyright © 1992-1994 General Magic, Inc.
+#	All rights reserved.
+#
+#
+#	Version:	MC30
+#
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+#include "Modem.h"
+
+#include "MCindexicals.h"
+
+#undef CURRENTCLASS
+#define CURRENTCLASS PhoneEditButton
+
+Method void
+PhoneEditButton_Action(ObjectID self)
+{
+	#pragma unused(self)
+	Dot position;
+
+	/* Get the position of the text field so that the window's ballon spout will
+	   point to it. */
+	Origin(ipPhonefield, &position);
+	/* Start editing the phone number. */
+	EditAttribute(iPhoneLabelEditSteps, ipTelenumber, ipPhonefield, &position);
+}
+ 
+#undef CURRENTCLASS 
+#define CURRENTCLASS DialingButton
+
+Method void
+DialingButton_Action(ObjectID self)
+{
+    ObjectID rActor;
+	
+	rActor = DirectID(ipResynchActor);   /*** Test if actor already running or not... ***/
+	if (!HasObject(rActor))
+	{
+	    NewActorParameters params;
+		
+		SetUpParameters(&params.header, newActorObjects);
+		params.stackSize = 10240L;
+		params.mainFunction = NULL;
+		params.contextStackSize = 99L;
+		params.priority = 0;
+		params.registerSwitching = true;
+		params.parameters = NULL;
+		rActor = NewTransient(MSResynchActor_, &(params.header));
+		SetIndexical(ipResynchActor, rActor);
+    }
+}
+ 
+Method void
+DialingButton_Abort(ObjectID self)
+{
+    /* Window will get closed - must terminate connection, bomb out */
+	if (HasObject(ipResynchActor))
+	{
+	   SetStatus(ipResynchActor, 0);
+       Disconnect(iModem);
+	   Close(iModem);
+	   SetIndexical(ipResynchActor, nilObject);
+	   Retract(ipSynchAnnoucement);
+	   /* FailSoon(ipResynchActor, iCommunicationsAborted); */
+	}
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MSResynchActor
+
+IntrinsicMethod Character
+MSResynchActor_ReadByte(ObjectID theStream)   /* Get a single byte - this is a blocking call */
+{
+	uchar c;
+	
+	Read(theStream, &c, sizeof(c));   /* was ReadAll */
+	/*Log(("[%d]/[%c]", c, c));*/
+	return c;
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_ReadALine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine)  /* Scan stream until endOLine - this is blocking also */
+{
+	int soFar = 0;
+	char  *theCharP;
+	
+	theCharP = intoMe;
+	while(soFar < maxLen-1)
+	{
+	   Read(theStream, (Pointer) (theCharP + ((long int) soFar)), sizeof(char));
+	   if (*(theCharP + ((long int) soFar)) == (char) endOLine)
+	   {
+	      *(theCharP + ((long int) (soFar+1))) = '\0';
+		  return soFar+1L;  /* returns number of characters (not including null-terminator) being returned in line */
+	   }
+	   soFar++;
+	}
+	*(theCharP + ((long int) (maxLen-1))) = '\0';
+	return maxLen-1L;
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_ReadNELine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine)  /* Scan stream until find non-empty line */
+{
+    Unsigned  retVal;
+	char     *charIntoMe;
+	
+	charIntoMe = intoMe;
+	
+    while(1)
+	{
+       int j;
+	   
+       retVal = ReadALine(theStream, intoMe, maxLen, endOLine);
+	   Log(("reading (NE) line %s", intoMe));
+	   for (j=0; j<retVal; j++)
+	   {
+	      if ((*(charIntoMe + ((long int) j)) != ' ') && (*(charIntoMe + ((long int) j)) != '\t') && (*(charIntoMe + ((long int) j)) != '\n') &&
+		      (*(charIntoMe + ((long int) j)) != '\r') && (*(charIntoMe + ((long int) j)) != '\0') )
+			 return retVal;
+	   }
+	   Log(("was empty."));
+	}
+	return 0L;
+}
+
+Private void DBgetArrow(ObjectID theStream)  /* Scan stream until see "=>"  -  this is a blocking call */
+{
+    char nextByte = 0;
+
+    while(1)
+	{
+	    while(nextByte != '=')
+	       nextByte = ReadByte(theStream);
+		
+		while (nextByte == '=')
+		   nextByte = ReadByte(theStream);
+		
+		if (nextByte == '>')
+		{
+		   Log(("Got arrow."));
+		   return;
+		}
+	}
+}
+
+Private int DBgetConnected(ObjectID theStream)  /* Look for "Connected" at beginning of a line - this will block */
+{
+    char nextL[512];
+	int  theLen;
+	
+	while(1)
+	{
+	   theLen = ReadNELine(theStream, nextL, 510, 10);   /** 10 is LF - follows CR **/
+	   if (theLen < 10)
+	       continue;
+	   if (CompareBytes(nextL, "Connected", 9, NULL) == 0)
+	       return 1;
+	   if (CompareBytes(nextL, "telnet: connect to address", 26, NULL) == 0)
+	       return 0;
+	}
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_DoAnnexHandshake(ObjectID theStream)  /* Handshake with annex to telnet into provided port and host */
+{
+	Str255  writeText;
+	Unsigned myAmountB;
+	
+    /* Ok - I assume we've connected;  we read from the stream, waiting for "=>" */
+	Write(theStream, "\r\r", 2);
+	DBgetArrow(theStream);
+	Flush(theStream);
+	Write(theStream, (Pointer) "telnet -t ", 10);
+	
+	TextToString(ipHostfield, &writeText);
+	myAmountB = writeText[0];
+	Write(theStream, (Pointer) &(writeText[1]), myAmountB);
+    Write(theStream, (Pointer) " ", 1);
+	
+	TextToString(ipPortfield, &writeText);
+	myAmountB = writeText[0];
+	Write(theStream, (Pointer) &(writeText[1]), myAmountB);
+	Write(theStream, (Pointer) "\r", 1);
+	
+	/* Great - now wait for the "Connected to now.cs." string */
+	if (DBgetConnected(theStream) == 0)
+	{
+	   Log(("DBgetConnected failed with telnet: connect to address."));
+	   return 0;
+	}
+	   
+	Log(("Done handshake!"));
+	
+	/* Done!  Flush everything and quit */
+	Flush(theStream);
+	return 1;
+}
+
+IntrinsicMethod ObjectID
+MSResynchActor_GetTOC(ObjectID theStream)
+{
+   char       nextLine[1024];  /* ugly, but should work */
+   char      *id, *totchunk, *thischunk, *theNL;
+   ObjectID   newList, newMS;
+   long int   numMessages, i, curMessage;
+   Flags      theFlags;
+   
+   /**** First, parse out the HERE line for TOC ****/
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);                  /* get the line */
+   theNL = nextLine +  (long int) ScanForChar(10, nextLine, 1022);      /* knock of trailing NL */
+   if (theNL >= nextLine)
+      *theNL = '\0';
+   Log(("Got HERE - %s", nextLine));
+   
+   id = nextLine + (long int) ScanForChar(' ', nextLine, 1022);                   /* find space between HERE and reqid */
+   totchunk = id + 1L + (long int) ScanForChar(' ', id + 1L, 1018);				  /* find space between reqid and totalchunks */
+   thischunk = totchunk + 1L + (long int) ScanForChar(' ', totchunk + 1L, 1018);  /* find space between totalchunks and thischunk */
+   *id = '\0';  id++;
+   *totchunk = '\0';  totchunk++;
+   *thischunk = '\0'; thischunk++;
+   
+   CtoPString(totchunk);
+   if (!StringToInt(totchunk, &numMessages))
+   {
+      PtoCString(totchunk);
+      Log(("Couldn't convert %s to int!\n", totchunk));
+   }
+   CtoPString(thischunk);
+   if (!StringToInt(thischunk, &curMessage))
+   {
+      PtoCString(thischunk);
+	  Log(("Couldn't convert %s to int!\n", thischunk));
+   }
+   if (curMessage != 0)
+      Log(("TOC out of order? %d should be zero.", (int) curMessage));
+   else
+      Log(("TOC: numMess %d, curmess %d", (int) numMessages, (int) curMessage));
+   
+   /**** OK - now strip out the NDOCS and DSIZE line - for now I won't use them ****/
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+   Log(("Dropping (NDOCS) line: %s", nextLine));
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+   Log(("Dropping (DSIZE) line: %s", nextLine));
+   
+   newList = NewNear(ObjectList_, iTemplateMS, nil);
+   for (i=0L; i<numMessages; i++)
+   {
+       /* Create MS, get it to parse synopsis line, add to newList. */
+	   newMS = CopyNear(iTemplateMS, iTemplateMS);
+	   theFlags = MS_wasReceived | MS_noteditable;
+	   SetInfo_flags(newMS, theFlags);
+	   decodeTOCEntry(newMS, theStream);
+	   AddLast(newList, newMS);
+   }
+   Log(("Done all TOC adding!"));
+   
+   /* Strip and drop the END line */
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+   Log(("Dropping (END) line: %s", nextLine));
+   
+   return newList;   
+}
+
+IntrinsicMethod void
+MSResynchActor_GetMSMessage(ObjectID theStream)
+{
+    char        nextLine[128];
+	ObjectID    theMSmsg, theHotFV, msList;
+    char       *id, *totchunk, *thischunk, *theNL;
+    long int    numMessages, i, curMessage, dsize;
+	Boolean     res;
+		
+	/* OK - scan forward looking for a "HERE" string */
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);                  /* get the line */
+    theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+    if (theNL >= nextLine)
+      *theNL = '\0';
+	id = nextLine + (long int) ScanForChar(' ', nextLine, 127);                   /* find space between HERE and reqid */
+	totchunk = id + 1L + (long int) ScanForChar(' ', id + 1L, 123);				  /* find space between reqid and totalchunks */
+	thischunk = totchunk + 1L + (long int) ScanForChar(' ', totchunk + 1L, 123);  /* find space between totalchunks and thischunk */
+	*id = '\0';  id++;
+	*totchunk = '\0';  totchunk++;
+	*thischunk = '\0'; thischunk++;
+	CtoPString(totchunk);
+	if (!StringToInt(totchunk, &numMessages))
+	{
+	   PtoCString(totchunk);
+	   Log(("Couldn't convert %s to int!\n", totchunk));
+	}
+	CtoPString(thischunk);
+	if (!StringToInt(thischunk, &curMessage))
+	{
+	   PtoCString(thischunk);
+	   Log(("Couldn't convert %s to int!\n", thischunk));
+	}
+	Log(("Next message is number %d", (int) curMessage));
+    theHotFV = HotFV(iMainAdmin);
+	msList = List(theHotFV);
+	theMSmsg = At(msList, curMessage);
+	
+	/* Got theMSmsg - now deal with DRT */
+	res = parseDRTfromStream(theMSmsg, theStream);
+	
+	/* Now grab and parse the DSIZE line */
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);                  /* get the line */
+    theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+    if (theNL >= nextLine)
+      *theNL = '\0';
+	totchunk = nextLine + (long int) ScanForChar(' ', nextLine, 127);
+	*totchunk = '\0';  totchunk++;
+	CtoPString(totchunk);
+	if (!StringToInt(totchunk, &dsize))
+	{
+	   PtoCString(totchunk);
+	   Log(("Couldn't convert %s to int!\n", totchunk));
+	}
+	Log(("Length of message is %ld", dsize));
+	
+	/* Have length - call MS procedure to actually read in message from stream itself */
+	res = decodeFromStream(theMSmsg, theStream, (Unsigned) dsize);
+	
+	/* Got it!  Now get and junk the "END" line */
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);
+	Log(("Junking (END): %s", nextLine));
+}
+
+Private long int scanTok(char *theString, char **Tfrom, char **Tnext)
+/** returns number of chars inside token;  kills last delimeter and returns first after **/
+{
+   char theTok;
+   long int offsetT, theLen;
+   
+   Log(("Scanning %s..", theString));
+   theLen = CStringLength(theString);
+   Log(("length %ld", theLen));
+   theTok = *theString;
+   offsetT = 1L+ (long int) ScanForChar(theTok, theString+1L, theLen-1L);
+   Log(("Offset to [%c] is %ld", theTok, offsetT));
+   *Tnext = (char *) (theString + offsetT);
+   **Tnext = '\0';
+   *Tnext = (*Tnext) + 1L;
+   *Tfrom = (*Tfrom) + 1L;
+   return offsetT - 1L;
+}
+
+IntrinsicMethod void
+MSResynchActor_GetMSMime(ObjectID theStream, Unsigned MSnum)
+{
+    ObjectID    theMSmsg, theHotFV, msList, MIMEcompList, theMIMEparts;
+	long int    numMIMEentr, i;
+	
+	theHotFV = HotFV(iMainAdmin);
+	Log(("Getting hotfv"));
+	msList = List(theHotFV);
+	Log(("Getting mslist"));
+	theMSmsg = At(msList, MSnum);
+	Log(("Got msg %ld, getting Drt_entries", MSnum));
+	MIMEcompList = Drt_entries(theMSmsg);
+	Log(("Getting Mime_parts"));
+	theMIMEparts = Mime_parts(theMSmsg);
+	if (!HasObject(MIMEcompList))
+	   return;
+	
+	Log(("There is a mime DRT!"));
+	numMIMEentr = Length(MIMEcompList);
+	if (numMIMEentr == 0L)
+	   return;
+	
+	Log(("length is %ld", numMIMEentr));
+	for (i=1L; i <= numMIMEentr; i++)
+	{
+	    char      *theDRTentry, *entryTok, *pathTok, *protoTok, *reqTok, *sizeTok, *dummy;
+		long int   entryTS, pathTS, protoTS, reqTS, sizeTS;
+		char       nextLine[256], dummyC;
+		ObjectID   nextImage;
+		
+		/* Send GETDOC request */
+		ElementAt(MIMEcompList, i, &theDRTentry);
+		entryTS = scanTok(theDRTentry, &entryTok, &pathTok);
+		pathTS  = scanTok(pathTok, &pathTok, &protoTok);
+		protoTS = scanTok(protoTok, &protoTok, &reqTok);
+		reqTS   = scanTok(reqTok, &reqTok, &sizeTok);
+		sizeTS  = scanTok(sizeTok, &sizeTok, &dummy);
+		Write(iModem, "GET #", 5);   Write(iModem, pathTok, pathTS);
+		Write(iModem, "##", 2);      Write(iModem, protoTok, protoTS);
+		Write(iModem, "#\r", 2);
+	    Write(iModem, "MAX 9999\r", 9);
+	    Write(iModem, "TYPES #PGM##GIF##PBM#\r", 22);
+		Write(iModem, "ID ", 3);     Write(iModem, reqTok, reqTS);     Write(iModem, "\r", 1);
+	    Write(iModem, "END\r", 4);
+		Log(("sent GETDOC"));
+		
+		/* Read in the (dummy) TOC */
+		ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+		Log(("Read in dummy TOC (HERE): %s", nextLine));
+		while(1)
+		{
+		   ReadNELine(theStream, (Pointer) nextLine, 127, 10);
+		   if (CompareBytes(nextLine, "END", 3, NULL) == 0)
+              break;
+		   Log(("Ignoring guts of dummy TOC line %s", nextLine));
+		}
+		Log(("Read in dummy TOC (END): %s", nextLine));
+		
+		/* Read in the actual image chunk */
+		ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+		Log(("Read in MIME chunk (HERE): %s", nextLine));
+		ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+		Log(("Read in MIME chunk (NDOCS 0): %s", nextLine));
+		ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+		Log(("Read in MIME chunk (DSIZE ?): %s", nextLine));
+		
+		/* find out length of image chunk - don't use for now, but could be interesting later. */
+		dummy = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+        if (dummy >= nextLine)
+           *dummy = '\0';
+		sizeTok = nextLine + 6;
+		CtoPString(sizeTok);
+	    if (!StringToInt(sizeTok, &sizeTS))
+	    {
+	       PtoCString(sizeTok);
+	       Log(("Couldn't convert %s to int!\n", sizeTok));
+	    }
+	    Log(("Length of message is %ld", sizeTS));
+		
+		/* Great!  Now capture the image itself */
+		nextImage = GIFtoIMAGE(theStream, sizeTS-1L);
+		dummyC = ReadByte(theStream);
+		Log(("Stripped off newline at end of gif: #[%d]", dummyC));
+		
+		/* Parse off the last "END" */
+		
+		AddLast(theMIMEparts, nextImage);
+		ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+		Log(("Read in MIME chunk (END): %s", nextLine));
+		
+		/* Got it - now free up the buffer we allocated before */
+		DestroyLockedBuffer((Pointer) theDRTentry);
+	}
+	
+	/* Got 'em all - now toast the MIMEcompList */
+	for (i=1L; i <= numMIMEentr; i++)
+	{
+	   RemoveAt(MIMEcompList, 1L);
+	}
+}
+
+IntrinsicMethod void
+MSResynchActor_UpdateStatusAndForceRedraw(ObjectID announcement, Unsigned amount)
+{
+	UpdateStatusIndicator(announcement, amount);
+	PermitRedraw();
+	RunNext(iScheduler);   /*** We may want to toast this... ***/
+}
+
+Private void
+DumpNewMessages(ObjectID theStream)
+{
+    ObjectID nextMS, theHotFV, FVmsList;
+	Flags    theFlags;
+	long int i, nummessages, numnew, numStrLen, curStrLen;
+	char     numStr[15], curStr[15];
+    
+	theHotFV = HotFV(iMainAdmin);
+    FVmsList = List(theHotFV);
+    nummessages = Length(FVmsList);
+	
+	for (i=1L, numnew=0L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   theFlags = Info_flags(nextMS);
+	   if ((theFlags & MS_newMessage) && !(theFlags & MS_beenDeleted) && !(theFlags & MS_beenSent) && !(theFlags & MS_wasReceived))
+	      numnew += 1L;
+	}
+	
+	/* OK - prepare to send document of new messages */
+	Write(theStream, "PUT #draft##mail#\r", 18);
+	Write(theStream, "TYPES #mail#\r", 13);
+	Write(theStream, "MAX 9999\r", 9);
+	Write(theStream, "ID 12345\r", 9);
+	Write(theStream, "END\r", 4);
+	
+	/* Send TOC */
+	Write(theStream, "HERE 12345 ", 11);
+	SPrintF(numStr, "%ld", numnew);
+	numStrLen = CStringLength(numStr);
+	Write(theStream, numStr, numStrLen);
+	Write(theStream, " 0\r", 3);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE 0\r", 8);
+	Write(theStream, "END\r", 4);
+	
+	/* Now loop through and send messages */
+	for (i=1L, numnew=0L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   theFlags = Info_flags(nextMS);
+	   if ((theFlags & MS_newMessage) && !(theFlags & MS_beenDeleted) && !(theFlags & MS_beenSent) && !(theFlags & MS_wasReceived))
+	   {
+	       numnew += 1L;
+	       Write(theStream, "HERE 12345 ", 11);
+		   Write(theStream, numStr, numStrLen);
+		   Write(theStream, " ", 1);
+		   SPrintF(curStr, "%ld", numnew);
+	       curStrLen = CStringLength(curStr);
+		   Write(theStream, curStr, curStrLen);
+		   Write(theStream, "\r", 1);
+		   
+		   /* the rest is done by encodeIntoStream, I hope. */
+	       MailStore_encodeIntoStream(nextMS, theStream);
+	   }
+	}
+}
+
+Private void
+DumpChangeLog(ObjectID theStream)
+{
+    ObjectID nextMS, theHotFV, FVmsList;
+	Flags    theFlags;
+	long int i, nummessages, curStrLen, lenDat;
+	char     curStr[15];
+    
+	theHotFV = HotFV(iMainAdmin);
+    FVmsList = List(theHotFV);
+    nummessages = Length(FVmsList);
+	
+	for (i=1L, lenDat=0L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   theFlags = Info_flags(nextMS);
+	   if ((theFlags & MS_beenDeleted) && (theFlags & MS_wasReceived))
+	   {
+		  lenDat += 3L;  /**** for "r <#>\r" ****/
+		  SPrintF(curStr, "%ld", i);
+		  curStrLen = CStringLength(curStr);
+		  lenDat += curStrLen;
+	   }
+	}
+	
+	/* OK - prepare to send document of new messages */
+	Write(theStream, "PUT #log##mail#\r", 16);
+	Write(theStream, "TYPES #mail#\r", 13);
+	Write(theStream, "MAX 9999\r", 9);
+	Write(theStream, "ID 12345\r", 9);
+	Write(theStream, "END\r", 4);
+	
+	/* Send TOC */
+	Write(theStream, "HERE 12345 1 0\r", 15);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE 0\r", 8);
+	Write(theStream, "END\r", 4);
+	
+	Write(theStream, "HERE 12345 1 1\r", 15);
+	Write(theStream, "NDOCS 0\r", 8);
+	Write(theStream, "DSIZE ", 6);
+	SPrintF(curStr, "%ld", lenDat);
+	curStrLen = CStringLength(curStr);
+	Write(theStream, curStr, curStrLen);
+	Write(theStream, "\r", 1);
+	
+	/* Now loop through and send changes */
+	for (i=1L; i<=nummessages; i++)
+	{
+	   nextMS = At(FVmsList, i);
+	   theFlags = Info_flags(nextMS);
+	   if ((theFlags & MS_beenDeleted) && (theFlags & MS_wasReceived))
+	   {
+	       Write(theStream, "r ", 2);
+		   SPrintF(curStr, "%ld", i);
+	       curStrLen = CStringLength(curStr);
+		   Write(theStream, curStr, curStrLen);
+		   Write(theStream, "\r", 1);
+	   }
+	}
+	Write(theStream, "END\r", 4);
+}
+
+Method void
+MSResynchActor_Main(ObjectID self, Parameters *parameters)
+{
+    Str255	 numberToDial;
+	ObjectID modemException, processConnection, theTOClist, oldList, theHotFV;
+	char     startT;
+	int      i, numMessages;
+	ObjectID announcement = DirectID(ipSynchAnnoucement);
+	float    chunk;
+
+	/* need to have location defined in order to dial */
+	if (!SetupDialingLocation(iSystem)) return;
+
+	/* call LocalizedWithCallingCard() to adjust for the current area code and prefix as
+	   well as using the calling card. */
+	LocalizedWithCallingCard(ipTelenumber, numberToDial);
+    
+    /* We are disconnected, user wants us to attempt to connect */
+	if ((modemException = Try()) == nilObject)
+	{
+	   ReplaceTextWithLiteral(ipSynchAnnounceText, "Connecting...");
+	   ReplaceText(announcement, ipSynchAnnounceText);
+	   AnnounceWithAbort(announcement, iModem);  /* was ipDialingButton */
+	   UpdateStatusAndForceRedraw(announcement, 0);
+	   OpenPort(iModem);
+	   if (ConnectToNumber(iModem, numberToDial) == ZERROR)
+		  Fail(commHardwareError);
+   	   Commit();  /* Success! */
+	}
+	else
+	{  
+	   /* attempted connect, failure in modemException */
+	   Log(("Exception within connect.  Hanging up."));
+	   ReplaceTextWithLiteral(ipSynchAnnounceText, "Couldn't connect to annex.");
+	   ReplaceText(announcement, ipSynchAnnounceText);
+       Disconnect(iModem);
+	   Close(iModem);
+	   SetIndexical(ipResynchActor, nilObject);
+	   Retract(ipSynchAnnoucement);
+	   return;
+	}
+	
+	/* Great!  Successfully connected...start mail protocol */
+  if ((processConnection = Try()) == nilObject)
+  {
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Handshaking with annex...");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 10);
+    if (DoAnnexHandshake(iModem) == 0)
+	{
+	    /* Couldn't connect */
+		ReplaceTextWithLiteral(ipSynchAnnounceText, "Couldn't handshake with annex.");
+		ReplaceText(announcement, ipSynchAnnounceText);
+		UpdateStatusAndForceRedraw(announcement, 0);
+		Disconnect(iModem);
+		Close(iModem);
+		SetIndexical(ipResynchActor, nilObject);
+		Retract(ipSynchAnnoucement);
+		Commit();
+		return;
+	}
+		
+	/* Successfully connected! Start dumping new messages */
+	Write(iModem, "c #steve##magiccap#\r", 20);
+	DumpNewMessages(iModem);
+	DumpChangeLog(iModem);
+	
+	/* Now begin download of newly synchronized messages - send a request */
+	Write(iModem, "get #unseen##mail#\r", 19);
+	Write(iModem, "max 9999\r", 9);
+	Write(iModem, "types #mail#\r", 13);
+	Write(iModem, "id 2222\r", 8);
+	Write(iModem, "end\r", 4);
+	
+	/* Get TOC */
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Getting table of contents...");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 20);
+	theTOClist = GetTOC(iModem);
+    theHotFV = HotFV(iMainAdmin);
+    oldList = List(theHotFV);
+    DestroyContents(oldList);
+	numMessages = Length(theTOClist);
+    for (i=1L; i<=numMessages; i++)
+	{
+       AddMailStore(theHotFV, At(theTOClist, i));   
+	   updateInfoText(At(theTOClist, i), i);
+	}
+	Clear(theTOClist);
+    Destroy(theTOClist);
+	
+	chunk = ((float) 96) - ((float) 50);
+	if (numMessages > 0)
+	   chunk = chunk / ((float) numMessages);
+	
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Getting messages...");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 50);
+	
+	/* Now get each message itself */
+	for (i=1L; i<=numMessages; i++)
+	{
+	   int  prog;
+	   
+	   Log(("Getting message %ld", i));
+	   GetMSMessage(iModem);
+	   prog = 50 + ((i*chunk)/2);
+	   UpdateStatusAndForceRedraw(announcement, prog);
+	}
+	
+	/* Now get each MIME component of each message... */
+	Log(("replacing text"));
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Getting MIME inclusions...");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 73);
+	Log(("Updating status"));
+	for (i=1L; i<=numMessages; i++)
+	{
+	   int prog;
+	   
+	   Log(("Getting mime for %ld", i));
+	   GetMSMime(iModem, i);
+	   prog = 73 + ((i*chunk)/2);
+	   UpdateStatusAndForceRedraw(announcement, prog);
+	}
+	
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Hanging up...");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 98);
+		
+	/* Done transfer - close up shop */
+	Write(iModem, "q\r", 2);
+	Flush(iModem);
+	Disconnect(iModem);
+	Close(iModem);
+	ReplaceTextWithLiteral(ipSynchAnnounceText, "Done!");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	UpdateStatusAndForceRedraw(announcement, 100);
+	Retract(ipSynchAnnoucement);
+	Commit();
+	return;
+  }
+  else  /* Some exception happened to the synch actor - abort the transfer, close off modem etc. */
+  {
+    Log(("Exception within transfer.  Aborting!"));
+    ReplaceTextWithLiteral(ipSynchAnnounceText, "Transfer aborted.");
+	ReplaceText(announcement, ipSynchAnnounceText);
+	if (IsConnected(iModem) == true)
+       Disconnect(iModem);
+	Close(iModem);
+	Retract(ipSynchAnnoucement);
+    return;
+  }
+}
+
+#undef CURRENTCLASS@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

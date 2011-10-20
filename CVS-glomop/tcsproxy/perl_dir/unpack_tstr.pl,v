@@ -1,0 +1,441 @@
+head	1.12;
+access;
+symbols
+	Yatin-final:1.12
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.8
+	fox-dev:1.8;
+locks; strict;
+comment	@# @;
+
+
+1.12
+date	97.09.10.02.26.25;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.06.01.08.52;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.04.03.43.42;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.08.27.19.52.06;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.24.03.19.02;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.15.02.43.13;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.10.21.21.09;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.10.06.14.51;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.08.03.14.26;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.08.00.43.19;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.07.03.19.47.51;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.07.03.03.32.37;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@tims config file
+@
+text
+@#!/opt/bin/perl -w
+#
+#  Unpacks a tSTR resource from a file into the "trivial interchange" format
+#  that the Tcl/Tk layout client understands.
+#
+
+# break_string should be a unique expression (ie that should "never occur" in
+# the body text of an html page) that this script will use to denote where it
+# thinks line breaks are indicated in the output.  
+
+$break_string = '<//>';                     # not a great choice....
+
+BEGIN {
+    $main::DEBUGGING = 1;
+    push(@@INC,
+         qw(/disks/barad-dur/now/pythia/release/lib/perl-5.002
+            ../xs/lib
+            ../xs/lib/i586-linux/5.003
+            ));
+}
+
+$Debug = 1 if grep(/^-d/, @@ARGV);
+sub debug { warn @@_ if $Debug; }
+
+$proxyHome = &Options_Find("proxy.home")
+    or die "No proxy.home option in config file\n";
+$Tbmp = "$proxyHome/bin/Tbmptopnm";
+die "No Tbmptopnm executable in $Tbmp\n"
+    unless -x $Tbmp;
+use clib;
+use Para;
+
+$buf = '';
+if ($fn = pop @@ARGV) {
+    open(F, $fn) or die $!;
+    $buf .= $_ while $_=<F>;
+    close F;
+} else {
+    $buf .= $_ while <>;
+}
+
+&debug("Buffer length is " . length($buf) . "\n");
+
+$i = 0;
+while ($buf) {
+    $link = '';
+    $plen = unpack("n",$buf);
+    last if $plen == 0xffff;
+    ($back,$for,$x,$y,$xe,$ye,$atr) = unpack("n7",$buf);
+    $buf = substr($buf,14);
+    $linklen = 0;
+    if ($atr & $F_LINK) {
+        # extract link info
+        $linklen = unpack("n",$buf);
+        $buf = substr($buf,2);
+        $link = unpack("A$linklen", $buf);
+        chop $link if $link =~ /\000$/;
+        $linklen++ if $linklen & 1;
+        $buf = substr($buf,$linklen);
+        $linklen += 2;
+    }
+    if ($atr & $F_LINK_ALT) {
+        # extract alternate-link info
+        # warn "Extracting LINK_ALT\n";
+        $altlinklen = unpack("n",$buf);
+        $buf = substr($buf,2);
+        $altlink = unpack("A$altlinklen", $buf);
+        chop $altlink if $altlink =~ /\000$/;
+        $altlinklen++ if $altlinklen & 1;
+        $buf = substr($buf,$altlinklen);
+        $linklen += $altlinklen + 2;
+    }
+    if ($atr & $F_BITMAP) {
+        &debug("Bitmap #$i:");
+        $filename = "/tmp/$$.$i.ppm";
+        $data = "[image $filename]";
+        open(PROG, "| $Tbmp -2bit>$filename")   or die $!;
+        $i++;
+        print PROG substr($buf,0,$for-14-$linklen);
+        close PROG;
+        unlink "/tmp/$$.$i.ppm";
+        $buf = substr($buf,$for-14-$linklen);
+    } else {
+        $data = '';
+      FRAG:
+        while (1) {
+            $len = unpack("n",$buf);
+            $buf = substr($buf,2);
+            &debug("Data EOS:"), last FRAG if $len == 0;
+            &debug("Data length $len:");
+            $data .= unpack("A$len",$buf) . $break_string;
+            $len++ if $len & 1;
+            $buf = substr($buf,$len);
+        }
+        
+    }
+    printf("%4d %4d %4d %4d %4d %s {%s}\n", $x,$y,$xe,$ye,$atr,
+           $link, $data);
+    # verify that forward-link was correct
+}
+
+@
+
+
+1.11
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@d1 1
+a1 1
+#!/opt/bin/perl -wn0
+d14 1
+d22 3
+a24 2
+use clib;
+use Para;
+d30 11
+d42 46
+a87 13
+$buf .= $_;
+END {
+    $i = 0;
+    while ($buf) {
+        $link = '';
+        $plen = unpack("n",$buf);
+        last if $plen == 0xffff;
+        ($back,$for,$x,$y,$xe,$ye,$atr) = unpack("n7",$buf);
+        $buf = substr($buf,14);
+        $linklen = 0;
+        if ($atr & $F_LINK) {
+            # extract link info
+            $linklen = unpack("n",$buf);
+d89 5
+a93 5
+            $link = unpack("A$linklen", $buf);
+            chop $link if $link =~ /\000$/;
+            $linklen++ if $linklen & 1;
+            $buf = substr($buf,$linklen);
+            $linklen += 2;
+d95 1
+a95 35
+        if ($atr & $F_LINK_ALT) {
+            # extract alternate-link info
+            # warn "Extracting LINK_ALT\n";
+            $altlinklen = unpack("n",$buf);
+            $buf = substr($buf,2);
+            $altlink = unpack("A$altlinklen", $buf);
+            chop $altlink if $altlink =~ /\000$/;
+            $altlinklen++ if $altlinklen & 1;
+            $buf = substr($buf,$altlinklen);
+            $linklen += $altlinklen + 2;
+        }
+        if ($atr & $F_BITMAP) {
+            $filename = "/tmp/$$.$i.ppm";
+            $data = "[image $filename]";
+            open(PROG, "| $Tbmp -2bit>$filename")   or die $!;
+            $i++;
+            print PROG substr($buf,0,$for-14-$linklen);
+            close PROG;
+            $buf = substr($buf,$for-14-$linklen);
+        } else {
+            $data = '';
+          FRAG:
+            while (1) {
+                $len = unpack("n",$buf);
+                $buf = substr($buf,2);
+                last FRAG if $len == 0;
+                $data .= unpack("A$len",$buf) . $break_string;
+                $len++ if $len & 1;
+                $buf = substr($buf,$len);
+            }
+            
+        }
+        printf("%4d %4d %4d %4d %4d %s {%s}\n", $x,$y,$xe,$ye,$atr,
+               $link, $data);
+        # verify that forward-link was correct
+d97 3
+a100 1
+
+@
+
+
+1.10
+log
+@fixes for bug 57
+@
+text
+@d21 1
+d23 6
+d63 1
+a63 1
+            open(PROG, "| /home/fox/tcsproxy/bin/Tbmptopnm -2bit>$filename")   or die $!;
+@
+
+
+1.9
+log
+@Added refinement ("get original") functionality to transend.text.piml;
+the ALT_LINK field is now filled in with a magic URL which, when
+retrieved, should cause the refined image to be delivered at the maximum
+screen width.  Also, the LINK flag is turned off for imagemaps so that
+users can't click thru the imagemap, at least until we have imagemaps
+working.  Flag definitions in Para.pm are now consistent with new LINE
+and ALT_LINK fields; the NEWLINE flag (used internally by the distiller)
+was redefined since it was colliding with a client-specific flag called
+LINE.  Changed unpack_tstr.pl to understand ALT_LINK in the data
+format.  Added the magic-URL-manipulation function to TACCutils.pm since
+several distillers will be using it.
+@
+text
+@d7 6
+d68 1
+a68 1
+                $data .= unpack("A$len",$buf) . "//";
+@
+
+
+1.8
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d1 1
+a1 1
+#!/opt/bin/perl -n0
+d10 2
+a11 2
+            /home/fox/tcsproxy/xs/lib
+            /home/fox/tcsproxy/xs/lib/i586-linux/5.003
+a18 1
+    $prev_forw = 0;
+a19 1
+        $length_now = length($buf);
+d25 1
+d35 11
+a45 2
+        } else {
+            $linklen = 0;
+@
+
+
+1.7
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d40 3
+a42 2
+            $data = '[image]';
+            open(PROG, "| /home/fox/tcsproxy/bin/Tbmptopnm -2bit>/tmp/img$i.ppm")   or die $!;
+@
+
+
+1.6
+log
+@transend.text.piml
+@
+text
+@d10 2
+a11 4
+            /home/fox/work/tcsproxy/xs
+            /home/fox/work/tcsproxy/xs/lib/i586-linux/5.003
+            /home/fox/nfs-home/286proj/tcsproxy/xs
+            /home/fox/nfs-home/286proj/tcsproxy/xs/lib/i586-linux/5.003
+d19 1
+d21 1
+d29 1
+a29 1
+            $l = unpack("n",$buf);
+d31 7
+a37 3
+            $link = unpack("A$l", $buf);
+            $l++ if $l & 1;
+            $buf = substr($buf,$l);
+d41 1
+a41 1
+            open(PROG, "| /home/fox/nfs-home/286proj/tcsproxy/bin/Tbmptopnm -2bit>/tmp/img$i.ppm")   or die $!;
+d43 1
+a43 1
+            print PROG substr($buf,0,$for-14);
+d45 1
+a45 1
+            $buf = substr($buf,$for-14);
+d61 1
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d22 1
+d27 8
+d56 1
+a56 1
+               "(LINK)", $data);
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d46 2
+a47 1
+        printf("%4d %4d %4d %4d %4d {%s}\n", $x,$y,$xe,$ye,$atr,$data);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d20 1
+d28 4
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d12 2
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d10 2
+a11 2
+            /home/fox/nfs-home/286proj/tcsproxy/xs
+            /home/fox/nfs-home/286proj/tcsproxy/xs/lib/i586-linux/5.003
+@

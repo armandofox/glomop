@@ -1,0 +1,222 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     98.01.29.19.46.22;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.01.29.19.46.22;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@An unresolved issue: Why not HTTP?
+----------------------------------
+                           
+Intel view: "The world is Pentium notebooks, TCP/IP, cellular modems"
+No concept of wireless overlay  --> no need for adaptive apps (except
+that they "adapt" between cellular, wireline modem, and fast LAN; no
+handoffs while app is running)
+
+My observation: using HTTP doesn't really buy us anything on
+non-PC-notebook devices, since the apps we want to build don't really
+exist in *any* form on those devices now.  If we must start from scratch
+anyway, we may as well start from a real protocol.
+
+Objection: market forces -- soon every PDA and calculator will run
+TCP/IP and have a Web browser.  they may be nonadaptive because they are
+straight ports from desktop software, but they will exist.  They will be
+the result of many many people's effort.  We can achieve better leverage
+by doing all our work at the proxy and sticking to HTTP.
+
+HTTP problem                    Workaround?
+---------------------------------------------------------------------------
+Stateless                  Pass state cookie to proxy in HTTP header or
+                           as part of URL; user must explicitly
+                           register/deregister to indicate session
+                           beg/end (can include authentication)
+
+Vertical/horiz handoff     Can be hidden in transport layer, which can
+                           advise proxy via UDP (like Pythia)
+
+Requires full TCP stack    ? GloMop can 'fake it' using dialup/telnet,
+                           but loses error robustness
+                           Counterview: the world is going to TCP
+                           anyway.  Is there a planned "TCP-lite"?
+
+One TCP per request        Will be fixed in HTTP-NG
+
+Can't notify user of       Separate app listening on UDP for notifications?
+   important events
+
+No way to specify          - Can hack HTML (like Pythia)
+   refinement params       - Java applet?
+
+No way to request unmod-   Can hack HTML (like Pythia), but the user intfc
+   ified original            to this functionality will be awkward
+                           (compare AOL browser "get original" button)
+                           
+No bandwidth mgmt across   Proxy can try to "choreograph" return data to
+   data types (e.g.                fake priorities (lottery scheduling)
+   HTML vs GIF links)      Interface to BW mgmt "control panel" will
+                                     be an HTML form
+
+No BW mgmt across apps     No workaround
+
+No BW mgmt across devices/    No workaround, and this is going to become
+   basestations                           important
+
+No TOC/document structure  Hack HTML at proxy to create one?
+
+Can't add services (fax    Netscape plug-ins can fix?
+  back, speech-email, etc)
+                           
+No recovery from sudden    No workaround
+  disconnection or handoff
+
+No per-file priorities     Munge URL? (use Netscape + ftp proxy)
+  (for FTP, etc)
+
+Differences between CLIENT<->GLOMOP and GLOMOP<->PROXY interfaces
+-----------------------------------------------------------------
+
+- For non stream-based document retrieval requests, the C<->G has been
+  designed as asynchronous.  Should the same be true for the G<->P
+  interface?
+
+Issues:	- multiple outstanding document requests.  Chunks of the
+	  two documents may arrive at GloMop in an interleaved manner.
+	- some chunks of a given document may be of higher priority than
+	  others;  eg. HTML text more important than inline images,
+	  MIME text more important than MIME images, MPEG keyframes
+	  more important than MPEG diff frames.  This implies chunks
+	  should be able to arrive out of order.
+	- some documents may have a relatively lengthy distillation time.
+	  This should not prevent other activity from taking place
+	  while the proxy performs distillation.
+	  Implications:
+		-there must be at least some degree of multi-processing to
+		 the proxy;  buffered communications should not be blocked
+		 while distillation occurs.  (Consider extreme case of
+		 time-critical stream based data.)
+		-some documents requests may be stuck at the proxy for
+		 longer periods of time than others
+		-low priority document requests, eg. "Agent" idea of
+		 'let me know when something interesting happens' or
+		 'go browse around the net for things related to foo',
+		 imply asynchronous retrieval.
+Conclusions:
+	- G<->P communication must be asynchronous, to some degree.
+
+---------
+
+- What are the functional differences between the C<->G API and the
+  G<->P protocol?
+
+	- flow control.  Client is concerned about getting too little
+	  data (ie. callbackThresh argument to CGetDoc), while GloMop
+	  should be concerned about getting too much data at once.
+	  Flow control is needed between G<->P;  transport mechanism
+	  may provide this automagically.
+	- client specifies what types would be acceptable if returned
+	  from GloMop.  This does not necessarily restrict what types
+	  could be transmitted by the proxy.  eg.  a highly compressed
+	  form could be used for the wireline encoding;  a GloMop
+	  side TSM would then convert this to one of the allowable
+	  return values.
+	- Concepts of session may be different.  One "session" is the
+	  time during which GloMop is physically connected to the proxy.
+	  Another "session" is the period during which an end-user
+	  manipulates a particular document, or perhaps browses multiple
+	  documents.
+	- Client may request chunks from GloMop, possibly in a random order
+	  (BTW the GetChunk and callback mechanisms are broken right now),
+	  while currently the proxy decides when to inject chunks into
+	  GloMop.  Perhaps this should change?  GloMop should have greater
+	  control over when particular chunks get put on the wire.
+	- Both GloMop and the proxy act as virtual storage mechanisms.
+	  GloMop behaves more like a fast local cache, while the proxy
+	  appears as a slow, remote store.  Issue:  persistence of
+	  data at the proxy and in GloMop.  Does a Client fetching a
+	  chunk from GloMop flush it out of GloMop?  Proxy will cache
+	  documents in case GloMop requests it in the future;  what
+	  mechanism controls the flushing of that cache?  Refinement
+	  will confuse the issue, since documents (or chunks?) must
+	  hang around in case refinements are requested.
+
+----------------
+
+Suggestions
+
+
+G<->P: 
+
+   asynchronous nature of chunk retrieval, flow control
+	- THRESH/MAX mechanism is good enough for most doc requests.
+	  Assume chunks will come back in order, adhering to these
+	  two parameters.  (Note this implies either the proxy must
+	  monitor when chunks are actually transmitted, or glomop must
+	  sent ACKs.  I prefer ACKs.
+	- A new "GetChunk" request should be allowed.  A GetChunk only
+	  is issued for high-priority chunks that should have expedited
+	  delivery, or for chunks that weren't received or were
+	  corrupted and need retransfer.  (CRC-32 checksum field?  Is
+	  this unimportant for the level at which the G<->P protocol
+	  resides?)
+	- An ACK message should be implemented;  a sequence of
+	  chunks should be acknowledged with a single message.  Reception
+	  of the ACK implies that the proxy can toss away the corresponding
+	  chunks.  (Original unchunked document may still be cached.)
+	- Perhaps require glomop to send ACK every N messages;  this
+	  is similar to sliding window mechanism, and could be used for
+	  the basis of G<->P flow control?
+  
+   type information
+	- Type information must be sent in TOC chunk so that GloMop knows
+	  which TSM to invoke for subsequent document chunks.  Should
+	  distillation parameters be present in the chunks, or should we
+	  assume that GloMop or the client will be able to handle it?
+
+   sessions
+	- ?
+
+C<->G:
+
+   asynchronous nature, flow control
+	- asynchronous nature already handled, flow control not relevant.
+
+   type information
+	- TSM's will perform conversion of chunks before handing off to
+	  client via GetChunk.  TSM's must return type-specific information,
+	  such as "what type?  size?  what further distillation is possible
+	  locally, and what must be performed on proxy?"
+
+   sessons
+	- ?
+@
+
+
+1.1.1.1
+log
+@GloMOp bibliographies, meetings, etc, re-imported into GloMop CVS
+archive on full-sail
+@
+text
+@@

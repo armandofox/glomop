@@ -1,0 +1,194 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.31.18.56.26;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@R* papers.
+@
+text
+@<html>
+<title>
+R<sup>*</sup> Overview
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+R<sup>*</sup>: An Overview of the Architecture
+</h1>
+<strong>
+R. Williams, D. Daniels, L. Haas, G. Lapis, B. Lindsay, P. Ng,
+R. Obermarck, P. Selinger, A. Walker, P. Wilms, and R. Yost
+</strong>
+
+<P>
+<i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+R* is a distributed database system consisting of a set of voluntarily
+cooperating (but distrusting) sites;  the architectural theme in R* is the
+maintainence of the autonomy of each site.
+</p>
+
+<h2>Relevance</h2>
+One of the first well-implemented distributed databases;  identified many
+of the difficult issues in distributed database systems, and managed to
+present a reasonable solution to some of them.  A good introductory paper
+for distributed databases.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> Many of the interesting complexities were brushed over, such as
+	  access path selection cost modelling, authentication issues,
+	  distributed crash detection and recovery, directory service
+	  performance issues, cache consistency issues, costs of
+	  concurrency control, and any mention of performance at all.
+     <li> What about fault tolerance?  Was that a design goal at all?
+     <li> Seems that they &quot;rolled their own&quot; for a lot of the
+	  system components, such as object naming and location services.
+	  Many of the distributed database issues are also distributed
+	  systems issues, yet no distributed systems research/literature
+	  was mentioned or referenced.
+</ul>
+
+<h2>Overview/Main Points</h2>
+<ul>
+     <li> <B>Goals</B>:
+	  <ul>
+	       <li> each site retains local privacy and control of its data
+	       <li> present a single-machine interface to users and
+		    programs for simplicity in coding/interaction
+	       <li> no central dependencies (such as a central catalog,
+		    compiler, deadlock detector, or scheduler) -
+		    <i>maximize site autonomy</i>
+	       <li> exploit parallelism wherever possible
+	  </ul>
+     <li> <b>Data definitions and relations</b>
+	  <ul>
+	       <li> data is stored as tuples in relations.  Relations can
+		    be:
+		    <ul>
+			 <li> <i>dispersed</i>:  a relation in its entirety
+			      is stored on a particular node in the network
+			 <li> <i>replicated</i>: a relation is duplicated
+			      in its entirety on two nodes in the network
+			 <li> <i>partitioned</i>: data is logically a
+			      single relation, but partitioned either into
+			      sets of rows (horizontal partitioning) or
+			      sets of columns (vertical partitioning) that
+			      live on different sites in the network
+		    </ul>
+	       <li> partitioning and replication can both simultaneously be
+		    applied to relations
+	       <li> snapshots (cached and possibly stale copies) of
+		    relations can be made by R* for sake of performance, if
+		    consistency constrains don't forbid it
+	  </ul>
+     <li> Objects are named according to scheme
+	  &quot;USER@@USER_SITE.OBJECT_NAME@@BIRST_SITE&quot;
+	  to achieve uniqueness across all sites (a <i>system wide name</i>
+	  or SWN).  &quot;OBJECT_NAME&quot;
+	  is shorthand for local objects (a <i>print name</i>).
+     <li> <b>Catalogs and Locating objects</b>
+	  <ul>
+	       <li> local-only and global objects are distinguished in R*
+	       <li> system catalog is logically a relation, which can be
+		    fragmented and replicated.  R* maintains a cache of
+		    catalog entries at each site.
+	       <li> a site's catalog maintains information about objects
+		    stored at that site and objects that were created at
+		    that site (but since have been dispersed elsewhere).
+		    This allows any object to be located via its SWN by
+		    checking at the birth site.  <i>SG: what about fault
+		    tolerance?</i>
+	  </ul>
+     <li> <b>Transactions</b>
+	  <ul>
+	       <li> Each transaction is given a unique transaction number
+		    made up from site name and a locally unique
+		    (monotonically increasing) sequence number.
+		    Transaction number thus also gives ordering info.
+	       <li> Two-phase commit protocol is used for transaction
+		    commits/aborts.  R* uses &quot;presumed-to-commit&quot;
+		    variant to reduce number of messages necessary -
+		    it is assumed that commits in the 2nd phase are
+		    successful unless somebody notifies otherwise.  <i>SG:
+		    again, what about fault tolerance?</i>
+	  </ul>
+     <li> <B>Query preparation</B>
+	  <ul>
+	       <li> first print names are resolved to SWNs.  Then catalog
+		    entries for each named object are fetched.
+		    User-level authorization at each site is then performed
+		    (no mention is made of protocol or method used).
+	       <li> The site at which the SQL query is entered becomes the
+		    <b>master site</b>.  The master site compiles a global
+		    query plan (using the usual Selingeresque access plan
+		    selection techniques, taking into accound network I/O
+		    cost).  The global plan decides inter-site issues
+		    (access strategies) - the invocation sequence of
+		    participating sites and order of parameters.
+	       <li> Remote <b>apprentice</b> sites receive the master
+		    global plan, and then compile a local access strategy
+		    for the locally managed objects.  For example,
+		    apprentices can change join orders etc. for local
+		    relations as long as the result tuples are presented in
+		    the order in the master plan.
+	       <li> Access path cost is a linear function of I/O cost, CPU
+		    cost, and message cost.  Access path selection is very
+		    tricky (e.g. consider accessing horizontally partitioned
+		    relations in a cross-site join).
+	       <li> 5 cross-site join strategies are considered:
+		    <ol>
+			 <li> all tuples of inner relation sent to outer
+			      relaton site in one batch and stored in
+			      temporary relation; local join then done.
+			 <li> all tuples of outer relation sent to inner
+			      site one tuple at a time - join is pipelined
+			      with tuple sending
+			 <li> for each tuple of outer, a request for the
+			      appropriate tuples of the inner relation is
+			      sent to the inner site from the outer site;
+			      the join is then done on the outer site.
+			 <li> All inner tuples sent to third site and
+			      stored in temp relation.  Matching outer
+			      tuples are sent to third site and pipelined
+			      join is done.
+			 <li> Outer tuples sent to third site.  For each
+			      outer tuple, request from third site to inner
+			      site for matching inner tuples is sent, and
+			      join done on third site.
+		    </ol>
+	  </ul>
+     <li> <B>Query Execution</B>
+	  <ul>
+	       <li> Deadlock detection is done at each site by periodically
+		    looking at wait-for information gathered locally and
+		    retrieved from other sites. Potential cycles are
+		    detected, and the cycle string propagated along the
+		    potential cycle path.
+	       <li> Logging is as in System R.
+	  </ul>
+     <li> Some SQL additions were created for the distribution and
+	  migration of relations.
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

@@ -1,0 +1,218 @@
+head	1.2;
+access;
+symbols
+	stable:1.2
+	current:1.2
+	release:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.06.14.21.11.34;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.03.23.36.40;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Whoohoo!  Created image browser application, added unauthenticated
+connection, TOC parsing.
+@
+text
+@#!/usr/sww/bin/wish -f
+
+##
+## gm_cp_qos button - the "proxy QoS" control panel module
+##
+## This module is reponsible for allowing the user to specify their
+## default quality of service preferences.  I haven't figured out what
+## this is going to look like, yet.
+##
+
+proc gm_cp_qos { fm constate } {
+    global ${constate}
+    global params paramDescr whichParam quality f1
+
+    # destroy what was in fm before
+    eval destroy [winfo children $fm]
+
+    # "title" frame
+    frame $fm.ft
+    label $fm.ft.l -relief ridge -foreground red -text "Image Fetching Options"
+    button $fm.ft.ch -width 10 -command "showCoolMode $fm"
+    pack $fm.ft.ch -side right -fill none -expand 0
+    pack $fm.ft.l -side left -fill x -expand 1
+    pack $fm.ft -side top -expand 1 -fill x
+
+    # "dummy" mode
+    frame $fm.fd
+    scale $fm.fd.s -orient horizontal -length 100 -variable quality \
+	    -showvalue 0 -from 0 -to 255
+    label $fm.fd.l -width 15
+    label $fm.fd.r -width 15
+
+    pack $fm.fd.l -side left
+    pack $fm.fd.r -side right
+    pack $fm.fd.s -side left -fill x -expand 1
+
+
+    # "cool" mode
+    set params {Seconds Bits/Pixel "% Actual Size"}
+    set paramDescr {"Faster Delivery" "More Colors" "Bigger Image"}
+    set whichParam 0
+    frame $fm.fc -relief groove
+    label $fm.fc.el -text "Approximately" -anchor e
+    entry $fm.fc.e -width 8 -textvariable f1
+    # radiobutton frame
+    frame $fm.fc.rb -relief groove
+    for {set x 0} {$x < [llength $params]} {incr x} {
+	radiobutton $fm.fc.rb.$x -variable whichParam -value $x \
+		-text [lindex $params $x] \
+		-command "setFixedParam $fm"
+	pack $fm.fc.rb.$x -side top -anchor w -fill none -expand 0
+    }
+    pack $fm.fc.el $fm.fc.e $fm.fc.rb -side left -fill x -expand 0
+    pack $fm.fd -side top -fill none -expand 0
+
+    frame $fm.dobut -relief groove
+    button $fm.dobut.dobut -text "Send Prefs" -command \
+	    "sendPrefs $fm $constate" -bg red \
+	    -activebackground PaleVioletRed1 -bd 2
+    pack $fm.dobut.dobut -side top -fill none -expand 0
+    pack $fm.dobut -side top -fill none -expand 0 -pady 10
+
+    showSimpleMode $fm
+}
+
+proc sendPrefs { fm constate } {
+    global params paramDescr whichParam whichstate quality f1
+    global ${constate}
+
+    if ![info exists ${constate}(connected)] {
+	puts "cannot send prefs1: not connected!"
+	return
+    }
+    set myconst [set ${constate}(connected)]
+    if {$myconst == 0} {
+	puts "cannot send prefs2: not connected!"
+	return
+    }
+    set conid [set ${constate}(connectid)]
+
+    set qosstring "gm_setqospref $conid Image -mtu 1024 -maxx 640 -maxyy 480"
+    append qosstring " -bw 0"
+
+    # calculate preferences and call gm_setqosprefs
+    if {$whichstate == "cool"} {
+	# cool - f1 is text, whichParam gives radio, quality gives scroll
+	puts "(cool) text: $f1 radio: $whichParam quality: $quality"
+	set minus [expr 255 - $quality]
+
+	if {$whichParam == 0} {
+	    # seconds selected
+	    if {$f1 == ""} {
+		append qosstring " -lat 10:255"
+	    } else {
+		append qosstring " -lat $f1:255"
+	    }
+
+	    #determine bpp and scale
+	    append qosstring " -bpp 8:$quality"
+	    append qosstring " -scale 100:$minus"
+	    
+	} elseif {$whichParam == 1} {
+	    # bits/pixel selected
+	    if {$f1 == ""} {
+		append qosstring " -bpp 8:255"
+	    } else {
+		append qosstring " -bpp $f1:255"
+	    }
+
+	    #determine seconds and scale
+	    append qosstring " -lat 10:$minus"
+	    append qosstring " -scale 100:$quality"
+
+	} else {
+	    # % actual size selected
+	    if {$f1 == ""} {
+		append qosstring " -scale 100:255"
+	    } else {
+		append qosstring " -scale $f1:255"
+	    }
+
+	    #determine seconds and bpp
+	    append qosstring " -lat 10:$quality"
+	    append qosstring " -bpp 8:$minus"
+	}
+    } else {
+	# simple - quality gives scroll
+	puts "(simple) quality: $quality"
+	set minus [expr 255 - $quality]
+	set latbit [expr 1 + ($quality / 4)]
+	set bppbit [expr 1 + ($quality / 20)]
+	if {$bppbit > 8} {
+	    set bppbit 8
+	}
+	   # was -lat 10:$minus
+	append qosstring " -lat $latbit:$minus -bpp $bppbit:$quality -scale 100:$quality"
+    }
+    puts "$qosstring"
+    uplevel #0 $qosstring
+}
+
+proc showCoolMode { fm } {
+    global params paramDescr whichParam whichstate
+    pack forget $fm.dobut
+    pack $fm.fc -side top -fill x -expand 0
+    $fm.ft.ch configure -text "Fewer Choices" -command "showSimpleMode $fm"
+    pack $fm.dobut -side top -fill none -expand 0 -pady 10
+    setFixedParam $fm
+
+    set whichstate "cool"
+}
+
+proc showSimpleMode { fm } {
+    global params paramDescr whichParam whichstate
+
+    pack forget $fm.fc
+    $fm.fd.l configure -text "Fastest Delivery"
+    $fm.fd.r configure -text "Highest Quality"
+    $fm.ft.ch configure -text "More Choices" -command "showCoolMode $fm"
+
+    set whichstate "simple"
+}
+
+proc setFixedParam { fm } {
+    global params paramDescr whichParam
+    set len [llength $params]
+    $fm.fd.l configure -text \
+	    [lindex $paramDescr [expr ($whichParam-1) % $len]]
+    $fm.fd.r configure -text \
+	    [lindex $paramDescr [expr ($whichParam+1) % $len]]
+}
+@
+
+
+1.1
+log
+@This will eventually be the QoS specification module - currently it
+does absolutely nothing.
+@
+text
+@d11 4
+a14 1
+proc gm_cp_qos { fm } {
+d18 153
+a170 1
+    # add connection stuff 
+@

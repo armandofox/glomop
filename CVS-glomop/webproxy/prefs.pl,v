@@ -1,0 +1,1348 @@
+head	1.17;
+access;
+symbols
+	release:1.16
+	geoworks:1.16.2.1
+	pregeo:1.16
+	geoworks-0701:1.16.2.1
+	geoworks-062696:1.16
+	dev:1.14
+	demo:1.13.0.2;
+locks; strict;
+comment	@# @;
+
+
+1.17
+date	96.07.04.02.38.50;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	96.04.04.01.46.40;	author fox;	state Exp;
+branches
+	1.16.2.1;
+next	1.15;
+
+1.15
+date	96.03.12.22.25.25;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.11.28.01.01.41;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.11.15.10.10.56;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.11.14.06.54.16;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.11.10.09.05.05;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.11.10.08.52.21;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.11.10.08.42.46;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.11.10.08.27.53;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.11.03.21.47.02;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.28.01.53.59;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.09.27.20.34.38;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.09.19.21.04.01;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.09.17.23.02.21;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.09.17.20.42.56;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.07.18.06.32;	author fox;	state Exp;
+branches;
+next	;
+
+1.16.2.1
+date	96.07.04.03.18.49;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#  User prefs maintenance for http proxy. Maintains a large associative array
+#  for user prefs, keyed by IP address; allows periodic checkpointing of the
+#  array to a file.
+#
+
+package prefs;
+
+#
+#  Private globals for this file
+#
+%Prefs = ();
+$Dirty = 0;
+$NumRegistrations = 0;                      # number of registrations since
+                                            # last checkpoint
+$NumRegistrationsThisSession = 0;           # num new this session
+%PrefsCodes = ();                           # default profile for new users
+
+#
+# Read default prefs info from config file.  There is no place in the code that
+# is required to know about the format of the default prefs entries.
+#
+for (@@main::Config) {
+    $PrefsCodes{$1} = $2 if /prefs\s+(\S+)\s+(.*)$/;
+}
+
+$Const{Expire} = 14;                        # days after which a prefs entry
+                                            # will expire if not used
+$Const{Userfile} = "./pythia.users";        # user info database
+
+$Const{RegisterOK} = <<EndHtml;
+    <HTML><TITLE>Registration OK</TITLE><BODY><H1>Registration OK</H1>
+    Registration succeeded for IP address %s.  Your registration may expire
+    after $Const{Expire} days of inactivity.</P>
+    <P>If you changed your preferences profile, you may need to clear your
+    browser's caches (disk and/or memory) to see your preferences changes take
+    effect for pages that your browser has cached.  Your browser's Preferences
+    dialog provides a way to clear the caches.</P>
+    <P><B><I>Enjoy your surfing!</I></B></P> 
+    </BODY></HTML>
+EndHtml
+
+$Const{RemapOK} = <<End2Html;
+    <HTML><TITLE>Remap OK</TITLE><BODY><H1>Remap OK</H1>
+    The IP address for '%s' has been changed from %s to %s, effective
+    until the next time you remap.</P><P><B><I>Enjoy your surfing!
+    </I></B></P></BODY></HTML>
+End2Html
+
+$Const{CheckpointInterval} = 1;        # checkpoint interval: after every N
+                                       # registrations, checkpoint to disk
+
+#
+# Initialization: read users file
+#
+
+if (open(PREFS, $Const{Userfile})) {
+    $LastModPrefs = (stat($Const{Userfile}))[9];
+    while ($_ = <PREFS>) {
+        $Prefs{$1} = $2 if /([^&]+)&(.*)/;
+    }
+    close PREFS;
+} else {
+    &main::log("Warning: couldn't open user db $Const{Userfile}: $!");
+}
+
+#######################################################################
+#   Translates an IP address to an appropriate set of prefs, returns empty if
+#   none found.  Returns an associative array of prefs info.  Array keys have
+#   the names used in the URL encoding (see comments for "register" function).
+#   If the IP address is the string "default", return a set of default browsing
+#   prefs for unregistered users.
+#
+#   Assumptions:
+#     This function is intimately familiar with the encoding of the
+#       prefs file.
+#     Prefs info in file (and therefore in prefs array) must be well-formed:
+#     this function does no sanity checks.
+######################################################################
+
+sub main::get_prefs
+{
+    local($id) = shift;
+    local(%result);
+
+    # Start off with some default defaults...
+
+    %result = %PrefsCodes;
+    return %result if ($id =~ /^default$/);
+    
+    # Fill in prefs from this user, if we know about him....
+
+    return undef unless $_ = $prefs::Prefs{$id};
+    
+    my @@prefs = split(/&/,$_);
+    for (@@prefs) {
+        $result{$1} = $2 if /(\w)=(.+)/;
+    }
+    return %result;
+}
+
+###########################################################################
+#  Set prefs: set the prefs for a profile by copying the prefs from another
+#  (existing) profile.  If the source profile doesn't exist, create the new
+#  prefs as default, and return undef.
+###########################################################################
+
+sub main::copy_prefs
+{
+    my($to, $from) = @@_;
+    my $prefs;
+    
+    if (defined $prefs::Prefs{$from}) {
+        $prefs::Prefs{$to} = $prefs::Prefs{$from};
+        return $to;
+    } else {
+        &set_prefs($to, (&main::get_prefs("default")));
+        return undef;
+    }
+}
+
+sub split_url {
+    my $url = shift;
+    my @@fields, %fields;
+
+    @@fields = split(/&/, $url);
+    for (@@fields) { $fields{$1} = $2 if /(\w)=(.*)/ };
+
+    return( %fields );
+}
+
+######################################################################
+#  Register a new user.
+#
+#  Arguments:
+#     URL encoding the registration info (from form submission); if null, a
+#       default registration profile is used instead.  The initial
+#       URL path has been stripped off, leaving a set of "(\w)=(.+)" fields
+#       separated by "&".
+#     User's IP address as printable string.
+#
+#  Side effects:
+#     Replace the entry corresponding to the given IP address
+#     in the prefs array if it already exists, and indicate the array is dirty.
+#     Also create an entry for the user in the user database, making sure it
+#     includes info about his IP address.  The user database is intended to be
+#     human readable.  Checkpoint prefs array if necessary.
+#
+#  Returns: a text/html string encoding a response to the registration
+#     request.  Any errors are indicated in the string.
+#
+#  Assumptions: This function is intimately familiar with the format of a prefs
+#    file entry.  It converts the info embedded in the URL (form submission) into
+#    an appropriate entry.
+#
+######################################################################
+
+sub main::register
+{
+    local($url, $ipaddr) = @@_;
+    local($old_ipaddr);
+    local(%fields);
+    local($newentry, %newentry);
+    local($x);
+    
+    &main::debug('register', "New prefs for $ipaddr: $url");
+
+    %fields = ($url? &split_url($url) : &main::get_prefs("default"));
+    
+    # Start off with a template of default values....
+
+    %newentry = %PrefsCodes;
+
+    # Fill in each value from the user-provided fields that are defined.
+
+    for (keys %fields) {
+        $newentry{$_} = lc($fields{$_}) if exists $newentry{$_};
+    }
+
+    # Special case - we need a user id.
+
+    return undef unless $newentry{'u'};
+
+    # Convert +'s to whitespace in userid field only
+    $newentry{'u'} =~ s/\++/ /g;
+    
+    # Remove spurious '&'s from entry fields.
+
+    while (($x, $_) = each %fields) {
+        s/&/_/g;
+    }
+
+    #
+    #  if this is a remap request, the user presumably exists: search the prefs
+    #  list, grab the user's prefs, and use them instead of the supplied prefs
+    #
+
+    if ($fields{'p'} !~ /n/i) {
+        return &remap($newentry{'u'}, $ipaddr);
+    }
+
+    # tally a new registration
+    $NumRegistrationsThisSession++;
+
+    # Create or modify the new entry
+
+    &set_prefs($ipaddr, %newentry);
+    #
+    #  If number of new registrations since last checkpoint exceeds threshold,
+    #  checkpoint to disk now.
+    #
+
+    if ($NumRegistrations++ >= $Const{CheckpointInterval}) {
+        $NumRegistrations = 0;          # reset counter
+        &main::checkpoint || &main::log("Warning: checkpoint failed");
+    }
+
+    return sprintf($Const{RegisterOK}, $ipaddr);
+}    
+
+# Remap a user to a new location, i.e. indicate that a new IP address should be
+# associated with the user.
+sub remap {
+    my ($user,$newaddr) = @@_;
+    # try to find entry for this user
+    my $old_ipaddr = undef;
+    my $prefs = undef;
+    for (keys %Prefs) {
+        $old_ipaddr = $_, $prefs = $Prefs{$_}, last
+            if ($Prefs{$_} =~ /\bu=$user\b/ );
+    }
+    unless (defined $prefs) {
+        &main::log("*** register: remap failed for $ipaddr ($url)");
+        return undef;
+    }
+    #
+    #  Got the user's prefs: set them to the new IP addr
+    #
+    $Prefs{$newaddr} = $prefs;
+    return sprintf($Const{RemapOK}, $user, $old_ipaddr, $ipaddr);
+}
+    
+sub set_prefs
+{
+    my $ipaddr = shift;
+    my %newentry = @@_;
+    my @@newentry = ();
+    for (keys %newentry) {
+        push(@@newentry, join(//, $_, '=', $newentry{$_}));
+    }
+    $Prefs{$ipaddr} = join('&', @@newentry);
+}
+
+###########################################################################
+#  Return number of total registered users and number registered this session.
+############################################################################
+
+sub register_info
+{
+    return (0+%Prefs, $NumRegistrationsThisSession);
+}
+
+######################################################################
+#  Checkpoint prefs array to disk - very naive for now
+#
+#  Returns: 1 if checkpointed successfully
+#
+#  Side effects: User Prefs array is streamed to $Const{Userfile}, which is first
+#  backed up in .bak.  CheckpointTime is set to the time
+#  of this checkpoint.
+######################################################################
+
+sub main::checkpoint
+{
+    local($res) = 1;
+    local($key,$val);
+
+    #
+    #  If the prefs file has been written by someone else since the last time
+    #  we touched it, slurp it first to merge changes, then write out the
+    #  checkpoint.
+    #
+    if ((stat($Const{Userfile}))[9] != $LastModPrefs) {
+        &main::log("Warning: $Const{Userfile} changed since last read; " .
+                   "merging changes before checkpointing");
+        if (open(PREFS, $Const{Userfile})) {
+            while ($_ = <PREFS>) {
+                $prefs::Prefs{$1} = $2 if /([^&]+)&(.*)/
+                    && !exists $prefs::Prefs{$1};
+            }
+            close PREFS;
+        } else {
+            &main::log("Warning: couldn't merge changes from " .
+                       "$Const{Userfile}: $!");
+        }
+    }
+    #
+    # checkpoint user info db
+    #
+    &main::log("*** Checkpointing user db $Const{Userfile}");
+    rename($Const{Userfile}, "$Const{Userfile}.bak")
+        || &main::log("Warning: renaming $Const{Userfile} to " .
+                     "$Const{Userfile}.bak: $!");
+    if (! (open(PREFS, ">$Const{Userfile}"))) {
+        &main::log("Writing users file: $!");
+        $res = 0;
+    } else {
+        while (($key,$val) = each %Prefs) {
+            print PREFS "$key&$val\n";
+        }
+        close PREFS;
+    }
+
+    $LastModPrefs = (stat($Const{Userfile}))[9];
+    $CheckpointTime = time;
+    return $res;
+}
+
+
+######################################################################
+
+1;                  
+@
+
+
+1.16
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@d9 9
+a17 1
+%PrefsCodes = ();
+d45 1
+a45 1
+    The IP address for '%u' has been changed from %s to %s, effective
+a53 9
+#  Private globals for this file
+#
+%Prefs = ();
+$Dirty = 0;
+$NumRegistrations = 0;                      # number of registrations since
+                                            # last checkpoint
+$NumRegistrationsThisSession = 0;           # num new this session
+
+#
+d64 1
+a64 1
+    &main::log("Warning: couldn't open user db: $!");
+d93 1
+a93 1
+    return undef unless $_ = $Prefs{$id};
+d95 1
+a95 1
+    @@prefs = split(/&/,$_);
+d113 2
+a114 2
+    if (defined $Prefs{$from}) {
+        $Prefs{$to} = $Prefs{$from};
+d122 10
+d136 5
+a140 4
+#     URL encodes the registration info (from form submission).  The preceding
+#     http garbage has been stripped off, leaving a set of "(\w)=(.+)" fields
+#     separated by "&".
+#     User's IP address supplied as printable string.
+d143 5
+a147 5
+#  Replace the entry
+#  in the prefs array if it already exists, and indicate the array is dirty.
+#  Also create an entry for the user in the user database, making sure it
+#  includes info about his IP address.  The user database is intended to be
+#  human readable.  Checkpoint prefs array if necessary.
+d149 2
+a150 2
+#  Returns: a string of HTML text encoding a response to the registration
+#  request.  Any errors are indicated in the string.
+d153 2
+a154 2
+#  file entry.  It converts the info embedded in the URL (form submission) into
+#  an appropriate entry.
+a157 10
+sub split_url {
+    my $url = shift;
+    my @@fields, %fields;
+
+    @@fields = split(/&/, $url);
+    for (@@fields) { $fields{$1} = $2 if /(\w)=(.*)/ };
+
+    return( %fields );
+}
+
+d166 1
+a166 1
+    &main::debug('register', "Processing registration for client $ipaddr");
+a169 3
+    #@@fields = split(/&/, $url);
+    #for (@@fields) { $fields{$1} = $2 if /(\w)=(.*)/ };
+
+d195 1
+a195 1
+    #  list, grab the user's prefs, and use them instead of the supplied prefs.
+d199 1
+a199 16
+        # try to find entry for this user
+        $old_ipaddr = undef;
+        $prefs = undef;
+        for (keys %Prefs) {
+            $old_ipaddr = $_, $prefs = $Prefs{$_}, last
+                if ($Prefs{$_} =~ /\bu=$newentry{'u'}\b/ );
+        }
+        return undef unless defined $prefs;
+        #
+        #  Got the user's prefs
+        #
+        $Prefs{$ipaddr} = $prefs;
+        return sprintf($Const{RemapOK}, $newentry{'u'},
+                       $old_ipaddr, $ipaddr);
+    } else {
+        $NumRegistrationsThisSession++;
+d202 3
+d221 22
+d288 2
+a289 1
+                $Prefs{$1} = $2 if /([^&]+)&(.*)/ && !exists $Prefs{$1};
+@
+
+
+1.16.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d9 1
+a9 9
+#
+#  Private globals for this file
+#
+%Prefs = ();
+$Dirty = 0;
+$NumRegistrations = 0;                      # number of registrations since
+                                            # last checkpoint
+$NumRegistrationsThisSession = 0;           # num new this session
+%PrefsCodes = ();                           # default profile for new users
+d24 8
+a31 2
+    <HTML><TITLE>Registration OK</TITLE><BODY>
+    Prefs change for %s succeeded...click "Back" to resume browsing
+d37 1
+a37 1
+    The IP address for '%s' has been changed from %s to %s, effective
+d46 9
+d65 1
+a65 1
+    &main::log("Warning: couldn't open user db $Const{Userfile}: $!");
+d94 1
+a94 1
+    return undef unless $_ = $prefs::Prefs{$id};
+d96 1
+a96 1
+    my @@prefs = split(/&/,$_);
+d114 2
+a115 2
+    if (defined $prefs::Prefs{$from}) {
+        $prefs::Prefs{$to} = $prefs::Prefs{$from};
+a122 10
+sub split_url {
+    my $url = shift;
+    my @@fields, %fields;
+
+    @@fields = split(/&/, $url);
+    for (@@fields) { $fields{$1} = $2 if /(\w)=(.*)/ };
+
+    return( %fields );
+}
+
+d127 4
+a130 5
+#     URL encoding the registration info (from form submission); if null, a
+#       default registration profile is used instead.  The initial
+#       URL path has been stripped off, leaving a set of "(\w)=(.+)" fields
+#       separated by "&".
+#     User's IP address as printable string.
+d133 5
+a137 5
+#     Replace the entry corresponding to the given IP address
+#     in the prefs array if it already exists, and indicate the array is dirty.
+#     Also create an entry for the user in the user database, making sure it
+#     includes info about his IP address.  The user database is intended to be
+#     human readable.  Checkpoint prefs array if necessary.
+d139 2
+a140 2
+#  Returns: a text/html string encoding a response to the registration
+#     request.  Any errors are indicated in the string.
+d143 2
+a144 2
+#    file entry.  It converts the info embedded in the URL (form submission) into
+#    an appropriate entry.
+d148 10
+d166 1
+a166 1
+    &main::debug('register', "New prefs for $ipaddr: $url");
+d170 3
+d198 1
+a198 1
+    #  list, grab the user's prefs, and use them instead of the supplied prefs
+d202 16
+a217 1
+        return &remap($newentry{'u'}, $ipaddr);
+a219 3
+    # tally a new registration
+    $NumRegistrationsThisSession++;
+
+a235 22
+# Remap a user to a new location, i.e. indicate that a new IP address should be
+# associated with the user.
+sub remap {
+    my ($user,$newaddr) = @@_;
+    # try to find entry for this user
+    my $old_ipaddr = undef;
+    my $prefs = undef;
+    for (keys %Prefs) {
+        $old_ipaddr = $_, $prefs = $Prefs{$_}, last
+            if ($Prefs{$_} =~ /\bu=$user\b/ );
+    }
+    unless (defined $prefs) {
+        &main::log("*** register: remap failed for $ipaddr ($url)");
+        return undef;
+    }
+    #
+    #  Got the user's prefs: set them to the new IP addr
+    #
+    $Prefs{$newaddr} = $prefs;
+    return sprintf($Const{RemapOK}, $user, $old_ipaddr, $ipaddr);
+}
+    
+d242 1
+a242 1
+        push(@@newentry, join('', $_, '=', $newentry{$_}));
+d281 1
+a281 2
+                $prefs::Prefs{$1} = $2 if /([^&]+)&(.*)/
+                    && !exists $prefs::Prefs{$1};
+@
+
+
+1.15
+log
+@grayscale now works for gifs and jpegs.  handoff behavior is
+considerably less boneheaded (accounted for in prefs dialogs).
+NetCondom now works.
+@
+text
+@d148 10
+d162 1
+a162 1
+    local(%fields, @@fields);
+d168 4
+a171 2
+    @@fields = split(/&/, $url);
+    for (@@fields) { $fields{$1} = $2 if /(\w)=(.*)/ };
+@
+
+
+1.14
+log
+@Demo code, munged to allow PS to work.  still need to generalize
+"distillation by MIME type" mechanism
+@
+text
+@d156 2
+@
+
+
+1.13
+log
+@various fixes: handoff hack is working, and pstotext converter.  need to
+generalize mechanism for launching distillers and pythia.cf syntax for
+specifying how to call them.
+@
+text
+@d52 1
+d59 1
+d63 1
+a155 10
+    #
+    #  If number of new registrations since last checkpoint exceeds threshold,
+    #  checkpoint to disk now.
+    #
+
+    if ($NumRegistrations++ >= $Const{CheckpointInterval}) {
+        $NumRegistrations = 0;          # reset counter
+        &main::checkpoint || &main::log("Warning: checkpoint failed");
+    }
+
+a187 1
+        # BUG: still broken
+d202 2
+d209 10
+d224 1
+a224 1
+    my $ipad = shift;
+d239 1
+a239 1
+    return (0+%Prefs, $NumRegistrations);
+d258 18
+d292 1
+@
+
+
+1.12
+log
+@random bug fixes
+@
+text
+@a51 1
+$NumRegistrationsThisSession = 0;           # since startup
+d73 2
+d100 20
+d158 1
+a158 1
+    if ($NumRegistrations >= $Const{CheckpointInterval}) {
+a161 2
+    $NumRegistrations++;
+    $NumRegistrationsThisSession++;
+d214 9
+a222 1
+    @@newentry = ();
+d227 1
+a227 3
+    return sprintf($Const{RegisterOK}, $ipaddr);
+}    
+
+d235 1
+a235 1
+    return (0+%Prefs, $NumRegistrationsThisSession);
+@
+
+
+1.11
+log
+@stupid bug
+@
+text
+@d52 1
+a73 2
+#     This function is intimately familiar with the encoding of the
+#       prefs file.
+d137 1
+a137 1
+    if ($NumRegistrations++ >= $Const{CheckpointInterval}) {
+d141 2
+d210 1
+a210 1
+    return (0+%Prefs, $NumRegistrations);
+@
+
+
+1.10
+log
+@foo
+@
+text
+@d58 1
+a58 1
+    while ($_ = <USERS>) {
+@
+
+
+1.9
+log
+@foo
+@
+text
+@d87 2
+a88 1
+
+d91 5
+a95 7
+    $_ = $Prefs{$id};
+
+    if ($_) {
+        @@prefs = split(/&/,$_);
+        for (@@prefs) {
+            $result{$1} = $2 if /(\w)=(.+)/;
+        }
+@
+
+
+1.8
+log
+@Remapping your prefs from different IP addrs now works. spurious
+pythia.prefs removed once and for all.  tcp_sock.pl and
+unregistered.html are gone (obsolete).  prefs are now read from
+pythia.cf instead of being hardwired in prefs.pl.
+@
+text
+@a18 1
+$Const{Preffile} = "./pythia.prefs";        # prefs checkpoint file
+d57 1
+a57 1
+if (open(USERS, $Const{Userfile})) {
+d59 1
+a59 1
+        $Users{$1} = $2 if /([^&]+)&(.*)/;
+d216 1
+a216 1
+#  Returns: 1 if both files checkpointed successfully
+d218 2
+a219 3
+#  Side effects: Prefs array is streamed to $Const{Preffile}, which is first
+#  backed up in $Const{Preffile}.bak. Same for users array into
+#  $Const{Userfile}.  CheckpointTime is set to the time
+d239 1
+a239 1
+        while (($key,$val) = each %Users) {
+@
+
+
+1.7
+log
+@Registration, etc works well enough to release this version...
+@
+text
+@a8 8
+#
+#  Preferences information goes here.  Following is the list of default values
+#  for all prefs.  This is used when (a) an unregistered user accesses an
+#  allowed page, (b) a registered user is missing a prefs field because that
+#  field was added after the user became registered.  There is no other place
+#  in the code where specific knowledge of the prefs entries is required.
+#
+
+a10 9
+$PrefsCodes{'p'} = 'new';                   # new user, not remapping
+$PrefsCodes{'u'} = '';                      # username
+$PrefsCodes{'t'} = '1';                     # distill size threshold Kbytes
+$PrefsCodes{'s'} = '100';                   # thumb size pixels
+$PrefsCodes{'c'} = '4';                     # thumb colors
+$PrefsCodes{'r'} = 'p';                     # rerender Image/Page/Reanchor
+$PrefsCodes{'b'} = 'on';                    # omit background on/off
+$PrefsCodes{'l'} = 'on';                    # provide Pythia link on/off
+
+d12 2
+a13 1
+#  End of prefs codes
+d15 3
+d38 1
+a38 1
+    Greetings, %s.  Your IP address has been changed from %s to %s, effective
+d55 1
+a55 1
+# Initialization: read prefs file and users file
+a57 8
+if (open(PREFS, $Const{Preffile})) {
+    while ($_ = <PREFS>) {
+        $Prefs{$1} = $2 if /(\S+)\s+(.*)/;
+    }
+} else {
+    &main::log("Warning: couldn't open prefs file: $!");
+}
+
+d88 1
+a88 1
+    
+d91 3
+a93 2
+    if ($id !~ /default/) {
+        $_ = $Prefs{$id} || return undef;
+d95 3
+a97 3
+    }
+    for (@@prefs) {
+        $result{$1} = $2 if /(\w)=(.+)/;
+d183 1
+a183 1
+                if m/\bu=$newentry{'u'}\b/;
+d190 1
+a190 1
+        return sprintf($Const{RemapOK}, $newentry{userid},
+a229 13
+    &main::log("*** Checkpointing prefs file $Const{Preffile}");
+    rename($Const{Preffile}, "$Const{Preffile}.bak")
+        || &main::log("Warning: renaming $Const{Preffile} to " .
+                     "$Const{Preffile}.bak: $!");
+    if (! (open(PREFS, ">$Const{Preffile}"))) {
+        &main::log("Writing preffile: $!");
+        $res = 0;
+    } else {
+        while (($key,$val) = each %Prefs) {
+            print PREFS "$key $val\n";
+        }
+        close PREFS;
+    }
+@
+
+
+1.6
+log
+@Closer....basic registration works, remapping doesn't seem to
+@
+text
+@d196 1
+a196 1
+    if ($fields{'p'} !~ /new/i) {
+a200 1
+        m/\bu=$newentry{'u'}\b/;              # set up for pattern match
+d203 1
+a203 1
+                if //;
+d220 1
+a220 1
+    $Prefs{$ipaddr} = join('&', newentry);
+d224 9
+@
+
+
+1.5
+log
+@Successfully uses POSIX nonblocking waitpid to reap children.  Need to
+be sure that POSIX nonblocking waitpid is supported on host, even tho
+Perl5 provides POSIX interface.
+@
+text
+@d2 1
+a2 1
+#  User prefs maintenance for http proxy.  Maintains a large associative array
+d6 3
+a8 4
+#  For image distillation, the prefs allowed are:
+#    - bbox size (largest dimension)
+#    - color or monochrome
+#    - bits per pixel
+d10 17
+d28 3
+a30 1
+package prefs;
+d37 1
+a37 1
+$Const{RegisterOK} = <<EndHtml
+a47 1
+    ;
+d49 1
+a49 1
+$Const{RemapOK} = <<End2Html
+a54 1
+    ;
+d76 1
+a76 1
+    &main'log("Warning: couldn't open prefs file: $!");
+d84 1
+a84 1
+    &main'log("Warning: couldn't open user db: $!");
+d101 1
+a101 1
+sub main'get_prefs
+a103 3
+    local(@@prefnames) = ('colordepth', 'color', 'thresh', 'size', 'bpp',
+                         'rerender', 'bg', 'regtime', 'ilace', 'link');
+    local(@@prefs) = ('8', 'c', '1', '64', '2', 'i', 'b', '0', 'n', 'n');
+d106 6
+d116 2
+a117 2
+    for (@@prefnames) {
+        $result{$_} = shift @@prefs;
+d123 10
+a132 1
+#  Register a new user.  URL encodes the registration info.  Replace the entry
+d136 1
+a136 1
+#  human readable.
+d139 1
+a139 4
+#  request.  Errors are indicated in the string.
+#
+#  Side effects: Prefs array is created/modified for the new user, and dirty
+#  flag for the array is incremented.
+a143 1
+#    $main'Const{Sockaddr} is a template for unpacking socket addresses.
+d147 1
+a147 1
+sub main'register
+d149 1
+a149 1
+    local($url, $inetaddr, $ipaddr) = @@_;
+d152 2
+a153 3
+    local($newentry, @@newentry);
+    local($error);
+    local($cbits, $color);
+d162 1
+a162 1
+        &main'checkpoint || &main'log("Warning: checkpoint failed");
+d166 1
+a166 24
+    for (@@fields) { $fields{$1} = $2 if /(.*)=(.*)/ };
+    # Convert +'s to whitespace in userid and OS fields only
+    $fields{userid} =~ s/\++/ /g;
+    $fields{os} =~ s/\++/ /g;
+    
+    #
+    #  if this is a remap request, either confirm that the user actually exists
+    #  and then skip the prefs parsing (just update the user<->IP addr
+    #  mapping); or, if the user doesn't exist in our db, complain (HTTP
+    #  error).
+    #
+
+    if ($fields{remap} !~ /new/i) {
+        # try to update entry in Users array
+        if ( $Users{$fields{userid}} =~  s/^([0-9.]+)&/$ipaddr/) {
+            # copy prefs from this user's last known IP addr
+            $old_ipaddr = $1;
+            $Prefs{$ipaddr} = $Prefs{$old_ipaddr};
+            return sprintf($Const{RemapOK}, $fields{userid},
+                           $old_ipaddr, $ipaddr);
+        } else {
+            return $main'Const{Unregistered};
+        }
+    }
+d168 1
+a168 1
+    # Make sure all required fields are filled in & valid.
+d170 1
+a170 2
+    # Incoming URL looks like this:
+    # ?userid=&email=&os=Windows+%28all+flavors%29&baud=14400&color=256+or+More+Colors&thresh=1&size=64&bpp=2&rerender=page&nobg=on
+d172 1
+a172 26
+    # format of prefs entry in perl regexp format:
+    #  (\d)&(c|g)&(\d+)&(\d+)&(\d+)&(i|p|r)&(b|n)&(\d+)
+    # screen depth, color/gray, distill thresh, bbox size, distill #colors,
+    # rerender image/page/reanchor, use obnoxious background b/n, timestamp of
+    # registration (as reported by time)
+    # Color depth and color/gray of main display
+    $_ = $fields{color};
+
+    $cbits = ( /256/ && 8 ) || ( /16/ && 4 ) || 2;
+    $color = ( /color/i ? 'c': 'g');
+    push(@@newentry, $cbits, $color);
+    
+    # Distillation threshold
+    $fields{thresh} = 0 if ($fields{thresh}<0) ;
+    push(@@newentry, $fields{thresh});
+
+    # Distillation thumbnail size
+    $fields{size} = 32 if ($fields{size} < 32);
+    push(@@newentry, $fields{size});
+
+    # Distillation BPP
+    $fields{bpp} = 256 if ($fields{bpp} =~ /all/i);
+    $fields{bpp} = 1 if ($fields{bpp} < 1);
+    push(@@newentry, $fields{bpp});
+    
+    # Rerender image only/page+image/reanchored page
+d174 3
+a176 2
+    $fields{rerender} = 'i' unless ($fields{rerender} =~ /^[ipr]/);
+    push(@@newentry, substr($fields{rerender},0,1));
+d178 1
+a178 2
+    # Render obnoxious background b/n
+    push(@@newentry, ($fields{nobg} =~ /^on/i ? 'n':'b'));
+d180 1
+a180 2
+    # Time at which registration occurred
+    push(@@newentry, time);
+d182 2
+a183 5
+    # Interlace distilled image GIF's, i/n
+    push(@@newentry, ($fields{ilace} =~ /^on/i ? 'i':'n'));
+    
+    # Provide link to Pythia registration page on every page visited, y/n
+    push(@@newentry, ($fields{link} =~ /^on/i ? 'y':'n'));
+a184 6
+    # Create the new entry
+
+    $Prefs{$ipaddr} = join('&', @@newentry);
+
+    # Add new entry of user info
+
+a190 6
+
+    ($name,$x,$x,$x,$x) = gethostbyaddr($inetaddr, &main'AF_INET);
+
+    $fields{os} =~ s/(\S+).*/\1/;           # first word of OS
+    $fields{baud} =~ s/(\S+).*/\1/;         # same for baud
+
+d192 2
+a193 2
+    #  Enter user name into names database.  If this user was previously
+    #  associated with a different IP address, that is changed here.
+a194 2
+    $Users{$fields{userid}} =
+        "$ipaddr&$name&$fields{email}&$fields{os}&$fields{baud}";
+d196 18
+d215 7
+d237 1
+a237 1
+sub main'checkpoint
+d242 1
+a242 1
+    &main'log("*** Checkpointing prefs file $Const{Preffile}");
+d244 1
+a244 1
+        || &main'log("Warning: renaming $Const{Preffile} to " .
+d247 1
+a247 1
+        &main'log("Writing preffile: $!");
+d258 1
+a258 1
+    &main'log("*** Checkpointing user db $Const{Userfile}");
+d260 1
+a260 1
+        || &main'log("Warning: renaming $Const{Userfile} to " .
+d263 1
+a263 1
+        &main'log("Writing users file: $!");
+@
+
+
+1.4
+log
+@Registration works.  Misfeature: when updating prefs, you should be able
+to start from your old prefs and make incremental changes, instead of
+starting from a default prefs screen.  Posting still doesn't work.
+@
+text
+@d40 1
+a40 1
+$Const{CheckpointInterval} = 5;        # checkpoint interval: after every N
+d65 1
+a65 1
+        $Users{$1} = $2 if /([^&]+)(.*)/;
+d90 1
+a90 1
+    local(@@prefs) = ('8', 'c', '1', '64', '2', 'i', 'b', '0', 'n', 'y');
+d125 1
+a125 3
+    local($url, $addr) = @@_;
+    local($x,$x,$inetaddr) = unpack($main'Const{Sockaddr}, $addr);
+    local($ipaddr) = join('.', unpack('C4', $inetaddr));
+@
+
+
+1.3
+log
+@registration mostly works.  email and name info is currently dropped on
+the floor, but the mechanism for recording prefs info is sound.  prefs
+info is not yet used in distillation decisions though.
+@
+text
+@d17 2
+d21 7
+a27 1
+    Registration succeeded for IP address %s.
+d32 11
+d48 2
+a49 1
+$CheckpointTime = time;
+d52 1
+a52 1
+# Initialization: read prefs file
+d63 8
+d88 9
+a96 6
+    local(@@prefnames) = ('color', 'thresh', 'size', 'bpp', 'rerender');
+    local(@@prefs,@@result);
+
+    $_ = $Prefs{$id} || return undef;
+
+    @@prefs = split(/&/,$_);
+d98 1
+a98 2
+        push(@@result,$_);
+        push(@@result, shift(@@prefs));
+d100 1
+a100 31
+    return @@prefs;
+}
+
+
+######################################################################
+#  Checkpoint prefs array to disk - very naive for now
+#
+#  Returns: 1
+#
+#  Side effects: Prefs array is streamed to $Const{Preffile}, which is first
+#  backed up in $Const{Preffile}.bak.  CheckpointTime is set to the time
+#  of this checkpoint.
+######################################################################
+
+sub main'checkpoint
+{
+    &main'log("*** Checkpointing prefs file $Const{Preffile}");
+    rename($Const{Preffile}, "$Const{Preffile}.bak")
+        || &main'log("Warning: renaming $Const{Preffile} to " .
+                     "$Const{Preffile}.bak: $!");
+    local($key,$val);
+    unless (open(PREFS, ">$Const{Preffile}")) {
+        &main'log("Writing preffile: $!");
+        return 0;
+    }
+    while (($key,$val) = each %Prefs) {
+        print PREFS "$key $val\n";
+    }
+    close PREFS;
+    $CheckpointTime = time;
+    return 1;
+d106 3
+d120 1
+d128 1
+d134 10
+d146 3
+d150 20
+d176 1
+a176 1
+    #  (\d)&(c|g)&(\d+)&(\d+)&(\d+)&(i|p|r)&(b|n)
+d178 2
+a179 1
+    # rerender image/page/reanchor, use obnoxious background b/n
+d192 1
+a192 1
+    $fields{size} = 64 if ($fields{size} < 64);
+d208 9
+d221 22
+d245 51
+@
+
+
+1.2
+log
+@registration broken because it needs to occur in parent, not child,
+process. d'oh!
+@
+text
+@d23 1
+d45 10
+a54 4
+#   none found.  Format of a prefs string is:  username:c|mxxx yyy
+#   c or m indicates color or monochrome; xxx is pixel dimension of larger
+#   bbox edge;  yyy is max # of colors.  username is the arbitrary
+#   string by which user identified herself when registered.
+d57 1
+a57 1
+sub main'getcmdprefs
+a58 1
+    local($size,$bpp,$color);
+d60 2
+a61 2
+    local($_) = $Prefs{$id} || return undef;
+    s/[^:]+://;                             # remove username/identifier
+d63 1
+a63 1
+    # if prefs are malformed, return some default values and print a warning.
+d65 4
+a68 5
+    if ( /^([cm])\s+(\d+)\s+(\d+)/i ) {
+        ($col,$size,$bpp) = ($1,$2,$3);
+    } else {
+        &main'log("Malformed prefs: `$_'");
+        ($col,$size,$bpp) = ('m','64','1');
+d70 1
+a70 6
+    return
+        sprintf("giftopnm|pnmscale -xysize %d %d|%s ppmquant %d| ".
+                "ppmtogif -sort",
+                $size, $size, # bbox size
+                $col =~ /c/i ? "": "ppmtopgm|", # color/gray
+                $bpp);             # colormap depth
+d116 1
+d121 3
+a123 1
+    local($url) = shift;
+d127 1
+d139 1
+a139 1
+    # screen depth, color/gray, distill thresh, bbox size, distill bpp,
+d144 2
+a145 6
+    ($cbits, $color) .=
+        /256.*color/i ? (8,c) :
+            /256.*gray/i ? (8,g) :
+                /16.*color/i ? (4,c) :
+                    /16.*gray/i ? (4,g) :
+                        (2,g);
+d157 1
+d159 1
+a159 1
+    push(@@newentry, 1 << $fields{bpp});
+d164 1
+a164 1
+    push(@@newentry, $fields{rerender});
+d167 1
+a167 1
+    push(@@nobg, ($fields{nobg} =~ /^on/i ? 'n':'b'));
+d171 1
+a171 1
+    $Prefs{$main'IPaddr} = join('&', @@newentry);
+d173 1
+a173 1
+    return sprintf($Const{RegisterOK}, $main'IPaddr);
+@
+
+
+1.1
+log
+@added http error reporting and robustness
+@
+text
+@d14 9
+d27 1
+a27 1
+$Preffile = "./uprefs";
+d34 1
+a34 1
+if (open(PREFS, $Preffile)) {
+d36 1
+a36 1
+        $Prefs{$1} = "$2:$3" if /([0-9.]+)\s+([^:]+):(.*)$/;
+d39 1
+a39 2
+#    &main'log("Warning: couldn't open prefs file: $!");
+    print STDERR  ("Warning: couldn't open prefs file: $!");
+d76 6
+d86 4
+a89 2
+    rename($Preffile, "$Preffile.bak")
+        || &main'log("Warning: renaming $Preffile to $Preffile.bak: $!");
+d91 1
+a91 1
+    unless (open(PREFS, ">$Preffile")) {
+d102 73
+@

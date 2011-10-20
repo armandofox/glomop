@@ -1,0 +1,181 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.06;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	ScrollTextField.c
+#
+#	Mostly initialization code.
+#	 - ScrollTextField is simply a box with a text field and a couple of
+#	   scroll arrows inside it - it implements a scrolling text field.
+#	 - The scroll arrows have their action overridden in order to handle
+#      the dynamic resizing of the text field when scrolling past the end
+#      occurs.
+#
+#	Version:	1						August 6th, 1995
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "MCindexicals.h"
+
+/*** Note no main defined - is defined in MailClient.c  ***/
+
+#undef CURRENTCLASS
+#define CURRENTCLASS STFScrollArrow
+
+Private void Resize_BodyField(ObjectID arrowID)
+{
+   /**** This method figures out if the BodyField within the box is shorter (including scrolling)
+         than the box itself;  if so, it grows it.  If not, it attempts to shrink it as much
+		 as possible with "AdjustSize".  ****/
+
+   ObjectID superBox, siblingTF;
+   Dot      SBsOff, TFrOrigin;
+   Unsigned SBcontHeight, TFcontHeight, SBbot, TFbot, diffHeight;
+   
+   /** Find the STF and text field in which we live.  We know that the STF is our
+       SuperView, and the text field an attribute of the STF, so we're ok ***/
+   superBox = Superview(arrowID);
+   siblingTF = Stf_BodyField(superBox);
+   
+   /** Calculate the bottom of the siblingTF.  **/
+   SBcontHeight = ContentHeight(superBox) / 2;
+   ScrollOffset(superBox, &SBsOff);
+   TFcontHeight = ContentHeight(siblingTF) / 2;
+   RelativeOrigin(siblingTF, &TFrOrigin);
+
+   TFbot = TFrOrigin.v + TFcontHeight;
+   SBbot = SBsOff.v + SBcontHeight;
+   
+   if (TFbot < SBbot)
+   {
+      diffHeight = SBbot - TFbot;
+	  ExtendBottom(siblingTF, diffHeight);
+   }
+   else
+   {
+      diffHeight = TFbot - SBbot;
+	  AdjustSize(siblingTF);
+   }
+   DirtyContent(superBox);
+}
+
+Method void
+STFScrollArrow_Action(ObjectID self)
+{
+   InheritedAction(self);         /** Let the scroll arrow scroll **/
+   Resize_BodyField(self);        /** and resize the BodyField as appropriate **/
+}
+
+#undef CURRENTCLASS
+#define CURRENTCLASS ScrollTextField;
+
+Method void
+ScrollTextField_showSTFlabel(ObjectID self)
+{
+   // Show the label - good for Mail Header fields
+   SetLabelLoc(self, labelLocLeftMiddle);
+   SetShowLabel(self, true);
+}
+
+Method void
+ScrollTextField_hideSTFlabel(ObjectID self)
+{
+   // Hide the label - just looks like a text field
+   SetShowLabel(self, false);
+}
+
+Method void
+ScrollTextField_setSTFlabel(ObjectID self, StringPtr theLit)
+{
+   // Set the label as a Pascal-style length prefixed string
+   SetName(self, theLit);
+}
+
+Method void
+ScrollTextField_resizeSTF(ObjectID self, Dot *newSize)
+{
+   // keeps relativeOrigin the same, but resizes self to
+   // newSize, and moves arrows and stretches BodyField as appropriate
+   
+   Dot      oldSize, newRO, oldRO;
+   Dot		STFscrollOffset;
+   Unsigned newH, diffH, diffV;
+   ObjectID theBF;
+   
+   oldSize.h = ContentWidth(self);
+   oldSize.v = ContentHeight(self);
+   SetContentWidth(self, newSize->h);
+   SetContentHeight(self, newSize->v);
+   ScrollOffset(self, &STFscrollOffset);
+   
+   /* Shift arrows to correct position */
+   newRO.h = (newSize->h - 13*256.0) / 2.0;
+   newRO.v = (13*256.0 - newSize->v) / 2.0 + STFscrollOffset.v;
+   SetRelativeOrigin( Stf_UpArrow(self), &newRO );
+   
+   newRO.v = (newSize->v - 13*256.0) / 2.0 + STFscrollOffset.v;
+   SetRelativeOrigin( Stf_DownArrow(self), &newRO );
+   
+   /* Extend right size of BF by correct amount */
+   theBF = Stf_BodyField(self);
+   diffH = newSize->h - oldSize.h;
+   diffV = newSize->v - oldSize.v;
+   newH = diffH + ContentWidth(theBF);
+   SetContentWidth(theBF, newH);
+   
+   /* Resize BF as appropriate */
+   Resize_BodyField( Stf_UpArrow(self) );
+   
+   /* Now move BF by half of the changes to the STF */
+   RelativeOrigin( theBF, &oldRO );
+   newRO.h = oldRO.h;
+   newRO.v = oldRO.v - (diffV/2.0);
+   SetRelativeOrigin(theBF, &newRO);
+   
+   DirtyContent(self);
+}
+
+#undef CURRENTCLASS  /* this goes at the end of the file */
+@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

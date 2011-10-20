@@ -1,0 +1,203 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "packet.h"
+#include "pcap.h"
+
+/* Resolve host names using DNS */
+unsigned long resolve_name(char *name)
+{
+    struct hostent *hp;
+
+    if(isdigit(*name))
+	return inet_addr(name);
+
+    if ((hp = gethostbyname(name)) == NULL) {
+	fprintf(stderr, "%s: no such host", name);
+	return (0);
+    }
+
+    return *(long*)hp->h_addr;
+}
+
+/* Compute IP/ICMP/TCP/UDP checksum */
+unsigned short in_cksum(unsigned short *ptr, int nbytes)
+{
+    register long sum;      /* assumes long == 32 bits */
+    u_short oddbyte;
+    register u_short anwser;        /* assumes u_short == 16 bits */
+
+    /* 
+     * Our algorithm is simple, using a 32-bit accumulator (sum),
+     * we add sequential 16-bit words to it, and at the end, fold back
+     * all the carry bits from the top 16 bits into the lower 16 bits.
+     */
+
+    sum = 0;
+    while (nbytes > 1) {
+	sum += *ptr++;
+	nbytes -= 2;
+    }
+
+    /* mop up an odd byte, if necessary */
+    if (nbytes == 1) {
+	oddbyte = 0;    /* make sure top half is zero */
+	*((u_char *) & oddbyte) = *(u_char *) ptr;      /* one
+							   byte
+							   only */
+	sum += oddbyte;
+    }
+    /* 
+     * Add back carry outs from top 16 bits to low 16 bits.
+     */
+
+    sum = (sum >> 16) + (sum & 0xffff);     /* add high-16 to low-16 */
+    sum += (sum >> 16);     /* add carry */
+    anwser = ~sum;          /* ones-complement, then truncate to 16
+			       bits */
+    return (anwser);
+}
+
+int send_udp(int fd, u_char *data, int datalen,
+	     int source_port, int dest_port, 
+	     unsigned long source_addr, unsigned long dest_addr)
+{
+    u_char buffer[1600];
+    ip_packet_t *packet;
+    int datagram_size = sizeof(struct ip)+sizeof(struct udphdr)+datalen;
+
+    memset(buffer, 0, sizeof(buffer));
+    packet = (ip_packet_t *) buffer;
+
+    /* UDP Datagram Construction */
+    packet->p.udp.head.uh_sport = source_port;
+    packet->p.udp.head.uh_dport = dest_port;
+    packet->p.udp.head.uh_ulen = htons(sizeof(struct udphdr)+datalen);
+    packet->p.udp.head.uh_sum = htons(0);
+    memcpy(packet->p.udp.data, data, datalen);
+
+    /* IP Datagram Construction */
+    packet->iphead.ip_hl = sizeof(struct ip)/4; /* no options */
+    packet->iphead.ip_v = IPVERSION;
+    packet->iphead.ip_tos = 0;
+    /* htons ? */
+    packet->iphead.ip_len = htons(datagram_size);
+    packet->iphead.ip_id = htons(0);
+    packet->iphead.ip_off = 0;
+    packet->iphead.ip_ttl = 100;
+    packet->iphead.ip_p = IPPROTO_UDP; /* 17 for udp */
+    packet->iphead.ip_src.s_addr = source_addr;
+    packet->iphead.ip_dst.s_addr = dest_addr;
+    packet->iphead.ip_sum = in_cksum((unsigned short *) &packet->iphead, 
+				     sizeof(struct ip));
+
+    if (pcap_write(fd, "", buffer, datagram_size) < 0) {
+	fprintf(stderr, "error writing to socket\n");
+	return(1);
+    }
+
+    return (0);
+}
+
+
+int send_tcp(int fd, u_char *data, int datalen,
+	     int source_port, int dest_port, 
+	     unsigned long source_addr, unsigned long dest_addr,
+	     tcp_seq seq_num, tcp_seq ack_num,
+	     u_char flags)
+{
+    u_char buffer[1600];
+    u_char pseudo_buffer[1600];
+    ip_packet_t *packet;
+    pseudo_header *tcp_pseudo_header;
+    int datagram_size = sizeof(struct ip)+sizeof(struct tcphdr)+datalen;
+
+    memset(buffer, 0, sizeof(buffer));
+    packet = (ip_packet_t *) buffer;
+    memset(pseudo_buffer, 0, sizeof(pseudo_buffer));
+    tcp_pseudo_header = (pseudo_header *) pseudo_buffer;
+
+    /* TCP Datagram Construction */
+    packet->p.tcp.head.th_sport = source_port;
+    packet->p.tcp.head.th_dport = dest_port;
+    packet->p.tcp.head.th_seq = seq_num;
+    packet->p.tcp.head.th_ack = ack_num;
+    packet->p.tcp.head.th_off = sizeof(struct tcphdr)/4;
+    packet->p.tcp.head.th_flags = flags;
+    packet->p.tcp.head.th_win = htons(0x5000);
+    memcpy(packet->p.tcp.data, data, datalen);
+
+    /* TCP pseudo header construction and checksum calculation */
+    tcp_pseudo_header->source = source_addr;
+    tcp_pseudo_header->destination = dest_addr;
+    tcp_pseudo_header->zero_byte = 0;
+    tcp_pseudo_header->protocol = IPPROTO_TCP; /* 6 for tcp */
+    tcp_pseudo_header->length = htons(sizeof(struct tcphdr)+datalen);
+    memcpy(pseudo_buffer+sizeof(pseudo_header), 
+	   &(packet->p.tcp.head),
+	   sizeof(struct tcphdr)+datalen);
+    packet->p.tcp.head.th_sum = in_cksum((unsigned short *) pseudo_buffer,
+	 sizeof(pseudo_header)+sizeof(struct tcphdr)+datalen);
+
+    /* IP Datagram Construction */
+    packet->iphead.ip_hl = sizeof(struct ip)/4; /* no options */
+    packet->iphead.ip_v = IPVERSION;
+    packet->iphead.ip_tos = 0;
+    /* htons ? */
+    packet->iphead.ip_len = htons(datagram_size);
+    packet->iphead.ip_id = htons(0);
+    packet->iphead.ip_off = 0;
+    packet->iphead.ip_ttl = 100;
+    packet->iphead.ip_p = IPPROTO_TCP; /* 6 for tcp */
+    packet->iphead.ip_src.s_addr = tcp_pseudo_header->source;
+    packet->iphead.ip_dst.s_addr = tcp_pseudo_header->destination;
+    packet->iphead.ip_sum = in_cksum((unsigned short *) &packet->iphead, 
+				     sizeof(struct ip));
+
+    if (pcap_write(fd, "", buffer, datagram_size) < 0) {
+	fprintf(stderr, "error writing to socket\n");
+	return(1);
+    }
+
+    return (0);
+}
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

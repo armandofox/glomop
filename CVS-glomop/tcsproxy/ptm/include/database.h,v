@@ -1,0 +1,408 @@
+head	1.8;
+access;
+symbols
+	Yatin-final:1.8
+	Yatin:1.8.0.2
+	pre-yatin-merge:1.8
+	transend-beta2:1.8
+	fox-dev:1.8
+	ptm-ng:1.7
+	transend-beta-latest:1.7
+	Aggregators:1.7
+	NoAggregators:1.7
+	iang:1.7.0.4
+	transend-beta:1.7.0.2
+	SOSP:1.7
+	stable_ptm:1.6
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	97.06.14.05.05.39;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.17.03.01.01;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.05.20.20.48;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.04.09.55.33;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.05.01.27.06;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.42;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.26;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@#ifndef __DATABASE_H__
+#define __DATABASE_H__
+
+#include "defines.h"
+#include "linkedlist.h"
+#include <stdio.h>
+
+
+#define DefaultNumberOfBuckets 13
+
+
+class Database;
+struct DatabaseRecord {
+  virtual ~DatabaseRecord() { };
+};
+
+struct IndexKey {
+  virtual gm_Bool   Equal(IndexKey *key)=0;
+  virtual UINT32 Hash()=0;
+};
+
+
+typedef gm_Bool (*ForEachFunction)(Database*, DatabaseRecord*, void*);
+
+
+class Index {
+private:
+  typedef List<DatabaseRecord> Bucket;
+
+  Bucket *buckets;
+  int     numberOfBuckets;
+  gm_Bool    duplicatesAllowed;
+
+  virtual IndexKey *getIndexKey(DatabaseRecord *record)=0;
+  inline  int Normalize(int hashValue);
+
+public:
+  inline Index(gm_Bool dupsAllowed=gm_False, 
+	       int _numberOfBuckets=DefaultNumberOfBuckets);
+  virtual ~Index();
+
+  inline gm_Bool Add(DatabaseRecord *record);
+  void Remove(DatabaseRecord *record);
+  void Remove(IndexKey       *key);
+
+  DatabaseRecord* FindOne(IndexKey *key);
+  void            Find   (IndexKey *key, List<DatabaseRecord> *list);
+  inline          List<DatabaseRecord> *getBucket(IndexKey *key); /* XXX */
+};
+
+
+class Database {
+public:
+  Database() { };
+  virtual ~Database();
+
+  gm_Bool AddIndex(Index *index) { return indices.InsertAtHead(index); }
+  void RemoveIndex(Index *index) { indices.Remove(index); }
+
+  gm_Bool Add(DatabaseRecord *record);
+  void Remove(DatabaseRecord *record);
+  void DeleteAllRecords();
+
+  gm_Bool ForEach(ForEachFunction function, void *functionData);
+  List<DatabaseRecord> *getAllRecords();
+
+private:
+  List<Index>          indices;
+  List<DatabaseRecord> records;
+};
+
+
+
+inline
+Index::Index(gm_Bool dupsAllowed, int _numberOfBuckets)
+  : buckets(NULL), numberOfBuckets(_numberOfBuckets),
+    duplicatesAllowed(dupsAllowed)
+{
+  buckets = new Bucket[numberOfBuckets];
+  if (buckets==NULL) numberOfBuckets = 0;
+}
+
+
+inline int
+Index::Normalize(int hashValue)
+{
+  return ((hashValue < 0) ? -hashValue:hashValue) % numberOfBuckets;
+}
+
+
+inline gm_Bool
+Index::Add(DatabaseRecord *record)
+{
+  int hashValue = Normalize(getIndexKey(record)->Hash()); 
+  if (duplicatesAllowed==gm_False) {
+    if (FindOne(getIndexKey(record))!=NULL) 
+      Return(gm_False, errDuplicateIndexEntry);
+  }
+  return buckets[hashValue].InsertAtHead(record);
+}
+
+
+inline Index::Bucket *
+Index::getBucket(IndexKey *key)
+{
+  int hashValue = Normalize(key->Hash());
+  return &buckets[hashValue];
+}
+
+
+inline List<DatabaseRecord> *
+Database::getAllRecords()
+{ 
+  return &records; 
+}
+
+
+inline UINT32
+HashString(char *string)
+{
+  UINT32 hash = 0;
+  char   *ptr;
+  for (ptr=string; *ptr!=0; ptr++) hash += (UINT32) (*ptr);
+  return hash;
+}
+
+
+#endif // __DATABASE_H__
+@
+
+
+1.7
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d42 1
+a42 1
+  inline gm_Bool Add   (DatabaseRecord *record);
+@
+
+
+1.6
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d28 1
+a28 1
+  typedef LinkedList<DatabaseRecord> Bucket;
+d34 1
+a34 1
+  virtual IndexKey *GetIndexKey(DatabaseRecord *record)=0;
+d47 2
+a48 2
+  void            Find   (IndexKey *key, LinkedList<DatabaseRecord> *list);
+  LinkedList<DatabaseRecord> *getBucket(IndexKey *key);
+d57 1
+a57 1
+  gm_Bool AddIndex   (Index *index) { return indices.InsertAtHead(index); }
+d60 1
+a60 1
+  gm_Bool Add   (DatabaseRecord *record);
+d65 1
+a65 1
+  LinkedList<DatabaseRecord> *getAllRecords() { return &records; };
+d68 2
+a69 2
+  LinkedList<Index>          indices;
+  LinkedList<DatabaseRecord> records;
+d94 1
+a94 1
+  int hashValue = Normalize(GetIndexKey(record)->Hash()); 
+d96 1
+a96 1
+    if (FindOne(GetIndexKey(record))!=NULL) 
+d103 1
+a103 1
+inline LinkedList<DatabaseRecord> *
+d108 7
+@
+
+
+1.5
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d26 10
+a36 1
+class Index {
+d38 2
+a39 1
+  Index(gm_Bool dupsAllowed=gm_False, int _numberOfBuckets=DefaultNumberOfBuckets);
+d42 1
+a42 1
+  gm_Bool Add   (DatabaseRecord *record);
+d48 1
+a48 10
+
+private:
+  typedef LinkedList<DatabaseRecord> Bucket;
+
+  Bucket *buckets;
+  int     numberOfBuckets;
+  gm_Bool    duplicatesAllowed;
+
+  virtual IndexKey *GetIndexKey(DatabaseRecord *record)=0;
+  int     Normalize(int hashValue);
+d100 8
+@
+
+
+1.4
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d96 1
+a96 1
+      gm_BoolErrorReturn(errDuplicateIndexEntry);
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d18 1
+a18 1
+  virtual Bool   Equal(IndexKey *key)=0;
+d23 1
+a23 1
+typedef Bool (*ForEachFunction)(Database*, DatabaseRecord*, void*);
+d29 1
+a29 1
+  Index(Bool dupsAllowed=FALSE, int _numberOfBuckets=DefaultNumberOfBuckets);
+d32 1
+a32 1
+  Bool Add   (DatabaseRecord *record);
+d44 1
+a44 1
+  Bool    duplicatesAllowed;
+d56 1
+a56 1
+  Bool AddIndex   (Index *index) { return indices.InsertAtHead(index); }
+d59 1
+a59 1
+  Bool Add   (DatabaseRecord *record);
+d63 1
+a63 1
+  Bool ForEach(ForEachFunction function, void *functionData);
+d74 1
+a74 1
+Index::Index(Bool dupsAllowed, int _numberOfBuckets)
+d90 1
+a90 1
+inline Bool
+d94 1
+a94 1
+  if (duplicatesAllowed==FALSE) {
+d96 1
+a96 1
+      BoolErrorReturn(errDuplicateIndexEntry);
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d12 1
+d23 1
+a23 1
+typedef Bool (*ForEachFunction)(DatabaseRecord*, void*);
+d39 1
+a39 1
+protected:
+d66 1
+a66 1
+protected:
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d18 1
+a18 1
+  virtual uint32 Hash()=0;
+d60 1
+d63 1
+d101 1
+a101 1
+inline uint32
+d104 1
+a104 1
+  uint32 hash = 0;
+d106 1
+a106 1
+  for (ptr=string; *ptr!=0; ptr++) hash += (uint32) (*ptr);
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

@@ -1,0 +1,224 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.24.03.29.51;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added 2 network summaries
+@
+text
+@<html>
+<title>
+Multicast Routing
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Multicast Routing in Datagram Internetworks and Extended LANs
+</h1>
+<strong>
+Steve Deering and David R. Cheriton, Stanford Univ.
+</strong>
+
+<p><b>One-line summary:</b>
+Extensions and refinements to distance-vector and link-state/OSPF
+routing to support 
+efficient multicast tree creation and maintenance in wide area
+internetworks.  Main tradeoff is low delay (for joining or delivery)
+vs. increased cost in bandwidth or router state.  Distance-vector
+routing seems to scale better.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Design of service interface: sender need not know membership of
+       destination group, nor be a member of it.
+       <ul>
+         <li> Compare Cheriton &amp; Skeen V-System group notions
+              vs. ISIS!
+       </ul>
+  <li> Rough classification of multicast groups:
+       <ul>
+         <li> Pervasive: members all over the place.  This type of group
+              motivates efficient shortest-path delivery tree over
+              sending many unicast messages.  For some groups, eg
+              directory servers, packet delivery should be constrained
+              to subset.
+         <li> Sparse: few members per local group.  
+         <li> Local: scope-constrained to this admin. domain or subnet;
+              can probably exploit NI-level broadcast.
+       </ul>
+  <li> Main tradeoff is cost of broadcast bandwidth vs. cost of keeping router
+       state and control programs to do selective multicast.
+  <li> Scope control: Boundary routers can refuse to
+       forward mcast packets outside their domain unless the packets have a
+       minimum remaining TTL, allowing TTL to be used to scope intra-
+       vs. inter-domain mcast.
+  <li> <b>Basic algorithm</b> as used with LAN bridges:
+       <ol>
+         <li> If pkt arrives with mcast source addr, record which branch
+              it arrived on and set its age to zero in mcast address
+              table, which maps mcast addresses to links along which
+              there are members of that mcast group.
+         <li> If pkt arrives with mcast dest addr, forward it along
+              appropriate links.
+         <li> Periodically increment ages of mcast table records, and
+              expire them.
+         <li> Main costs are bandwidth used for periodic membership
+              reporting, which is used to construct the tables, and the
+              space required for tables (1 entry per active mcast group).
+         <li> <b>Optimization</B> to reduce this cost: when issuing a
+              membership report for group G, sender addresses it to G
+              rather than using a broadcast address.  Then other members
+              of G will overhear it and suppress additional membership
+              reports containing duplicate info.
+       </ol>
+  <li> <b>Distance-vector mcast routing:</b> Like basic algorithm, but
+       each router sends distance-vector packet on 
+       each outgoing link indicating distances to nearest
+       neighbors.  But the Internet is a not a tree, so computing a
+       single spanning tree over all routers won't result in most
+       efficient (shortest-path) mcast delivery for all mcast groups.
+  <li> <b>Refinement 1: reverse path flooding (RPF)</b>
+       <ul>
+         <li> Router forwards broadcast packet from S iff it arrives via
+              shortest known path from S.
+         <li> Problem: if multiple routers on a single link, they may
+              all rebroadcast it.
+         <li> Example: routers x and y are on the same LAN, L, but may
+              be reached by different routes from source S.  If they
+              both hear broadcast packet from source S, they both
+              rebroadcast the packet.
+       </ul>
+  <li> <b>Refinement 2: reverse path broadcasting (RPB)</b> to solve
+       above problem. 
+       <ul>
+         <li> Identify a single closest "parent" router for each link relative
+              to source S.  Use address numbers to break ties.
+         <li> In example above, x and y periodically broadcast (locally)
+              their distance to S.  So x and y eventually learn that x
+              (say) is closer to S.  From now on, y will not rebroadcast
+              packets from S.
+         <li> Requires an additional field, <i>children</i>, be added to
+              each routing table entry.  Each bit indicates whether the
+              corresponding outgoing link from this router is a child
+              for mcast routing purposes.
+       </ul>
+  <li> <b>Refinement 3: truncated RPB</b>
+       <ul>
+         <li> Hosts at leaves periodically report their memberships in
+              various mcast groups. If no membership report is heard
+              from some leaf after some timeout, that leaf is pruned.
+         <li> Cost: an additional <i>leaves</i> bitmap per table entry.
+              Each bit in <i>children</i> bitmap indicates whether that
+              link leads  to a
+              topological child (generally long-lived stable property);
+              corresponding bit in <i>leaves</i> bitmap indicates 
+              whether that child has any currently active memberships
+              (short-lived property).
+         <li> Also bandwidth cost of membership reports, but they can be
+              on order of every few minutes.
+       </ul>
+  <li> <b>Refinement 4: reverse path multicasting (RPM) by on-demand
+       pruning</b>
+       <ul>
+         <li> After forwarding an mcast packet, routers may receive
+              non-membership report (NMR) from one or more children.
+         <li> If NMR's from all children are received before some
+              timeout, router reports NMR to its parent, pruning that
+              subtree.  NMR's are positively acked; once the ack is
+              seen, any additional mcast packets received at the
+              NMR-sender will not trigger additional NMR's.
+         <li> NMR reports eventually expire, so pruned paths will rejoin
+              the mcast tree after the expiration time.  
+         <li> Optimization: if new node joins on a particular link that
+              has already been pruned, routers can send an NMR
+              cancellation up the tree. Requires routers to remember which
+              NMR's they've sent and when.
+         <li> Physical topology changes must trigger NMR cancellations.
+         <li> Cost: as TRPB, plus cost of transmitting, storing and
+              processing NMR's.
+       </ul>
+  <li> Link-state mcast routing:
+       <ol>
+         <li> as in OSPF (like the <a
+              href="arpa_routing.html">Arpanet Routing</a> 
+              paper), each router independently computes global
+              shortest-path spanning 
+              tree rooted at itself using Dijkstra's algorithm.
+         <li> Routers should consider mcast membership as part of the
+              link "state".
+         <li> Since there is a potentially a separate such tree from
+              every sender to every group, each router with L outgoing
+              links  maintains a cache
+              of tuples <i>&lt;sender, dest-group, min-hops&gt;</i>,
+              where <i>min-hops</i> is an L-vector of distances to the
+              nearest descendant member of <i>dest-group</i> via that
+              outgoing link (with infinity meaning no group members live
+              along that link).  Upon cache miss, the router computes
+              the vector on demand using Dijkstra's algorithm.  <font
+              size="-1">(Like routers really have spare time to do
+              this.)</font>  Cache is invalidated when topology changes.
+         <li> Costs: hard to estimate due to the computing-on-demand
+              nature and variation in cache behavior, but some
+              observations:
+              most memberships likely to be long-lived;
+              volatile memberships likely to be local in scope or
+              sparsely distributed; non-membership reports ("I am
+              leaving the group") can be "batched" or piggybacked on
+              other updates; membership reports ("I am joining the
+              group") can be rate-limited at expense of greater join
+              latency.
+       </ul>
+  <li> Hierarchical mcast routing: if a host or superdomain router
+       attached to a subdomain sends mcast packet addressed to G into
+       the subdomain, packet is delivered to all hosts in G <i>plus</i>
+       all other superdomain routers attached to the subdomain.
+       <ul>
+         <li> Optimization: "leaf subdomains" -- a single superdomain
+              router can be responsible for forwarding mcasts to rest of
+              network.
+       </ul>
+              
+       
+</ul>
+
+<h2>Relevance</h2>
+
+Extends existing routing algorithms, by successive optimizations, to
+handle multicast routing reasonably efficiently.  Delay vs. cost
+tradeoffs are well illustrated, as is separation of logical (mcast
+group) from physical addressing.
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> No way routers have the resources to do the computations for
+       link-state extensions.
+  <li> Design goal: "Mcast packet should be delivered to each
+       member...with probability and delay very close to that of
+       unicast...this property gives higher-layer protocols a basis to
+       handle packet loss by retransmission".  It's not obvious that
+       this is the right starting goal, but we have already seen this
+       "end-to-end vs. middleware" argument in the Cheriton/Skeen vs. ISIS
+       papers.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

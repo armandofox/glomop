@@ -1,0 +1,103 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/bin/perl -0777
+
+package prexec;
+
+$protport = 512;
+
+sub prexec {
+MAIN:
+foreach $file (@@_)
+{
+    ($lhost,$lport,$hhost,$hport) = $file =~ m{
+	([\w\.-]+?)
+	:
+	(\d+)
+	-
+	([\w\.-]+?)
+	:
+	(\d+)
+	}sox;
+
+    if ($lport != $protport && $hport != $protport)
+    {
+	warn "Not on port $protport!\n";
+	next MAIN;
+    }
+
+    ($cli, $srv, $clihost, $cliport, $srvhost, $srvport) = 
+	($hport == $protport) ? ("\x01", "\x02", $lhost, $lport, $hhost, $hport)
+			: ("\x02", "\x01", $hhost, $hport, $lhost, $lport);
+
+    open(F, $file) || do {warn "Cannot open $file: $!\n"; next MAIN;};
+
+    print "\n$file\n" if $main::v;
+    $sess = <F>;
+    close(F);
+    unlink($file) if $main::rm;
+
+    $flowdir = 1;
+    while ($sess =~ m{
+	(?:
+	    ([\x01\x02])
+	|
+	    \d*						## stderr port
+	    \x03\^\@@        				## NUL
+	    ((?:[^\x01\x02\x03]|\x03.[^\@@]){1,20})       ## local userid
+	    \x03\^\@@        				## NUL
+	    ((?:[^\x01\x02\x03]|\x03.[^\@@]){1,20})       ## password
+	    \x03\^\@@        				## NUL
+	    (?:[^\x01\x02\x03]|\x03.[^\@@])* 		## command
+	    \x03\^\@@        				## NUL
+	    ${srv}          				## Server reply:
+	    \x03\^\@@        				## NUL
+	)
+	}sxg)
+    {
+	if ($1 eq $cli) { $flowdir = 1; }
+	elsif ($1 eq $srv) { $flowdir = 2; }
+	elsif ($flowdir == 1) {
+	    print "REXEC\t$2\@@$srvhost\t$3\n";
+	}
+    }
+}
+}
+
+1;
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

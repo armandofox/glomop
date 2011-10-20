@@ -1,0 +1,1083 @@
+head	1.20;
+access;
+symbols
+	v15b:1.20
+	v10b3:1.19
+	v10b2:1.14
+	v10b1:1.13;
+locks; strict;
+comment	@ * @;
+
+
+1.20
+date	97.11.11.21.24.37;	author aspolito;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.10.27.16.12.51;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.10.26.19.41.00;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.10.25.19.50.27;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.24.20.24.38;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.10.24.03.30.31;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.10.18.18.45.26;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.10.07.01.45.43;	author iang;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.26.19.19.21;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.09.25.03.28.47;	author iang;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.09.25.00.47.02;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.09.23.23.28.33;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.23.21.07.45;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.22.23.38.24;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.15.23.40.51;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.14.23.41.11;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.13.00.36.49;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.12.21.46.10;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.09.00.10.22;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.04.23.03.26;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.20
+log
+@out of memory handled gracefully.  Fallback proxies added
+@
+text
+@#include <Pilot.h>
+#include "trans.h"
+#include "globals.h"
+#include "notify.h"
+#include "pagedisplay.h"
+#include "2bit.h"
+
+static DataSize total;
+static DataSize seen;
+static WinHandle statbarbufWin = NULL;
+
+#define STATBAR_WIDTH 160
+#define STATBAR_HEIGHT (157-MAIN_DISPLAY_HEIGHT)
+#define STATBAR_X 0
+#define STATBAR_Y (MAIN_DISPLAY_HEIGHT+3)
+
+Err StatusInit(void)
+{
+    Err err;
+
+    statbarbufWin = WinCreateOffscreenWindow(STATBAR_WIDTH, STATBAR_HEIGHT,
+	screenFormat, &err);
+    return err;
+}
+
+void StatusCleanup(void)
+{
+    if (statbarbufWin) WinDeleteWindow(statbarbufWin, false);
+}
+
+void Notify (DataSize *total, DataSize *seen, void *ptr) {
+  RectangleType offrect = { { 0, 0 }, { STATBAR_WIDTH, STATBAR_HEIGHT } };
+  FormPtr frm = FrmGetActiveForm();
+  WinHandle drawwin;
+  FontID oldfont;
+
+  if (!frm || frm->formId != MainForm) return;
+ 
+#ifdef OLD_STATUS_BAR
+  if ((total && *total && seen && ((*seen) < (*total))) &&
+      conID != -1) {
+      WinDrawRectangle(&r, 0);
+      r.extent.x = ((160 * (*seen)) / (*total)) +1;
+      WinFillRectangle(&r, 0);
+  } else {
+      WinEraseRectangle(&r, 0);
+  }
+#else
+  drawwin = WinGetDrawWindow();
+  WinSetDrawWindow(statbarbufWin);
+  WinEraseWindow();
+  oldfont = FntGetFont();
+  FntSetFont(stdFont);
+  if ((total && *total && seen && ((*seen) < (*total))) &&
+      conID != -1) {
+      if ((*seen) > 0) {
+        RectangleType r = { { 45, 1 }, { 0, STATBAR_HEIGHT-2 } };
+	static char loading[11] = { "Loaded 00%" };
+	Word p = ((100 * (DWord)(*seen)) / (DWord)(*total));
+	if (p > 99) p = 99;
+	loading[7] = (p>=10)?('0'+(p/10)):' ';
+	loading[8] = '0'+(p%10);
+	WinDrawChars(loading, 10,
+	    STATBAR_WIDTH/2-(FntCharsWidth(loading,10)/2), 0);
+	r.extent.x = ((70 * (DWord)(*seen)) / (DWord)(*total));
+	WinInvertRectangle(&r, 0);
+      } else {
+        static char *connecting = "Connecting...";
+	WinDrawChars(connecting, 13,
+	    STATBAR_WIDTH/2-(FntCharsWidth(connecting,13)/2), 0);
+      }
+  }
+  FntSetFont(oldfont);
+  WinSetDrawWindow(drawwin);
+  WinCopyRectangle(statbarbufWin, drawwin, &offrect,
+		    STATBAR_X, STATBAR_Y, scrCopy);
+#endif
+}
+
+void ReNotify(void)
+{
+    Notify(&total, &seen, NULL);
+}
+
+void RegisterNotify(ConID conID) {
+  RegisterNotifyCallback(conID, Notify, &total, &seen, NULL);
+}
+
+/* Draw the status bar */
+void StatusDraw(int reset)
+{
+    FormPtr frm = FrmGetActiveForm();
+
+    if (reset) {
+	total = 0;
+	seen = 0;
+    }
+
+    if (!frm || frm->formId != MainForm) return;
+
+    /* Draw any decorations on the page (dividing lines, etc.) */
+    WinDrawLine(MAIN_DISPLAY_WIDTH, MAIN_DISPLAY_HEIGHT, MAIN_DISPLAY_WIDTH+2,
+		MAIN_DISPLAY_HEIGHT+2);
+    WinDrawLine(MAIN_DISPLAY_WIDTH, MAIN_DISPLAY_HEIGHT+2, MAIN_DISPLAY_WIDTH+2,
+		MAIN_DISPLAY_HEIGHT);
+    ReNotify();
+}
+
+/* Draw text in the status bar field; "" means erase field;
+   NULL means restore field.
+   
+   crunchtype specifies how to crunch strings that are too long:
+   0: show the center of the string (default)
+   1: the string is a URL; do something sane
+*/
+void StatusBarText(unsigned char *text, int crunchtype)
+{
+    RectangleType r;
+    int l;
+
+    r.topLeft.x = STATBAR_X;
+    r.topLeft.y = STATBAR_Y;
+    r.extent.x = STATBAR_WIDTH;
+    r.extent.y = STATBAR_HEIGHT;
+
+    if (text) {
+	l = StrLen(text);
+	WinEraseRectangle(&r, 0);
+	if (l) {
+	    unsigned char *copy = NULL;
+	    int width = FntCharsWidth(text,l);
+	    int pos = 0;
+	    unsigned char *slash;
+	    if (width > STATBAR_WIDTH &&
+		(copy = MemPtrNew(l+1))) { /* Yes, I mean = */
+		switch(crunchtype) {
+		case 1:
+		    StrCopy(copy, text);
+		    text = copy;
+		    /* Try to strip http:// */
+		    
+		    /* changed this to save, oh, umm, umm, 28 bytes of 
+		       code space.  also makes it prettier code.
+		       If my change doesn't work bash me over the head
+		       or something
+		    if (text[0] == 'h' && text[1] == 't' && text[2] == 't' &&
+			text[3] == 'p' && text[4] == ':' && text[5] == '/' &&
+			text[6] == '/') {
+		    */
+		    if (StrStr(text, "http://") == (CharPtr) text) {
+			text += 7;
+			l -= 7;
+			width = FntCharsWidth(text, l);
+			if (width <= STATBAR_WIDTH) break;
+		    }
+
+		    /* Draw the hostname/path/to/file; we'll overwrite
+		       the end of that later */
+		    WinDrawChars(text, l, STATBAR_X, STATBAR_Y);
+
+		    /* Now find the / before the end (but not right at the
+		       end), and put '...' before it */
+		    for(slash = text+l-2; slash >= text; --slash) {
+			if (*slash == '/') break;
+		    }
+		    if (slash > text) --slash;
+		    if (slash < text) ++slash;
+		    *slash = '\x85'; /* '\x85' is an ellipsis */
+		    l -= (slash - text);
+		    text = slash;
+		    width = FntCharsWidth(text, l);
+		    pos = STATBAR_WIDTH-width;
+		    break;
+
+		default:
+		    /* Center things */
+		    pos = STATBAR_WIDTH/2-width/2;
+		    break;
+		}
+	    }
+	    WinDrawChars(text, l, pos, STATBAR_Y);
+	    if (copy) MemPtrFree(copy);
+	}
+    } else {
+	ReNotify();
+    }
+}
+
+typedef enum { SCROLL_ORIENT_VERT, SCROLL_ORIENT_HORIZ } ScrollOrient;
+
+typedef struct {
+    int x;
+    int y;
+    int pagesize;
+    int barlength;
+    ScrollOrient hv;
+    int len;
+    int pos;
+    int curleft;
+    int curright;
+} ScrollInfo;
+
+static ScrollInfo hBar = { 0, MAIN_DISPLAY_HEIGHT, MAIN_DISPLAY_WIDTH,
+			    MAIN_DISPLAY_WIDTH-1, SCROLL_ORIENT_HORIZ,
+			    -1, 0, 0, MAIN_DISPLAY_WIDTH };
+static ScrollInfo vBar = { MAIN_DISPLAY_WIDTH, 0, MAIN_DISPLAY_HEIGHT,
+                            MAIN_DISPLAY_HEIGHT-1, SCROLL_ORIENT_VERT,
+			    -1, 0, 0, MAIN_DISPLAY_HEIGHT };
+
+static void InitInfo(ScrollInfo *b, int len)
+{
+    b->len = len;
+    b->pos = 0;
+    b->curleft = 0;
+    b->curright = len > b->pagesize ? (ULong)b->pagesize *
+			(ULong)b->barlength / (ULong)b->len : b->barlength;
+}
+
+static void ScrollUpdate(int newleft, int newright, ScrollInfo *b, int force)
+{
+    /* Just be silly for now */
+    if (force || b->curleft != newleft || b->curright != newright) {
+	if (b->hv == SCROLL_ORIENT_VERT) {
+	    WinEraseLine(b->x, b->y+b->curleft, b->x, b->y+b->curright);
+	    WinEraseLine(b->x+2, b->y+b->curleft, b->x+2, b->y+b->curright);
+	    WinDrawLine(b->x, b->y+newleft, b->x, b->y+newright);
+	    WinDrawLine(b->x+2, b->y+newleft, b->x+2, b->y+newright);
+	} else {
+	    WinEraseLine(b->x+b->curleft, b->y, b->x+b->curright, b->y);
+	    WinEraseLine(b->x+b->curleft, b->y+2, b->x+b->curright, b->y+2);
+	    WinDrawLine(b->x+newleft, b->y, b->x+newright, b->y);
+	    WinDrawLine(b->x+newleft, b->y+2, b->x+newright, b->y+2);
+	}
+	b->curleft = newleft;
+	b->curright = newright;
+    }
+}
+
+static void ScrollDraw(ScrollInfo *b)
+{
+    int l = b->curleft;
+    int r = b->curright;
+    /* Doing this will guarantee a redraw */
+    b->curleft = 0;
+    b->curright = b->barlength;
+    if (b->hv == SCROLL_ORIENT_VERT) {
+	WinDrawLine(b->x+1, b->y, b->x+1, b->y+b->barlength);
+    } else {
+	WinDrawLine(b->x, b->y+1, b->x+b->barlength, b->y+1);
+    }
+    ScrollUpdate(l, r, b, 1);
+}
+
+static void ScrollRepos(int newpos, ScrollInfo *b)
+{
+    int l = b->len > 0 ? (ULong)newpos * (ULong)b->barlength / (ULong)b->len
+			: 0;
+    int r = b->len > newpos + b->pagesize ?
+		    (ULong)(newpos + b->pagesize) *
+			(ULong)b->barlength / (ULong)b->len
+		    : b->barlength;
+    b->pos = newpos;
+    ScrollUpdate(l, r, b, 0);
+}
+
+void ScrollPage(SWord xamt, SWord yamt)
+{
+    int newx = currXPosOffset;
+    int newy = currYPosOffset;
+
+    if (!hPage) return;
+
+    /* Calculate the new x and y scroll positions, based on the requested
+       relative scroll amounts, taking into account the total dimensions of
+       the page. */
+    if (yamt < 0) {
+	if (currYPosOffset < -yamt) {
+	    newy = 0;
+	} else {
+	    newy = currYPosOffset + yamt;
+	}
+    } else {
+	if (vBar.len < 0) {
+	    SWord width, height;
+	    GetCurPageDims(&width, &height);
+	    InitInfo(&vBar, height);
+	    InitInfo(&hBar, width);
+	}
+	if (currYPosOffset + yamt + vBar.pagesize > vBar.len) {
+	    if (vBar.pagesize < vBar.len) {
+		newy = vBar.len - vBar.pagesize;
+	    } else {
+		newy = 0;
+	    }
+	} else {
+	    newy = currYPosOffset + yamt;
+	}
+    }
+
+    if (xamt < 0) {
+	if (currXPosOffset < -xamt) {
+	    newx = 0;
+	} else {
+	    newx = currXPosOffset + xamt;
+	}
+    } else {
+	if (hBar.len < 0) {
+	    SWord width, height;
+	    GetCurPageDims(&width, &height);
+	    InitInfo(&vBar, height);
+	    InitInfo(&hBar, width);
+	}
+	if (currXPosOffset + xamt + hBar.pagesize > hBar.len) {
+	    if (hBar.pagesize < hBar.len) {
+		newx = hBar.len - hBar.pagesize;
+	    } else {
+		newx = 0;
+	    }
+	} else {
+	    newx = currXPosOffset + xamt;
+	}
+    }
+
+    /* Now scroll the page by blitting the appropriate rectangle, and then
+       erasing and redrawing only the remaining gnomon.  This eliminates
+       most of the "flicker" effect. */
+    if (newy != currYPosOffset || newx != currXPosOffset) {
+	RectangleType r1, r2, srcr;
+	RectanglePtr rp1, rp2;
+	WinHandle curwin;
+	int destx, desty;
+	int diffx, diffy;
+	int adiffx, adiffy;
+
+	diffx = newx - currXPosOffset;
+	diffy = newy - currYPosOffset;
+	adiffx = (diffx > 0) ? diffx : -diffx;
+	adiffy = (diffy > 0) ? diffy : -diffy;
+	if (adiffx >= MAIN_DISPLAY_WIDTH || adiffy >= MAIN_DISPLAY_HEIGHT) {
+	    currXPosOffset = newx;
+	    currYPosOffset = newy;
+	    EraseMainWindow();
+	    WinDrawProxyString(hPage, currXPosOffset, currYPosOffset);
+	} else {
+	    if (newy > currYPosOffset) {
+		r1.topLeft.x = 0;
+		r1.extent.x = MAIN_DISPLAY_WIDTH;
+		srcr.extent.y = r1.topLeft.y = MAIN_DISPLAY_HEIGHT-adiffy;
+		srcr.topLeft.y = r1.extent.y = adiffy;
+		desty = 0;
+		rp1 = &r1;
+	    } else if (newy < currYPosOffset) {
+		r1.topLeft.x = 0;
+		r1.extent.x = MAIN_DISPLAY_WIDTH;
+		srcr.topLeft.y = r1.topLeft.y = 0;
+		desty = r1.extent.y = adiffy;
+		srcr.extent.y = MAIN_DISPLAY_HEIGHT-adiffy;
+		rp1 = &r1;
+	    } else {
+		srcr.topLeft.y = 0;
+		srcr.extent.y = MAIN_DISPLAY_HEIGHT;
+		desty = 0;
+		rp1 = NULL;
+	    }
+	    if (newx > currXPosOffset) {
+		srcr.extent.x = r2.topLeft.x = MAIN_DISPLAY_WIDTH-adiffx;
+		srcr.topLeft.x = r2.extent.x = adiffx;
+		destx = 0;
+		r2.topLeft.y = 0;
+		r2.extent.y = MAIN_DISPLAY_HEIGHT;
+		rp2 = &r2;
+	    } else if (newx < currXPosOffset) {
+		srcr.topLeft.x = r2.topLeft.x = 0;
+		destx = r2.extent.x = adiffx;
+		srcr.extent.x = MAIN_DISPLAY_WIDTH-adiffx;
+		r2.topLeft.y = 0;
+		r2.extent.y = MAIN_DISPLAY_HEIGHT;
+		rp2 = &r2;
+	    } else {
+		srcr.topLeft.x = 0;
+		srcr.extent.x = MAIN_DISPLAY_WIDTH;
+		destx = 0;
+		rp2 = NULL;
+	    }
+	    currXPosOffset = newx;
+	    currYPosOffset = newy;
+	    curwin = WinGetActiveWindow();
+	    WinCopy2BitRectangle(curwin, &srcr, destx, desty, scrCopy);
+	    if (rp1) WinEraseRectangle(rp1, 0);
+	    if (rp2) WinEraseRectangle(rp2, 0);
+	    WinDrawProxyStringGnomon(hPage, currXPosOffset, currYPosOffset,
+		rp1, rp2);
+	}
+	ScrollRepos(currYPosOffset, &vBar);
+	ScrollRepos(currXPosOffset, &hBar);
+    }
+}
+
+/* Reset the scroll bar */
+void ScrollReset(void)
+{
+    SWord width, height;
+    GetCurPageDims(&width, &height);
+    InitInfo(&vBar, height);
+    InitInfo(&hBar, width);
+    ScrollDraw(&vBar);
+    ScrollDraw(&hBar);
+    currXPosOffset = 0;
+    currYPosOffset = 0;
+}
+
+/* Refresh the scroll bar */
+void ScrollRefresh(void)
+{
+    if (vBar.len < 0) {
+	SWord width, height;
+	GetCurPageDims(&width, &height);
+	InitInfo(&vBar, height);
+	InitInfo(&hBar, width);
+    }
+    ScrollDraw(&vBar);
+    ScrollDraw(&hBar);
+}
+
+/* Handle an event */
+Boolean ScrollHandleEvent(EventPtr e)
+{
+    Boolean handled = false;
+    static int hdragging = 0;
+    static int hdragloc = 0;
+    static int vdragging = 0;
+    static int vdragloc = 0;
+
+    /* Is this interesting? */
+    switch(e->eType) {
+    case penDownEvent:
+	vdragging = 0;
+	hdragging = 0;
+	if (e->screenX >= vBar.x && e->screenX <= vBar.x+2 &&
+	    e->screenY >= vBar.y && e->screenY <= vBar.y+vBar.barlength) {
+	    if (e->screenY < vBar.y + vBar.curleft) {
+		ScrollPage(0, -vBar.pagesize);
+	    } else if (e->screenY > vBar.y + vBar.curright) {
+		ScrollPage(0, vBar.pagesize);
+	    } else {
+		/* Start a drag */
+		vdragging = 1;
+		vdragloc = e->screenY;
+	    }
+	    handled = true;
+	} else if (e->screenX >= hBar.x && e->screenX <= hBar.x+hBar.barlength
+	    && e->screenY >= hBar.y && e->screenY <= hBar.y+2) {
+	    if (e->screenX < hBar.x + hBar.curleft) {
+		ScrollPage(-hBar.pagesize, 0);
+	    } else if (e->screenX > hBar.x + hBar.curright) {
+		ScrollPage(hBar.pagesize, 0);
+	    } else {
+		/* Start a drag */
+		hdragging = 1;
+		hdragloc = e->screenX;
+	    }
+	    handled = true;
+	}
+	break;
+    
+    case penMoveEvent:
+	if (vdragging) {
+	    int sy = e->screenY;
+	    int diff;
+	    if (sy < vBar.y) sy = vBar.y;
+	    if (sy > vBar.y + vBar.barlength) sy = vBar.y + vBar.barlength;
+	    diff = sy - vdragloc;
+	    if ((diff > 0 ? diff : -diff) > SCROLL_THRESH) {
+		ScrollPage(0, (Long)diff * (Long)vBar.len /
+			    (Long)vBar.barlength);
+		vdragloc = sy;
+	    }
+	    handled = true;
+	} else if (hdragging) {
+	    int sx = e->screenX;
+	    int diff;
+	    if (sx < hBar.x) sx = hBar.x;
+	    if (sx > hBar.x + hBar.barlength) sx = hBar.x + hBar.barlength;
+	    diff = sx - hdragloc;
+	    if ((diff > 0 ? diff : -diff) > SCROLL_THRESH) {
+		ScrollPage((Long)diff * (Long)hBar.len /
+			    (Long)hBar.barlength, 0);
+		hdragloc = sx;
+	    }
+	    handled = true;
+	}
+	break;
+
+    case penUpEvent:
+	if (vdragging) {
+	    int sy = e->screenY;
+	    int diff;
+	    if (sy < vBar.y) sy = vBar.y;
+	    if (sy > vBar.y + vBar.barlength) sy = vBar.y + vBar.barlength;
+	    diff = sy - vdragloc;
+	    ScrollPage(0, (Long)diff * (Long)vBar.len / (Long)vBar.barlength);
+	    vdragging = 0;
+	    handled = true;
+	} else if (hdragging) {
+	    int sx = e->screenX;
+	    int diff;
+	    if (sx < hBar.x) sx = hBar.x;
+	    if (sx > hBar.x + hBar.barlength) sx = hBar.x + hBar.barlength;
+	    diff = sx - hdragloc;
+	    ScrollPage((Long)diff * (Long)hBar.len / (Long)hBar.barlength, 0);
+	    hdragging = 0;
+	    handled = true;
+	}
+	break;
+    
+    default:
+	break;
+    }
+    return handled;
+}
+@
+
+
+1.19
+log
+@o Fixed 2bit issues with offscreen windows
+o added progress bar (a la Postman)
+@
+text
+@a91 9
+    /* It should be safe to remove this.  Tell me if I'm wrong.  - Ian */
+    /*
+    RectangleType r;
+    r.topLeft.x = 0;
+    r.topLeft.y = 150;
+    r.extent.x = 160;
+    r.extent.y = 10;
+    WinEraseRectangle(&r, 0);
+    */
+d141 5
+d149 2
+@
+
+
+1.18
+log
+@Added a "smarter" scrolling routine; copy the overlapping rectangle, and only
+erase and update the remaining gnomon
+@
+text
+@d10 20
+d32 1
+a32 1
+  RectangleType r;  
+d34 2
+a38 5
+  r.topLeft.x = 0;
+  r.topLeft.y = (MAIN_DISPLAY_HEIGHT+3);
+  r.extent.x = 160;
+  r.extent.y = (157-MAIN_DISPLAY_HEIGHT);
+  
+d49 5
+a53 1
+  WinEraseRectangle(&r, 0);
+d57 1
+d63 4
+a66 2
+	WinDrawChars(loading, 10, 80-(FntCharsWidth(loading,10)/2),
+	    MAIN_DISPLAY_HEIGHT+3);
+d69 2
+a70 2
+	WinDrawChars(connecting, 13, 80-(FntCharsWidth(connecting,13)/2),
+	    MAIN_DISPLAY_HEIGHT+3);
+d73 4
+d130 4
+a133 4
+    r.topLeft.x = 0;
+    r.topLeft.y = (MAIN_DISPLAY_HEIGHT+3);
+    r.extent.x = 160;
+    r.extent.y = (157-MAIN_DISPLAY_HEIGHT);
+d143 2
+a144 1
+	    if (width > 160 && (copy = MemPtrNew(l+1))) { /* Yes, I mean = */
+d156 1
+a156 1
+			if (width <= 160) break;
+d161 1
+a161 1
+		    WinDrawChars(text, l, 0, MAIN_DISPLAY_HEIGHT+3);
+d174 1
+a174 1
+		    pos = 160-width;
+d179 1
+a179 1
+		    pos = 80-width/2;
+d183 1
+a183 1
+	    WinDrawChars(text, l, pos, MAIN_DISPLAY_HEIGHT+3);
+@
+
+
+1.17
+log
+@o Added a horizontal scrollbar
+o Added panning when you drag on the main form (as long as your penDown wasn't
+  on something interesting); if we want to do "select text" later, something
+  will have to be done.
+@
+text
+@d6 1
+d246 3
+d297 3
+d301 66
+a366 4
+	currXPosOffset = newx;
+	currYPosOffset = newy;
+	EraseMainWindow();
+	WinDrawProxyString(hPage, currXPosOffset, currYPosOffset);
+@
+
+
+1.16
+log
+@oops in scroll-down code
+@
+text
+@d17 1
+a17 1
+  r.topLeft.y = (MAIN_DISPLAY_HEIGHT+1);
+d19 1
+a19 1
+  r.extent.y = (159-MAIN_DISPLAY_HEIGHT);
+d41 1
+a41 1
+	    MAIN_DISPLAY_HEIGHT+1);
+d45 1
+a45 1
+	    MAIN_DISPLAY_HEIGHT+1);
+d81 5
+a85 1
+    WinDrawLine(0, MAIN_DISPLAY_HEIGHT, 160, MAIN_DISPLAY_HEIGHT);
+d102 1
+a102 1
+    r.topLeft.y = (MAIN_DISPLAY_HEIGHT+1);
+d104 1
+a104 1
+    r.extent.y = (159-MAIN_DISPLAY_HEIGHT);
+d131 1
+a131 1
+		    WinDrawChars(text, l, 0, MAIN_DISPLAY_HEIGHT+1);
+d153 1
+a153 1
+	    WinDrawChars(text, l, pos, MAIN_DISPLAY_HEIGHT+1);
+d161 1
+a161 1
+#define SCROLL_GRANULARITY 5
+d166 1
+d168 1
+d175 5
+a179 1
+static ScrollInfo vBar = { MAIN_DISPLAY_WIDTH + 1, 0, MAIN_DISPLAY_HEIGHT-1,
+d187 1
+a187 2
+    b->curright = len > MAIN_DISPLAY_HEIGHT ?
+		    (ULong)MAIN_DISPLAY_HEIGHT *
+d191 1
+a191 2
+static void ScrollVUpdate(int newleft, int newright,
+    ScrollInfo *b)
+d194 15
+a208 6
+    WinEraseLine(b->x, b->y+b->curleft, b->x, b->y+b->curright);
+    WinEraseLine(b->x+2, b->y+b->curleft, b->x+2, b->y+b->curright);
+    WinDrawLine(b->x, b->y+newleft, b->x, b->y+newright);
+    WinDrawLine(b->x+2, b->y+newleft, b->x+2, b->y+newright);
+    b->curleft = newleft;
+    b->curright = newright;
+d211 1
+a211 1
+static void ScrollVDraw(ScrollInfo *b)
+d218 6
+a223 2
+    WinDrawLine(b->x+1, b->y, b->x+1, b->y+b->barlength);
+    ScrollVUpdate(l, r, b);
+d226 1
+a226 1
+static void ScrollVRepos(int newpos, ScrollInfo *b)
+d230 2
+a231 2
+    int r = b->len > newpos + MAIN_DISPLAY_HEIGHT ?
+		    (ULong)(newpos + MAIN_DISPLAY_HEIGHT) *
+d235 1
+a235 1
+    ScrollVUpdate(l, r, b);
+d238 1
+a238 1
+void ScrollPage(SWord amt)
+d240 1
+d245 2
+a246 2
+    if (amt < 0) {
+	if (currYPosOffset < -amt) {
+d249 1
+a249 1
+	    newy = currYPosOffset + amt;
+d252 9
+a260 4
+	if (vBar.len < 0) InitInfo(&vBar, GetCurPageHeight());
+	if (currYPosOffset + amt + MAIN_DISPLAY_HEIGHT > vBar.len) {
+	    if (MAIN_DISPLAY_HEIGHT < vBar.len) {
+		newy = vBar.len - MAIN_DISPLAY_HEIGHT;
+d265 25
+a289 1
+	    newy = currYPosOffset + amt;
+d293 2
+a294 1
+    if (newy != currYPosOffset) {
+d297 3
+a299 2
+	WinDrawProxyString(hPage, currYPosOffset);
+	ScrollVRepos(currYPosOffset, &vBar);
+d306 8
+a313 2
+    InitInfo(&vBar, GetCurPageHeight());
+    ScrollVDraw(&vBar);
+d319 8
+a326 2
+    if (vBar.len < 0) InitInfo(&vBar, GetCurPageHeight());
+    ScrollVDraw(&vBar);
+d333 2
+d342 1
+d346 1
+a346 1
+		ScrollPage(-MAIN_DISPLAY_HEIGHT);
+d348 1
+a348 1
+		ScrollPage(MAIN_DISPLAY_HEIGHT);
+d355 12
+d377 3
+a379 2
+	    if ((diff > 0 ? diff : -diff) > SCROLL_GRANULARITY) {
+		ScrollPage((Long)diff * (Long)vBar.len / (Long)vBar.barlength);
+d383 12
+d405 1
+a405 1
+	    ScrollPage((Long)diff * (Long)vBar.len / (Long)vBar.barlength);
+d407 9
+@
+
+
+1.15
+log
+@Added a scroll bar
+@
+text
+@d232 1
+a232 1
+	    if (amt + MAIN_DISPLAY_HEIGHT < vBar.len) {
+@
+
+
+1.14
+log
+@Fixed crash when you tried to delete the stored page you were viewing
+@
+text
+@d5 1
+d155 167
+@
+
+
+1.13
+log
+@Don't let the status bar overwrite anything other than the main form
+@
+text
+@a111 1
+		    /* 0x85 is an ellipsis */
+d124 1
+a124 1
+		    /* Draw the ...hostname/path/to/file; we'll overwrite
+d135 1
+a135 1
+		    *slash = '\x85';
+@
+
+
+1.12
+log
+@o Fixed display of URL that are both too wide for the display and don't
+  contain a '/'
+o Changed max scroll rate from 160 to MAIN_DISPLAY_HEIGHT
+@
+text
+@d11 3
+d71 2
+d77 3
+@
+
+
+1.11
+log
+@Fixed more nasty memory errors
+@
+text
+@d127 1
+@
+
+
+1.10
+log
+@o Fixed a bug that gets tickled when the pen is being held on a link at the
+  time a new page appears.
+o Added URLs to the status bar when you hold down on a link
+@
+text
+@d123 1
+a123 1
+		    for(slash = text+l-1; slash >= text; --slash) {
+@
+
+
+1.9
+log
+@Fixed positioning of text in status bar
+@
+text
+@d75 72
+@
+
+
+1.8
+log
+@o Fixed logic big
+o Made status bar textful
+@
+text
+@d13 1
+a13 1
+  r.topLeft.y = 150;
+d15 1
+a15 1
+  r.extent.y = 10;
+d34 1
+a34 1
+	loading[7] = '0'+(p/10);
+d36 2
+a37 1
+	WinDrawChars(loading, 10, 80-(FntCharsWidth(loading,10)/2), 150);
+d40 2
+a41 1
+	WinDrawChars(connecting, 13, 80-(FntCharsWidth(connecting,13)/2), 150);
+d72 1
+a72 1
+    WinDrawLine(0, 149, 160, 149);
+@
+
+
+1.7
+log
+@o When loading a page with the Open form, the yoffset would incorrectly
+  be set to 0 (top) when the request was _sent_.  This caused a ghost
+  image to appear, overlaid on the real one.  Fixed.
+o If a download was canceled in the middle, and then you "Open" a URL in
+  your cache, the partway-done status bar would remain on the screen.  Fixed.
+@
+text
+@d17 1
+d26 17
+@
+
+
+1.6
+log
+@Grew the status bar, so we can fit text in there.
+@
+text
+@d35 20
+@
+
+
+1.5
+log
+@Following has been added
+
+1. Stop/cancel load functionality (but buggy, transport layer state not reset)
+
+2. Moved PutInHistory to only when a new page is loaded
+   (this is a consequence of the cancel function/otherwise URL is
+    put in history even if cancel is hit; this lead to history
+    errors.)
+
+3. changed event loop to drop every 200 ticks; my pilot batteries go dead
+   way to fast
+
+4. can now move back and forward by backspace/space
+@
+text
+@d13 1
+a13 1
+  r.topLeft.y = 151;
+d15 1
+a15 1
+  r.extent.y = 9;
+@
+
+
+1.4
+log
+@o Removed some (not all) of the "blinking" when loading pages
+o Made 2-bit images reappear after being obscured and unobscured by
+  a popup window
+@
+text
+@d17 2
+a18 1
+  if (total && *total && seen && ((*seen) < (*total))) {
+@
+
+
+1.3
+log
+@o UI fixed up: scroll bar at bottom.  It goes all black when the page is
+  requested, and disappears when the page has arrived completely.  The
+  view area is now 150 pixels high.
+o Various bugfixes
+@
+text
+@d26 5
+@
+
+
+1.2
+log
+@bug fixes and offline cache
+@
+text
+@d12 4
+a15 4
+  r.topLeft.x = 30;
+  r.topLeft.y = 100;
+  r.extent.x = 100;
+  r.extent.y = 20;
+d17 7
+a23 5
+  WinDrawRectangle(&r, 0);
+
+  r.extent.x = ((100 * (*seen)) / (*total)) +1;
+
+  WinFillRectangle(&r, 0);
+@
+
+
+1.1
+log
+@dl status bar added
+@
+text
+@d25 1
+a25 1
+  RegisterCallback(conID, Notify, &total, &seen, NULL);
+@

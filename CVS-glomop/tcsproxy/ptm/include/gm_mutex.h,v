@@ -1,0 +1,400 @@
+head	1.4;
+access;
+symbols
+	Yatin-final:1.3.6.3
+	Yatin:1.3.0.6
+	pre-yatin-merge:1.3
+	transend-beta2:1.3
+	fox-dev:1.3
+	ptm-ng:1.3
+	transend-beta-latest:1.3
+	Aggregators:1.3
+	NoAggregators:1.3
+	iang:1.3.0.4
+	transend-beta:1.3.0.2
+	SOSP:1.2;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	98.01.16.22.16.13;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.04.07.00.26.29;	author yatin;	state Exp;
+branches
+	1.3.6.1;
+next	1.2;
+
+1.2
+date	97.02.26.04.14.51;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.17.22.16.54;	author yatin;	state Exp;
+branches;
+next	;
+
+1.3.6.1
+date	97.12.01.22.19.30;	author iang;	state Exp;
+branches;
+next	1.3.6.2;
+
+1.3.6.2
+date	97.12.02.00.59.43;	author iang;	state Exp;
+branches;
+next	1.3.6.3;
+
+1.3.6.3
+date	97.12.02.22.04.46;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __GM_MUTEX_H__
+#define __GM_MUTEX_H__
+
+
+#include <pthread.h>
+#include <errno.h>
+#include <stdio.h>
+#include "defines.h"
+
+
+class Mutex {
+private:
+  static void OpenLog() {
+    if (log==NULL && log_file!=NULL) {
+      log = fopen(log_file, "w");
+    }
+  }
+public:
+  Mutex(const char *name_) : name(NULL) { 
+    name = new char[strlen(name_)+1];
+    strcpy(name, name_);
+    ThreadError(pthread_mutex_init(&mp, NULL)); 
+  };
+  virtual ~Mutex() { 
+    if (name!=NULL) delete [] name;
+    ThreadError(pthread_mutex_destroy(&mp)); 
+  };
+
+  void Lock() {
+    int status;
+    //Log("trying to lock");
+    if ((status=ThreadError(pthread_mutex_lock(&mp)))!=0) {
+      char buffer[100];
+      sprintf(buffer, "Mutex::Lock() failed! (error status: %d)\n", status);
+      gm_Abort(buffer);
+    }
+    //Log("has locked");
+  };
+  void Unlock() { 
+    int status;
+    //Log("trying to unlock");
+    if ((status=ThreadError(pthread_mutex_unlock(&mp)))!=0) {
+      char buffer[100];
+      sprintf(buffer, "Mutex::Unlock() failed! (error status: %d)\n", status);
+      gm_Abort(buffer);
+    }
+  };
+  void SetName(char *name_) {
+    if (name!=NULL) delete [] name;
+    name = new char[strlen(name_)+1];
+    strcpy(name, name_);    
+  }
+  void Log(char *msg) { Log_(msg, getName(), this); }
+  static void Log_(char *msg, const char *mutexName, Mutex *this_) {
+    OpenLog();
+    if (log!=NULL) {
+      struct tm t;
+      time_t ti = time(NULL);
+      localtime_r(&ti, &t);
+      fprintf(log, "%02d:%02d:%02d: Thread %u %s %s (%p)\n", t.tm_hour, 
+	      t.tm_min, t.tm_sec, (unsigned int) pthread_self(), msg, 
+	      mutexName, this_);
+      fflush(log);
+    }
+  }
+
+
+  pthread_mutex_t* getID() { return &mp; };
+  const char *getName() { return name; };
+
+  static char *log_file;
+private:
+  static FILE *log;
+  pthread_mutex_t mp;
+  char *name;
+};
+
+
+/*class OwnerMutex : public Mutex {
+public:
+  OwnerMutex() : Mutex(), owner(0) { };
+  void Lock() {
+    Mutex::Lock();
+    ownerMutex.Lock();
+    owner = pthread_self();
+    ownerMutex.Unlock();
+  }
+
+  void Unlock() {
+    ownerMutex.Lock();
+    owner = 0;
+    ownerMutex.Unlock();
+    Mutex::Unlock();
+  }
+
+  gm_Bool DidILock() {
+    gm_Bool flag;
+    pthread_t me = pthread_self();
+    if (me==0) return gm_False;
+    ownerMutex.Lock();
+    flag = ((me==owner) ? gm_True : gm_False);
+    ownerMutex.Unlock();
+    return flag;
+  }
+
+protected:
+  Mutex ownerMutex;
+  pthread_t owner;
+};*/
+
+class Condition {
+
+public:
+  Condition()  { ThreadError(pthread_cond_init(&cond, NULL)); };
+  virtual ~Condition() { ThreadError(pthread_cond_destroy(&cond)); };
+  
+  gm_Bool Wait(Mutex *mutex)
+  { 
+    pthread_mutex_t *mID=mutex->getID();
+    mutex->Log("waiting on cv with mutex");
+    gm_Bool returnValue = (ThreadError(pthread_cond_wait(&cond, mID))==0) ? gm_True:gm_False;
+    mutex->Log("done waiting on cv with mutex");
+    return returnValue;
+  };
+  // returns 1 on error, 0 on success, -1 on timeout
+  int TimedWait(Mutex *mutex, struct timeval *tv)
+  {
+    struct timespec absendtime;
+    pthread_mutex_t *mID=mutex->getID();
+    mutex->Log("timed waiting on cv with mutex");
+    int threrror;
+    int retval;
+    if (tv) {
+	struct timeval now, end;
+	gettimeofday(&now, NULL);
+	absendtime.tv_sec = end.tv_sec = now.tv_sec + tv->tv_sec;
+	end.tv_usec = now.tv_usec + tv->tv_usec;
+	while (end.tv_usec > 1000000) {
+	    end.tv_sec++;
+	    end.tv_usec -= 1000000;
+	}
+	absendtime.tv_nsec = end.tv_usec * 1000;
+	threrror = pthread_cond_timedwait(&cond, mID, &absendtime);
+	gettimeofday(&now, NULL);
+	if (now.tv_sec > end.tv_sec || (now.tv_sec == end.tv_sec &&
+	    now.tv_usec >= end.tv_usec)) {
+	    tv->tv_sec = tv->tv_usec = 0;
+	} else if (end.tv_usec >= now.tv_usec) {
+	    tv->tv_sec = end.tv_sec - now.tv_sec;
+	    tv->tv_usec = end.tv_usec - now.tv_usec;
+	} else {
+	    tv->tv_sec = end.tv_sec - now.tv_sec - 1;
+	    tv->tv_usec = (1000000 + end.tv_usec) - now.tv_usec;
+	}
+    } else {
+	threrror = pthread_cond_wait(&cond, mID);
+    }
+    if (threrror && threrror != ETIMEDOUT) {
+	ThreadError(threrror);
+	retval = 1;
+    } else if (!threrror) {
+	retval = 0;
+    } else {
+	retval = -1;
+    }
+    mutex->Log("done waiting on cv with mutex");
+    return retval;
+  }
+  gm_Bool Signal() 
+  { return (ThreadError(pthread_cond_signal (&cond))==0) ? gm_True:gm_False; };
+  gm_Bool Broadcast()
+  { return (ThreadError(pthread_cond_broadcast(&cond))==0) ? gm_True:gm_False;};
+  
+  pthread_cond_t* getID() { return &cond; };
+protected:
+  pthread_cond_t cond;
+};
+
+
+#endif // __GM_MUTEX_H__
+@
+
+
+1.3
+log
+@Removed debugging information from the PTM code.
+Removed the setspecific/getspecific calls from frontend code
+@
+text
+@d6 1
+a110 1
+
+d125 44
+@
+
+
+1.3.6.1
+log
+@Added DistillAsync and friends
+@
+text
+@a109 7
+// On Linux, this seems to be true:
+#ifdef linux
+#define TIMEDWAIT_TIMEOUT_CODE ETIMEDOUT
+#else
+// On Solaris, it's supposed to be ETIME
+#define TIMEDWAIT_TIMEOUT_CODE ETIME
+#endif
+a124 44
+  // returns 1 on error, 0 on success, -1 on timeout
+  int TimedWait(Mutex *mutex, struct timeval *tv)
+  {
+    struct timespec absendtime;
+    pthread_mutex_t *mID=mutex->getID();
+    mutex->Log("timed waiting on cv with mutex");
+    int threrror;
+    int retval;
+    if (tv) {
+	struct timeval now, end;
+	gettimeofday(&now, NULL);
+	absendtime.tv_sec = end.tv_sec = now.tv_sec + tv->tv_sec;
+	end.tv_usec = now.tv_usec + tv->tv_usec;
+	while (end.tv_usec > 1000000) {
+	    end.tv_sec++;
+	    end.tv_usec -= 1000000;
+	}
+	absendtime.tv_nsec = end.tv_usec * 1000;
+	threrror = pthread_cond_timedwait(&cond, mID, &absendtime);
+	gettimeofday(&now, NULL);
+	if (now.tv_sec > end.tv_sec || (now.tv_sec == end.tv_sec &&
+	    now.tv_usec >= end.tv_usec)) {
+	    tv->tv_sec = tv->tv_usec = 0;
+	} else if (end.tv_usec >= now.tv_usec) {
+	    tv->tv_sec = end.tv_sec - now.tv_sec;
+	    tv->tv_usec = end.tv_usec - now.tv_usec;
+	} else {
+	    tv->tv_sec = end.tv_sec - now.tv_sec - 1;
+	    tv->tv_usec = (1000000 + end.tv_usec) - now.tv_usec;
+	}
+    } else {
+	threrror = pthread_cond_wait(&cond, mID);
+    }
+    if (threrror && threrror != TIMEDWAIT_TIMEOUT_CODE) {
+	ThreadError(threrror);
+	retval = 1;
+    } else if (!threrror) {
+	retval = 0;
+    } else {
+	retval = -1;
+    }
+    mutex->Log("done waiting on cv with mutex");
+    return retval;
+  }
+@
+
+
+1.3.6.2
+log
+@Added an include
+@
+text
+@a114 1
+#include <sys/errno.h>
+@
+
+
+1.3.6.3
+log
+@DistillRendezvous() now works on Solaris
+@
+text
+@a5 1
+#include <errno.h>
+d110 9
+d166 1
+a166 1
+    if (threrror && threrror != ETIMEDOUT) {
+@
+
+
+1.2
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d30 1
+a30 1
+    Log("trying to lock");
+d36 1
+a36 1
+    Log("has locked");
+d40 1
+a40 1
+    Log("trying to unlock");
+d60 2
+a61 1
+	      t.tm_min, t.tm_sec, pthread_self(), msg, mutexName, this_);
+@
+
+
+1.1
+log
+@Forgot to add gm_mutex.h
+@
+text
+@d11 6
+d18 9
+a26 2
+  Mutex()  { ThreadError(pthread_mutex_init(&mp, NULL)); };
+  virtual ~Mutex() { ThreadError(pthread_mutex_destroy(&mp)); };
+d30 1
+d36 1
+d40 1
+d47 18
+d67 5
+a71 1
+protected:
+d73 1
+d77 1
+a77 1
+class OwnerMutex : public Mutex {
+d107 1
+a107 1
+};
+d119 4
+a122 1
+    return (ThreadError(pthread_cond_wait(&cond, mID))==0) ? gm_True:gm_False;
+@

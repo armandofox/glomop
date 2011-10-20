@@ -1,0 +1,165 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.03.03.16.17;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#
+#  Interpret UDP datagrams containing advice regarding network
+#  characteristics.  At present, the advice is stored in the prefs profiles.
+#  We have the following entries:
+#
+#  w  bandwidth in bits/sec
+#  l  roundtrip latency in msec
+#
+
+package advice;
+
+$advice::PacketFormat = "CCCC N N f N";
+
+#  BUG::the following array should be constructed on the fly by reading the
+#  advice.h file, rather than being 'hardwired' here.
+
+@@Opcodes = qw(DUMMY_OP
+              WHATIS_CURRENT_PER
+              WHATIS_CURRENT_BANDWIDTH 
+              WHATIS_CURRENT_LATENCY 
+              WHATIS_POWER_TOSEND 
+              WHATIS_POWER_TORECV 
+              WHATIS_COST_TOSEND 
+              WHATIS_COST_TORECV 
+              WHATIS_POWER_TURNON 
+              WHATIS_POWER_TURNOFF 
+              WHATIS_MAX_PACKETSIZE 
+              WHATIS_BEST_PACKETSIZE 
+              REGISTER_BANDWIDTH_LESSTHAN 
+              REGISTER_BANDWIDTH_MORETHAN 
+              REGISTER_LATENCY_LESSTHAN 
+              REGISTER_LATENCY_MORETHAN 
+              REGISTER_PER_LESSTHAN 
+              REGISTER_PER_MORETHAN 
+              );
+
+sub opcode {
+    my $op = shift;
+    return @@advice::Opcodes[$op & 0x7f] || sprintf("unknown (%d)", $op);
+}
+
+#  Decode the packet, returning the client IP address (as string), the opcode
+#  (int), age (int), confidence interval (float), and data.  The type of the
+#  returned data depends on the particular opcode.
+
+sub decode_pkt {
+    my $pkt = shift;
+
+    my ($a1,$a2,$a3,$a4,$op,$age,$confidence,$data)
+        = unpack($advice::PacketFormat, $pkt);
+    my $addr = join('.', $a1,$a2,$a3,$a4);
+    # remember, top bit of opcode is the "reply mask"
+    return ($addr, $op & 0x7f, $age, $confidence, $data);
+}
+    
+sub do_advice {
+    my ($addr, $op, $age, $confidence, $data) = &decode_pkt(shift @@_);
+
+    # for network bw/latency notifications, just set the appropriate pref.
+    my $opcode = &opcode($op);
+    &main::debug('advice',
+                 sprintf("%s says: %s changes to %lu +- %.2f\n",
+                         $addr, $opcode, $data, $confidence));
+
+    if ($opcode eq 'WHATIS_CURRENT_BANDWIDTH') {
+        &main::set_one_pref($addr, "w", $data);
+        &main::set_one_pref($addr, "a", time);
+    } elsif ($opcode eq 'WHATIS_CURRENT_LATENCY') {
+        &main::set_one_pref($addr, "l", $data);
+        &main::set_one_pref($addr, "a", time);
+    }
+}
+
+#
+# given a user prefs structure (which encodes bandwidth and latency info as
+# received by the above routines) and a client characteristics structure (which
+# may encode a default bandwidth for the client, in the absence of
+# notifications), derive an estimate of the current bandwidth and latency.
+#
+
+sub estimate_bandwidth_latency {
+    my ($prefs, $client) = @@_;
+
+    my $bw = 14400;
+    my $lat = 0;                            # initial estimates
+
+    if (defined $prefs->{'w'}
+        && defined $prefs->{'a'}) {
+        # use estimate from user prefs
+        &main::debug("advice",
+                     sprintf("Using BW advice value %d (%d seconds old)",
+                             $prefs->{'w'}, time - $prefs->{'a'}));
+        $bw = $prefs->{'w'};
+    } elsif (defined $client->{'b'}) {
+        &main::debug("advice", "Using client-default bandwidth ".
+        $client->{'b'});
+        $bw = $prefs->{'b'};
+    }
+
+    # latency
+
+    if (defined $prefs->{'l'} && defined $prefs->{'a'}) {
+        &main::debug("advice",
+                     sprintf("Using lat advice value %d (%d seconds old)",
+                     $prefs->{'l'}, time - $prefs->{'a'}));
+    } else {
+        &main::debug("advice", "Using lat default value $lat");
+    }
+    
+    return ($bw,$lat);
+}
+       
+1;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

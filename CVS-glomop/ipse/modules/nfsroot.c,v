@@ -1,0 +1,116 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include "uifile.h"
+#include <pcap.h>
+
+typedef struct {
+    int handid;
+} state_t;
+
+static int nfsroot_ui_choose(stream_t *stream, void *st)
+{
+    stream->ui = &ui_proc_funcs;
+    stream->uistate = ui_proc_state(stream, "pxtract", 0, 0);
+
+    return 0;
+}
+
+static void * nfsroot_init(int handid, char *arg)
+{
+    state_t *state = malloc(sizeof(state_t));
+    if (state == NULL) return (INIT_FAIL);
+    state->handid = handid;
+    ui_file_init();
+    return state;
+}
+
+static int nfsroot_handle(interface_t *interface, void *st)
+{
+    streamid_t streamid;
+    streamdir packetdir;
+    stream_t *stream;
+    state_t *state = (state_t *)st;
+    int res, wd;
+    ip_packet_t *packet;
+
+    /*
+    if (interface->frame_type == DLT_EN10MB) {
+    } else if (interface->frame_type == DLT_PPP) {
+    } else {
+    }
+    */
+
+    packet = interface->packet;
+    wd = interface->wd;
+
+    if (packet->iphead.ip_p != IPPROTO_UDP) return 0;
+
+    if (htons(packet->p.udp.head.uh_dport) == 2049) {
+	memset((char *)&streamid, 0, sizeof(streamid_t));
+	streamid.laddr = inet_addr(inet_ntoa(packet->iphead.ip_src));
+	streamid.haddr = inet_addr(inet_ntoa(packet->iphead.ip_dst));
+	streamid.lport = 0;
+	streamid.hport = packet->p.udp.head.uh_dport;
+	streamid.protocol = IPPROTO_UDP;
+	streamid.handid = state->handid;
+	packetdir = STREAM_DIR_LTOH;
+    } else {
+	return 0;
+    }
+
+    if ((res = stream_get_node(&streamid, &stream, nfsroot_ui_choose, st))
+	!= 0) return res;
+
+    return stream_display(stream, packet, packetdir);
+}
+
+static void nfsroot_clean(void *st)
+{
+    state_t *state = (state_t *)st;
+    free(state);
+}
+
+int nops = 1;
+module_ops oplist[] = { { nfsroot_init, nfsroot_handle, nfsroot_clean } };
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

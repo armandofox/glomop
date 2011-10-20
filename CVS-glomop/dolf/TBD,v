@@ -1,0 +1,229 @@
+head	1.3;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	96.12.04.05.22.07;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.02.05.37.53;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@BUGS
+
+imagemaps don't work
+uncacheable things don't work because of harvest semantics (doesn't
+resolve via parent)
+
+
+- ask for a URL that is a DO candidate:
+  => convert into request for a DO
+  - return a DO
+  a DOLF DO is named by a handle constructed from:
+    <version_id, repository_cache_name, orig_url>
+
+Compose(listOfStrings) takes a bunch of strings and somehow composes
+them into a single one that obeys URL (RFC??) syntax.
+
+Decompose(string) returns a list of things that were composed.  It's up
+to the caller to determine what the meaning of each thing is.
+
+func ProxyGet(URL, Method)
+{
+   if Method == GET && IsDolfUrl(URL) then 
+         return GetViaCache(CacheNameFromUrl(URL),CacheTagFromUrl(URL));
+   elsif Method == GET && IsFixationUrl(URL) then {
+         (fixation_type, orig_url, distiller_path) = Decompose(URL);
+         orig_doc = FetchFromInternet(orig_url);
+         return CreateFixationLazily(orig_doc, distiller_path, fixation_type);
+   }
+   elsif Method == GET && IsCandidateForDolf(URL) then
+         return HttpRedirect(UrlToDolf(URL));
+   else
+         return GetRegularUrl(URL);
+}
+
+func UrlToDolf(origUrl)
+{
+   cacheName = addr_of_harvest_server;
+   /* the DOLF_VERSION_ID is part of the cache tag simply because it
+   gives a simple way to differentiate "regular" from DOLF URL's in the
+   cache, allowing a single existing cache to be used for both */
+   cacheTag = Compose(origUrl, DOLF_VERSION_ID);
+   return Urlify(Compose(DOLF_URL_ID, cacheName,cacheTag));
+}
+
+/* procedure invoked when cache queries proxy on DOLF URL miss */
+
+func CreateDO(tag)
+{
+   resultDO = NewDO();
+   orig_url = TagToUrl(tag);
+   orig_object = FetchFromInternet(orig_url);
+   type = MimeTypeOfObject(orig_object);
+   foreach target in Reachables(type) {
+       url = CreateFixationUrl(orig_url, target.type, target.graph_path);
+       AddToDO(resultDO, url, DescribeInEnglish(target.type),
+                         DescribeInEnglish(target.gen_cost));
+   }
+   return resultDO;
+}
+
+func CreateFixationUrl(orig_url, target_type, distiller_path)
+{
+}   
+
+
+
+- to return a DO given the DOLF DO handle:
+  - query cache object for the DO, if applicable.  cache tag is given by
+  some deterministic function of the orig_url.
+  - otherwise: create_DO(orig_url)
+
+
+- ask for a fixation
+  - maybe a real fixation
+  - otherwise produce it
+
+- ask for a non-DOLF URL
+
+a DOLF URL is:
+  <type, url, version-identifier>
+
+
+  http://<handle-server>/<hdl-name> 
+          --> resolves to a "real URL"
+  if <handle-server> is the name of the "proxy handle server", it names
+  a virtual repository.
+
+  <handle=type=EXISTING, url=real-url>
+  <type=LAZY, url=base-url>
+
+---
+DO:
+- handle
+- gets cached, can be ref'd later
+- list of fixations available 
+- cost of each? (bandwidth, etc)
+
+System can be queried/configured:
+- show type graph
+- behavior for URL's
+  - always assume asking for a fixation in graph == asking for DO
+  - require explicit prefix
+
+POSSIBLE EXTENSIONS:
+
+add "DOLF DO" as separate MIME type e.g. with embedded Tcl viewer or
+    external viewer
+intercept other request types besides HTTP
+
+
+TRANSFORMATIONS:
+
+DOLF URL is <cache_name, cache_tag>
+     where cache_tag is <orig_url, dolf_version_id>
+
+
+   
+   
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 7
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 101
+a101 1
+# TBD file --  $Id: TBD,v 1.6 1996/09/11 01:35:11 fox Exp $
+a102 1
+DOCUMETNATION TBD
+d104 8
+a111 38
+Common tasks:
+       - how to add HTML tag behavior
+       - how to see client prefs & user prefs from inside HTML parser
+       - how to add/support a new user pref
+       - how to add distillation & refinement for a new datatype
+       - how to build a distiller using pythsvc
+       - how to add a new client device, or new device characteristics
+
+Design:
+        - why no in-place refinement
+        - forking issues: performance, max#conns, process table size
+
+Open issues: known limitations/bugs and how to fix/workaround them
+        - "addrss already in use"        
+        - "in place" anchors (HREF="#foo") break with segmented pages...
+        - how to tell if an imgmap is client-side-only or
+        client-and-server-side? USEMAP tag occurs in both!!!!
+
+Possible optimizations/extensions and how to do them:
+         - redirect should be turned off for user-agent (ua->redirect_ok(0))
+         - refining jpeg's doesn't work (same reason)
+         - "sending headers only" is not a good idea
+         - segmenting should use the cache mechanism, not its own
+
+Code issues, many of which I will be fixing on an ongoing basis at UCB:
+- a lot of redundancy in the params passed to forward_html and around in
+  the parser.  resp should be able to substitute for url, etc.
+- redundancy: send_html and html_wrap.
+- optimize forward_via_pipeline - feed to popen when possible.  Need a
+  "reads_stdin" (equivalent to "writes_stdout") to optimize this too.
+- prefetch or somehow send-ahead image dimensions (would also allow
+  omission of refinement tags where they are not appropriate)
+- fetching an image standalone: should use the refinement mech., even
+  though currently it bypasses it by design.
+      
+Drawbacks in current system that cannot easily be worked around:
+- cache pollution
+- "back" and "forward" semantics change with page segmentation
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

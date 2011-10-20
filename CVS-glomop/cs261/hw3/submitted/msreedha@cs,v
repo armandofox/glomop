@@ -1,0 +1,240 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.01;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@Homework Assignment 3
+=====================
+Sreedhar Mukkamalla		msreedha@@cs.berkeley.edu
+
+
+(Question 1)
+* Violation of Basic Security Principles (not specific attacks)
+  -------------------------------------------------------------
+First of all, why is this program a 'setuid root' program ? There is
+no reason it should be. The idea is that a trusted subset of users
+(the moderators) be allowed to edit the moderators file. The right
+approach to do this would have been to create a separate user
+called moderator and place all the required files (lock, debug and
+moderators) in the home directory of this user. All the users who are
+moderators and this moderator user could then be placed in a new
+group. The approach used in the example violates the principle of
+Least Privilege. Also, the program runs as root all the time except when
+it temporarily relinquishes privileges to open the debug file (function
+secure_open_as_user()). This is asking for trouble (it should have
+relinquished privileges at the very beginning and regained them only
+when it needed them...)
+
+* Stack Smashing in the function debug()
+  --------------------------------------
+The function debug does not perform any checks on the size of the string
+progname before the sprintf() function call, which means a malicious
+user can simple create a symbolic link with a ridiculously long name
+to this setuid program - the name of the symlink contains the malicious
+code (as in classic stack smashing). { Of course, there is a limit on the
+max. filename length in UNIX (I think its 255 chars), but this obstacle
+is easily overcome by putting the symlink deep down in set of nested
+subdirectories each of which has a ridiculously long name)
+
+* (Possibly) undesirable behaviour in function secure_open_as_user()
+  ------------------------------------------------------------------
+The debug file is in /tmp which means a malicious user who creates the
+file /tmp/debug.vi_moderators before the setuid program ever gets run
+can do harmful things. My attack (assuming I'm the attacker):
+First, I create a file with the above name (it'll be owned by me) and
+make it world writable (so the moderators who use the program don't get
+any error message when the program tries to open the file for appending
+debug info). Subsequently, I can view the contents of the
+debug file anytime I want to, I can edit and delete the file. 
+
+* Using tmpname to create a temporary file
+  ----------------------------------------
+tmpnam() creates a temporary file either in /var/tmp or /tmp usually,
+and any malicious user can create files in these directories. My attack:
+Right before a legitimate moderator invokes the setuid program, somehow
+I guess the name of the next tmp file that will be created (I don't know
+how feasible this is but my instinct is that it should be possible by
+studying source code of the kernel and  making calls to tmpnam myself -
+there probably isn't THAT much randomness in it) and create such a tmp
+file myself. (This has to be timed very carefully to occur between the
+time tmpnam checks for the existence of such a file and its actual
+creation of the file). I then seek to a very far position in the file
+(much farther than a usual moderators files size) and put lots of
+malicious data there. (I do this AFTER the fopen() in the copyfile()
+function otherwise all my data would get truncated). The moderator
+doesn't notice this malicious data and when he finishes everything gets
+written back to the actual /usr/lib/news/moderators file...
+
+MORAL: tmpnam() is unatomic, so its a very bad idea to put this file in /tmp
+
+* vi is invoked with root privileges
+  ----------------------------------
+This means any user who can run this program (i.e. one of the
+moderators) can execute arbitrary shell commands from within vi, edit
+arbitary files etc...  AS ROOT.... BAD!!!
+
+* Race condition in looksok(tmpf)...rename(tmpf,MODF)
+  ---------------------------------------------------
+This sequence of operations is unatomic which means that between the
+time looksok(tmpf) finishes and rename() executes, if an attacker can
+replace or modify the contents of tmpf, he's subverted the security that
+this was supposed to provide. (Since the tmpf file would normally be
+owned by root, this attack requires that the umask of root be set to some
+stupid value which makes it world writable)
+
+
+-------------------------------------------------------------------------
+
+(Question 2)
+(1) 
+This essentially gives us IP source-routing functionality (plus some
+more features, since it can be adaptive etc..), so the traditional
+IP spoofing attacks using source routing can be exploited. 
+
+Another attack, the mobile code can use the routing of the packets
+as a **covert channel**  to communicate info to an attacker who
+wants to learn the network topology inside an organization (of course,
+the whole idea here is that the mobile code makes the packets adapt to
+things like congestion, knowledge of better routes etc.., so this may
+not be an "attack", but it exposes info which many organizations would
+not want to advertise to the entire world)
+
+Also, an attacker can deliberately flood a particular link to degrade
+service to a certain organization for instance 
+
+(2)
+Attacker spoofs IP addresses with packets containing malicious mobile
+code that reroutes someone else's flow to his machine. He has now 
+remotely interposed himself as a man-in-the-middle and can DROP,MODIFY
+packets (this is a new attack thats not there in IP - the attacker could
+previously (at most) INSERT packets, now he can DROP,MODIFY packets)
+Source checking of IP addresses cannot be done by routers in this scenario
+since packets can be forwarded any which way they want to which makes
+spoofing attacks some much easier)
+SOLUTION: Have firewalls examine the src and dst IP addresses and
+perform some sanity checks (source checking) - this at least prevents
+outside attacks of this nature.
+
+Flood router with thousands of bogus flows (exhaust routers memory)
+SOLUTION: Have routers restrict number of flows emanating from any
+particular host 
+
+(3) 
+Infinite loops in the mobile code which ties up router's processor
+SOLUTION: Timeout the handler and kill it...
+
+(4)
+Flooding network by never allowing TTL to go down to zero...
+Basically, one single host can create packets that live "forever" in the
+network and bring down entire network
+Changing IP src address after getting past a firewall (spoofing)
+SOLUTION: Make routers check various fields like TTL,QoS,ECN (congestion
+notification), src + dst IP addresses before and after mobile code has
+finished processing to make sure it doesn't modify these
+
+Application level gateways no longer offer any security since packets 
+can modify themselves after getting past the gateway
+SOLUTION: Can't think of one... bad idea to allow handler to modify packets!
+
+(5) 
+Malicious mobile code can gather information about the state of the
+network and mount more intelligent attacks(probably doesn't enable a new
+class of attacks but makes it easier to mount some old ones)
+
+(6)
+Attacker can now launch "evil agents" which sit in the routers of networks
+and periodically mount attacks proactively. For e.g. attacks like TCP
+hijacking which exploit race conditions become much easier since our
+"hijacking agent" (mobile code) can live on a router right next to the
+host we're trying to attack
+Its also much easier to flood the entire network now, since one single
+malicious packet can create an infinite number of packets in the network
+each of which lives forever.
+
+(7)
+BPF offered some safety because of its lack of expressiveness. We forgo
+that and open the floodgates to innumberable security holes that Java
+has (many of which we saw in class - too many to list here)
+Also, running bytecodes on a JVM for every single packet might be a
+serious performance hit(?)
+
+--------------------------------------------------------------------------
+
+(Question 3)
+(1)
+First of all, defining "mobile code" is not so easy. We could include 
+Javascript,Java applets, ActiveX, Tcl applets
+("MASHlets"),shellscripts,binary  executables,C source files etc...
+We'd do this by disallowing downloads of all files ending in .exe, .c,
+.cc, .java, .tcl, .js etc.. We'd also run checks on each downloaded file
+to see if it looked like a shellscript or a binary executable (for all
+architectures in our organization)
+(1.1)PROBLEM: Blocking the last two(executables,source files) is totally
+unacceptable since it means users can no longer download any
+programs. (Moreover, even if this is done , suppose a user downloads a
+.tar.gz file, how is the firewall to know whats in the archive ? - Not a
+feasible approach, so obviously we can't block ALL mobile code. 
+--------------------
+(2)
+To be reasonable, we only filter out mobile code that will be executed
+automatically by a web browser - Java applets,Javascript,ActiveX,Tcl
+applets etc.. These are dangerous because they get executed behind the
+scenes without the user explicitly running them by typing a command.
+
+(2.1)PROBLEM: Finding the mobile code
+Filtering out the Javascript from within the HTML document
+could be hard. The firewall (which has to be application-level)
+has to parse the HTML document and strip out the Java script (if the
+javascript is specified as a separate .js file, the firewall's job is
+easier). Filtering out applets is hard too..., how is the firewall to
+know whether the .class file being downloaded is an applet or a regular
+class file? To do this sort of filtering, the firewall has to maintain
+state about the applet tags in the HTML pages it recently saw and only
+filter those out(even this wont work if the web page is cached but
+the applet is not)
+
+(2.2)PROBLEM: Lots of web pages simply cannot properly be accessed by users
+(lots of web pages require Java or Javascript to be enabled otherwise
+the page is useless).  
+
+So, we decide to allow a subset of mobile code that , ostensibly, is
+"secure" and sandboxed such as Java, Javascript. (We disallow stuff like
+ActiveX,Tcl applets, which allow arbitrary mobile code to access
+arbitrary system resources and have no security whatsoever)
+(2.3)PROBLEM: How exactly do we screen out the mobile code ?
+For example, the  Tcl applet is simply a Tcl script that is executed by
+a browser plug-in, how is the firewall to know that its an applet ? (Has
+to maintain state) (same problem as in Java applets)
+
+The basic problem here is that there are all kinds of browser plug-ins
+out there which users can install and the firewall has to know about
+them ALL if it is to know what it should disallow.... ---> difficult problem 
+--------------------
+
+(3) 
+The basic problems here are:
+* Its difficult to decide what exactly constitutes mobile code 
+* Its difficult to decide what exactly constitutes SAFE mobile code
+* Its difficult to filter out mobile code (being overcautious results in
+a loss of desirable functionality)
+All these are problems with the 
+general paradigm of mobile code and 
+the idea of using a firewall to prevent its unsafe use.
+@

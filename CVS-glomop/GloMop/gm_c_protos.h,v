@@ -1,0 +1,201 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     98.01.29.19.46.23;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.01.29.19.46.23;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
+ *  Establish connection to proxy
+ */
+
+/*
+ *  The GM_ConnectProxy function call is used to forge a new connection
+ *  to a proxy specified by proxyAddr.  proxyAddr should be a NULL
+ *  terminated string of the form "HOST PORT".  The auth_info structure
+ *  is used to authenticate a client to the target proxy.  A GM_ConnectId
+ *  of zero indicates that the connection attempt failed.  This function
+ *  call is synchronous - ie. the client will suspend until the connection
+ *  and authentication succeed.
+ */
+
+GM_ConnectId  GM_ConnectProxy(char *proxyAddr,
+			      GM_auth auth_info);
+
+/*
+ *  The GM_DisconnectProxy function call is used to destroy a currently
+ *  active proxy connection.  The connId field is a connection ID returned
+ *  from a previous GM_ConnectProxy function call.  A non-zero GM_Error
+ *  value indicates that the disconnection failed.  This call is
+ *  synchronous.
+ */
+
+GM_Error GM_DisconnectProxy(GM_ConnectId connId);
+
+/*
+ *  Register the list of types known.  Called once after connection, may
+ *  be called again later to update the list.  This call is asynchronous -
+ *  it will return immediately.
+ */
+
+GM_Error GM_RegisterTypes(TypeList *t);
+
+/* 
+ * Update the client's QOS preferences.  If a non-zero docID is provided,
+ * the QOS preferences for that document only are updated.  If a non-zero
+ * chunkID is provided as well as a non-zero docID, the QOS preferences for
+ * future refinements of that chunk are updated.  If both the docID and
+ * the chunkID are zero, the default QOS preferences for all chunks and
+ * documents are updated.
+ *
+ * If a non-zero doc_type or doc_subtype are specified, the QOS preference
+ * updates are restricted to the specified document type and/or subtype.
+ *
+ * This call lis asynchronous - it will return immediately.
+ */
+
+GM_Error GM_UpdateQOS(GM_QosPrefs   newPrefs,
+		      GM_DocId      doc_id,
+		      GM_ChunkId    chunk_id,
+		      GM_DocType    doc_type,
+		      GM_DocSubType doc_subtype);
+
+
+/*
+ *  Initiate a "get document" request.
+ *
+ *  Args:
+ *  
+ *  DocLocator structure: tells proxy how to locate the document in a
+ *  protocol-dependent way.  E.g. for HTTP, DocLocator may contain a
+ *  URL; for GMail, it may contain the name of the mailspool directory
+ *  and host; etc.
+ *
+ *  QosPrefs structure: specifies desired QOS params for this document.
+ *  If blank, the default QOS preferences for the document, doctype,
+ *  etc. are used.
+ *
+ *  AcceptTypes list: a list specifying which types are acceptable as
+ *  return.  If null, any type previously registered with proxy is OK.
+ *  Non-null lists only have scope within this call - to change default
+ *  acceptable types, the GM_RegisterTypes call must be used.
+ *
+ *  annotation: a descriptive comment about the request, stored locally
+ *  so client can review what requests are outstanding.  not used by the
+ *  proxy. 
+ *
+ *  callbackThresh: the number of document "chunks" that must arrive
+ *  before the callback procedure that receives the document is able to
+ *  do anything useful.  "Chunks" are defined relative to each datatype.
+ *
+ *  callbackProc: the procedure that should be called as soon as
+ *  CallbackThresh "chunks" of the document have arrived.  The
+ *  callback procedure and chunk threshold between calls can be
+ *  changed after the first callback.
+ *
+ *  ISSUE: Should the CallbackProc will continue to be called as new
+ *  chunks arrive, or should a client be forced to call GM_GetChunk on a
+ *  (range of) chunks for callbacks to happen for chunks within the range?
+ *
+ *  maxChunks: the maximum number of chunks to preload into the GloMop
+ *  layer initially.  By convention the first chunk is the document
+ *  table of contents.  Some symbolic constants are available to
+ *  specify things like "all chunks", "as many as will fit in some
+ *  existing buffer", etc.
+ *
+ *  ISSUE:  I believe the buffer argument is now obsolete.
+ *  buffer: if non-NULL, specifies where to store incoming chunks; if
+ *  NULL, GM will allocate the buffer space.  User-supplied buffer space
+ *  should be large enough to hold maxChunks.
+ *
+ *  Returns a document ID that will be passed to the callback proc
+ *  later to identify the document.  If the document ID is null, an
+ *  error occurred.  (TBD: an "errno"-like mechanism in which
+ *  information about the error is stored.)  This call is asynchronous.
+ *
+ */
+
+GM_DocID  GM_GetDoc(GM_DocLocator *loc,
+                  GM_TypeList *types,
+                  GM_QosPrefs *qos,
+                  char *annotation,
+                  GM_DocCallbackProcPtr callback,
+                  unsigned callbackThreshold,
+                  unsigned maxChunks);
+/*                  BlobPtr buffer  */  /* Obsolete? */
+
+/*
+ *  Get a chunk from an open document connection.  This may require
+ *  loading the chunk from the proxy if the chunk isn't already there.
+ *  (ISSUE: If chunk isn't available, the call should return
+ *  asynchronously & perform a callback when the chunk arrives.  Is
+ *  it redundant to implement that behavior both here and in GM_GetDoc?  Not
+ *  if GM_GetDoc only does the callback for the initial set of chunks,
+ *  as previously mentioned.
+ *  Alternatively: Maybe GM_GetDoc should only return the TOC (though it may
+ *  preload up to maxChunks chunks)? 
+ *
+ *  This call is asynchronous.
+ */
+GM_Chunk  GM_GetChunk(GM_DocId doc_id,
+                      GM_ChunkId chunk_id);
+                   
+/*
+ *  Close an open document connection.  All client-allocated buffers for
+ *  this document are freed, and the document is "forgotten about"; any
+ *  preloads in progress for this document are cancelled; etc.
+ *
+ *  This call is asynchronous.
+ */
+GM_Error  GM_CloseDoc(GM_DocId doc_id);
+                   
+/*
+ *  Set/change the callback proc for an existing request; any future
+ *  notifications on the request will go to the new proc.  Returns the
+ *  pointer to the old callback procedure (like signal(1)).
+ *  newMaxChunks refers to the new maximum number of chunks from this
+ *  document that can be preloaded into the GloMop layer from the proxy.
+ *  newThreshold refers to the new number of chunks that must be preloaded
+ *  before the callback procedure is called.
+ *  
+ *  This call will return immediately.
+ */
+
+GM_DocCallbackProcPtr GM_SetCallback(GM_DocID doc_id,
+                                     GM_DocCallbackProcPtr newProc,
+				     unsigned newMaxChunks,
+				     unsigned newThreshold,
+				     BlobPtr buffer);
+
+@
+
+
+1.1.1.1
+log
+@GloMOp bibliographies, meetings, etc, re-imported into GloMop CVS
+archive on full-sail
+@
+text
+@@

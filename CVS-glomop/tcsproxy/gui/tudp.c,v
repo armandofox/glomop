@@ -1,0 +1,1237 @@
+head	1.13;
+access;
+symbols
+	Yatin-final:1.12.2.1
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.12
+	fox-dev:1.12
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.6
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.13
+date	98.01.16.22.16.00;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.07.25.01.06.32;	author fox;	state Exp;
+branches
+	1.12.2.1;
+next	1.11;
+
+1.11
+date	97.07.24.23.37.04;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.07.22.01.06.50;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.21.21.30.17;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.21.17.15.29;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.16.08.15.35;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.01.28.03.55.23;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.08.03.39.19;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.23.21.40.25;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.08.19.33;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.22.01.29.12;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.21.23.25.08;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.21.23.25.08;	author fox;	state Exp;
+branches;
+next	;
+
+1.12.2.1
+date	97.11.17.22.06.53;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "tcl.h"
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
+#include <string.h>
+#include <stdio.h>
+#include <assert.h>
+
+#define TUDP_MAXPROCNAMELEN 80
+#define TUDP_DEFAULT_TTL    8
+#define TUDP_MAXMSGSIZE     1024 /* max size of a single message */
+
+typedef struct {
+  Tcl_Interp *cb_interp;
+  int cb_sock;
+  struct sockaddr_in cb_inaddr;
+
+#if TCL_MAJOR_VERSION < 8
+  Tcl_File cb_tclsock;
+#else
+  int cb_tclsock;
+#endif
+
+  char cb_procname[TUDP_MAXPROCNAMELEN];
+} CB;
+
+/*
+ *  Forward prototypes
+ */
+
+Tcl_PackageInitProc Tudp_Init;
+static int   Tudp_UdpListenCmd  _ANSI_ARGS_((ClientData cd, Tcl_Interp *i,
+                                         int argc, char *argv[]));
+static int   Tudp_UdpForgetCmd  _ANSI_ARGS_((ClientData cd, Tcl_Interp *i,
+                                         int argc, char *argv[]));
+static int   Tudp_UdpSendCmd    _ANSI_ARGS_((ClientData cd, Tcl_Interp *i,
+                                         int argc, char *argv[]));
+static int   Tudp_CreateUdpSocket _ANSI_ARGS_((Tcl_Interp *interp, int port,
+                                               CB *cb));
+static int   Tudp_CreateMulticastSocket _ANSI_ARGS_((Tcl_Interp *interp, 
+						     unsigned long multicast,
+						     int port, CB *cb,
+                                                     int ttl));
+
+static Tcl_FileProc Tudp_ReceiveDgram;
+
+/*
+ *  Tudp_Init adds the udp_listen and udp_cancel commands to the interpreter.
+ */
+
+int
+Tudp_Init(interp)
+     Tcl_Interp *interp;
+{
+
+  if (! Tcl_CreateCommand(interp, "udp_listen", 
+			Tudp_UdpListenCmd, (ClientData)NULL,
+                          (Tcl_CmdDeleteProc *)NULL)) {
+    Tcl_AppendResult(interp, "Can't create udp_listen command", (char *)NULL);
+    return TCL_ERROR;
+  }
+  if (! Tcl_CreateCommand(interp, "udp_cancel", Tudp_UdpForgetCmd,
+                          (ClientData)NULL, (Tcl_CmdDeleteProc *)NULL)) {
+    Tcl_AppendResult(interp, "Can't create udp_cancel command", (char *)NULL);
+    return TCL_ERROR;
+  }
+  if (! Tcl_CreateCommand(interp, "udp_send", Tudp_UdpSendCmd,
+                        (ClientData)NULL, (Tcl_CmdDeleteProc *)NULL)) {
+    Tcl_AppendResult(interp, "Can't create udp_send command", (char *)NULL);
+    return TCL_ERROR;
+  }
+  return TCL_OK;
+}
+
+void
+Tudp_UdpListenUsage(interp, procname, message)
+     Tcl_Interp *interp;
+     const char *procname;
+     const char *message;
+{
+  Tcl_AppendResult(interp, message, "Usage: ", procname,
+		   " -multicast multicast_addr/port_number\n -callback proc",
+                   "\n or: ", procname,
+                   " -unicast port_number -callback proc\n",
+		   (char *) NULL);
+}
+      
+
+/*
+ *  Tudp_UdpListenCmd
+ *
+ *  This procedure is invoked to handle the "udp_listen" command.  It
+ *  expects a UDP port number and the name of a callback function.  It
+ *  sets up the event-based callback to Tudp_ReceiveDgram, and sets
+ *  interp->result to the filehandle of the socket.
+ *
+ *  Format: udp_listen -multicast mcast_addr/port[/ttl] -callback proc
+ *          udp_listen -unicast port
+ */
+
+static int
+Tudp_UdpListenCmd(dummy, interp, argc, argv)
+     ClientData dummy;
+     Tcl_Interp *interp;
+     int argc;
+     char *argv[];
+{
+  int port, isMulticast=0;
+  int sock;
+  CB *callback_info;
+  unsigned long ipAddr;
+  char *callbackProc;
+  int i;
+  int ttl = TUDP_DEFAULT_TTL;
+  
+  port = -1;
+  ipAddr = 0xFFFFFFFF;
+  callbackProc = NULL;
+
+  for (i = 1; i < argc; i++) {
+
+    if (strcmp(argv[i], "-callback")==0) {
+      /*
+       *  Consume callback proc name
+       */
+      if (++i >= argc) {
+	Tudp_UdpListenUsage(interp, argv[0], 
+			    "No callback procedure specified\n");
+	return TCL_ERROR;
+      }
+      
+      if (strlen(argv[i]) > TUDP_MAXPROCNAMELEN-1) {
+	Tudp_UdpListenUsage(interp, argv[0], "Callback proc name too long\n");
+	return TCL_ERROR;
+      }
+
+      callbackProc = argv[i];
+      continue;
+    }
+
+    
+    if (strcmp(argv[i], "-address") == 0) {
+      /*
+       * consume -address plus address/port[/ttl]
+       */
+
+      char *port_p, *ttl_p;
+    
+      if (ipAddr!=0xFFFFFFFF) {
+        /* address has already been specified! */
+	Tudp_UdpListenUsage(interp,argv[0],
+			    "Duplicate network address option specified\n");
+	return TCL_ERROR;
+      }
+
+      /* Check for address/port number.  */
+      
+      if (++i == argc) {        /* this is the last arg */
+        Tudp_UdpListenUsage(interp,argv[0], "No address/port specified\n");
+	return TCL_ERROR;
+      }
+
+      /* consume address/port specification */
+      if ((port_p = strchr(argv[i], '/'))==NULL) {
+        Tudp_UdpListenUsage(interp,argv[0],
+                            "Must specify both address and port number\n");
+        return TCL_ERROR;
+      }
+      *port_p++ = '\0';
+
+      if ((ttl_p = strchr(port_p, '/')) != NULL) {
+        *ttl_p++ = '\0';
+        if (Tcl_GetInt(interp, ttl_p, &ttl) != TCL_OK 
+            || ttl < 0 || ttl > 255) {
+          Tudp_UdpListenUsage(interp, argv[0],
+                              "Invalid TTL (must be between 0 and 255)");
+          return TCL_ERROR;
+        }
+      }
+      
+      ipAddr = inet_addr(argv[i]);
+
+      /*
+       * ipAddr may be a valid multicast addr, a valid unicast addr or 
+       * a hostname
+       */
+
+      if ((Tcl_GetInt(interp, port_p, &port) != TCL_OK)
+          || port <= 0 || port > 65535) {
+        Tudp_UdpListenUsage(interp,argv[0],"Invalid port number ",
+                            "(must be between 1 and 65535)\n");
+        return TCL_ERROR;
+      }
+
+      if (ipAddr==0xFFFFFFFF || IN_CLASSD(ntohl(ipAddr))==0) {
+	/* this is a unicast address */
+	isMulticast = 0;
+      }
+      else {
+	/* this is a multicast address */
+	isMulticast = 1;
+      }
+      continue;
+    }
+
+#if 0
+    if (strcmp(argv[i], "-multicast") == 0) {
+      char *port_p, *ttl_p;
+      /*
+       *  consume -multicast plus address/port.
+       */
+      isMulticast = 1;
+    
+      if (ipAddr!=0xFFFFFFFF) {
+        /* address has already been specified! */
+	Tudp_UdpListenUsage(interp,argv[0],
+			    "Duplicate network address option specified\n");
+	return TCL_ERROR;
+      }
+
+      /* Check for address/port number.  */
+      
+      if (++i == argc) {        /* this is the last arg */
+        Tudp_UdpListenUsage(interp,argv[0], "No address/port specified\n");
+	return TCL_ERROR;
+      }
+
+      /* consume address/port specification */
+      if ((port_p = strchr(argv[i], '/'))==NULL) {
+        Tudp_UdpListenUsage(interp,argv[0],
+                            "Must specify both address and port number\n");
+        return TCL_ERROR;
+      }
+      *port_p++ = '\0';
+
+      if ((ttl_p = strchr(port_p, '/')) != NULL) {
+        *ttl_p++ = '\0';
+        if (Tcl_GetInt(interp, ttl_p, &ttl) != TCL_OK 
+            || ttl < 0 || ttl > 255) {
+          Tudp_UdpListenUsage(interp, argv[0],
+                              "Invalid TTL (must be between 0 and 255)");
+          return TCL_ERROR;
+        }
+      }
+      
+      ipAddr = inet_addr(argv[i]);
+      if (ipAddr==0xFFFFFFFF) {
+        Tudp_UdpListenUsage(interp, argv[0], "Invalid address\n");
+        return TCL_ERROR;
+      }
+      if ((Tcl_GetInt(interp, port_p, &port) != TCL_OK)
+          || port <= 0 || port > 65535) {
+        Tudp_UdpListenUsage(interp,argv[0],"Invalid port number ",
+                            "(must be between 1 and 65535)\n");
+        return TCL_ERROR;
+      }
+      continue;
+    }
+
+    if (strcmp(argv[i], "-unicast") == 0) {
+
+      char *port_p;
+
+      ++i;
+      port_p = strchr(argv[i], '/');
+      if (port_p != 0)
+        port_p++;
+      else
+        port_p = argv[i];
+
+      isMulticast = 0;
+      
+      if ((Tcl_GetInt(interp, port_p, &port) != TCL_OK)
+          || port<=0 || port > 65535) {
+        Tudp_UdpListenUsage(interp,argv[0],"Invalid port number ",
+                            "(must be between 1 and 65535)\n");
+        return TCL_ERROR;
+      }
+      continue;
+    }
+#endif
+    
+    /* here if no argument keyword was matched */
+
+    Tcl_AppendResult(interp, "Incorrect argument: ", argv[i], "\n", 
+                     (char *)NULL);
+    Tudp_UdpListenUsage(interp, argv[0], "");
+    return TCL_ERROR;
+  }
+
+  /* sanity check arguments */
+  if (port==-1 || callbackProc==NULL) {
+    Tudp_UdpListenUsage(interp, argv[0], "Incorrect number of arguments\n");
+    return TCL_ERROR;
+  }
+
+  assert(callback_info = (CB *)ckalloc(sizeof(CB)));
+
+  if (isMulticast==0) {
+    /* we are using unicast UDP */
+    sock = Tudp_CreateUdpSocket(interp, port, callback_info);
+  } else {
+    sock = Tudp_CreateMulticastSocket(interp, ipAddr, port, callback_info, ttl);
+  }
+
+  if (sock==-1) return TCL_ERROR;
+  
+  /*
+   *  now register the Tcl callback
+   */
+  strcpy(callback_info->cb_procname, callbackProc);
+
+#if TCL_MAJOR_VERSION < 8
+  callback_info->cb_tclsock = Tcl_GetFile((ClientData)sock, TCL_UNIX_FD);
+  if (callback_info->cb_tclsock == (Tcl_File)NULL) {
+    Tcl_AppendResult(interp, "Tcl_GetFile call failed for socket", 
+		     (char *)NULL);
+    return TCL_ERROR;
+  }
+#else
+  callback_info->cb_tclsock = sock;
+#endif
+
+  callback_info->cb_interp = interp;
+  callback_info->cb_sock = sock;
+  Tcl_CreateFileHandler(callback_info->cb_tclsock, TCL_READABLE|TCL_EXCEPTION,
+                        Tudp_ReceiveDgram, (ClientData)callback_info);
+  sprintf(interp->result, "%lu", (unsigned long)callback_info);
+  return TCL_OK;
+}
+
+static int
+Tudp_UdpSendCmd(cdata, interp, argc, argv)
+     ClientData cdata;
+     Tcl_Interp *interp;
+     int argc;
+     char *argv[];
+{
+  CB *cb;
+  
+  if (argc != 3) {
+    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
+                     " callback_cookie string\"", (char *)NULL);
+    return TCL_ERROR;
+  }
+
+  cb = (CB *)strtoul(argv[1], (char **)NULL, 0);
+
+  if (sendto(cb->cb_sock, (const char *)argv[2], strlen(argv[2]),
+             0, (const struct sockaddr *)&(cb->cb_inaddr),
+             sizeof(struct sockaddr_in))
+      == -1) {
+    Tcl_AppendResult(interp, argv[0], ": ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  } else {
+    return TCL_OK;
+  }
+}
+
+
+static int
+Tudp_UdpForgetCmd(dummy, interp, argc, argv)
+     ClientData dummy;
+     Tcl_Interp *interp;
+     int argc;
+     char *argv[];
+{
+  CB *cb;
+  if (argc != 2) {
+    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
+                     " callback_cookie\"", (char *) NULL);
+    return TCL_ERROR;
+  }
+
+  cb = (CB *)strtoul(argv[1], (char **)NULL, 0);
+  close(cb->cb_sock);
+  Tcl_DeleteFileHandler(cb->cb_tclsock);
+#if TCL_MAJOR_VERSION < 8
+  Tcl_FreeFile(cb->cb_tclsock);
+#endif
+  ckfree((char *)cb);
+  return TCL_OK;
+}
+
+
+
+/*
+ * This function creates a (unicast) UDP socket listening on "port"
+ * Returns the socket id on success; -1 on failure
+ */
+static int
+Tudp_CreateUdpSocket(interp, port, cb)
+     Tcl_Interp *interp;
+     int port;
+     CB *cb;
+{
+
+  if ((cb->cb_sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+    Tcl_AppendResult(interp, "socket: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+
+  cb->cb_inaddr.sin_addr.s_addr = INADDR_ANY;
+  cb->cb_inaddr.sin_family = AF_INET;
+  cb->cb_inaddr.sin_port = htons(port);
+  if (bind(cb->cb_sock, (struct sockaddr *)&(cb->cb_inaddr),
+           sizeof(struct sockaddr_in)) < 0) {
+    close(cb->cb_sock);
+    Tcl_AppendResult(interp, "bind: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+  return cb->cb_sock;
+}
+
+
+/*
+ * This function creates a multicast socket listening on "multicastAddr/port"
+ * Returns the socket descriptor on success; -1 on failure
+ */
+static int
+Tudp_CreateMulticastSocket(interp, multicastAddr, port, cb, ttl)
+     Tcl_Interp *interp;
+     unsigned long multicastAddr;
+     int port;
+     CB *cb;
+     int ttl;
+{
+  int on;
+  struct sockaddr_in *sin = &(cb->cb_inaddr);
+  struct ip_mreq mr;
+  unsigned char u_ttl = (unsigned char)ttl;
+
+  if ((cb->cb_sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+    Tcl_AppendResult(interp, "socket: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+
+  on = 1;
+  if (setsockopt(cb->cb_sock,SOL_SOCKET,SO_REUSEADDR,(char*)&on,sizeof(on))<0) {
+    Tcl_AppendResult(interp, "reuseaddr: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+  if (setsockopt(cb->cb_sock,IPPROTO_IP,IP_MULTICAST_TTL, (char *)&u_ttl,
+                 sizeof(u_ttl)) < 0) {
+    Tcl_AppendResult(interp, "setting ttl: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+
+  memset((char*)sin, 0, sizeof(struct sockaddr_in));
+  sin->sin_family = AF_INET;
+  sin->sin_port   = htons((u_short)port);
+  sin->sin_addr.s_addr = multicastAddr;
+
+  if (IN_CLASSD(ntohl(sin->sin_addr.s_addr))==0) {
+    close(cb->cb_sock);
+    Tcl_AppendResult(interp,"multicast: not a Class-D address\n",(char *)NULL);
+    return -1;
+  }
+
+  if (bind(cb->cb_sock, (struct sockaddr*)sin, sizeof(struct sockaddr_in)) < 0) {
+    close(cb->cb_sock);
+    Tcl_AppendResult(interp, "bind: ", strerror(errno), (char *)NULL);
+    return -1;
+  }
+
+  /* This multicast setup shouldn't really be required */
+  /* That's what the vic code says - Yatin */
+  mr.imr_multiaddr.s_addr = sin->sin_addr.s_addr;
+  mr.imr_interface.s_addr = INADDR_ANY;
+  if (setsockopt(cb->cb_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&mr, 
+		 sizeof(mr)) < 0) {
+    close(cb->cb_sock);
+    Tcl_AppendResult(interp, "add-membership: ",strerror(errno), (char *)NULL);
+    return -1;
+  }
+
+  return cb->cb_sock;
+}
+
+
+/*
+ *  Callback routine.
+ *  Receive a packet, and call the Tcl callback proc with the sending host
+ *  IP address, sending port number, and the string.
+ */
+
+static void
+Tudp_ReceiveDgram(cd, mask)
+     ClientData cd;
+     int mask;
+{
+
+  CB *cb;
+  int fromlen = sizeof(struct sockaddr);
+  int msglen;
+  char sender_ipaddr[20], sender_port[8];
+  unsigned long ipaddr;
+  struct sockaddr from;
+  struct sockaddr_in *fromp = (struct sockaddr_in *)&from;
+  char buf[TUDP_MAXMSGSIZE];
+
+  cb = (CB *)cd;
+  msglen = recvfrom(cb->cb_sock, buf, TUDP_MAXMSGSIZE-1, 0,
+                    &from, &fromlen);
+  assert(cb);
+  if (msglen <= 0) {
+    Tcl_AppendResult(cb->cb_interp, "recvfrom returned ", strerror(errno),
+                     (char *)NULL);
+    Tcl_BackgroundError(cb->cb_interp);
+    return;
+  }
+  buf[msglen] = 0;
+  /*
+   *  Parse out IP address and port of sender from the sockaddr_in.
+   */
+
+  sprintf(sender_port, "%d", (int)(ntohs(fromp->sin_port)));
+  ipaddr = (unsigned long)(fromp->sin_addr.s_addr);
+  sprintf(sender_ipaddr, "%d.%d.%d.%d", (int)(ipaddr >> 24),
+          (int)((ipaddr >> 16) & 0xff), (int)((ipaddr >> 8) & 0xff),
+          (int)(ipaddr & 0xff));
+  
+  /*
+   *  If the datagram contains any zeros, replace them with '@@'.
+   */
+          
+  /*buf[msglen] = '\0';
+  for (index = 0; index < msglen; index++)
+    if (buf[index] == '\0')
+      buf[index] = '@@';*/
+
+  /*
+   *  deliver it....
+   */
+
+  if (Tcl_VarEval(cb->cb_interp, cb->cb_procname, " ",
+                  sender_ipaddr, " ", sender_port, 
+                  " {",
+                  buf, "}", (char *)NULL)
+      != TCL_OK) 
+    Tcl_BackgroundError(cb->cb_interp);
+}
+
+    
+    
+@
+
+
+1.12
+log
+@temporary commit so anthony can make; still tracking memory bug interaction frontend/clientlib
+@
+text
+@d23 2
+d26 4
+d318 6
+a323 3
+  if ((callback_info->cb_tclsock = Tcl_GetFile((ClientData)sock, TCL_UNIX_FD))
+      == (Tcl_File)NULL) {
+    Tcl_AppendResult(interp, "TclFile call failed for socket", (char *)NULL);
+d326 4
+d384 1
+d386 1
+@
+
+
+1.12.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a22 2
+
+#if TCL_MAJOR_VERSION < 8
+a23 4
+#else
+  int cb_tclsock;
+#endif
+
+d312 3
+a314 6
+
+#if TCL_MAJOR_VERSION < 8
+  callback_info->cb_tclsock = Tcl_GetFile((ClientData)sock, TCL_UNIX_FD);
+  if (callback_info->cb_tclsock == (Tcl_File)NULL) {
+    Tcl_AppendResult(interp, "Tcl_GetFile call failed for socket", 
+		     (char *)NULL);
+a316 4
+#else
+  callback_info->cb_tclsock = sock;
+#endif
+
+a370 1
+#if TCL_MAJOR_VERSION < 8
+a371 1
+#endif
+@
+
+
+1.11
+log
+@More stuff has changed....cutthrough behaviour for large files is
+defined for the cache library.
+@
+text
+@d1 1
+a1 1
+#include "tcl/tcl.h"
+@
+
+
+1.10
+log
+@Modified Makefile.in in gui to get it to compile on Solaris
+@
+text
+@d1 1
+a1 1
+#include "tcl.h"
+@
+
+
+1.9
+log
+@Changes to monitor to do unicast and multicast listening properly
+Modified distiller database so that everything after "--" is assumed to
+be command line args to the distiller
+@
+text
+@a18 5
+#ifdef __GNUC__
+  /* This is necessary to force link against libgcc...  */
+  void (*dummy)() = __eprintf;
+#endif
+
+@
+
+
+1.8
+log
+@minor changes to make monitor unicast-capable and allow compilation on other linuxes (need explicit link to libgcc?)
+@
+text
+@d146 66
+d286 1
+@
+
+
+1.7
+log
+@makefile changes to get everything to compile with 2 different versions of pthreads, and with tcl/tk that does not already link the gcc library.
+@
+text
+@d201 9
+d211 2
+a212 1
+      if ((Tcl_GetInt(interp, argv[++i], &port) != TCL_OK)
+@
+
+
+1.6
+log
+@bug fix to tudp.so, usability fixes to libmon
+@
+text
+@d19 5
+@
+
+
+1.5
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@d17 1
+d414 1
+a414 1
+  char buf[512];
+d417 1
+a417 1
+  msglen = recvfrom(cb->cb_sock, buf, 512, 0,
+d426 1
+a426 1
+
+@
+
+
+1.4
+log
+@Updated GUI with new command line options
+@
+text
+@d15 2
+a16 2
+#define MAXPROCNAMELEN 80    
+#define MAXARGS 256             /* max # strings in a single UDP dgram */
+d21 1
+d23 1
+a23 1
+  char cb_procname[MAXPROCNAMELEN];
+d35 4
+a38 1
+static int   Tudp_CreateUdpSocket _ANSI_ARGS_((Tcl_Interp *interp, int port));
+d41 2
+a42 1
+						     int port));
+d54 2
+a55 1
+  if (Tcl_CreateCommand(interp, "udp_listen", 
+d57 12
+a68 5
+                        (Tcl_CmdDeleteProc *)NULL)
+      && Tcl_CreateCommand(interp, "udp_cancel", Tudp_UdpForgetCmd,
+                           (ClientData)NULL, (Tcl_CmdDeleteProc *)NULL))
+    return TCL_OK;
+  else
+d70 2
+a73 1
+
+d81 3
+a83 3
+		   " -multicast <multicast-addr/port-number>/"
+		   "-unicast <port-number>\n"
+		   "                  -callback <callback-handler>\n", 
+d96 2
+a97 2
+ *  Format: udp_listen [-multicast <multicast-addr>] -port <port-number>
+ *                      -callback <callback-handler>
+d111 4
+a114 2
+  char *callbackProc, **current, *slash;
+
+d119 20
+a138 1
+  for (current=argv+1; current < argv+argc; current++) {
+d140 6
+a145 3
+    if (strcmp(*current, "-multicast")==0 || strcmp(*current, "-unicast")==0) {
+      if (strcmp(*current, "-multicast")==0) isMulticast = 1;
+      else isMulticast = 0;
+d148 1
+d154 4
+a157 5
+      if (++current >= argv+argc) {
+	if (isMulticast==0) 
+	  Tudp_UdpListenUsage(interp,argv[0],"No port number specified\n");
+	else
+	  Tudp_UdpListenUsage(interp,argv[0],"No address/port specified\n");
+d161 5
+a165 2
+      if (isMulticast==0) {
+	slash = *current - 1;
+d167 10
+a176 13
+      else {
+	if ((slash = strchr(*current, '/'))==NULL) {
+	  Tudp_UdpListenUsage(interp,argv[0],
+			      "Must specify both address and port number\n");
+	  return TCL_ERROR;
+	}
+	
+	*slash = '\0';
+	ipAddr = inet_addr(*current);
+	if (ipAddr==0xFFFFFFFF) {
+	  Tudp_UdpListenUsage(interp, argv[0], "Invalid address\n");
+	  return TCL_ERROR;
+	}
+d178 11
+a188 6
+
+      port = atoi(slash+1);
+      if (port<=0 || port > 65535) {
+	Tudp_UdpListenUsage(interp,argv[0],"Invalid port number "
+			    "(must be between 1 and 65535)\n");
+	return TCL_ERROR;
+a189 1
+
+d192 9
+a200 6
+    
+    if (strcmp(*current, "-callback")==0) {
+      if (++current >= argv+argc) {
+	Tudp_UdpListenUsage(interp, argv[0], 
+			    "No callback procedure specified\n");
+	return TCL_ERROR;
+a201 7
+      
+      if (strlen(*current) > MAXPROCNAMELEN-1) {
+	Tudp_UdpListenUsage(interp, argv[0], "Callback proc name too long\n");
+	return TCL_ERROR;
+      }
+
+      callbackProc = *current;
+d205 4
+a208 2
+    Tcl_AppendResult(interp, "Incorrect argument: ", *current, "\n", 
+		     (char *)NULL);
+d212 2
+a213 2
+  
+  
+d219 1
+d222 4
+a225 5
+    /* we are using UDP */
+    sock = Tudp_CreateUdpSocket(interp, port);
+  }
+  else {
+    sock = Tudp_CreateMulticastSocket(interp, ipAddr, port);
+a229 2
+
+
+d231 1
+a231 1
+   *  now register the callback
+a232 1
+  assert(callback_info = (CB *)ckalloc(sizeof(CB)));
+d247 28
+d301 1
+a301 1
+ * This function creates a UDP socket listening on "port"
+d305 1
+a305 1
+Tudp_CreateUdpSocket(interp, port)
+d308 1
+a309 2
+  int sock;
+  struct sockaddr_in inaddr;
+d311 1
+a311 1
+  if ((sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+d316 6
+a321 5
+  inaddr.sin_addr.s_addr = INADDR_ANY;
+  inaddr.sin_family = AF_INET;
+  inaddr.sin_port = htons(port);
+  if (bind(sock, (struct sockaddr *)&inaddr, sizeof(inaddr)) < 0) {
+    close(sock);
+d325 1
+a325 2
+
+  return sock;
+d334 1
+a334 1
+Tudp_CreateMulticastSocket(interp, multicastAddr, port)
+d338 2
+d341 2
+a342 2
+  int sock, on;
+  struct sockaddr_in sin;
+d344 1
+d346 1
+a346 1
+  if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+d352 1
+a352 1
+  if (setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,(char*)&on,sizeof(on))<0) {
+d356 5
+d362 4
+a365 4
+  memset((char*)&sin, 0, sizeof(sin));
+  sin.sin_family = AF_INET;
+  sin.sin_port   = htons((u_short)port);
+  sin.sin_addr.s_addr = multicastAddr;
+d367 2
+a368 2
+  if (IN_CLASSD(ntohl(sin.sin_addr.s_addr))==0) {
+    close(sock);
+d373 2
+a374 2
+  if (bind(sock, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
+    close(sock);
+d381 1
+a381 1
+  mr.imr_multiaddr.s_addr = sin.sin_addr.s_addr;
+d383 1
+a383 1
+  if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&mr, 
+d385 1
+a385 1
+    close(sock);
+d390 1
+a390 1
+  return sock;
+a393 2
+
+
+d395 3
+a397 3
+ *  Callback routine.  Receive a packet, chop it up into null-terminated
+ *  ASCII strings, and call the Tcl callback proc with the sending host
+ *  IP address, sending port number, and the strings.
+@
+
+
+1.3
+log
+@The Monitor GUI currently has the Log script predefined.
+Need to add other scripts
+@
+text
+@d2 1
+a2 1
+
+d8 1
+d60 1
+d66 5
+a70 3
+  Tcl_AppendResult(interp, message, "Usage: \"", procname,
+		   " [-multicast <multicast-addr>] -port <port-number> "
+		   "-callback <callback-handler>\"", (char *) NULL);
+d93 1
+a93 1
+  int port;
+a94 3
+  int protonum;
+  struct protoent *pr;
+  struct sockaddr_in inaddr;
+d96 2
+a97 2
+  unsigned long multicastAddr;
+  char *callbackProc, **current;
+d100 1
+a100 1
+  multicastAddr = 0xFFFFFFFF;
+d104 8
+a111 3
+    if (strcmp(*current, "-multicast")==0) {
+      if (++current >= argv+argc) {
+	Tudp_UdpListenUsage(interp,argv[0],"No multicast address specified\n");
+d115 5
+a119 3
+      multicastAddr = inet_addr(*current);
+      if (multicastAddr==0xFFFFFFFF) {
+	Tudp_UdpListenUsage(interp, argv[0], "Invalid multicast address\n");
+a121 2
+      continue;
+    }
+d123 16
+a138 4
+    if (strcmp(*current, "-port")==0) {
+      if (++current >= argv+argc) {
+	Tudp_UdpListenUsage(interp, argv[0], "No port number specified\n");
+	return TCL_ERROR;
+d141 1
+a141 1
+      port = atoi(*current);
+d143 2
+a144 2
+	Tudp_UdpListenUsage(interp, argv[0], "Invalid port number "
+			    "(must be between 1 and 65535)");
+d147 1
+d150 1
+a150 1
+
+d157 1
+a157 1
+
+d166 1
+a166 1
+
+d172 2
+a173 2
+
+
+d180 1
+a180 1
+  if (multicastAddr==0xFFFFFFFF) {
+d185 1
+a185 1
+    sock = Tudp_CreateMulticastSocket(interp, multicastAddr, port);
+a336 1
+  int index;
+@
+
+
+1.2
+log
+@The new monitoring GUI with multicast support
+@
+text
+@d325 1
+a325 1
+  char buf[100];
+d328 1
+a328 1
+  msglen = recvfrom(cb->cb_sock, buf, 100, 0,
+d352 1
+a352 1
+  buf[msglen] = '\0';
+d355 1
+a355 1
+      buf[index] = '@@';
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d33 5
+d48 2
+a49 1
+  if (Tcl_CreateCommand(interp, "udp_listen", Tudp_UdpListenCmd, (ClientData)NULL,
+d57 11
+d77 3
+d95 2
+d98 53
+a150 3
+  if (argc != 3) {
+    Tcl_AppendResult(interp, "wrong # args: should be \"", argv[0],
+                     " portnum callbackproc\"", (char *) NULL);
+d153 4
+a156 2
+  if (strlen(argv[2]) > MAXPROCNAMELEN-1) {
+    Tcl_AppendResult(interp, "callback proc name too long", (char *)NULL);
+d160 7
+a166 4
+  port = atoi(argv[1]);
+  if (port > 65535) {
+    Tcl_AppendResult(interp, "Port must be <65535", (char *)NULL);
+    return TCL_ERROR;
+d169 2
+a170 5
+  if ((pr = getprotobyname("udp")) == NULL) {
+    Tcl_AppendResult(interp, "getprotobyname: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+  protonum = pr->p_proto;
+a171 4
+  if ((sock = socket(PF_INET, SOCK_DGRAM, 17)) < 0) {
+    Tcl_AppendResult(interp, "socket: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+a172 7
+  inaddr.sin_addr.s_addr = INADDR_ANY;
+  inaddr.sin_family = AF_INET;
+  inaddr.sin_port = htons(port);
+  if (bind(sock, (struct sockaddr *)&inaddr, sizeof(inaddr)) < 0) {
+    Tcl_AppendResult(interp, "bind: ", strerror(errno), (char *)NULL);
+    return TCL_ERROR;
+  }
+d177 1
+a177 1
+  strcpy(callback_info->cb_procname, argv[2]);
+d191 1
+d213 91
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

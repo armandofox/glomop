@@ -1,0 +1,365 @@
+head	1.8;
+access;
+symbols
+	release:1.7
+	Release:1.5;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	95.10.25.23.01.49;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.25.03.00.08;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.18.05.29.07;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.10.18.05.20.10;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.16.23.12.02;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.16.19.35.50;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.13.03.19.22;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.11.01.21.05;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@cleaned up some other stuff.  socket stuff is nicer now.
+@
+text
+@#
+#  Authentication for GloMop proxy.
+#
+#  Authentication is handled as follows.
+#   1. Client encrypts password using a secret invertible matrix and random
+#      salt supplied by proxy.
+#   2. We have the matrix in a protected file, so we read it, multiply it by
+#      the salt, invert it, and use the inverted matrix to recover the password
+#      typed by the user.
+#   3. We encrypt the password using the one-way crypt function and compare it
+#      to the encrypted password stored in GloMop's password file.  Note that
+#      GloMop passwords are different from NIS passwords.
+#   4. If they match, the proxy forks a copy of itself which runs as the user,
+#      and exits when done.
+#
+
+package gm_auth;
+# use strict 'vars';
+
+@@Mat = ();
+
+sub new {
+    shift;
+    local($matrix) = shift;
+    local($insecure) = shift;
+    local($/) = '';
+    local($i);
+
+    # are we running insecurely?
+
+    my $self = bless {};
+
+    $self->{insecure} = 1
+        if $insecure eq 'pythia';
+
+    # Read the secret 4x4 matrix
+    open(MAT, $matrix) || die "$matrix: $!";
+    my(@@vals) = split(/\s+/,<MAT>);
+    close MAT;
+    #
+    #  Put the matrix into a square array
+    #
+    for ($i=0; $i <= 15; $i++) {
+        $Mat[int($i/4)][$i % 4] = shift @@vals;
+    }
+    
+    undef @@vals;                                # for safety
+    return (bless $self);
+}
+
+######################################################################
+#   checkpass
+#
+#   Given username, encrypted password, and salt, returns 1 iff authentic.
+#   Multiplies encrypted password by the magic matrix, scales resulting vector
+#   by the salt value, converts vector to a word, crypts it, and compares with
+#   user's entry in the local passwd file.
+#
+#   RETURNS:  (n, str)
+#     n != 0 means success; n==0 means failure, str is the error msg.
+#
+######################################################################
+
+sub checkpass {
+    my($self) = shift;
+    my($username, $pass, $salt) = @@_;
+    my($vecs) = ();
+    my($k, @@ivec, @@ovec);
+    my($passwd, $gotsalt) = ();
+    my($nispass) = ();
+    #
+    #  The salted password is actually a whitespace-separated list of vector
+    #  elements.  Break it up into a number of 4-vectors.  Multiply each by the
+    #  decryption matrix; this will result in a 4-vector that alternates 
+    #  password components with salt components (P1 S1 P2 S2).  Use these to
+    #  gradually build up the password and salt.  Once done, run the password
+    #  through crypt() and compare result to what is stored for the user's
+    #  password in the proxy's pass file, and also verify that the salt
+    #  matches. 
+    #
+
+    for ($k=0; $k<4; $k++) {
+        if ($pass =~ s/^\s*(\d+)\s+(\d+)+\s+(\d+)\s+(\d+)//) {
+            @@ivec = ($1,$2,$3,$4);
+        } else {
+            return (0, "Malformed password");
+        }
+        @@ovec = (0,0,0,0);
+        for ($i=0; $i<4; $i++) {
+            for ($j=0; $j<4; $j++) {
+                $ovec[$i] += $ivec[$j] * $Mat[$i][$j];
+            }
+        }
+        $passwd .= chr(int($ovec[0]+0.5)) . chr(int($ovec[2]+0.5));
+        $gotsalt .= chr(int($ovec[1]+0.5)) . chr(int($ovec[3]+0.5));
+    }
+    
+    #  If passwd or salt is not exactly 8 characters, fail.
+    return (0, "Malformed password or salt")
+        if ((length($passwd) != 8) || (length($salt) != 8));
+
+    # Since passwd may have been padded to 8 characters, remove trailing nulls
+    # if any.  The crypt function appears to pad trailing nulls anyway when
+    # necessary. 
+
+    $passwd =~ s/\0+$//;
+
+    #  If salt doesn't match, fail.
+    return (0, "Bad salt")
+        if $gotsalt ne $salt;
+
+    # Check one-way encryption
+
+    $nispass = (getpwnam($username))[1];
+
+    # If we don't have a password entry for this user, fail.
+    return (0, "Who are you?")
+        unless $nispass;
+
+    $passwd = crypt($passwd, substr($nispass,0,2));
+    return (0, "Bad password or salt")
+        unless $passwd ne substr($storedpass, 2);
+
+    return (1, "+ok");
+}
+
+######################################################################
+#  conn_handshake: perform initial connection handshake and authenticate user.
+#
+#  Arguments: object reference to the 'sock' object.
+#  Returns:  (1, devicename, username) if success
+#            (0, devicename, username) if error
+#
+#  Assumptions:  'sock' object has been initialized and its readsock and
+#  writesock methods can be assumed to work.
+#
+#  Side effects: authenticates the user by calling the checkpass function.
+######################################################################
+
+sub conn_handshake {
+    my $self = shift;
+    my $sock = shift;
+    local(@@result);
+    local($leftover);
+    my($devicename, $username);
+    
+    &aux'debug("Accepting handshake");
+
+    $_ = $sock->readsock();                         #read handshk line 
+
+    ($leftover,@@result) = &aux'pick_strings($_);
+
+    if ($result[0] !~ /c/i) {
+        &aux'debug("Bad connect handshake");
+        return 0;
+    }
+    
+    #
+    # record presence of new client
+    #
+
+    &aux'debug("Client acknowledged");
+    ($devicename, $username) = @@result[1,2];
+
+    #
+    #  Select random salt and send it.
+    #
+
+    local($salt);
+    srand;
+    
+    $salt .= ('A'..'Z', 'a'..'z', '0'..'9')[int(rand(62))]
+        while length($salt) < 8;
+
+    writesock $sock "s \#$salt\#\n";
+    #
+    # wait for salted encrypted password to arrive
+    #
+    $_ = readsock $sock;
+    ($leftover, $cmd, $pass) = &aux'pick_strings($_);
+    if ($cmd !~ /a/i) {
+        writesock $sock ("ERR 0 auth handshake failed\n");
+        return 0;
+    }
+    #
+    #  do authentication....
+    #
+    ($result, $err) = checkpass gm_auth $username, $pass, $salt;
+
+    $result = 1 if ($self->{insecure});
+    
+    if ($result) {
+        &aux'log("Connected $devicename:$username");
+        return (1, $devicename, $username);
+    } else {
+        &aux'log("Authentication failed for $devicename:$username");
+        return (0, $devicename, $username);
+    }
+}
+
+1;
+@
+
+
+1.7
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d149 1
+a149 1
+    $_ = readsock $sock;                         #read handshk line 
+@
+
+
+1.6
+log
+@authentication can be disabled in debugging mode
+@
+text
+@a22 1
+    my $self = {};
+d25 1
+d28 8
+d190 2
+a191 2
+    $result = 1 if ($self->{Config}->{debugging} eq 'pythia');
+
+@
+
+
+1.5
+log
+@Mail works again!
+@
+text
+@d181 3
+a183 1
+    $result = 1;
+@
+
+
+1.4
+log
+@foo
+@
+text
+@d164 1
+a164 1
+    $salt .= ('A'..'Z', 'a'..'z', '0..9')[int(rand(62))]
+a182 1
+        writesock $sock "+ok\n";
+a185 1
+        writesock $sock ("ERR 0 $err\n");
+@
+
+
+1.3
+log
+@foo
+@
+text
+@d181 1
+a181 1
+
+@
+
+
+1.2
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@d181 1
+a181 1
+    $result = 1;
+@
+
+
+1.1
+log
+@Compactified and encapsulated some of the code.  Auth seems to be in
+reasonable shape.  Still need to test the suid stuff.
+@
+text
+@d75 5
+a79 2
+        (@@ivec = ($1,$2,$3,$4))
+            if $pass =~ s/^\s*(\d+)\s+(\d+)+\s+(\d+)\s+(\d+)//;
+d114 1
+a114 1
+        unless $passwd eq substr($storedpass, 2);
+d162 2
+a163 1
+    srand((times)[0]);
+d166 1
+d174 1
+a174 1
+        writesock $sock ("ERR auth handshake failed\n");
+d181 1
+d187 1
+a187 1
+        writesock $sock ("ERR $err\n");
+@

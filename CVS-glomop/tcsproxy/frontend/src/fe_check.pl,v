@@ -1,0 +1,433 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.7
+	Yatin:1.7.0.2
+	pre-yatin-merge:1.7
+	transend-beta2:1.5
+	fox-dev:1.5
+	frontend-ng:1.5
+	transend-beta-latest:1.5
+	Aggregators:1.4
+	NoAggregators:1.4
+	iang:1.4.0.4
+	transend-beta:1.4.0.2;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	98.01.21.04.29.15;	author transend;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.12.15.04.57.21;	author tkimball;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.10.30.02.26.23;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.06.03.06.34;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.06.04.01.16.41;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.04.27.06.53.45;	author fox;	state Exp;
+branches
+	1.4.2.1;
+next	1.3;
+
+1.3
+date	97.04.18.23.57.28;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.04.18.23.55.43;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.18.23.35.07;	author fox;	state Exp;
+branches;
+next	;
+
+1.4.2.1
+date	97.04.27.19.08.32;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@.
+@
+text
+@#!/usr/sww/bin/perl
+use Socket;
+
+# poll every 30 sec; if no reply after 30 sec, save all core files,
+# frontend/frontend.errs, then send mail to transend-bugs@@latte
+
+# here is the pseudocode for the state machine
+
+# State 0:
+#   restart FE
+#   if (successful ping before timeout) {
+#     goto state 1
+#   } else {
+#     send email "restart failed, will keep trying"
+#     goto state 2
+#   }
+# State 1: (system successfully running)
+#   while (successful ping) {
+#     stay in this state
+#   }
+#   send email "frontend crashed, trying to restart"
+#   goto state 0
+# State 2: (previous restart failed)
+#   while (! (successful ping)) {
+#     stay in this state
+#   }
+#   send email "frontend back up"
+#   goto state 1
+
+# command line args
+
+my $optionfilename = shift @@ARGV;
+die "Reading options file: $!" unless -r $optionfilename;
+
+my $dirname = ".";                 # where to put subdirs that save corefiles
+die "Can't create save dirs in $dirname!"
+    unless -d $dirname && -w $dirname;
+
+$timeout = pop @@ARGV;
+$timeout = 30 if $timeout<30;
+$runcmd = ("/usr/sww/bin/gmake run_frontend");
+$sendmail = undef;                          # path to sendmail prog
+$sin =undef;                                # sock addr to ping
+
+$just_started = 1;                          # to suppress sending mail the
+                                            # first time we check
+$generation = 1;                            # successive saves
+
+# where to look for sendmail, etc.
+@@bin = qw(/usr/sbin /usr/bin /usr/lib /usr/etc /usr/ucb);
+
+$state = 1;
+&init($optionfilename);
+
+if (($admin eq '') || ($urgent eq '')) {
+   print STDERR "\n";
+   print STDERR "Error: frontend.admin_email/urgent_email undefined in options file $optionfilename";
+   print STDERR "\n";
+   exit(0);
+}
+
+
+sub main {
+    my ($res,$where);
+    while (1) {
+        if ($state == 0) {
+            # 
+            # frontend just crashed
+            # 
+            $res = &restart_fe;
+            sleep($timeout);
+            if (($e = &ping_error($timeout)) eq '') {
+                $state = 1;
+            } else {
+                &send_mail($urgent, "URGENT crash",
+                           "Frontend restart failed ($res$e), still trying");
+                $state = 2;
+            }
+        } elsif ($state == 1) {
+            #
+            # system running OK
+            #
+            sleep($timeout) while (($e = &ping_error($timeout)) eq '');
+            # ping failed!
+            unless ($just_started) {
+                $where = &save_state($dirname);
+                &send_mail($admin, "FE-checker report",
+                           "Frontend crashed ($e), restarting $where");
+            }
+            $just_started = 0;
+            $state = 0;
+        } else {                                # state==2
+            #
+            #  restart failed
+            #
+            &restart_fe,sleep($timeout)
+                until (&ping_error($timeout) eq '');
+            &send_mail($urgent, "URGENT resolved", "Frontend back up");
+            $state = 1;
+        }
+    }
+}
+
+sub ping_error {
+    my $to = shift;
+    my($r,$w,$e) = ('','','');
+    my($nf,$tl);
+    my $reply = '';
+
+    socket(SOCK, PF_INET, SOCK_STREAM, getprotobyname('tcp')) or die $!;
+    bind(SOCK, sockaddr_in(0,inet_aton("localhost"))) or die $!;
+    return "Connect: $!" unless connect(SOCK, $sin);
+    vec($r,fileno(SOCK),1) = 1;
+    vec($e,fileno(SOCK),1) = 1;
+    
+    select SOCK; $| = 1; select STDOUT;
+    print SOCK "GET foobarfoobar HTTP/1.0\r\n\r\n";
+
+    while (1) {
+        ($nf,$tl) = select($ro=$r,$w,$eo=$e,$to);
+        if ($nf == 0) {                     # timeout
+            close SOCK;
+            return "Timeout waiting for proxy reply";
+        }
+        if ($nf == -1) {                    # i/o error?
+            close SOCK;
+            return "select() I/O error: $!";
+        }
+        if (vec($eo,fileno(SOCK),1)) {       # exception
+            close SOCK;
+            return "Filehandle exception: $!";
+        }
+        if (vec($ro,fileno(SOCK),1)) {       # readable, yay
+            last;
+        }
+    }
+    
+    $reply .= $_ while ($_ = <SOCK>);
+    close SOCK;
+    if (length($reply) > 0) {
+        return '';
+    } else {
+        return "Request got zero bytes from FE";
+    }
+}
+            
+
+sub restart_fe {
+    my $result;
+    $result   = system($runcmd);
+    if ($result) {
+        return "exit $result -->";
+    } else {
+        return '';
+    }
+}
+
+sub save_state {
+    my $dir = shift;
+    my $newdir = "$dir/save.$$.$generation";
+    $generation++;
+    
+    mkdir($newdir, 0777)
+        or return "(Couldn't create state dir $newdir: $!)";
+    if ($res=system("/bin/mv core */core frontend.errs frontend/frontend.errs $newdir")) {
+        return "(Couldn't save state in dir $newdir: exit $res)";
+    } else {
+        return "(Saved state in $newdir)";
+    }
+}
+
+sub init {
+    my $optionfilename = shift;
+    my %opt;
+
+    undef $sendmail;
+    for (@@bin) {
+        $sendmail = "$_/sendmail" if -x "$_/sendmail";
+    }
+    $" = ' ', die "Can't find sendmail in @@bin"  #"
+        unless defined $sendmail;
+
+    open(OPT, $optionfilename) or die $!;
+    while (<OPT>) {
+        chop;
+        next if /^!/;
+        next if /^\s*$/;
+        $opt{$1} = $2 if /^\s*([^:]+):\s*(.*)$/;
+    }
+    close OPT;
+
+    my $port = ($opt{'frontend.http_listen_port'}
+                || die "No port number in options file?");
+    $admin = ($opt{'frontend.admin_email'} 
+                || die "No frontend.admin_email defined in options file?");
+    $urgent = ($opt{'frontend.urgent_email'} 
+                || die "No frontend.urgent_email defined in options file?");
+
+    # generates global $sin and filehandle SOCK
+    $host = shift @@ARGV || "localhost";
+    $sin = sockaddr_in($port,inet_aton($host)) or die $!;
+}
+
+sub send_mail {
+    # assumes: global $sendmail is path to executable sendmail
+    my ($to,$subject,$msg) = @@_;
+    return unless $to;
+    my $date = "" . localtime;
+    my $text =
+        "From: Frontend-checker\nTo: $to\nDate: $date\nSubject: $subject\n"
+            . "-----\n$msg\n";
+    
+    if (open(MAIL, "| $sendmail -t")) {
+        print MAIL $text;
+        close MAIL;
+    } else {
+        warn "Mail would be: $text";
+    }
+}
+
+warn "Checker pid is $$\n";
+&main;
+
+@
+
+
+1.8
+log
+@Commiting any files that need commiting!
+@
+text
+@d165 1
+a165 1
+    if ($res=system("/bin/cp core */core frontend.errs frontend/frontend.errs $newdir")) {
+@
+
+
+1.7
+log
+@Added winman dispatcher.  .prc's in .zip's now works
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl -w
+a40 4
+$admin = 'transend-bugs@@latte.cs.berkeley.edu'; # for "normal" mail
+$urgent = 'transend-bugs@@latte.cs.berkeley.edu'; # for urgent mail
+#$admin = 'gribble@@latte.cs.berkeley.edu'; # for "normal" mail
+#$urgent = 'gribble@@latte.cs.berkeley.edu'; # for urgent mail
+d53 9
+a63 1
+    &init($optionfilename);
+d194 4
+d223 1
+@
+
+
+1.6
+log
+@Looks for frontend.listen_port - changed to frontend.http_listen_port
+@
+text
+@d161 1
+a161 1
+    if ($res=system("/bin/cp */core frontend/frontend.errs $newdir")) {
+@
+
+
+1.5
+log
+@merged changes from head of transend-beta branch
+@
+text
+@d188 1
+a188 1
+    my $port = ($opt{'frontend.listen_port'}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d43 2
+@
+
+
+1.4.2.1
+log
+@got tcp_redirect check script working
+@
+text
+@a42 2
+#$admin = 'gribble@@latte.cs.berkeley.edu'; # for "normal" mail
+#$urgent = 'gribble@@latte.cs.berkeley.edu'; # for urgent mail
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d49 1
+d52 1
+a52 1
+@@bin = qw(/usr/sbin /usr/bin /usr/lib /usr/etc);
+d154 2
+d157 4
+a160 4
+    mkdir("$dir/save.$$", 0777)
+        or return "(Couldn't save state: $!)";
+    if ($res=system("/bin/cp */core frontend/frontend.errs $dir/save.$$")) {
+        return "(Couldn't save state: exit $res)";
+d162 1
+a162 1
+        return "(Saved state in $dir/save.$$/)";
+@
+
+
+1.2
+log
+@save state implemented
+@
+text
+@d194 1
+d200 1
+a200 1
+    if (0 && open(MAIL, "| $sendmail -t")) {
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d35 6
+a40 1
+$timeout = pop @@ARGV || 30;
+d57 1
+a57 1
+    my $res;
+d79 1
+d81 1
+a81 1
+                           "Frontend crashed ($e), restarting");
+d151 12
+d196 2
+a197 1
+        "From: Frontend-checker\nTo: $to\nDate: $date\nSubject: $subject\n$msg\n";
+@

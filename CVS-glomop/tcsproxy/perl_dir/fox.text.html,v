@@ -1,0 +1,214 @@
+head	1.4;
+access;
+symbols
+	Yatin-final:1.4
+	Yatin:1.4.0.2
+	pre-yatin-merge:1.4
+	transend-beta2:1.4
+	fox-dev:1.4
+	transend-beta-latest:1.3
+	perl_dir-ng:1.3
+	Aggregators:1.3
+	NoAggregators:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.4
+date	97.07.30.02.28.20;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.21.19.41.15;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.15.08.33.35;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.11.11.22.51;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Toplevel Makefile slimmed down.  lib/ subdir and corresponding install
+targets added, to prep for binary dist.  client_lib now has
+strerror()-style error reporting.  Fixed bug in dispatch.c that caused
+prefs call for an aggregator to coredump (strcpy called on null ptr).
+text/html distiller more streamlined and correctly "munges" user prefs
+form items.  GetOptions moved from clib to TaccUtils.  perl_stub now
+passes arguments named "s11", "i2", etc. instead of "11", "2", etc.
+@
+text
+@# -*- perl -*-
+#
+#  A regexp based distiller that converts keywords identified by arg id 9050
+#  to have the formatting specified by arg id 9051.
+#
+
+use TACCutils;
+use clib;
+
+sub DistillerInit {
+    0;    
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @@_;
+    my $url = &get_my_url($headers);
+    my($pattern,$replacement,$opentags,$closetags);
+    my $regexp;
+    
+    if ($url =~ m/\bPREFS\b/) {
+        return(&htmlify(&make_prefs_form("Regular expression to hilite",
+                                         "s9050",
+                                         "text",
+                                         "",
+
+                                         "Replacement regexp",
+                                         "s9052",
+                                         "text",
+                                         "",
+
+                                         "Tags to apply",
+                                         "s9051",
+                                         "text",
+                                         "<B><FONT COLOR=RED>",
+                                         )),
+               "", "text/html", 0);
+    }
+
+    # regexp to highlight
+    $pattern = &unescape($args{9050}) or return($data,'','text/html',0);
+    $replacement = &unescape($args{9052});
+    $opentags = &unescape($args{9051})  or return($data,'','text/html',0);
+    #warn "Regexp=$pattern  tags=$opentags\n";
+    my $tag = '<([^> \t]+)[^>]*>';
+
+    $pattern = quotemeta($pattern);
+    $replacement = quotemeta($replacement);
+
+    if ($replacement) {
+        $regexp = "s!$pattern!$replacement!isg";
+    } else {
+        ($closetags = $opentags) =~ s!$tag!</$1>!sg;
+        # reverse order of tags
+        $closetags = join('', reverse(split(/(?=<)/, $closetags)));
+        $regexp = "s!($pattern)!$opentags\$1$closetags!ig";
+    }
+
+    $data = &html_regsub($data,$regexp);
+    # since this is a simple distiller, return an empty string and let the
+    # frontend construct the headers.
+    return($data, "", "text/html", 0);
+}
+
+
+1;
+
+@
+
+
+1.3
+log
+@Changes, including some HACKS in dispatch.c, to support aggregator behavior.  New doc file explaining how to write them, but its out of date.  sample aggregators and new stuff in TACCutils.pm.  different syntax for specifying distillers/aggregators.
+@
+text
+@d1 1
+d3 1
+a3 1
+#  A distiller that converts keywords identified by arg id 9050
+a6 7
+BEGIN {
+    push(@@INC, qw(
+                  /home/tomorrow/b/grad/fox/286proj/tcsproxy/xs/lib/perl-5.002
+                  /disks/barad-dur/now/pythia/release/lib/perl-5.002
+                  ));
+}
+
+d8 1
+d17 3
+a19 2
+    my($pattern,$opentags,$closetags);
+
+d25 6
+d34 2
+a35 1
+                                         "<B><FONT COLOR=RED>")),
+d41 1
+a44 3
+    ($closetags = $opentags) =~ s!$tag!</$1>!g;
+    # reverse order of tags
+    $closetags = join('', reverse(split(/(?=<)/, $closetags)));
+d46 11
+a56 1
+    my $regexp = "s!($pattern)!$opentags\$1$closetags!ig";
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d32 1
+a32 1
+                                         "")),
+d37 2
+a38 2
+    $pattern = &unescape($args{9050}) || "interest";
+    $opentags = &unescape($args{9051}) || "<font color=\"red\"><b>";
+d40 4
+a43 1
+    ($closetags = $opentags) =~ s!<!</!g;
+d45 1
+a45 1
+    $regexp = "s!($pattern)!$opentags\$1$closetags!ig";
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 5
+a8 1
+                  /home/tomorrow/b/grad/fox/286proj/tcsproxy/xs
+d13 2
+d16 1
+a16 2
+    require "html_utils.pl";
+    return 0;
+a18 7
+#
+#  Add a line "Armando's Filter" to the top of the page, followed by a
+#  horizontal rule; then chain to the fox/text/html2 distiller and after that
+#  to transend's generic text/html distiller.  Note that for the chaining to
+#  work, fox/text/html2 must also return a status of 10 (distRedispatch).
+#
+
+d20 29
+a48 4
+    my($data,$metadata,$type,%args)= @@_;
+
+    $data = &html_utils::insert_at_top($data,
+                           '<br><h2 align="center">Armandos Filter</h2><hr>');
+a49 6
+    # specify next (and last) step in the chain.
+
+    $metadata = &html_utils::add_header($metadata, "X-Route",
+                                        "fox/text/html2;transend/text/html");
+    return($data,$metadata,"text/html",10);
+}
+@

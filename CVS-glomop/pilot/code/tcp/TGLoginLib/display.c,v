@@ -1,0 +1,220 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.11.22.48.50;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.11.22.48.50;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <Pilot.h>
+#include "TGLoginLibRsc.h"
+#include "display.h"
+
+void display_init(Display *dpy, FieldPtr fld, FieldPtr sfld, FontPtr fnt,
+    UInt width, void (*set_dpy)(Display *,void *), void *set_dpyp)
+{
+    /* Calculate dimensions */
+    dpy->rows = DpyFieldVisHeight / fnt->fRectHeight;
+    dpy->viscols = DpyFieldVisWidth / fnt->fRectWidth;
+    dpy->fldwidth = width * fnt->fRectWidth;
+    if (dpy->fldwidth % fnt->fRectWidth) dpy->fldwidth += fnt->fRectWidth;
+    dpy->hscroll = 0;
+    dpy->cols = width;
+
+    /* Set up a buffer */
+    dpy->fld = fld;
+    dpy->sfld = sfld;
+    dpy->escstate = 0;
+    dpy->standout = 0;
+    dpy->viscurs = 1;
+
+    display_init_ofld(dpy, set_dpy, set_dpyp);
+}
+
+void display_init_ofld(Display *dpy, void (*set_dpy)(Display *, void *),
+    void *set_dpyp)
+{
+    /* Create the memory buffer */
+    FldFreeMemory(dpy->fld);
+    dpy->bufhandle = MemHandleNew((dpy->rows+1)*(dpy->cols+1)+1);
+    dpy->bufptr = MemHandleLock(dpy->bufhandle);
+
+    /* Clear the buffer */
+    display_clear(dpy);
+
+    /* Draw it */
+    display_show(dpy);
+
+    /* Register it */
+    if (set_dpy) set_dpy(dpy, set_dpyp);
+}
+
+void display_show(Display *dpy)
+{
+    FldSetTextHandle(dpy->fld, (Handle)dpy->bufhandle);
+    FldDrawField(dpy->fld);
+}
+
+void display_clear(Display *dpy)
+{
+    unsigned char *p;
+    int i,j;
+
+    p = dpy->bufptr;
+    for(i=0;i<=dpy->rows;++i) {
+	for(j=0;j<dpy->cols;++j) {
+	    *(p++) = ' ';
+	}
+	*(p++) = '\n';
+    }
+    *p = '\0';
+    dpy->cursr = 0;
+    dpy->cursc = 0;
+    if (dpy->viscurs) *(dpy->bufptr) ^= 0x80;
+}
+
+void display_addtxt(Display *dpy, unsigned char *data, long amt)
+{
+    int wasvis = dpy->viscurs;
+
+    if (wasvis) {
+	dpy->bufptr[(dpy->cursr)*(dpy->cols+1)+dpy->cursc] ^= 0x80;
+	dpy->viscurs = 0;
+    }
+    while (amt) {
+	switch(dpy->escstate) {
+	case 0: /* Regular output */
+            if (*data == '\033') {
+                /* beginning of escape sequence */
+                dpy->escstate = 1;
+            } else if (*data == '\t') {
+                display_addtxt(dpy, "        ", 8-((dpy->cursc)%8));
+            } else if (*data == '\b') {
+                if (dpy->cursc > 0) {
+                    --(dpy->cursc);
+                }
+            } else if (*data == '\r') {
+                dpy->cursc = 0;
+            } else if (*data == '\a') {
+                SndPlaySystemSound(sndInfo);
+            } else if (dpy->cursc == dpy->cols || *data == '\n') {
+                (dpy->cursr)++;
+                if (dpy->cursr == dpy->rows) {
+                    MemMove(dpy->bufptr, dpy->bufptr+dpy->cols+1,
+			(dpy->rows)*(dpy->cols+1));
+                    (dpy->cursr)--;
+                }
+                if (*data != '\n') {
+                    if (*data < ' ' || *data >= 0x7f) {
+                        dpy->bufptr[(dpy->cursr)*(dpy->cols+1)]
+			    = '.' + dpy->standout;
+                    } else {
+                        dpy->bufptr[(dpy->cursr)*(dpy->cols+1)]
+			    = *data + dpy->standout;
+                    }
+		    dpy->cursc = 1;
+                }
+            } else if (*data < ' ' || *data >= 0x7f) {
+                dpy->bufptr[(dpy->cursr)*(dpy->cols+1)+((dpy->cursc)++)]
+		    = '.' + dpy->standout;
+            } else {
+                dpy->bufptr[(dpy->cursr)*(dpy->cols+1)+((dpy->cursc)++)]
+		    = *data + dpy->standout;
+            }
+            break;
+        case 1:  /* saw ESC */
+            if (*data == 'c') {
+                dpy->escstate = 0;
+                display_clear(dpy);
+            } else if (*data == 'm') {
+                dpy->escstate = 2;
+            } else if (*data == 'b') {
+                dpy->standout = 0x80;
+                dpy->escstate = 0;
+            } else if (*data == 'B') {
+                dpy->standout = 0;
+                dpy->escstate = 0;
+            } else {
+                dpy->escstate = 0;
+            }
+            break;
+        case 2: /* saw ESC 'm' */
+            if (*data != '~') {
+                dpy->cursr = (*data)-' ';
+                if (dpy->cursr >= dpy->rows) dpy->cursr = dpy->rows - 1;
+            }
+            dpy->escstate = 3;
+            break;
+        case 3: /* saw ESC 'm' r */
+            if (*data != '~') {
+                dpy->cursc = (*data)-' ';
+                if (dpy->cursc >= dpy->cols) dpy->cursc = dpy->cols - 1;
+            }
+            dpy->escstate = 0;
+            break;
+	}
+	++data;
+	--amt;
+    }
+    if (wasvis) {
+	dpy->bufptr[(dpy->cursr)*(dpy->cols+1)+dpy->cursc] ^= 0x80;
+	dpy->viscurs = 1;
+    }
+    display_show(dpy);
+}
+
+void display_draw_hscroll(Display *dpy)
+{
+    RectangleType scroller;
+
+    scroller.topLeft.y = 124;
+    scroller.extent.y = 3;
+    scroller.topLeft.x = (dpy->hscroll) * DpyFieldVisWidth / (dpy->cols);
+    scroller.extent.x = (dpy->viscols) * DpyFieldVisWidth / (dpy->cols);
+    WinDrawRectangle(&scroller, 0);
+    WinDrawLine(0,125,160,125);
+    WinDrawLine(0,141,160,141);
+}
+
+void display_status(Display *dpy, char *status)
+{
+    VoidHand shand = MemHandleNew(StrLen(status)+1);
+    CharPtr stxt = MemHandleLock(shand);
+
+    StrCopy(stxt, status);
+    MemHandleUnlock(shand);
+
+    FldFreeMemory(dpy->sfld);
+    FldSetTextHandle(dpy->sfld, (Handle)shand);
+    FldDrawField(dpy->sfld);
+}
+@
+
+
+1.1.1.1
+log
+@Top Gun Login Library
+@
+text
+@@

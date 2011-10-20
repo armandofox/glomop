@@ -1,0 +1,1612 @@
+head	1.3;
+access;
+symbols
+	current:1.3;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	96.08.23.19.37.30;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.07.26.20.33.09;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.07.26.20.32.20;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  htmltowml - HTML 2.0+ to intermediate form markup language
+#  $Id: htmltowml.pl,v 1.2 96/08/22 15:05:45 glomop Exp $
+#
+#  This module follows the standard front-end-transcoder API.
+#  It returns a list of chunks; some will be text/wml, others will be
+#  "placeholders" indicating where an image chunk should have gone.  The
+#  "placeholder" chunks will only have their "loc" field filled in, with the
+#  URL of the inline image.
+
+package doc::htmltowml;
+require "html_parser.pl";
+
+
+
+sub convert {
+    my ($doc, $client, $prefs) = @@_;
+    
+    @@doc::htmltowml::stack = ();
+    
+    my $parser = new html_parser(&util::slurp($doc->filename),
+                                 \&doc::htmltowml::html_content,
+				 undef, # callback for comments
+                                 \&doc::htmltowml::do_nothing,
+                                 \&doc::htmltowml::do_nothing);
+
+
+    # set up the "base" URL corresponding to this page, so that the URL's for
+    # inline images can be canonicalized.  Remember that the "parser" object
+    # can be used to store arbitrary local state.
+
+    $parser->{"base_url"} = $doc->resp->base;
+    # used to be:  $parser->{"base_url"} = $doc->loc;
+    $parser->{"chunks"} = [];
+    $parser->{"chunknum"} = 0;
+    $parser->{"current"} = '';
+
+    $parser->{"palign"} = '';
+    $parser->{"bulletstack"} = [];
+    $parser->{"fontstack"} = [];
+    $parser->{"fontsizestack"} = [];
+    $parser->{"bodystack"} = [];
+    $parser->{"astack"} = [];
+    $parser->{"newlined"} = 0;
+    $parser->{"eat"} = 0;
+    $parser->{"grabtitle"} = 0;
+    $parser->{"title"} = '';
+    $parser->{"nonl"} = 0;
+    $parser->{"lasttag"} = '';
+    $parser->{"eat"} = 0;
+    $parser->strict_nesting(1);
+
+    push (@@{$parser->{"fontsizestack"}}, "4");
+
+
+##############################################
+# address
+    $parser->tag_begin("ADDRESS", \&doc::htmltowml::do_address_open);
+    $parser->tag_end("ADDRESS", \&doc::htmltowml::do_address_close);
+
+##############################################
+# fixed
+    $parser->tag_begin("CODE", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("CODE", \&doc::htmltowml::do_fixed_close);
+ 
+    $parser->tag_begin("KBD", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("KBD", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("LISTING", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("LISTING", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("PLAINTEXT", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("PLAINTEXT", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("PRE", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("PRE", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("SAMP", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("SAMP", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("TT", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("TT", \&doc::htmltowml::do_fixed_close);
+
+    $parser->tag_begin("XMP", \&doc::htmltowml::do_fixed_open);
+    $parser->tag_end("XMP", \&doc::htmltowml::do_fixed_close);
+
+##############################################
+# i
+    $parser->tag_begin("CITE", \&doc::htmltowml::do_i_open);
+    $parser->tag_end("CITE", \&doc::htmltowml::do_i_close);
+
+    $parser->tag_begin("EM", \&doc::htmltowml::do_i_open);
+    $parser->tag_end("EM", \&doc::htmltowml::do_i_close);
+
+    $parser->tag_begin("VAR", \&doc::htmltowml::do_i_open);
+    $parser->tag_end("VAR", \&doc::htmltowml::do_i_close);
+
+    $parser->tag_begin("I", \&doc::htmltowml::do_i_open);
+    $parser->tag_end("I", \&doc::htmltowml::do_i_close);
+
+##############################################
+# b
+    $parser->tag_begin("B", \&doc::htmltowml::do_b_open);
+    $parser->tag_end("B", \&doc::htmltowml::do_b_close);
+
+    $parser->tag_begin("STRONG", \&doc::htmltowml::do_b_open);
+    $parser->tag_end("STRONG", \&doc::htmltowml::do_b_close);
+##############################################
+# br
+    $parser->tag_begin("BR", \&doc::htmltowml::do_br_open);
+    $parser->tag_end("BR", \&doc::htmltowml::do_br_close);
+
+##############################################
+# html
+    $parser->tag_end("END", \&doc::htmltowml::do_html_end);
+
+##############################################
+# p
+    $parser->tag_begin("P", \&doc::htmltowml::do_p_open);
+    $parser->tag_end("P", \&doc::htmltowml::do_p_close);
+
+##############################################
+# quote
+    $parser->tag_begin("BLOCKQUOTE", \&doc::htmltowml::do_quote_open);
+    $parser->tag_end("BLOCKQUOTE", \&doc::htmltowml::do_quote_close);
+
+    $parser->tag_begin("DIR", \&doc::htmltowml::do_quote_open);
+    $parser->tag_end("DIR", \&doc::htmltowml::do_quote_close);
+##############################################
+# LISTS
+    $parser->tag_begin("LI", \&doc::htmltowml::do_li_open);
+    $parser->tag_end("LI", \&doc::htmltowml::do_li_close);
+
+    $parser->tag_begin("UL", \&doc::htmltowml::do_ul_open);
+    $parser->tag_end("UL", \&doc::htmltowml::do_ul_close);
+
+    $parser->tag_begin("MENU", \&doc::htmltowml::do_ul_open);
+    $parser->tag_end("MENU", \&doc::htmltowml::do_ul_close);
+
+    $parser->tag_begin("OL", \&doc::htmltowml::do_ol_open);
+    $parser->tag_end("OL", \&doc::htmltowml::do_ol_close);
+
+    $parser->tag_begin("DD", \&doc::htmltowml::do_dd_open);
+#    remove </DD>
+
+    $parser->tag_begin("DT", \&doc::htmltowml::do_dt_open);
+#    remove </DT>
+
+##############################################
+# FONT
+    $parser->tag_begin("FONT", \&doc::htmltowml::do_font_open);
+    $parser->tag_end("FONT", \&doc::htmltowml::do_font_close);
+
+    $parser->tag_begin("BASEFONT", \&doc::htmltowml::do_basefont_open);
+    $parser->tag_end("BASEFONT", \&doc::htmltowml::do_basefont_close);
+
+    $parser->tag_begin("BIG", \&doc::htmltowml::do_big_open);
+    $parser->tag_end("BIG", \&doc::htmltowml::do_big_close);
+
+    $parser->tag_begin("SMALL", \&doc::htmltowml::do_small_open);
+    $parser->tag_end("SMALL", \&doc::htmltowml::do_small_close);
+
+##############################################
+# OTHER
+
+    $parser->tag_begin("IMG", \&doc::htmltowml::do_img_open);
+#   remove </IMG>
+
+    $parser->tag_begin("A", \&doc::htmltowml::do_a_open);
+    $parser->tag_end("A", \&doc::htmltowml::do_a_close);
+
+    $parser->tag_begin("BODY", \&doc::htmltowml::do_body_open);
+    $parser->tag_end("BODY", \&doc::htmltowml::do_body_close);
+
+    $parser->tag_begin("TITLE", \&doc::htmltowml::do_title_open);
+    $parser->tag_end("TITLE", \&doc::htmltowml::do_title_close);
+
+    $parser->tag_begin("CENTER", \&doc::htmltowml::do_center_open);
+    $parser->tag_end("CENTER", \&doc::htmltowml::do_center_close);
+
+##############################################
+# PASS THROUGH
+
+    $parser->tag_begin("H1", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H1", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("H2", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H2", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("H3", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H3", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("H4", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H4", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("H5", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H5", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("H6", \&doc::htmltowml::do_hn_open);
+    $parser->tag_end("H6", \&doc::htmltowml::do_hn_close);
+
+    $parser->tag_begin("HR", \&doc::htmltowml::do_hr_open);
+    $parser->tag_end("HR", \&doc::htmltowml::do_hr_close);
+
+##############################################
+# EAT
+
+    $parser->tag_begin("FORMS", \&doc::htmltowml::do_eat_open);
+    $parser->tag_end("FORMS", \&doc::htmltowml::do_eat_close);
+
+    $parser->tag_begin("FRAMESET", \&doc::htmltowml::do_eat_open);
+    $parser->tag_end("FRAMESET", \&doc::htmltowml::do_eat_close);
+
+    $parser->tag_begin("SCRIPT", \&doc::htmltowml::do_eat_open);
+    $parser->tag_end("SCRIPT", \&doc::htmltowml::do_eat_close);
+
+    $parser->tag_begin("TABLE", \&doc::htmltowml::do_eat_open);
+    $parser->tag_end("TABLE", \&doc::htmltowml::do_eat_close);
+
+##############################################
+# MAIN
+
+
+    # ....set up other tags here....
+
+    $parser->parse_html_string;             # do it!
+
+    # close the last chunk if necessary.
+
+    if ($parser->{"current"} =~ /\S/) {     # some characters still in buffer
+        $parser->{"chunknum"}++;            # so add a new chunk
+        &util::debug('WebPage',
+                     "Sending text: " . $parser->{"current"});
+        
+        push(@@{$parser->{"chunks"}},
+             new chunk ("text/plain", undef, undef, $parser->{"chunknum"},
+                        $parser->{"current"} . chr(0), undef, undef,
+                        "Text " . $parser->{"chunknum"}));
+    }
+
+    return @@{$parser->{"chunks"}};
+}
+
+
+############################################################
+############################################################
+#
+# ... callback functions go here
+#
+############################################################
+############################################################
+sub do_nothing {
+}
+
+
+sub AddToOutput {
+    my ($parser, $text) = @@_;	       
+
+    unless (0 && $parser->{"eat"}) {
+	$parser->{"current"} .= $text;
+    }
+}
+
+
+sub ClosingNewLines {
+    my ($parser, $number) = @@_;
+
+    my $diff = $number - $parser->{"newlined"};
+
+    while($diff-- > 0) {
+	$parser->{"current"} .= "\n";
+    }
+    
+    $parser->{"newlined"} = $number;
+}
+
+sub OpeningNewLines {
+    my ($parser, $number) = @@_;
+ 
+    my $diff = $number - $parser->{"newlined"};
+
+    while($diff-- > 0) {
+	$parser->{"current"} .= "\n";
+    }
+    
+    $parser->{"newlined"} = 0;
+}
+
+
+
+############################################################
+# ADDRESS
+
+sub do_address_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found ADDRESS open tag\n");
+    AddToOutput($parser, "\n<I>");
+}
+
+sub do_address_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found ADDRESS close tag.  Explicit = $explicit\n");
+    AddToOutput($parser, "</I>\n");
+}
+############################################################
+# B, STRONG
+sub do_b_open {
+   my ($parser, $tag, $text, $attr) = @@_;
+   &util::debug("wml","Found BOLD open tag\n");
+   AddToOutput($parser, "<B>");
+}
+
+sub do_b_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found BOLD closing tag.  Explicit = $explicit\n");
+   AddToOutput($parser, "</B>");
+
+}
+############################################################
+# CODE, KBD, LISTING, PLAINTEXT, PRE, SAMP, TT, XMP
+sub do_fixed_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found FIXED open tag\n");
+    AddToOutput($parser, "<FIXED>");
+}		       
+
+sub do_fixed_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found FIXED closing tag.  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</FIXED>");
+}		       
+############################################################
+# CITE, EM, I, VAR
+sub do_i_open {
+   my ($parser, $tag, $text, $attr) = @@_;
+   &util::debug("wml","Found I open tag\n");
+   AddToOutput($parser, "<I>");
+}
+
+sub do_i_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found I close tag.  Explicit = $explicit\n");
+   AddToOutput($parser, "</I>");
+}
+
+############################################################
+# BR
+sub do_br_open {
+   my ($parser, $tag, $text, $attr) = @@_;
+   &util::debug("wml","Found BR open tag\n");
+#   ClosingNewLines($parser, 1);
+   AddToOutput($parser, "\n");
+   $parser->{"newlined"} = 1;
+}
+
+sub do_br_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found BR close tag  Explicit = $explicit\n");
+
+#   AddToOutput($parser, "\n");
+}
+
+############################################################
+# P
+sub do_p_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found P open tag\n");
+
+    ClosingNewLines($parser, 2);
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+ 
+    my $align = $attr->get("ALIGN");
+    $align = "\U$align";
+
+    &util::debug("wml","Setting palign to ".$align ."\n");
+    $parser->{"palign"} = $align;
+    
+    if ($align eq "CENTER") {
+	AddToOutput($parser, "<CENTER>");
+    }
+    elsif ($align eq "RIGHT") {
+	AddToOutput($parser, "<RIGHT>");
+    }
+    elsif ($align eq "LEFT") {
+	AddToOutput($parser, "<LEFT>");
+    }
+    
+}
+
+
+sub do_p_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found P close tag  Explicit = $explicit\n");
+   
+   my $align = $parser->{"palign"};
+   &util::debug("wml","palign = ". $align ."\n");
+
+   if ( $align eq "CENTER") {
+       AddToOutput($parser, "</CENTER>");
+   }				 
+   elsif ($align eq "RIGHT") {  
+       AddToOutput($parser, "</RIGHT>");
+   }				 
+   elsif ($align eq "LEFT") {  
+       AddToOutput($parser, "</LEFT>");
+   }
+
+   ClosingNewLines($parser, 2);
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+#   $parser->{"newlined"} = 1;
+}
+
+############################################################
+# BLOCKQUOTE
+
+sub do_quote_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found BLOCKQUOTE open tag\n");
+    OpeningNewLines($parser, 2);
+
+#    warn "newlined = " . $parser->{"newlined"} ."\n";
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+    
+    AddToOutput($parser, "<INCMARGIN>");
+}
+sub do_quote_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found BLOCKQUOTE close tag  Explicit = $explicit\n");
+
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+   ClosingNewLines($parser, 2);
+
+   AddToOutput($parser, "</INCMARGIN>");
+}
+
+############################################################
+# DIR
+
+sub do_dir_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found DIR open tag\n");
+ 
+    #if in dir already "\n<INCMARGIN>"
+    AddToOutput($parser, "\n\n<INCMARGIN>");
+}
+sub do_dir_close {
+   my ($parser, $tag, $text, $attr, $explicit) = @@_;
+   &util::debug("wml","Found DIR close tag  Explicit = $explicit\n");
+
+   #if in dir already "\n</INCMARGIN>"
+   AddToOutput($parser, "\n\n</INCMARGIN>");
+}
+
+############################################################
+# LI
+
+sub do_li_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found LI open tag\n");
+
+    # do same as /p
+
+    my @@bulletstack = @@{$parser->{"bulletstack"}};
+    
+    my $bullet_type = pop(@@bulletstack);
+    if ($bullet_type) {
+	if ($bullet_type eq "DISK") {
+	    AddToOutput($parser, "* ");
+	}
+	else { 
+	    $num = pop(@@bulletstack);
+	    &util::debug("wml","bt = NUM, popped ".$num."\n");
+	    if ($num < 10) {	 
+		AddToOutput($parser, " $num. ");
+	    }			
+	    else {
+		AddToOutput($parser, "$num. ");
+	    }
+	    push(@@bulletstack, ++$num);
+	}
+    }
+    else {
+	AddToOutput($parser, "* ");
+    }
+    push(@@bulletstack, $bullet_type);
+    $parser->{"bulletstack"} = \@@bulletstack;
+}
+
+sub do_li_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found LI close tag  Explicit = $explicit\n");
+
+    ClosingNewLines($parser, 1);
+#    AddToOutput($parser, "\n");
+}
+############################################################
+# UL, MENU
+
+sub do_ul_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found UL open tag\n");
+
+    my @@bulletstack = @@{$parser->{"bulletstack"}};
+    push(@@bulletstack, "DISK");
+
+    OpeningNewLines($parser, 1);
+
+    AddToOutput($parser, "<INCMARGIN>");
+    
+    # do same as /p
+    $parser->{"bulletstack"} = \@@bulletstack;
+    $parser->{"nonl"} = 1;
+}
+
+sub do_ul_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found UL close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</INCMARGIN>");
+
+    $parser->{"newlined"} = 0;
+
+    my @@bulletstack = @@{$parser->{"bulletstack"}};
+    pop(@@bulletstack);
+    $parser->{"bulletstack"} = \@@bulletstack;
+    $parser->{"nonl"} = 0;
+}
+
+############################################################
+# OL
+sub do_ol_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found OL open tag\n");
+
+    my @@bulletstack = @@{$parser->{"bulletstack"}};
+    &util::debug("wml","Pushing NUM of bullet stack\n");
+    if ($attr->get("START")) {
+	push(@@bulletstack, $attr->get("START"));
+    }
+    else {
+	push(@@bulletstack, "1");
+    }
+    push(@@bulletstack, "NUM");
+    AddToOutput($parser, "\n<INCMARGIN>");
+    
+    # do same as /p
+    $parser->{"bulletstack"} = \@@bulletstack;
+    $parser->{"nonl"} = 1;
+}
+
+sub do_ol_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found OL close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</INCMARGIN>");
+
+    my @@bulletstack = @@{$parser->{"bulletstack"}};
+    pop(@@bulletstack);
+    pop(@@bulletstack);
+    $parser->{"bulletstack"} = \@@bulletstack;
+    $parser->{"nonl"} = 0;
+}
+
+############################################################
+# DEFINITION LISTS
+
+sub do_dt_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found DT open tag\n");
+    OpeningNewLines($parser, 1);
+
+#    AddToOutput($parser, "\n");
+}
+
+sub do_dd_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found DD open tag\n");
+
+    ClosingNewLines($parser, 1);
+
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n");
+#    }	
+
+    AddToOutput($parser, "<TAB>");
+}
+
+############################################################
+# font
+
+sub top {
+    my (@@stack) = @@_;
+    $stacksize = @@stack;
+    $top = @@stack[$stacksize - 1];
+}
+
+sub do_font_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found FONT open tag\n");
+    
+    my @@fontstack = @@{$parser->{"fontstack"}};    
+    my @@sizestack = @@{$parser->{"fontsizestack"}};    
+
+    my $tagcount = 0;
+
+    if ($attr->get("COLOR")) {
+	AddToOutput($parser, "<FONTCOLOR><".$attr->get("COLOR").">");
+	push(@@fontstack, "COLOR");
+	$tagcount++;
+    }
+
+    if ($attr->get("SIZE")) {
+
+	my $fontsize = top(@@sizestack);
+
+	&util::debug("wml","fontsize ".$fontsize. "\n");
+
+	$_ = $attr->get("SIZE");
+	if (/\+/) {
+	    $_ = substr($_, 1, length($_)-1);
+	    $fontsize += $_;
+	}
+	elsif (/\-/) {
+	    $_ = substr($_, 1, length($_)-1);
+	    $fontsize -= $_;
+	}
+	else {
+	    $fontsize = $attr->get("SIZE");
+	}
+	AddToOutput($parser, "<FONTSIZE><".$fontsize.">");
+	push(@@sizestack, $fontsize);
+	push(@@fontstack, "SIZE");
+	$tagcount++;
+    }
+
+    push(@@fontstack, $tagcount);
+    $parser->{"fontstack"} = \@@fontstack;
+    $parser->{"fontsizestack"} = \@@sizestack;
+}
+
+sub do_font_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found FONT close tag  Explicit = $explicit\n");
+
+    my $tagcount = pop(@@{$parser->{"fontstack"}});
+
+    while($tagcount--) {
+	$tag = pop(@@{$parser->{"fontstack"}});
+	if ($tag eq "COLOR") {
+	    AddToOutput($parser, "</FONTCOLOR>");
+	}
+	else {
+	    AddToOutput($parser, "</FONTSIZE>");
+	    pop(@@{$parser->{"fontsizestack"}});
+	}
+    }
+}
+
+
+############################################################
+# basefont
+
+sub do_basefont_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found BASEFONT open tag\n");
+    
+    if ($attr->get("SIZE")) {
+	AddToOutput($parser, "<FONTSIZE><".$attr->get("SIZE").">");
+	push(@@{$parser->{"fontsizestack"}}, $attr->get("SIZE"));
+    }
+}
+
+sub do_basefont_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found BASEFONT close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</FONTSIZE>");
+    pop(@@{$parser->{"fontsizestack"}});
+}
+############################################################
+# big
+
+sub do_big_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found BIG open tag\n");
+
+    my @@sizestack = @@{$parser->{"fontsizestack"}};        
+
+    my $fontsize = top(@@sizestack); 
+    $fontsize += 1;
+    
+    AddToOutput($parser, "<FONTSIZE><".$fontsize.">");
+    push(@@sizestack, $fontsize);	 
+    
+    $parser->{"fontsizestack"} = \@@sizestack;
+}
+
+sub do_big_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found BIG close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</FONTSIZE>");
+    pop(@@{$parser->{"fontsizestack"}});
+}
+############################################################
+# small
+
+sub do_small_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found SMALL open tag\n");
+
+    my @@sizestack = @@{$parser->{"fontsizestack"}};        
+
+    my $fontsize = top(@@sizestack); 
+    $fontsize -= 1;
+    
+    AddToOutput($parser, "<FONTSIZE><".$fontsize.">");
+    push(@@sizestack, $fontsize);	 
+    
+    $parser->{"fontsizestack"} = \@@sizestack;
+}
+
+sub do_small_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found SMALL close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "</FONTSIZE>");
+    pop(@@{$parser->{"fontsizestack"}});
+}
+############################################################
+# Hn
+
+sub do_hn_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found Hn open tag\n");
+
+    OpeningNewLines($parser, 2);
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+
+    AddToOutput($parser, "\U$text");
+}
+
+sub do_hn_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found Hn close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "\U$text");
+
+ #   unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n\n");
+#    }				
+
+#    $parser->{"newlined"} = 1;#
+    ClosingNewLines($parser, 2);
+
+}
+############################################################
+# HR
+
+sub do_hr_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found HR open tag\n");
+
+    AddToOutput($parser, "\U$text");
+}
+
+sub do_hr_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found HR close tag  Explicit = $explicit\n");
+
+    AddToOutput($parser, "\U$text\n");
+}
+
+############################################################
+# A
+
+sub do_a_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found A open tag\n");
+    my @@astack = @@{$parser->{"astack"}};
+
+    my $tagcount = 0;
+
+    if ($attr->get("HREF")) {
+	AddToOutput($parser, "<ANCHOR><".$attr->get("HREF").">");
+	push(@@astack, "ANCHOR");
+	$tagcount++;
+    }
+    
+    if ($attr->get("NAME")) {
+	AddToOutput($parser, "<NAME><".$attr->get("NAME").">");
+	push(@@astack, "NAME");
+	$tagcount++;
+    }
+    push(@@astack, $tagcount);
+
+    $parser->{"astack"} = \@@astack;
+}
+
+sub do_a_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found A close tag  Explicit = $explicit\n");
+
+    my $tagcount = pop(@@{$parser->{"astack"}});
+    while($tagcount--) {
+	my $tag = pop(@@{$parser->{"astack"}});
+	
+	if ($tag eq "ANCHOR") {
+	    AddToOutput($parser, "</ANCHOR>");
+	}
+	else {
+	    AddToOutput($parser, "</NAME>");
+	}
+    }
+}
+
+############################################################
+# BODY
+
+sub do_body_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found BODY open tag\n");
+
+    my @@bodystack = @@{$parser->{"bodystack"}};
+    my $tagcount = 0;
+
+    if ($attr->get("BGCOLOR")) {
+	AddToOutput($parser, "<BGCOLOR><".$attr->get("BGCOLOR").">");
+	push(@@bodystack, "BGCOLOR");
+	$tagcount++;
+    }
+
+    if ($attr->get("LINK")) {
+	AddToOutput($parser, "<LINKCOLOR><".$attr->get("LINK").">");
+	push(@@bodystack, "LINKCOLOR");
+	$tagcount++;
+    }
+
+    if ($attr->get("TEXT")) {
+	AddToOutput($parser, "<FONTCOLOR><".$attr->get("TEXT").">");
+	push(@@bodystack, "FONTCOLOR");
+	$tagcount++;
+    }
+    push(@@bodystack, $tagcount);
+
+    $parser->{"bodystack"} = \@@bodystack;
+}
+
+sub do_body_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found BODY close tag  Explicit = $explicit\n");
+
+    my $tagcount = pop(@@{$parser->{"bodystack"}});
+
+    while($tagcount--) {
+	&util::debug("wml","tagcount = $tagcount\n");
+	my $tag = pop(@@{$parser->{"bodystack"}});
+    
+	if ($tag eq "BGCOLOR") {	
+	    AddToOutput($parser, "</BGCOLOR>");
+	} elsif ($tag eq "LINKCOLOR" ){  
+	    AddToOutput($parser, "</LINKCOLOR>");
+	} elsif ($tag eq "FONTCOLOR" ) {
+	    AddToOutput($parser, "</FONTCOLOR>");
+	} else {
+	    &util::debug("wml","Stray </BODY> tag\n");
+	}
+    }
+}    
+
+############################################################
+# center
+sub do_center_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found CENTER open tag\n");
+
+#    unless ($parser->{"newlined"}) {
+#	AddToOutput($parser, "\n");
+#    }	
+    OpeningNewLines($parser, 1);
+    AddToOutput($parser, "<CENTER>");
+}
+
+sub do_center_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found CENTER close tag   Explicit = $explicit\n");
+
+    AddToOutput($parser, "</CENTER>");
+    ClosingNewLines($parser, 1);
+#    $parser->{"newlined"} = 1;
+}
+
+############################################################
+# pass_through
+
+sub do_pass_through_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Passing through <\U$tag>\n");
+
+    AddToOutput($parser, "<\U$tag>");
+}
+
+sub do_pass_through_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Passing through <\U/$tag> Explicit = $explicit\n");
+
+    AddToOutput($parser, "<\U/$tag>");
+}
+############################################################
+# IMAGE 
+
+# close_chunk:
+# Takes all HTML text accumulated in buffer so far, and makes a chunk out of
+# it.
+
+sub close_chunk {
+    my ($parser,$metadata) = @@_;
+    my $chunk;
+    
+    return unless $parser->{"current"} =~ /\S/; # need at least 1 non-WS char!
+    ($parser->{"chunknum"})++;
+    &util::debug('WebPage', "Packaging text: " . $parser->{"current"});
+    $chunk = new chunk ("text/plain", undef, undef, $parser->{"chunknum"},
+                        $parser->{"current"} . chr(0), undef, undef,
+                        "Text " . $parser->{"chunknum"}, $metadata);
+    $parser->{"current"} = '';
+    push(@@{$parser->{"chunks"}},$chunk);
+}
+         
+
+# Callback routine when an IMG tag is seen:
+#  - take all HTML text seen so far and make a chunk out of it.  we are keeping
+#    a cumulative buffer of all text parsed so far in the "current" field of
+#    the parser object.
+#  - make a new empty chunk which will hold the image later; for now, just fill
+#    in the "data" field with the attributes of the image tag.
+#    (BUG::there should really
+#    be a "meta" field or something in the chunk structure for this purpose.)
+#  - start collecting text for the next chunk (i.e. clear out the "current"
+#    buffer). 
+
+sub do_img_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found IMG open tag");
+
+    # if there is text in the current buffer, "close off" a new chunk.
+
+    # this will never be executed.  Want one text chunk for now
+    if (0) {
+        &close_chunk($parser, "");
+    }
+    AddToOutput($parser, "<IMG><");
+
+    my $align = $attr->get("ALIGN");
+    $align = "\U$align";
+
+    if ($align) {
+	AddToOutput($parser, $align);
+    }
+    else {
+	AddToOutput($parser, "NONE");
+    }
+    &util::debug("wml","src=".$attr->get("SRC")." align = ".$attr->get("ALIGN"));
+
+    AddToOutput($parser, "><" . $attr->get("SRC") . ">");
+ 
+   # make a new IMG chunk whose data is a handle to the IMG attributes.
+    ($parser->{"chunknum"})++;
+    my $url = (new URI::URL $attr->get("SRC"),$parser->{"base_url"})->abs;
+    &util::debug('WebPage', "Adding image chunk with URL $url");
+    push(@@{$parser->{"chunks"}},
+         new chunk ("image/?", undef, undef, $parser->{"chunknum"},
+                    [$url,$attr], undef, undef,
+                    "Inline img " . $parser->{"chunknum"},
+		    undef)); # metadata
+    $parser->{"newlined"} = 0;
+
+}
+
+############################################################
+# TITLE
+sub do_title_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found TITLE open tag\n");
+
+    $parser->{"title"} = ''; # clear the title buffer
+    $parser->{"grabtitle"} = 1;
+}
+
+sub do_title_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found TITLE close tag  Explicit = $explicit\n");
+
+    $parser->{"grabtitle"} = 0;
+}
+
+############################################################
+# HTML
+
+sub do_html_end {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found HTML CLOSE TAG  Explicit = $explicit\n");
+
+    
+    if ($parser->{"title"}) {
+	$parser->{"current"} = "<CENTER><B>".$parser->{"title"}."</B></CENTER>\n\n".
+	    $parser->{"current"};
+    }
+#    &util::debug("wml","\n\nOutput:\n");
+#    &util::debug("wml",$parser->{"current"}."\n");
+#    &util::debug("wml","\n\nTitle:\n");
+#    &util::debug("wml",$parser->{"title"}."\n");
+    
+    if(open(FP, ">/pork/tyronen/was/WMLParser/input")) {
+	syswrite(FP, $parser->{"current"}, length($parser->{"current"}));
+	close(FP);
+    } else {
+	&util::debug("wml","Error opening output file\n");
+    }
+
+}
+
+############################################################
+# eat
+
+
+sub do_eat_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+    &util::debug("wml","Found <\U$tag> EAT MODE\n");
+    $parser->{"eat"} = 1;
+}
+
+sub do_eat_close {
+    my ($parser, $tag, $text, $attr, $explicit) = @@_;
+    &util::debug("wml","Found <\U/$tag> Close  EAT MODE OFF  Explicit = $explicit\n");
+
+    $parser->{"eat"} = 0;
+}
+
+
+
+############################################################
+# CONTENT
+
+sub html_content {
+    my ($parser,$content) = @@_;
+
+
+    &util::debug("wml","content before = <$content>\n");
+
+    if ($parser->{"nonl"} || $parser->{"newlined"}) {
+	&util::debug("wml","replacing newline with nothing");
+	$content =~ s/\n+//mg ;
+    } else {
+	&util::debug("wml","replacing newline with space");
+	$content =~ s/\n+/ /mg ;
+    }
+
+    $parser->{"newlined"} = 0 if $content =~ /\S/; # any non-whitespace
+    $content =~ s/\s+/ /mg;	# many spaces --> one space
+
+    &util::debug("wml","content after= <$content>\n");
+
+    if ($parser->{"grabtitle"}) {
+	$parser->{"title"} .= $content;
+    } else {
+	AddToOutput($parser, $content);
+    }				
+}
+
+
+sub html_debug {
+    my ($parser,$warning) = @@_;
+    &util::debug("wml","HTML parser: $warning\n");
+}
+@
+
+
+1.2
+log
+@these files are Wink-specific, so i removed them from the repository.
+wink can manage them in their local repository if they want.
+@
+text
+@d3 1
+d23 4
+a26 2
+                                 \&doc::htmltowml::html_content,
+                                 \&doc::htmltowml::html_debug);
+d33 1
+d50 2
+d65 1
+a65 1
+
+d115 1
+a115 2
+#    $parser->tag_begin("HTML", \&doc::htmltowml::do_html_open);
+    $parser->tag_end("END", \&doc::htmltowml::do_html_close);
+d178 3
+a183 3
+    $parser->tag_begin("CENTER", \&doc::htmltowml::do_pass_through_open);
+    $parser->tag_end("CENTER", \&doc::htmltowml::do_pass_through_close);
+
+d202 2
+a203 2
+    $parser->tag_begin("HR", \&doc::htmltowml::do_pass_through_open);
+    $parser->tag_end("HR", \&doc::htmltowml::do_pass_through_close);
+d252 38
+d296 2
+a297 2
+    warn "Found ADDRESS open tag\n";
+    $parser->{"current"} .= "\n<I>";
+d302 2
+a303 2
+    warn "Found ADDRESS close tag.  Explicit = $explicit\n";
+    $parser->{"current"} .= "</I>\n";
+d309 2
+a310 2
+   warn "Found BOLD open tag\n";
+   $parser->{"current"} .= "<B>";
+d315 2
+a316 2
+   warn "Found BOLD closing tag.  Explicit = $explicit\n";
+   $parser->{"current"} .= "</B>";
+d323 2
+a324 2
+    warn "Found FIXED open tag\n";
+    $parser->{"current"} .= "<FIXED>";
+d329 1
+a329 1
+    warn "Found FIXED closing tag.  Explicit = $explicit\n";
+d331 1
+a331 1
+    $parser->{"current"} .= "</FIXED>";
+d337 2
+a338 2
+   warn "Found I open tag\n";
+   $parser->{"current"} .= "<I>";
+d343 2
+a344 2
+   warn "Found I close tag.  Explicit = $explicit\n";
+   $parser->{"current"} .= "</I>";
+d351 4
+a354 2
+   warn "Found BR open tag\n";
+   $parser->{"current"} .= "\n";
+d359 1
+a359 1
+   warn "Found BR close tag  Explicit = $explicit\n";
+d361 1
+a361 1
+#   $parser->{"current"} .= "\n";
+d368 6
+a373 5
+    warn "Found P open tag\n";
+    
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+d375 1
+a375 1
+    my $align = $attr->{"ALIGN"};
+d378 1
+a378 1
+    warn "Setting palign to ".$align ."\n";
+d382 1
+a382 1
+	$parser->{"current"} .= "<CENTER>";
+d385 1
+a385 1
+	$parser->{"current"} .= "<RIGHT>";
+d388 1
+a388 1
+	$parser->{"current"} .= "<LEFT>";
+d396 1
+a396 1
+   warn "Found P close tag  Explicit = $explicit\n";
+d399 1
+a399 1
+   warn "palign = ". $align ."\n";
+d402 1
+a402 1
+       $parser->{"current"} .= "</CENTER>";
+d405 1
+a405 1
+       $parser->{"current"} .= "</RIGHT>";
+d408 1
+a408 1
+       $parser->{"current"} .= "</LEFT>";
+d411 5
+a415 4
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+   $parser->{"newlined"} = 1;
+d423 2
+a424 1
+    warn "Found BLOCKQUOTE open tag\n";
+d426 4
+a429 3
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+d431 1
+a431 1
+    $parser->{"current"} .= "<INCMARGIN>";
+d435 1
+a435 1
+   warn "Found BLOCKQUOTE close tag  Explicit = $explicit\n";
+d437 4
+a440 3
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+d442 1
+a442 1
+   $parser->{"current"} .= "</INCMARGIN>";
+d450 1
+a450 1
+    warn "Found DIR open tag\n";
+d453 1
+a453 1
+    $parser->{"current"} .= "\n\n<INCMARGIN>";
+d457 1
+a457 1
+   warn "Found DIR close tag  Explicit = $explicit\n";
+d460 1
+a460 1
+   $parser->{"current"} .= "\n\n</INCMARGIN>";
+d468 1
+a468 1
+    warn "Found LI open tag\n";
+d477 1
+a477 1
+	    $parser->{"current"} .= "* ";
+d481 1
+a481 1
+	    warn "bt = NUM, popped ".$num."\n";
+d483 1
+a483 1
+		$parser->{"current"} .= " $num. ";
+d486 1
+a486 1
+		$parser->{"current"} .= "$num. ";
+d492 1
+a492 1
+	$parser->{"current"} .= "* ";
+d500 1
+a500 1
+    warn "Found LI close tag  Explicit = $explicit\n";
+d502 2
+a503 1
+    $parser->{"current"} .= "\n";
+d510 1
+a510 1
+    warn "Found UL open tag\n";
+d514 4
+a517 1
+    $parser->{"current"} .= "\n<INCMARGIN>";
+d526 1
+a526 1
+    warn "Found UL close tag  Explicit = $explicit\n";
+d528 3
+a530 1
+    $parser->{"current"} .= "</INCMARGIN>";
+d542 1
+a542 1
+    warn "Found OL open tag\n";
+d545 3
+a547 3
+    warn "Pushing NUM of bullet stack\n";
+    if ($attr->{"START"}) {
+	push(@@bulletstack, $attr->{"START"});
+d553 1
+a553 1
+    $parser->{"current"} .= "\n<INCMARGIN>";
+d562 1
+a562 1
+    warn "Found OL close tag  Explicit = $explicit\n";
+d564 1
+a564 1
+    $parser->{"current"} .= "</INCMARGIN>";
+d578 4
+a581 2
+    warn "Found DT open tag\n";
+    $parser->{"current"} .= "\n";
+d586 3
+a588 1
+    warn "Found DD open tag\n";
+d590 5
+a594 1
+    $parser->{"current"} .= "\n<TAB>";
+d608 1
+a608 1
+    warn "Found FONT open tag\n";
+d615 2
+a616 2
+    if ($attr->{"COLOR"}) {
+	$parser->{"current"} .= "<FONTCOLOR><".$attr->{"COLOR"}.">";
+d621 1
+a621 1
+    if ($attr->{"SIZE"}) {
+d625 1
+a625 1
+	warn "fontsize ".$fontsize. "\n";
+d627 1
+a627 1
+	$_ = $attr->{"SIZE"};
+d637 1
+a637 1
+	    $fontsize = $attr->{"SIZE"};
+d639 1
+a639 1
+	$parser->{"current"} .= "<FONTSIZE><".$fontsize.">";
+d652 1
+a652 1
+    warn "Found FONT close tag  Explicit = $explicit\n";
+d659 1
+a659 1
+	    $parser->{"current"} .= "</FONTCOLOR>";
+d662 1
+a662 1
+	    $parser->{"current"} .= "</FONTSIZE>";
+d674 1
+a674 1
+    warn "Found BASEFONT open tag\n";
+d676 3
+a678 3
+    if ($attr->{"SIZE"}) {
+	$parser->{"current"} .= "<FONTSIZE><".$attr->{"SIZE"}.">";
+	push(@@{$parser->{"fontsizestack"}}, $attr->{"SIZE"});
+d684 1
+a684 1
+    warn "Found BASEFONT close tag  Explicit = $explicit\n";
+d686 1
+a686 1
+    $parser->{"current"} .= "</FONTSIZE>";
+d694 1
+a694 1
+    warn "Found BIG open tag\n";
+d701 1
+a701 1
+    $parser->{"current"} .= "<FONTSIZE><".$fontsize.">";
+d709 1
+a709 1
+    warn "Found BIG close tag  Explicit = $explicit\n";
+d711 1
+a711 1
+    $parser->{"current"} .= "</FONTSIZE>";
+d719 1
+a719 1
+    warn "Found SMALL open tag\n";
+d726 1
+a726 1
+    $parser->{"current"} .= "<FONTSIZE><".$fontsize.">";
+d734 1
+a734 1
+    warn "Found SMALL close tag  Explicit = $explicit\n";
+d736 1
+a736 1
+    $parser->{"current"} .= "</FONTSIZE>";
+d744 1
+a744 1
+    warn "Found Hn open tag\n";
+d746 4
+a749 3
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+d751 1
+a751 1
+    $parser->{"current"} .= "\U$text";
+d756 3
+a758 1
+    warn "Found Hn close tag  Explicit = $explicit\n";
+d760 14
+a773 1
+    $parser->{"current"} .= "\U$text";
+d775 2
+a776 3
+    unless ($parser->{"newlined"}) {
+	$parser->{"current"} .= "\n\n";
+    }				
+d778 3
+a780 1
+    $parser->{"newlined"} = 1;
+d782 1
+d790 1
+a790 1
+    warn "Found A open tag\n";
+d795 2
+a796 2
+    if ($attr->{"HREF"}) {
+	$parser->{"current"} .= "<ANCHOR><".$attr->{"HREF"}.">";
+d801 2
+a802 2
+    if ($attr->{"NAME"}) {
+	$parser->{"current"} .= "<NAME><".$attr->{"NAME"}.">";
+d813 1
+a813 1
+    warn "Found A close tag  Explicit = $explicit\n";
+d820 1
+a820 1
+	    $parser->{"current"} .= "</ANCHOR>";
+d823 1
+a823 1
+	    $parser->{"current"} .= "</NAME>";
+d833 1
+a833 1
+    warn "Found BODY open tag\n";
+d838 2
+a839 2
+    if ($attr->{"BGCOLOR"}) {
+	$parser->{"current"} .= "<BGCOLOR><".$attr->{"BGCOLOR"}.">";
+d844 2
+a845 2
+    if ($attr->{"LINK"}) {
+	$parser->{"current"} .= "<LINKCOLOR><".$attr->{"LINK"}.">";
+d850 2
+a851 2
+    if ($attr->{"TEXT"}) {
+	$parser->{"current"} .= "<FONTCOLOR><".$attr->{"TEXT"}.">";
+d862 1
+a862 1
+    warn "Found BODY close tag  Explicit = $explicit\n";
+d867 1
+a867 1
+	warn "tagcount = $tagcount\n";
+d871 1
+a871 1
+	    $parser->{"current"} .= "</BGCOLOR>";
+d873 1
+a873 1
+	    $parser->{"current"} .= "</LINKCOLOR>";
+d875 1
+a875 1
+	    $parser->{"current"} .= "</FONTCOLOR>";
+d877 1
+a877 1
+	    warn "Stray </BODY> tag\n";
+d881 23
+d909 1
+a909 1
+    warn "Passing through\n";
+d911 1
+a911 1
+    $parser->{"current"} .= "<\U$tag>";
+d916 1
+a916 1
+    warn "Passing through  Explicit = $explicit\n";
+d918 1
+a918 1
+    $parser->{"current"} .= "<\U/$tag>";
+d920 2
+d923 3
+d927 14
+d955 2
+d960 13
+a972 9
+    if (0 && $parser->{"current"} =~ /\S/) {
+        ($parser->{"chunknum"})++;
+        &util::debug('WebPage',
+                     "Packaging text: " . $parser->{"current"});
+        push(@@{$parser->{"chunks"}},
+             new chunk ("text/plain", undef, undef, $parser->{"chunknum"},
+                        $parser->{"current"} . chr(0), undef, undef,
+                        "Text " . $parser->{"chunknum"}));
+        $parser->{"current"} = '';
+d974 1
+d976 1
+a976 1
+    $parser->{"current"} .= "<IMG><".$attr->{"SRC"}.">";
+d980 1
+a980 1
+    my $url = (new URI::URL $attr->{"SRC"},$parser->{"base_url"})->abs;
+d985 4
+a988 1
+                    "Inline img " . $parser->{"chunknum"}));
+d995 1
+a995 1
+    warn "Found TITLE open tag\n";
+d997 1
+d1003 1
+a1003 1
+    warn "Found TITLE close tag  Explicit = $explicit\n";
+a1009 4
+sub do_html_open {
+    my ($parser, $tag, $text, $attr) = @@_;
+
+}
+d1011 1
+a1011 1
+sub do_html_close {
+d1013 1
+a1013 1
+    warn "Found HTML CLOSE TAG  Explicit = $explicit\n";
+d1016 1
+a1016 1
+    if ($parser->{"title"} && $explicit) {  # !!!! later take out explicit !!!!!!!!!!!!!
+d1020 4
+a1023 4
+    warn "\n\nOutput:\n";
+    warn $parser->{"current"}."\n";
+    warn "\n\nTitle:\n";
+    warn $parser->{"title"}."\n";
+d1029 1
+a1029 1
+	warn "Error opening output file\n";
+d1040 1
+a1040 1
+    warn "Found EAT\n";
+d1046 1
+a1046 1
+    warn "Found EAT  Explicit = $explicit\n";
+a1058 23
+    unless ($parser->{"eat"}) {
+#	warn "WS = <$content>\n";
+	if ($content =~ s/\n+/ /m) {
+	    $ws = ' ';
+	    if ($parser->{"nonl"}) {
+		$ws = '';
+	    }
+	    if ($parser->{"grabtitle"}) {
+		$parser->{"title"} .= $ws
+		    unless $parser->{"title"} =~ /\s$/;
+	    } else {
+		$parser->{"current"} .= $ws
+		    unless $parser->{"current"} =~ /\s$/;
+	    }
+	}
+	elsif ($content =~ s/\s+/ /m) { 
+	    if ($parser->{"grabtitle"}) {
+		$parser->{"title"} .= ' '
+		    unless $parser->{"title"} =~ /\s$/;
+	    } else {
+		$parser->{"current"} .= ' '
+		    unless $parser->{"current"} =~ /\s$/;
+	    }
+d1060 8
+a1067 9
+	} else 	{
+	    if ($parser->{"grabtitle"}) {
+		$parser->{"title"} .= $content;
+	    }
+	    else {
+		$parser->{"current"} .= $content;
+	    }
+	    $parser->{"newlined"} = 0;
+	}
+d1069 11
+d1082 1
+d1085 1
+a1085 1
+    warn "HTML parser: $warning\n";
+@
+
+
+1.1
+log
+@WebPage can now actually parse web pages, sort of.... html_parser was
+moved (perhaps unwisely?) to gmproxyd main directory.
+@
+text
+@@

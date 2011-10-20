@@ -1,0 +1,548 @@
+head	1.2;
+access;
+symbols
+	release:1.2
+	pregeo:1.2
+	geoworks-0701:1.2
+	geoworks-062696:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.04.29.22.33.14;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.08.22.11.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@The webproxy is restored!  woo hoo!  (from Spring Break full bkup)
+@
+text
+@# HTML parser
+# Jim Davis, July 15 1994
+
+# This is an HTML parser not an SGML parser.  It does not parse a DTD,
+# The DTD is implicit in the code, and specific to HTML.  
+# The processing of the HTML can be customized by the user by
+#   1) Defining routines to be called for various tags (see Begin and End arrays)
+#   2) Defining routines html_content and html_whitespace
+
+# This is not a validating parser.   It does not check the content model
+# eg you can use DT outside a DL and it won't know.  It is too liberal in
+# what tags are allowed to minimize what other tags.
+
+# Bugs - can't parse the prolog or whatever you call it
+#   <!DOCTYPE HTML [
+#     <!entity % HTML.Minimal "INCLUDE">
+#     <!-- Include standard HTML DTD -->
+#     <!ENTITY % html PUBLIC "-//connolly hal.com//DTD WWW HTML 1.8//EN">
+#     %html;
+#     ]>
+
+# modified 3 Aug to add a bunch of HTML 2.0 tags
+# modified 3 Sept to print HTML stack to STDERR not STDOUT, to add new
+#  routines html_begin_doc and html_end_doc for application specific cleanup
+#  and to break parse_html into two pieces.
+# modified 30 Sept 94.  parse_attributes now handles tag attributes that
+#   don't have values.  thanks to  Bill Simpson-Young <bill@@syd.dit.csiro.au>
+#   for the code.
+# modified 17 Apr 95 to support FORMS tags.
+
+#package parse_html;
+
+$debug = 0;
+
+$whitespace_significant = 1;
+
+# global variables: 
+#  $line_buffer is line buffer
+#  $line_count is input line number.
+
+$line_buffer = "";
+$line_count = 0;
+
+sub parse_html {
+    local ($file) = @@_;
+    open (HTML, $file) || die "Could not open $file: $!\nStopped";
+    &parse_html_stream ();
+    close (HTML);}
+
+# Global input HTML is the handle to the stream of HTML
+sub parse_html_string {
+    local ($token, $new);
+    $line_buffer = shift;
+    ## initialization
+    @@stack=();
+    $line_count = 0;
+    #$line_buffer = "";
+
+    ## application specific initialization
+    &html_begin_doc();
+  main:
+    while (1) {
+
+	# if whitespace does not matter, trim any leading space.
+	if (! $whitespace_significant) {
+	    $line_buffer =~ s/^\s+//;}
+
+	# now dispatch on the type of token
+
+	if ($line_buffer =~ /^(\s+)/) {
+	    $token = $1;
+	    $line_buffer = $';
+	    &html_whitespace ($token);}
+
+	# This will lose if there is more than one comment on the line!
+	# elsif ($line_buffer =~ /^(\<!--(.|\n)*-->)/m ) {
+        elsif ($line_buffer =~ /^(\<!--)/) {
+	    $token = $1;
+	    $line_buffer = $';
+            local($pos)  = index($line_buffer, "-->");
+            if ($pos < 0) {
+                &main::debug('parse', "Comment has no ending!");
+            } else {
+                $token .= substr($line_buffer, 0, $pos+3);
+                $line_buffer = substr($line_buffer, $pos+3);
+                &html_comment ($token);
+            }
+        }
+	elsif ($line_buffer =~ /^(\<![^-][^\>]*\>)/) {
+	    $token = $1;
+	    $line_buffer = $';
+	    &html_comment ($token);}
+
+	elsif ($line_buffer =~ /^(\<\/[^\>]*\>)/) {
+	    $token = $1;
+	    $line_buffer = $';
+	    &html_etag ($token);}
+
+	elsif ($line_buffer =~ /^(\<[^!\/][^\>]*\>)/) {
+	    $token = $1;
+	    $line_buffer = $';
+	    &html_tag ($token);}
+
+	elsif ($line_buffer =~ /^([^\s<]+)/) {
+	    $token = $1;
+	    $line_buffer = $';
+	    $token = &substitute_entities($token);
+	    &html_content ($token); }
+
+        elsif ($line_buffer eq '') {
+            last;
+        } else {
+            &main::debug('parse', "No valid token! Line: $line_buffer\n");
+        }
+
+    }
+
+    ## cleanup
+    &html_end_doc();
+
+    if ($#stack > -1) {
+	&main::debug('parse', "Stack not empty at end of document\n");
+	&print_html_stack();}
+}
+
+
+sub html_tag {
+    local ($tag) = @@_;
+    local ($element) = &tag_element ($tag);
+    local (%attributes) = &tag_attributes ($tag);
+
+    # the tag might minimize (be an implicit end) for the previous tag
+    local ($prev_element);
+    while (&Minimizes(&stack_top_element(), $element)) {
+	$prev_element = &stack_pop_element ();
+        &main::debug('parse', "MINIMIZING $prev_element with $element\n");
+	&html_end ($prev_element, 0);
+    }
+
+    push (@@stack, $tag);
+
+    &html_begin ($element, $tag, *attributes);
+
+    if (&Empty($element)) {
+	pop(@@stack);
+	&html_end ($element, 0);}
+}
+
+sub html_etag {
+    local ($tag) = @@_;
+    local ($element) = &tag_element ($tag);
+
+    # pop stack until find matching tag.  This is probably a bad idea,
+    # or at least too general.
+    local ( $prev_element) = &stack_pop_element();
+    until ($prev_element eq $element) {
+        &main::debug('parse', "MINIMIZING $prev_element with /$element");
+        &html_end ($prev_element, 0);
+
+	if ($#stack == -1) {
+	    &main::debug('parse',
+                         "No match found for /$element.  You will lose\n");
+	    last;
+        }
+        
+	$prev_element = &stack_pop_element();}
+
+    &html_end ($element, 1);
+}
+
+
+# For each element, the names of elements which minimize it.
+# This is of course totally HTML dependent and probably I have it wrong too
+$Minimize{"DT"} = "DT:DD";
+$Minimize{"DD"} = "DT";
+$Minimize{"LI"} = "LI";
+$Minimize{"B"} = $Minimize{"I"} = $Minimize{"P"} =
+    "P:DT:LI:H1:H2:H3:H4:BLOCKQUOTE:UL:OL:DL";
+
+
+# Does element E2 minimize E1?
+sub Minimizes {
+    local ($e1, $e2) = @@_;
+    local ($value) = 0;
+    foreach $elt (split (":", $Minimize{$e1})) {
+	if ($elt eq $e2) {$value = 1;}}
+    $value;}
+
+$Empty{"BASE"} = 1;
+$Empty{"BR"} = 1;
+$Empty{"HR"} = 1;
+$Empty{"IMG"} = 1;
+$Empty{"ISINDEX"} = 1;
+$Empty{"LINK"} = 1;
+$Empty{"META"} = 1;
+$Empty{"NEXTID"} = 1;
+$Empty{"INPUT"} = 1;
+
+# Empty tags have no content and hence no end tags
+sub Empty {
+    local ($element) = @@_;
+    $Empty{$element};}
+
+
+sub print_html_stack {
+    &main::debug('parse', "\n  ==\n");
+    foreach $elt (reverse @@stack) {
+        &main::debug('parse', "  $elt\n");
+    }
+    &main::debug('parse', "  ==========\n");
+}
+
+# The element on top of stack, if any.
+sub stack_top_element {
+    if ($#stack >= 0) {	&tag_element ($stack[$#stack]);}}
+
+sub stack_pop_element {
+    &tag_element (pop (@@stack));}
+
+# The element from the tag, normalized.
+sub tag_element {
+    local ($tag) = @@_;
+    $tag =~ /<\/?([^\s>]+)/;
+    local ($element) = $1;
+    $element =~ tr/a-z/A-Z/;
+    $element;}
+
+# associative array of the attributes of a tag.
+sub tag_attributes {
+    local ($tag) = @@_;
+
+    # make attribute parsing work even when tag is split across newlines.
+    # this uses Perl 5 syntax for multiline match.
+    $tag =~ s/\n/ /mg;
+    
+    $tag =~ /^<[A-Za-z]+\s+(.*)>$/;
+    &parse_attributes($1);}
+
+# string should be something like
+# KEY="value" KEY2="longer value"  KEY3="tags o doom"
+# output is an associative array (like a lisp property list)
+# attributes names are not case sensitive, do I downcase them
+# Maybe (probably) I should substitute for entities when parsing attributes.
+
+sub parse_attributes {
+    local ($string) = @@_;
+    local (%attributes);
+    local ($name, $val);
+
+  get: while (1) {
+      if ($string =~ /^ *([A-Za-z]+)=\"([^\"]*)\"/) { #" 
+	  $name = $1;
+	  $val = $2;
+	  $string = $';
+	  $name =~ tr/A-Z/a-z/;
+	  $attributes{$name} = $val; }
+      elsif ($string =~ /^ *([A-Za-z]+)=(\S*)/) {
+	  $name = $1;
+	  $val = $2;
+	  $string = $';
+	  $name =~ tr/A-Z/a-z/;
+	  $attributes{$name} = $val;}
+      elsif ($string =~ /^ *([A-Za-z]+)/) {
+	  $name = $1;
+	  $val = "";
+	  $string = $';
+	  $name =~ tr/A-Z/a-z/;
+	  $attributes{$name} = $val;}
+      else {last;}
+  }
+    %attributes;
+}
+
+sub substitute_entities {
+    local ($string) = @@_;
+    $string =~ s/&amp;/&/g;
+    $string =~ s/&lt;/</g;
+    $string =~ s/&gt;/>/g;
+    $string =~ s/&quot;/\"/g;               #" 
+    $string;
+}
+
+
+@@HTML_elements =  sort (
+		  "A",
+		  "ADDRESS",
+                  "APP",                    # Java addition :(
+		  "B",
+		  "BASE",
+		  "BLINK",	#  Netscape addition :-(
+		  "BLOCKQUOTE",
+		  "BODY",
+		  "BR",
+		  "CITE",
+		  "CENTER",	# Netscape addition :-(
+		  "CODE",
+		  "DD",
+		  "DIR",
+		  "DFN",
+		  "DL",
+		  "DT",
+		  "EM",
+		  "FORM",
+		  "H1", "H2", "H3", "H4", "H5", "H6",
+		  "HEAD",
+		  "HR",
+		  "HTML",
+		  "I",
+		  "ISINDEX",
+		  "IMG",
+		  "INPUT",
+		  "KBD",
+		  "LI",
+		  "LINK",
+		  "MENU",
+		  "META",
+		  "NEXTID",
+		  "OL",
+		  "OPTION",
+		  "P",
+		  "PRE",
+		  "SAMP",
+		  "SELECT",
+		  "STRIKE",
+		  "STRONG",
+		  "TITLE",
+		  "TEXTAREA",
+		  "TT",
+		  "UL",
+		  "VAR",
+                  # more Netscape additions :( :(
+                   "FONT",
+                   "FRAME",
+                   "FRAMESET",
+                   "NOFRAMES",
+                   "SCRIPT", 
+                   "AREA",
+                   "TABLE", "TR", "TD",
+                        "MAP", 
+                   );
+
+sub define_element {
+    local ($element) = @@_;
+    $Begin{$element} = "Noop";
+    $End{$element} = "Noop";
+}
+
+foreach $element (@@HTML_elements) {&define_element($element);}
+
+# do nothing
+sub Noop {
+    local ($element, $xxx) = @@_;
+}
+
+# called when a tag begins.  Dispatches using Begin
+sub html_begin {
+    local ($element, $tag, *attributes) = @@_;
+
+    local ($routine) = $Begin{$element};
+    if ($routine eq "") {
+        &main::debug('parse', "Unknown HTML element $element ($tag)");
+    }
+    else {
+        &$routine($element, $tag, *attributes);
+        #eval "&$routine ( \$element,\$tag,\*attributes );"}
+    }
+}
+
+# called when a tag ends.  Explicit is 0 if tag end is because of minimization
+# not that you should care.
+sub html_end {
+    local ($element, $explicit) = @@_;
+    local ($routine) = $End{$element};
+    if ($routine eq "") {
+	&main::debug('parse', "Unknown HTML element \"$element\" ".
+                     "(END $explicit)");
+    }
+    else {
+        &$routine ($element, $explicit);
+        
+        #eval "&$routine(\"$element\", $explicit)";}
+    }
+}
+
+sub html_content {
+    if (defined $HtmlContent) {
+        &$HtmlContent(@@_);
+        #eval "&$HtmlContent(\@@_)";
+    }
+}
+
+sub html_whitespace {
+    if (defined $HtmlWhitespace) {
+        &$HtmlWhitespace(@@_);
+        #eval "&$HtmlWhitespace(\@@_)";
+    }
+}
+
+sub html_comment {
+    local ($tag) = @@_;}
+
+# redefine these for application-specific initialization and cleanup
+
+sub html_begin_doc {}
+
+sub html_end_doc {}
+
+# return a "true value" when loaded by perl.
+1;
+
+@
+
+
+1.1
+log
+@Added parse_html.pl, but it's not up to date; need version from spring
+break restored from barad-dur tape
+@
+text
+@d31 2
+d35 1
+a35 1
+$whitespace_significant = 0;
+d53 1
+a53 1
+
+d57 1
+a57 1
+    $line_buffer = shift @@_;
+d76 2
+a77 1
+	elsif ($line_buffer =~ /^(\<!--.*-->)/) {
+d80 9
+a88 2
+	    &html_comment ($token);}
+
+d110 6
+a115 12
+	else {
+	    # No valid token in buffer.  Maybe it's empty, or maybe there's an
+	    # incomplete tag.  So get some more data.
+	    $new = <HTML>;
+	    if (! defined ($new)) {last main;}
+	    # if we're trying to find a match for a tag, then get rid of embedded newline
+	    # this is, I think, a kludge
+	    if ($line_buffer =~ /^\</ && $line_buffer =~ /\n$/) {
+		chop $line_buffer;
+		$line_buffer .= " ";}
+	    $line_buffer .= $new;
+	    $line_count++;}
+d122 1
+a122 1
+	print STDERR "Stack not empty at end of document\n";
+d136 3
+a138 3
+	if ($debug)  {
+	    print STDERR "MINIMIZING $prev_element with $element on $line_count\n";}
+	&html_end ($prev_element, 0);}
+d157 2
+a158 3
+	if ($debug) {
+	    print STDERR "MINIMIZING $prev_element with /$element on $line_count \n";}
+	&html_end ($prev_element, 0);
+d161 5
+a165 2
+	    print STDERR "No match found for /$element.  You will lose\n";
+	    last;}
+d177 3
+a179 1
+$Minimize{"P"} = "P:DT:LI:H1:H2:H3:H4:BLOCKQUOTE:UL:OL:DL";
+d206 6
+a211 3
+    print STDERR "\n  ==\n";
+    foreach $elt (reverse @@stack) {print STDERR "  $elt\n";}
+    print STDERR "  ==========\n";}
+d231 5
+d249 1
+d251 1
+a251 1
+      if ($string =~ /^ *([A-Za-z]+)=\"([^\"]*)\"/) {
+d269 4
+a272 2
+      else {last;}}
+    %attributes;}
+d279 3
+a281 2
+    $string =~ s/&quot;/\"/g;
+    $string;}
+d284 1
+a284 1
+@@HTML_elements = (
+a303 1
+                  "FONT",      # Netscape addition; added by fox 
+d331 10
+a340 1
+		  );
+d345 2
+a346 1
+    $End{$element} = "Noop";}
+d352 2
+a353 1
+    local ($element, $xxx) = @@_;}
+d361 7
+a367 2
+	print STDERR "Unknown HTML element $element ($tag) on line $line_count\n";}
+    else {eval "&$routine;"}}
+d375 9
+a383 2
+	print STDERR "Unknown HTML element \"$element\" (END $explicit) on line $line_count\n";}
+    else {eval "&$routine(\"$element\", $explicit)";}}
+d387 2
+a388 1
+        eval "&$HtmlContent(\@@_)";
+d394 2
+a395 1
+        eval "&$HtmlWhitespace(\@@_)";
+@

@@ -1,0 +1,173 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.06.11.03.51.38;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.06.11.03.51.38;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/sww/bin/perl5
+
+$limit = 8192;                              # max gif size
+
+%gifs = ("monument.gif", "151 94",
+         "soda_inline.gif", "112 78",
+         "stimpy.gif", "121 175",
+         "tigger2.gif", "82 90",
+         "yosemitefalls.gif", "70 99"
+         );
+
+BEGIN {
+    push(@@INC, "/disks/barad-dur/now/pythia/release/perllib");
+    my $uname = `uname` || `/bin/uname` || `/usr/ucb/uname`  ||
+        warn "Can't get uname";
+    chomp $uname;
+    push(@@INC,
+         ($ENV{PERLMOD} || "/disks/barad-dur/now/pythia/release/perlmod.") .
+         $uname);
+    
+}
+
+$thresh = 0.1;
+$times = 5;
+$limit = 8192;
+$grays = 16;                               # defaults
+while ($_ = shift @@ARGV) {
+    $limit = (shift @@ARGV || die "$_ requires numeric arg!\n"), next
+        if /^-size/;
+    $grays = (shift @@ARGV || die "$_ requires numeric arg!\n"), next
+        if /^-grays/;
+    $thresh = (shift @@ARGV || die "$_ requires numeric arg!\n"), next
+        if /^-thresh/;
+    $times = (shift @@ARGV || die "$_ requires numeric arg!\n"), next
+        if /^-times/;
+    die "Usage: $0 [-limit maxsize] [-grays ngrays]\n";
+}
+
+use Times;
+require "gm_run.pl";
+
+&run::init() or die;
+$SIG{QUIT} = "done";
+open(R,">results") or die $!;
+select R; $| = 1; select STDOUT;
+foreach $img (keys %gifs) {
+    $params = $gifs{$img};
+    $size = -s $img;
+    warn "Doing $img (size $size)\n";
+
+    $f = &run::slurp($img);
+    %s = &run::gifattribs($f);
+    $colors = $s{colors} || 2 ** $s{bpp};
+
+    if (0) {
+        $nx = $s{x};
+        $ny = $s{y};
+        # determine correct set of distillation params
+      TRY:
+        while ($size > $limit) {
+            $nx >>= 1;
+            $ny >>= 1;
+            print STDERR ("Trying size $nx,$ny...\n");
+            $new = &run::run("$nx $ny $colors \#ffffff", $f);
+            $size = length($new);
+            print STDERR $size,"\n";
+        }
+        # too small?
+        if (($limit-$size)/$limit >= $thresh) {
+            $nx *= 1.5 * 2;
+            $ny *= 1.5 * 2;
+            $size = 1+$limit;
+            goto TRY;
+        }
+    } else {
+        ($nx,$ny) = (split(/\s+/, $params));
+    }
+    
+    print "Using $nx,$ny, colors=$colors\n";
+
+    # time the distillation for real.
+
+    $disttime = 0;
+    warn "Timing distillation\n";
+    for (1..$times) {
+        @@t1 = &Times::gtod();
+        $distsize = &run::run("$nx $ny $colors \#ffffff", $f);
+        @@t2 = &Times::gtod();
+        $disttime += &Times::utimesdiff(@@t2,@@t1);
+    }
+    $disttime /= $times;
+    open(Q,">dist"); print Q $distsize; close Q;
+    $distsize = length($distsize);
+    
+    # time distillation plus color quant
+
+    $quanttime = 0;
+    warn "Timing color quantization\n";
+    for (1..$times) {
+        @@t1 = &Times::gtod();
+        $quantsize = &run::run("$nx $ny $grays \#ffffff", $f);
+        @@t2 = &Times::gtod();
+        $quanttime += &Times::utimesdiff(@@t2,@@t1);
+    }
+    $quanttime /= $times;
+    open(Q,">quant"); print Q $quantsize; close Q;
+    $quantsize = length($quantsize);
+
+    # distillation plus col quant plus PICT conv.  since PICT conv occurs as a
+    # separate step, we can just construct (one time only) the PPM file, and
+    # time ppmtopict.  (This fxnlity should be part of gifmunch.)
+
+    system("giftopnm $img | pnmscale -xsize $nx -ysize $ny | ppmquant $grays > ${img}.ppm") and die $?;
+    $picttime = 0;
+    warn "Timing PICT conversion\n";
+    for (1..$times) {
+        @@t1 = &Times::gtod();
+        system("ppmtopict ${img}.ppm >${img}.pict");
+        @@t2 = &Times::gtod();
+        $picttime += &Times::utimesdiff(@@t2,@@t1);
+    }
+    $pictsize = -s "${img}.pict";
+    $picttime /= $times;
+    $picttime += $quanttime;
+
+    printf R "$img   %.2f %d   %.2f %d   %.2f %d\n",
+    $disttime,$distsize,$quanttime,$quantsize,$picttime,$pictsize;
+}
+
+&done();
+
+sub done {
+    close R;
+    &run::kill_muncher();
+}
+@
+
+
+1.1.1.1
+log
+@program to generate GIF distillation stats table in ASPLOS7 paper
+@
+text
+@@

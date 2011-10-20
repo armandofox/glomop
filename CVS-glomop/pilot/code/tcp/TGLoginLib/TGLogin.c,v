@@ -1,0 +1,689 @@
+head	1.4;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	98.07.21.15.00.23;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.07.11.21.08.31;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.11.11.20.07.00;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.11.22.48.50;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.11.22.48.50;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Fixed Palm III font code.  It seems you have to define custom fonts
+sequentially starting with 129.
+@
+text
+@/* Main code for Top Gun Net library
+   See the README file for copyright/licensing terms */
+
+#include <Pilot.h>
+#include <sys/socket.h>
+#include "TGLoginLibRsc.h"
+#include "TGLogin.h"
+#include "display.h"
+#include "ui.h"
+
+static FontPtr curfont = NULL;
+static UInt curwidth = 40;
+static FontPtr origfont6 = NULL;
+static void (*set_dpy)(Display *,void *);
+static void *set_dpyp;
+
+Err errno;
+
+typedef enum { FONT_4x6, FONT_5x6, FONT_6x8 } FontChoice;
+static VoidHand fontHtable[3];
+static FontPtr fonttable[3];
+static Boolean fontfaketables;
+
+static void fontinit(FieldPtr sfld, FieldPtr ofld, FieldPtr ifld)
+{
+    int i;
+    DWord romVersion = 0;
+
+    /* Set the fonts */
+    for(i=0;i<3;++i) {
+	fontHtable[i] = DmGetResource('NFNT', 0x18c0 + i);
+	ErrFatalDisplayIf(!fontHtable[i], "Unable to locate fixed-width font");
+	fonttable[i] = MemHandleLock(fontHtable[i]);
+    }
+
+    FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+    if ((romVersion & 0xff000000) < 0x03000000) {
+	/* We have to fake the font tables */
+	FontPtr * const UIFontTable6 = (FontPtr *)490 /*&(UIFontTable+6)*/;
+
+	/* Save font 6 */
+	if (*UIFontTable6 != fonttable[0]) origfont6 = *UIFontTable6;
+
+	FldSetFont(sfld, 6);
+	FldSetFont(ofld, 6);
+	FldSetFont(ifld, 6);
+
+	fontfaketables = true;
+    } else {
+	/* We can use the real font stuff */
+	for(i=0;i<3;++i) {
+	    FntDefineFont(fntAppFontCustomBase+1+i, fonttable[i]);
+	}
+	FldSetFont(sfld, fntAppFontCustomBase+1);
+	FldSetFont(ofld, fntAppFontCustomBase+1);
+	FldSetFont(ifld, fntAppFontCustomBase+1);
+	fontfaketables = false;
+    }
+}
+
+static void fontclean(void)
+{
+    int i;
+
+    if (fontfaketables) {
+	FontPtr * const UIFontTable6 = (FontPtr *)490 /*&(UIFontTable+6)*/;
+	
+	/* Restore font 6 */
+	*UIFontTable6 = origfont6;
+    } else {
+	/* Here we would normally FntUndefineFont(), but that routine
+	   doesn't seem to exist. */
+    }
+
+    /* Unlock the fonts */
+    for (i=0;i<3;++i) {
+	fonttable[i] = NULL;
+	if (fontHtable[i]) {
+	    MemHandleUnlock(fontHtable[i]);
+	    DmReleaseResource(fontHtable[i]);
+	}
+    }
+}
+
+static void setcurfont(FontChoice fntchoice, FieldPtr sfld,
+    FieldPtr ofld, FieldPtr ifld)
+{
+    curfont = fonttable[fntchoice];
+
+    if (fontfaketables) {
+	FontPtr * const UIFontTable6 = (FontPtr *)490 /* &(UIFontTable+6) */;
+
+	*UIFontTable6 = curfont;
+    } else {
+	FldSetFont(sfld, fntAppFontCustomBase+1+fntchoice);
+	FldSetFont(ofld, fntAppFontCustomBase+1+fntchoice);
+	FldSetFont(ifld, fntAppFontCustomBase+1+fntchoice);
+    }
+}
+
+static void redraw_field(Display *dpy, int newsize)
+{
+    FormPtr frm = FrmGetActiveForm();
+    FieldPtr ofld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,OField));
+    RectangleType rect;
+
+    FldGetBounds(ofld, &rect);
+    rect.extent.x = dpy->fldwidth;
+    rect.topLeft.x = -(dpy->hscroll)*(curfont->fRectWidth);
+    FldSetUsable(ofld, 0);
+    FldSetBounds(ofld, &rect);
+    if (newsize) {
+	display_init_ofld(dpy, set_dpy, set_dpyp);
+    }
+    FrmEraseForm(frm);
+    FldSetUsable(ofld, 1);
+    FrmUpdateForm(TGLoginForm, frmRedrawUpdateCode);
+}
+
+static void new_font(Display *dpy, FontChoice fntchoice, FieldPtr sfld,
+    FieldPtr ofld, FieldPtr ifld)
+{
+    int newsize = 0;
+    UInt newROWS;
+    FontPtr fnt = fonttable[fntchoice];
+
+    /* We may have to change FieldWidth, ROWS, VISCOLS, and HSCROLL.
+       COLS will not change */
+    if (fnt == curfont) return;
+
+    newROWS = DpyFieldVisHeight / fnt->fRectHeight;
+    if (dpy->rows != newROWS) {
+	newsize = 1;
+	dpy->rows = newROWS;
+    }
+    dpy->viscols = DpyFieldVisWidth / fnt->fRectWidth;
+    dpy->fldwidth = dpy->cols * fnt->fRectWidth;
+    if (DpyFieldVisWidth % fnt->fRectWidth) dpy->fldwidth += fnt->fRectWidth;
+    if (dpy->cols <= dpy->viscols) {
+	dpy->hscroll = 0;
+    } else if ((dpy->hscroll) > (dpy->cols)-(dpy->viscols)) {
+	(dpy->hscroll) = (dpy->cols)-(dpy->viscols);
+    }
+    setcurfont(fntchoice, sfld, ofld, ifld);
+    redraw_field(dpy, newsize);
+}
+
+static void new_width(Display *dpy, UInt width)
+{
+    /* We may have to change FieldWidth, COLS, and HSCROLL. */
+    if (width == (dpy->cols)) return;
+
+    (dpy->cols) = width;
+    (dpy->fldwidth) = (dpy->cols) * curfont->fRectWidth;
+    if (dpy->cols <= dpy->viscols) {
+	dpy->hscroll = 0;
+    } else if ((dpy->hscroll) > (dpy->cols)-(dpy->viscols)) {
+	(dpy->hscroll) = (dpy->cols)-(dpy->viscols);
+    }
+    redraw_field(dpy, 1);
+}
+
+static int ctoh(char c) {
+    if (c >= '0' && c <= '9') return c-'0';
+    if (c >= 'a' && c <= 'f') return c-'a'+10;
+    if (c >= 'A' && c <= 'F') return c-'A'+10;
+    return 0;
+}
+
+static void move_ofield_right(Display *dpy, FormPtr frm, int numchars) {
+    Word index = FrmGetObjectIndex(frm,OField);
+    SWord x,y;
+    UInt oldHSCROLL = dpy->hscroll;
+    UInt oldleft, newleft, oldright, newright;
+    
+    if ((Int)(dpy->hscroll) + numchars < 0) (dpy->hscroll) = 0;
+    else if ((Int)(dpy->hscroll) + numchars > (dpy->cols) - (dpy->viscols))
+	(dpy->hscroll) = (dpy->cols) - (dpy->viscols);
+    else (dpy->hscroll) = (Int)(dpy->hscroll) + numchars;
+    if ((dpy->hscroll) == oldHSCROLL) return;
+
+    /* Redraw the scrollbar */
+    oldleft = oldHSCROLL * DpyFieldVisWidth / (dpy->cols);
+    newleft = (dpy->hscroll) * DpyFieldVisWidth / (dpy->cols);
+    oldright = oldleft + (dpy->viscols) * DpyFieldVisWidth / (dpy->cols) - 1;
+    newright = newleft + (dpy->viscols) * DpyFieldVisWidth / (dpy->cols) - 1;
+    if (newleft > oldright || oldleft > newright) {
+	WinEraseLine(oldleft, 124, oldright, 124);
+	WinEraseLine(oldleft, 126, oldright, 126);
+	WinDrawLine(newleft, 124, newright, 124);
+	WinDrawLine(newleft, 126, newright, 126);
+    } else if (oldleft+1 < newleft) {
+	WinEraseLine(oldleft, 124, newleft-1, 124);
+	WinEraseLine(oldleft, 126, newleft-1, 126);
+	WinDrawLine(oldright+1, 124, newright, 124);
+	WinDrawLine(oldright+1, 126, newright, 126);
+    } else if (oldleft > newleft+1) {
+	WinEraseLine(newright+1, 124, oldright, 124);
+	WinEraseLine(newright+1, 126, oldright, 126);
+	WinDrawLine(newleft, 124, oldleft-1, 124);
+	WinDrawLine(newleft, 126, oldleft-1, 126);
+    }
+
+    /* Move the text field */
+    FrmGetObjectPosition(frm, index, &x, &y);
+    FrmSetObjectPosition(frm, index, -((Int)(dpy->hscroll)) *
+	((Int)curfont->fRectWidth), y);
+    FrmShowObject(frm, index);
+}
+
+static void send_buf_append(char *append, int appendlen) {
+    FormPtr frm = FrmGetActiveForm();
+    FieldPtr ifld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,IField));
+    unsigned char *itxt = FldGetTextPtr(ifld);
+    Erf erf = saveerf;
+    void *erfp = saveerfp;
+    VoidHand ihnd;
+    long amt;
+
+    if (!saveuistate) return;
+    if (!itxt) itxt="";
+    if (itxt[0]) {
+	/* Compact the send buffer */
+	unsigned char *s, *d;
+
+	d = itxt;
+	for(s=itxt;*s;++s) {
+	    if (*s == '\\' && s[1] != '\0') {
+		switch(s[1]) {
+		case '\\':
+		    *d = '\\'; ++s; break;
+		case 'c':
+		    if (s[2]) {
+			*d = (s[2]&0x1f); s+=2;
+		    }
+		    break;
+		case 'x':
+		    if (s[2] && s[3]) {
+			*d = (ctoh(s[2])<<4) + ctoh(s[3]); s+=3;
+		    }
+		    break;
+		case 'e':
+		    *d = '\033'; ++s; break;
+		case 'b':
+		    *d = '\b'; ++s; break;
+		case 'r':
+		    *d = '\r'; ++s; break;
+		case 'n':
+		    *d = '\n'; ++s; break;
+		case '^':
+		    *d = '^'; ++s; break;
+		default:
+		    *d = '\\'; break;
+		}
+	    } else if (*s == '^' && s[1] != '\0') {
+		*d = (s[1]&0x1f); ++s;
+	    } else if (*s == '\n') {
+		*d = '\r';
+	    } else {
+		*d = *s;
+	    }
+	    ++d;
+	}
+	*d = *s;
+	amt = ui_write(itxt, d-itxt, saveuistate, erf, erfp);
+	if (amt < d-itxt) {
+	    ui_fatal("Connection closed by peer");
+	}
+    }
+    if (append) {
+	amt = ui_write(append, appendlen, saveuistate, erf, erfp);
+	if (amt < appendlen) {
+	    ui_fatal("Connection closed by peer");
+	}
+    }
+
+    ihnd = MemHandleNew(1);
+    itxt = MemHandleLock(ihnd);
+    itxt[0] = '\0';
+    MemHandleUnlock(ihnd);
+    FldSetTextHandle(ifld, (Handle)ihnd);
+    FldDrawField(ifld);
+}
+
+static FieldPtr GetFocusObjectPtr(FormPtr frm)
+{
+    Word focus = FrmGetFocus(frm);
+    if (focus == noFocus) return NULL;
+
+    return FrmGetObjectPtr(frm, focus);
+}
+
+Boolean TGLoginFormHandleEvent (EventPtr e)
+{
+    static Word curfldID = 0;
+    static Display dpy;
+    static Int scrollfrom = -1;
+    Boolean handled = false;
+    FormPtr frm;
+    FieldPtr fld, sfld, ofld, ifld;
+    Erf erf = saveerf;
+    void *erfp = saveerfp;
+    unsigned char *itxt;
+
+    frm = FrmGetActiveForm();
+    sfld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,SField));
+    ofld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,OField));
+    ifld = FrmGetObjectPtr(frm,FrmGetObjectIndex(frm,IField));
+
+    switch (e->eType) {
+    case frmOpenEvent:
+
+	/* Init the fonts and set 4x6 as the initial one */
+	fontinit(sfld, ofld, ifld);
+	setcurfont(FONT_4x6, sfld, ofld, ifld);
+
+	/* Create a Display */
+	display_init(&dpy, ofld, sfld, curfont, curwidth, set_dpy, set_dpyp);
+
+	/* Draw the form, including the extra scrollbar */
+	FrmDrawForm(frm);
+	display_draw_hscroll(&dpy);
+
+	/* Give the focus to the input field */
+	FrmSetFocus(frm, FrmGetObjectIndex(frm,IField));
+	curfldID = IField;
+
+	handled = true;
+	break;
+
+    case frmUpdateEvent:
+	if (e->data.frmUpdate.updateCode == frmRedrawUpdateCode) {
+	    FrmUpdateForm(TGLoginForm, 1);
+	} else if (e->data.frmUpdate.updateCode == 1) {
+	    display_draw_hscroll(&dpy);
+	    handled = true;
+	}
+	break;
+
+    case frmCloseEvent:
+	/* Clean the fonts */
+	fontclean();
+	FrmEraseForm(frm);
+
+	/* NO handled = true here */
+	break;
+
+    case fldEnterEvent:
+	/* Record which field we're in */
+	curfldID = e->data.fldEnter.fieldID;
+	break;
+
+    case keyDownEvent:
+	/* If we're typing into the input field, handle some
+	    things specially */
+	if (curfldID != IField)
+	    break;
+
+	switch(e->data.keyDown.chr) {
+	case '\b':
+	    /* If the field is empty, send the \b */
+	    itxt = FldGetTextPtr(ifld);
+	    if (!itxt || !itxt[0]) {
+		send_buf_append("\b", 1);
+		handled = true;
+	    }
+	    break;
+	case pageUpChr:
+	    send_buf_append("\x0b", 1);
+	    handled = true;
+	    break;
+	case pageDownChr:
+	    send_buf_append("\x0c", 1);
+	    handled = true;
+	    break;
+	default:
+	    break;
+	}
+    	break;
+
+    case penDownEvent:
+	/* Check if we need to do some scrolling */
+	if (scrollfrom == -1 && e->screenY >= 124 && e->screenY <= 126) {
+	    /* Where is the scrollbox? */
+	    if (e->screenX >= dpy.hscroll * DpyFieldVisWidth / dpy.cols
+		&& e->screenX <= dpy.hscroll * DpyFieldVisWidth / dpy.cols
+		    + dpy.viscols * DpyFieldVisWidth / dpy.cols) {
+		scrollfrom = e->screenX;
+	    } else if (e->screenX <
+			dpy.hscroll * DpyFieldVisWidth / dpy.cols) {
+		move_ofield_right(&dpy, frm, -(dpy.viscols));
+	    } else {
+		move_ofield_right(&dpy, frm, (dpy.viscols));
+	    }
+	    handled = true;
+	}
+	break;
+
+    case penUpEvent:
+	if (scrollfrom >= 0) {
+	    Int diff = ((Int)e->screenX - scrollfrom) * (Int)(dpy.cols)
+		/ (Int)DpyFieldVisWidth;
+	    move_ofield_right(&dpy, frm, diff);
+	    scrollfrom = -1;
+	    handled = true;
+	}
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	case netMenuClose:
+	    ui_fatal("Connection closed by user");
+	    break;
+	case netMenuAbout:
+	    frm = FrmInitForm(TGLoginAboutForm);
+            FrmDoDialog(frm);
+	    FrmDeleteForm(frm);
+	    break;
+	case editMenuUndo:
+	    fld = GetFocusObjectPtr(frm);
+	    if (fld) {
+		FldUndo(fld);
+	    }
+	    break;
+	case editMenuCut:
+	    fld = GetFocusObjectPtr(frm);
+	    if (fld) {
+		if (curfldID == IField) {
+		    FldCut(fld);
+		} else {
+		    FldCopy(fld);
+		}
+	    }
+	    break;
+	case editMenuCopy:
+	    fld = GetFocusObjectPtr(frm);
+	    if (fld) {
+		FldCopy(fld);
+	    }
+	    break;
+	case editMenuPaste:
+	    fld = GetFocusObjectPtr(frm);
+	    if (fld && curfldID == IField) {
+		FldPaste(fld);
+	    }
+	    break;
+	case editMenuSelectAll:
+	    fld = GetFocusObjectPtr(frm);
+	    if (fld) {
+		FldSetSelection(fld, 0, FldGetTextLength(fld));
+	    }
+	    break;
+	case editMenuKeyboard:
+	    SysKeyboardDialog(kbdDefault);
+	    break;
+	case editMenuGraffiti:
+	    SysGraffitiReferenceDialog(referenceDefault);
+	    break;
+	case fontMenu4x6:
+	    new_font(&dpy, FONT_4x6, sfld, ofld, ifld);
+	    break;
+	case fontMenu5x6:
+	    new_font(&dpy, FONT_5x6, sfld, ofld, ifld);
+	    break;
+	case fontMenu6x8:
+	    new_font(&dpy, FONT_6x8, sfld, ofld, ifld);
+	    break;
+	case widthMenu26:
+	    new_width(&dpy, 26);
+	    break;
+	case widthMenu32:
+	    new_width(&dpy, 32);
+	    break;
+	case widthMenu40:
+	    new_width(&dpy, 40);
+	    break;
+	case widthMenu80:
+	    new_width(&dpy, 80);
+	    break;
+	case widthMenu132:
+	    new_width(&dpy, 132);
+	    break;
+	default:
+	    break;
+	}
+
+	/* Return the focus to the input field */
+	frm = FrmGetActiveForm();
+	FrmSetFocus(frm, FrmGetObjectIndex(frm,IField));
+	curfldID = IField;
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	case sendBtn:
+	    send_buf_append(NULL, 0);
+	    handled = true;
+	    break;
+
+	case sendCRBtn:
+	    send_buf_append("\r", 1);
+	    handled = true;
+	    break;
+	}
+	break;
+
+    default:
+	break;
+    }
+
+    return handled;
+}
+
+void TGLogin_set_setdpy(void (*sdpy)(Display *,void *), void *sdpyp)
+{
+    set_dpy = sdpy;
+    set_dpyp = sdpyp;
+}
+
+CharPtr TGLogin_version(void)
+{
+    return "TGLoginLib 1.21 beta";
+}
+
+void AppNetRefnum_set(UInt refnum)
+{
+    AppNetRefnum = refnum;
+}
+
+UInt AppNetRefnum_get(void)
+{
+    return AppNetRefnum;
+}
+
+void AppNetTimeout_set(Long timeout)
+{
+    AppNetTimeout = timeout;
+}
+
+Long AppNetTimeout_get(void)
+{
+    return AppNetTimeout;
+}
+@
+
+
+1.3
+log
+@First try at fixing fonts for Palm III
+@
+text
+@d52 1
+a52 1
+	    FntDefineFont(200+i, fonttable[i]);
+d54 3
+a56 3
+	FldSetFont(sfld, 200);
+	FldSetFont(ofld, 200);
+	FldSetFont(ifld, 200);
+d95 3
+a97 3
+	FldSetFont(sfld, 200+fntchoice);
+	FldSetFont(ofld, 200+fntchoice);
+	FldSetFont(ifld, 200+fntchoice);
+d343 1
+d525 1
+a525 1
+    return "TGLoginLib 1.2 beta";
+@
+
+
+1.2
+log
+@Recommit after crash
+@
+text
+@a5 3
+#include "clean4x6.h"
+#include "clean5x6.h"
+#include "clean6x8.h"
+d11 1
+a11 1
+static FontPtr curfont = (FontPtr)clean4x6;
+d19 82
+d120 2
+a121 1
+static void new_font(Display *dpy, FontPtr fnt)
+d125 1
+d144 1
+a144 2
+    curfont = fnt;
+    UIFontTable[6] = curfont;
+d312 4
+a315 6
+	/* Set the fonts */
+	if (UIFontTable[6] != (FontPtr)clean4x6) origfont6 = UIFontTable[6];
+	UIFontTable[6] = curfont = (FontPtr)clean4x6;
+	FldSetFont(sfld, 6);
+	FldSetFont(ofld, 6);
+	FldSetFont(ifld, 6);
+d341 3
+a343 2
+	/* Restore font 6 */
+	UIFontTable[6] = origfont6;
+d461 1
+a461 1
+	    new_font(&dpy, (FontPtr)clean4x6);
+d464 1
+a464 1
+	    new_font(&dpy, (FontPtr)clean5x6);
+d467 1
+a467 1
+	    new_font(&dpy, (FontPtr)clean6x8);
+d524 1
+a524 1
+    return "TGLoginLib 1.1 beta";
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a4 1
+#include <sys/types.h>
+d223 1
+d280 8
+d445 1
+a445 1
+    return "TGLoginLib 0.6 alpha";
+@
+
+
+1.1.1.1
+log
+@Top Gun Login Library
+@
+text
+@@

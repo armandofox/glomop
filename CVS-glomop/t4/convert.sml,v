@@ -1,0 +1,372 @@
+head	1.3;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	99.02.16.23.03.30;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.01.11.20.06.21;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.07.21.34.57;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.12.07.21.34.57;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Many small bugfixes.
+@
+text
+@(*
+Copyright (c) 1997,1998 The Regents of the University of California.
+All rights reserved.
+
+Permission to use, copy, modify, and distribute this software for any
+purpose, without fee, and without written agreement is hereby granted,
+provided that the above copyright notice and the following two
+paragraphs appear in all copies of this software.
+
+IN NO EVENT SHALL THE UNIVERSITY OF CALIFORNIA BE LIABLE TO ANY PARTY FOR
+DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT
+OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF THE UNIVERSITY OF
+CALIFORNIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+THE UNIVERSITY OF CALIFORNIA SPECIFICALLY DISCLAIMS ANY WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS FOR A PARTICULAR PURPOSE.  THE SOFTWARE PROVIDED HEREUNDER IS
+ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATION TO
+PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+*)
+
+structure Convert : CONVERT =
+    struct
+
+	open PTUtil
+
+	(*************************************************************
+
+	 Alpha-convert an AST
+
+	 *************************************************************)
+
+	(* State we need to flow through the traversal *)
+	datatype info = Info of {func : AST.identifier option,
+				 lookup : AST.lookupFun,
+				 filename : string}
+
+	(* Alpha convert an identifier *)
+	fun alphaConvert (Info {lookup, filename, ...}) id =
+	    case lookup AST.VarNames id of
+		SOME (AST.SymInfo {typ, typLookup,
+				   scopeInfo=SOME label, ...}) =>
+		    let val actualLabel =
+			if CType.isExternType (typLookup, typ) orelse
+			   CType.isFunType (typLookup, typ) then
+			   (* Functions are always in the extern scope *)
+			    0
+			else
+			    label
+			val labelStr = "@@" ^ (Int.toString actualLabel)
+		    in
+			if CType.isStaticType (typLookup, typ) then
+			    idAppend id (labelStr ^ "$" ^ filename)
+			else
+			    idAppend id labelStr
+		    end
+	      | SOME _ => (print "Error:  No scope info\n";
+			   raise Match)
+	      | NONE => idAppend id "@@0"
+
+	(* Tracks the current string number *)
+	val strNum = ref 0;
+	fun getStrNum () =
+	    let val n = !strNum
+	    in
+		strNum := !strNum + 1;
+		n
+	    end
+
+	(* Alpha-convert AST nodes, given that we are currently in
+	   function f. *)
+	fun expression (inf as Info {func, lookup, ...})
+	               (AST.Variable (name, astInfo as {region, ...})) =
+	    let val newName = alphaConvert inf name
+		val newNameString = AST.idToString newName
+	    in
+                (*
+		case !curSourceMap of
+		    SOME m =>
+			PamInt.addPotentialOverlay newName
+			                  (Bane.PAM.SourceMap m,
+					   region,
+					   {markup = SOME "LightSteelBlue",
+					    target=SOME newNameString,
+					    find = NONE,
+					    context = NONE})
+		  | NONE => ();
+                *)
+		AST.Variable (newName, astInfo)
+	    end
+	  | expression _ (AST.Constant (AST.String id, astInfo)) =
+	    AST.Constant (AST.String
+			  (idAppend id ("@@" ^ (Int.toString (getStrNum())))),
+			  astInfo)
+	  | expression _ (e as AST.Constant _) = e
+	  | expression inf (AST.Conditional(e1, e2, e3, astInfo)) =
+	    AST.Conditional(expression inf e1,
+			    expression inf e2,
+			    expression inf e3,
+			    astInfo)
+	  | expression inf (AST.Application(e, elist, astInfo, label)) =
+	    let val newCallee = expression inf e
+		val newParams = map (expression inf) elist
+		val Info {lookup, ...} = inf
+	    in
+		AST.Application(newCallee, newParams, astInfo, label)
+	    end
+	  | expression inf (AST.Operation(oper, elist, astInfo)) =
+	    let val Info {lookup, ...} = inf
+	    in
+		AST.Operation(oper, map (expression inf) elist, astInfo)
+	    end
+
+	  | expression inf (AST.Assignment(e1, opopt, e2, astInfo)) =
+	    AST.Assignment(expression inf e1, opopt, expression inf e2, astInfo)
+	  | expression inf (AST.Comma(e1, e2, astInfo)) =
+	    AST.Comma(expression inf e1, expression inf e2, astInfo)
+	  | expression inf (AST.Cast(st, e, astInfo)) =
+	    (AST.Cast(st, expression inf e, astInfo))
+	  | expression inf (node as AST.SizeOfExpr (e, astInfo)) =
+            (* Bugfix by daw: e might contain variable references which
+               need to be alpha-converted. *)
+              let val node' = AST.SizeOfExpr(expression inf e, astInfo)
+              in
+                  (*
+                  print ("DEBUG converting: "^(Unparse.expression node)^"\n");
+                  print ("DEBUG converted:  "^(Unparse.expression node)^"\n");
+                  *)
+                  node'
+              end
+	  | expression _ (e as AST.SizeOfTypeExpr _) = e
+	  | expression inf (AST.FieldDirect(e, id, astInfo)) =
+	    AST.FieldDirect(expression inf e, id, astInfo)
+	  | expression inf (AST.FieldIndirect(e, id, astInfo)) =
+	    AST.FieldIndirect(expression inf e, id, astInfo)
+	  | expression inf (AST.Postfix(oper, e, astInfo)) =
+	    AST.Postfix(oper, expression inf e, astInfo)
+	  | expression inf (AST.Index(e1, e2, astInfo)) =
+	    AST.Index(expression inf e1, expression inf e2, astInfo)
+	  | expression inf (AST.Extension(stmt, astInfo)) =
+	    AST.Extension(statement inf stmt, astInfo)
+
+	and declaration _ (d as AST.EllipsisDecl{...}) = d
+
+	  | declaration inf (AST.VarDecl{name, typ, init, region}) =
+            (* BUG: Doesn't alpha-convert any variable-references in `typ'
+               (e.g. consider `char p[100]; char q[2+sizeof(p)];' -- it's
+                gcc-only, but breaks the alpha-conversion). *)
+	    let val newName = alphaConvert inf name
+		val newDecl =  AST.VarDecl{name = newName,
+					   typ = typ,
+					   init = (apply_opt (initializer inf)
+						   init),
+					   region=region}
+		val newNameString = AST.idToString newName
+	    in
+                (*
+		case !curSourceMap of
+		    SOME m =>
+			PamInt.addPotentialOverlay newName
+			                  (Bane.PAM.SourceMap m,
+					   region,
+					   {markup = SOME "green",
+					    target=SOME newNameString,
+					    find = NONE,
+					    context = NONE})
+		  | NONE => ();
+                *)
+		newDecl
+	    end
+
+	  | declaration f (d as AST.TypeDef{...}) = d
+
+	  | declaration (inf as Info {lookup=lookup',
+				      filename, ...})
+	    (d as AST.FunDef{name, typ, return, params,
+			     decls, body, region, lookup}) =
+	    let val newName = alphaConvert inf name
+		val newInfo = Info {func = SOME newName,
+				    lookup = lookup,
+				    filename = filename}
+		val newParams = map (declaration newInfo) params
+		val newDecls = map (declaration newInfo) decls
+		val newBody = map (statement newInfo) body
+		val newDecl = AST.FunDef{name = newName,
+					 typ = typ,
+					 return = return,
+					 params = newParams,
+					 decls = newDecls,
+					 body = newBody,
+					 region = region,
+					 lookup = lookup}
+	    in
+		if (allocFunc newName) then
+		    (print "Warning:  Redefinition of allocation function ";
+		     print (AST.idToString name);
+		     print "\n")
+		     (*raise redefLibFunc*)
+		else
+		    ();
+
+		newDecl
+	    end
+
+	  | declaration inf (AST.FunDecl{name, typ, return, params, region}) =
+	    let val newName = alphaConvert inf name
+	    in
+		AST.FunDecl {name=newName, typ=typ, return=return,
+			     params=params, region=region}
+	    end
+
+	and initializer inf (AST.Initial e) =
+	    AST.Initial (expression inf e)
+	  | initializer inf (AST.InitialList ilist) =
+	    AST.InitialList (map (initializer inf) ilist)
+
+	and statement inf (AST.Return(eopt, iopt, info)) =
+	    let val Info {func,...} = inf
+	    in
+		case func of
+		    SOME f => AST.Return(apply_opt (expression inf) eopt,
+					 SOME f,
+					 info)
+		  | NONE => (print "Return statement out of function scope\n";
+			     raise Match)
+	    end
+	  | statement inf (AST.Expression (eopt, astInfo)) =
+	    AST.Expression (apply_opt (expression inf) eopt, astInfo)
+	  | statement inf (AST.IfThen(e, s, astInfo)) =
+	    AST.IfThen(expression inf e, statement inf s, astInfo)
+	  | statement inf (AST.IfThenElse(e, s1, s2, astInfo)) =
+	    AST.IfThenElse(expression inf e, statement inf s1,
+			   statement inf s2, astInfo)
+	  | statement inf (AST.WhileDo(e, s, astInfo)) =
+	    AST.WhileDo(expression inf e, statement inf s, astInfo)
+	  | statement inf (AST.DoWhile(s, e, astInfo)) =
+	    AST.DoWhile(statement inf s, expression inf e, astInfo)
+	  | statement inf (AST.For(e1_opt, e2_opt, e3_opt, s, astInfo)) =
+	    AST.For(apply_opt (expression inf) e1_opt,
+		    apply_opt (expression inf) e2_opt,
+		    apply_opt (expression inf) e3_opt,
+		    statement inf s,
+		    astInfo)
+	  | statement _ (s as AST.GoTo _) = s
+	  | statement inf (AST.Switch(e, s, astInfo)) =
+	    AST.Switch(expression inf e, statement inf s, astInfo)
+	  | statement inf (AST.Case(e_opt, s, astInfo)) =
+	    AST.Case(apply_opt (expression inf) e_opt, statement inf s, astInfo)
+	  | statement inf (AST.Labeled(id, s, astInfo)) =
+	    AST.Labeled(id, statement inf s, astInfo)
+	  | statement _ (s as AST.Break _) = s
+	  | statement _ (s as AST.Continue _)  = s
+	  | statement (Info {func, filename, ...})
+	    (AST.Compound{decls, body, region, extraInfo, lookup}) =
+	    let val newInfo = Info {func = func, lookup = lookup,
+				    filename = filename}
+		val newDecls = map (declaration newInfo) decls
+		val newStatements = map (statement newInfo) body
+	    in
+		AST.Compound {decls=newDecls,
+			      body=newStatements,
+			      region=region,
+			      extraInfo=extraInfo,
+			      lookup=lookup}
+	    end
+
+	(*************************************************************
+
+	 Interface
+
+	 *************************************************************)
+
+	fun reset () = strNum := 0
+
+	fun convert filename (pgm as AST.Program {decls, lookup}) =
+	    let val pgmInfo = Info {func = NONE,
+				    lookup = lookup,
+				    filename = afterLast #"/" filename}
+                val pgm' = AST.Program ({decls=map (declaration pgmInfo) decls,
+			      lookup=lookup})
+	    in
+                (* print ("DEBUG convert: -- begin converted program --\n"^(Unparse.program pgm')^"DEBUG convert: -- end converted program --\n"); *)
+                pgm'
+	    end
+
+	end
+@
+
+
+1.2
+log
+@Lots of stuff.  New str*() functions modeled.  Now detect which
+variables the overrun is in, and how bad the overrun might be.
+Lots of bugfixes.  Probably other stuff which I'm forgetting
+right now.
+@
+text
+@d120 1
+a120 1
+	  | expression inf (AST.SizeOfExpr (e, astInfo)) =
+d123 8
+a130 1
+            (AST.SizeOfExpr(expression inf e, astInfo))
+d146 3
+d275 1
+a275 1
+	fun convert filename (AST.Program {decls, lookup}) =
+d279 2
+d282 2
+a283 2
+		AST.Program ({decls=map (declaration pgmInfo) decls,
+			      lookup=lookup})
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d120 4
+a123 1
+	  | expression _ (e as AST.SizeOfExpr _) = e
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

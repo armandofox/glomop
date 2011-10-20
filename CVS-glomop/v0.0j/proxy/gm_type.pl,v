@@ -1,0 +1,289 @@
+head	1.8;
+access;
+symbols
+	release:1.8
+	Release:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	95.10.25.04.41.19;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.25.03.00.14;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.20.05.53.39;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.10.20.03.58.53;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.19.22.23.48;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.18.22.12.47;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.17.01.14.18;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.23.22.35.19;	author dgourley;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@in gm_mail.pl, where it checks for empty inbox: moving the "return"
+*outside* the scope of the 'if' block makes it work correctly; inside
+the scope of the 'if', it mysteriously returns "6" to the caller, even
+tho the value about to be returned is correct!  perl bug?
+@
+text
+@#
+# This package contains helper functions for the gm_types
+#
+
+package gm_proxy;
+
+#
+# Use 'require' to pull in a new file and call its init routine.  Return
+# nonzero if success.
+#
+
+sub Require {
+    #
+    # BUG: This routine should insure that, at a minimum, the necessary methods
+    # exist in the module being loaded.
+    #
+    my $self = shift;
+    my $newmod = shift;
+    my $reqid = shift;
+    my %modules = $self->{Modules};
+    my $obj;
+
+    eval "require('${newmod}.pl')";
+    if ($@@) {
+        $self->{LastError} = $@@;
+        &aux'log("Loading $pkg: $@@");
+        return 0;
+    }
+    $obj = Init $newmod $self;
+    unless ($obj) {
+        $self->{LastError} = "Call to $newmod" . "::Init failed";
+        $obj = undef;
+    }
+    $self->{Modules}->{$reqid} = $obj;
+    return $obj;
+}
+
+
+# 
+# A debugging proc for gm_types.
+#
+sub Debug {
+    my($self) = shift;
+    local(@@string) = @@_;
+    print "DEBUG: ", @@string;
+}
+
+#
+# Takes a command as an arguement. This proc is just a wrapper for external 
+# process execution. At this stage the routine completely trusts the caller 
+# to have authenticated the user. Later we may wish to explicitly check 
+# commands. 
+#
+sub Exec {
+    my($self) = shift;
+    local($reqid,$cmd) = @@_;
+    local($status, $result);
+
+    $result = `$cmd`;
+
+    $status = ($? >> 8);
+    &aux'debug("`$cmd' => exit $status\n");
+    if($status != 0) {
+        $self->{LastError} = "exit $status: `$cmd'";
+        return 0, $result;
+    }
+    $self->{LastError} = "OK";
+    return 1, $result;
+}
+
+#
+# This sub will pack a chunk, given the appropriate data, in a transmission 
+# ready form.
+#
+sub PackageChunk {
+    my($self) = shift;
+    local($reqId, $totalChunks, $thisChunk, $data, @@drtEntries) = @@_;	
+    local($drtSize, $index, $entry, @@chunk);
+    
+    $drtSize = $#drtEntries + 1;
+    $numBytes = length($data);
+    
+    $chunk[0] = "HERE $reqId $totalChunks $thisChunk\n";
+    $chunk[1] = "NDOCS $drtSize\n";
+    $index = 2;
+    $entry = 0;
+    while($entry < $drtSize) {
+	$chunk[$index] = $drtEntries[$entry] . "\n";
+	$entry++;
+	$index++;
+    }
+
+    $chunk[$index++] = "DSIZE $numBytes\n";
+    $chunk[$index++] = $data;
+    $chunk[$index] = "END\n";    
+
+    unshift(@@chunk, $totalChunks);
+    return (@@chunk);
+}
+
+1;
+
+@
+
+
+1.7
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d97 2
+a98 1
+    return $totalChunks, @@chunk;
+@
+
+
+1.6
+log
+@gifs seem to work.   empty inbox is now detected and returned as empty
+toc, rather than as an error
+@
+text
+@d13 4
+d19 1
+d21 1
+a21 3
+    local($initfunc) = "${newmod}::${newmod}Init";
+
+    return 1 if exists $self->{Modules}->{$newmod}; # already loaded
+d29 4
+a32 6
+    if (&$initfunc($self)) {
+        $self->{Modules}->{$newmod} = 1;
+        return 1;
+    } else {
+        $self->{LastError} = "Call to $initfunc failed";
+        return 0;
+d34 2
+a59 1
+    &aux'debug("`$cmd' => $result\n");
+d62 1
+d64 1
+a64 1
+        $self->{LastError} = "exit $status `$cmd:'";
+@
+
+
+1.5
+log
+@foo
+@
+text
+@d30 1
+d53 1
+a53 1
+    local($reqid, $cmd) = @@_;
+d56 2
+a57 4
+    $cmd =~ /^(.*)$/ ;
+    my($zz) = $1;
+    $result = `$zz`;
+    &aux'debug("`$zz' => $result\n");
+@
+
+
+1.4
+log
+@added last_error method, changed Exec to set error cond instead of
+sending error to client
+@
+text
+@d21 5
+a25 2
+    &aux'log("Loading $pkg: $@@"), return 0
+        if $@@;
+@
+
+
+1.3
+log
+@gm_mail only reports new mail now
+@
+text
+@a0 2
+#!/usr/sww/bin/perl
+
+d59 1
+a59 1
+	$self->send_error($reqid, "exec failed for $cmd: $status\n");
+d62 1
+@
+
+
+1.2
+log
+@foo bar
+@
+text
+@d9 25
+@
+
+
+1.1
+log
+@a file that I forgot
+@
+text
+@d7 1
+a7 1
+package gm_type;
+d13 1
+d25 1
+d29 4
+a32 3
+    $result = `$cmd`;
+    print $cmd;
+    print "\n";
+d34 1
+a34 1
+    $status = ($& >> 8);
+d36 1
+a36 1
+	&gm_pconnect'send_error($reqid, "gm_exec -- exec failed for $cmd\n");
+d47 1
+@

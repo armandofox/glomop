@@ -1,0 +1,74 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+#
+LEXLIBPATH = ./sgml-lex-19960207
+LEXLIB = sgml_lex
+LEXLIBEXT=a
+DISTLIB = -L../lib -ldist -lclib -lmon
+OTHERLIBS = @LIBS@ @LIBTHREAD@
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+INCLUDEPATH = $(LEXLIBPATH) @INCLUDEPATH@
+INCLUDE = $(patsubst %,-I%,$(INCLUDEPATH))
+CFLAGS = @CFLAGS@ $(INCLUDE)
+PERL = @PERL@
+
+ifdef DEBUGGING
+CFLAGS += -DINST
+endif
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+TARGETS = html_munger
+
+all: $(TARGETS)
+
+install: ../sbin/html_munger
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+MYOBJS = munge.o munge_magic.o
+MYLIBS = -L$(LEXLIBPATH) -l$(LEXLIB)
+
+html_munger: $(MYOBJS) lib$(LEXLIB).$(LEXLIBEXT) ../frontend/url_magic.o
+	$(LD) -o $@ $^ $(MYLIBS) $(DISTLIB) $(OTHERLIBS)
+
+../frontend/url_magic.o : ../frontend/src/url_magic.c
+	cd ../frontend; $(MAKE) url_magic.o
+
+test2: test_html_munge
+	./test_html_munge in.html _%_ > out.html
+	$(PERL) -pi.bak -e 's/\s+/\n/g' in.html out.html
+	diff in.html out.html
+
+test_main.o: ../gif_munger/src/test_main.c
+	$(CC) $(CFLAGS) $(INCLUDE) -c $<
+
+%.o: src/%.c src/munge.h
+	$(CC) $(CFLAGS) $(INCLUDE) -c $<
+
+lib$(LEXLIB).$(LEXLIBEXT):
+	$(MAKE) -C $(LEXLIBPATH) lib$(LEXLIB).$(LEXLIBEXT)
+	cp $(LEXLIBPATH)/lib$(LEXLIB).$(LEXLIBEXT) $@
+
+munge_magic.o: ../config_tr.h
+
+clean:
+	-/bin/rm -f *.o *~ html_munger test_html_munge lib$(LEXLIB).$(LEXLIBEXT)
+	cd $(LEXLIBPATH) ; $(MAKE) clean
+
+tags:
+	find . -name \*.[ch] -print | etags -
+
+distclean: clean
+	rm Makefile
+
+dist:
+	rm -rf dist_sdk
+	cp Makefile.sample ../ptm/libdist.* ../client_lib/libclib.* src/test_main.c src/ARGS.h dist_sdk
+	tar -cf - dist_sdk | gzip - > dist_sdk.tgz

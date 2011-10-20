@@ -1,0 +1,157 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.11.14.01.46.28;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.11;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@removed some obsolete files
+@
+text
+@/*
+ *  gifblock.c: extract and return a rectangular subblock of a GIF
+ *  image.  x0,y0 and optionally x1,y1 are specified; if only x0,y0,
+ *  then x1,y1 are computed by adding BLOCK_X and BLOCK_Y to them.
+ *
+ *  Works by converting Gif to a PPM, then extracting a subblock from
+ *  the PPM and converting back to a GIF.
+ */
+
+#include "canny.h"
+#include "ppm.h"
+#include <stdio.h>
+#include <string.h>
+
+#define BLOCK_X 64
+#define BLOCK_Y 64
+
+extern void Quantize(pixel **pixels, int cols, int rows, pixval maxval,
+                     int newcolors, int floyd);
+
+int X0,Y0,X1,Y1;
+struct header Hdr;
+
+main(ac, av)
+     int ac;
+     char *av[];
+{
+    int x,y;
+    int quant;                  /* # of new colors (0=preserve orig colors) */
+    pixel *new;
+    pixel **p;
+    
+    /*
+     *  get x0,y0,x1,y1 from cmd line.  x1 or y1 == -1 means whole image
+     */
+    sscanf(av[1], "%d", &X0);
+    sscanf(av[2], "%d", &Y0);
+    sscanf(av[3], "%d", &X1);
+    sscanf(av[4], "%d", &Y1);
+    /*
+     *  get color quant from cmd line; 0 means preserve original colors
+     */
+    if (ac > 5) 
+      sscanf(av[5], "%d", &quant);
+    else
+      quant = 0;
+
+    if (quant < 0) quant = 0;   /* -1 will work too */
+    /*
+     *  Read the GIF from stdin.
+     */
+
+    ReadGIF(stdin, 1, &Hdr);
+
+    /*
+     *  Special values: -1 for x1,y1 mean entire image.
+     */
+    if (X1 == -1) X1= Hdr.cols;
+    if (Y1 == -1) Y1= Hdr.rows;
+    /*
+     *  Pin x0,y0,x1,y1 to allowable range
+     */
+    X0 = max(X0,0);
+    Y0 = max(Y0,0);
+    X1 = min(X1,Hdr.cols);
+    Y1 = min(Y1,Hdr.rows);
+
+    if (X0>X1) {
+        int tmp=X0;
+        X0=X1;
+        X1=tmp;
+    }
+    if (Y0>Y1) {
+        int tmp=Y0;
+        Y0=Y1;
+        Y1=tmp;
+    }
+    /*
+     *  If quantizing is needed, do it.  We do this FIRST so that
+     *  quantizations of different subblocks from the same image will
+     *  end up using the same color-->gray maps.
+     */
+    if (quant)
+      Quantize(Hdr.img, Hdr.cols, Hdr.rows, 255, quant, 1);
+    
+    /*
+     *  Overwrite the old array with the new one containing just
+     *  the subblock.  
+     */
+
+    p = ppm_allocarray(X1-X0, Y1-Y0);
+    new = *p;
+    for (y=Y0; y<Y1; y++) {
+        /* copy a contiguous range of (X1-X0) pixels in this row.  BUG: */
+        /* this relies on the fact that PPM uses row-major ordering */
+        memmove(new, Hdr.img[y]+X0, (X1-X0)*sizeof(pixel));
+        new += X1-X0;
+    }
+
+    /*
+     *  Write new gif to stdout.  No transparent color.
+     */
+
+    WriteGIF(p, X1-X0, Y1-Y0, NULL);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

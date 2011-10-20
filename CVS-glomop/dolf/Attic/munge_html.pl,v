@@ -1,0 +1,426 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.03.03.16.29;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.54;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.54;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#
+#  $Id: munge_html.pl,v 1.1 1996/11/27 21:34:54 fox Exp fox $
+#
+#  Munge HTML going back to a client as follows.
+#  - Determine n= number of IMG tags in this document.
+#  - Munge each IMG tag to have URL of this document plus semicolon plus a
+#  string of n digits.  Each digit indicates a refinement level for the
+#  corresponding inline image.
+#  - When the IMG URL's are requested, they will have the refinement info
+#  tacked on.  Those URL's are interpreted specially by the forward_gif routine
+#  in child.pl.
+#
+
+=head1 NAME
+
+munge_html - distill and segment HTML for Pythia's client
+
+=head1 SYNOPSIS
+
+    package html;
+    
+    sub setup_parser($initial_html, $original_url);
+
+    $parser->html_new_page($html_of_this_segment, $last_one);
+
+=head1 DESCRIPTION
+
+These functions provide support for distilling and otherwise modifying
+HTML before sending it to a client browser, including support for
+chopping a single HTML page into several smaller ones for screen formatting
+("segmenting"). 
+It works by expanding the callbacks that can be done from action
+routines for the L<html_parser(3)>.
+
+By writing functions as described in this documentation, putting them in a
+file, and indicating
+the name of that file in Pythia's config file F<pythia.cf>,
+you can experiment with various HTML distilling and segmenting schemes.
+For a real example of how to use all this stuff, look at F<parser_actions.pl>.
+
+Note that your file's declarations should be in
+package "html" or (preferably) in their
+own package.  Because the file will be sourced using C<require>, it must return a
+true value (e.g. make the last token in the file be "1;").
+
+=head1 THE setup_parser FUNCTION
+
+You must provide a function html::setup_parser that creates a new
+L<html_parser(3)> object and initializes all desired callbacks, including an "end
+of document" callback using the fictitious END tag as described in 
+L<html_parser(3)/tag_begin>.  It will be called with two scalar arguments:
+the original HTML text (which you must pass on to the html_parser
+creation call, in addition to otherwise examining if you want), and the
+URL corresponding to the HTML text, for your benefit only (i.e. you
+don't need to do anything special with it).
+
+After creating the parser object and initializing all desired callbacks
+(see L<html_parser(3)> for details), the parser_setup function should
+return the parser object to indicate success, or an error string to
+indicate failure. 
+
+=cut
+
+package html;
+use strict 'vars';
+use MD5;
+
+$html::Navigate =
+    '<P><HR><FONT SIZE="-1"><CENTER>' .
+    '<A HREF="%s">Top</A> | ' .
+    '<A HREF="%s">Previous</A> | ' .
+    '<A HREF="%s">Next</a></CENTER></FONT></P>';
+$html::NavigateLast =
+    '<P><HR><FONT SIZE="-1"><CENTER>' .
+    '<A HREF="%s">Top</A> | ' .
+    '<A HREF="%s">Previous</A></CENTER></FONT></P>';
+
+# URL used to create a refinement for HTML, i.e. a page segment.  
+# A unique tag derived from the original page's URL
+# will be substituted for the %s.
+$html::RefineUrl =
+    'http://ref%%%s%%';
+
+# And its counterpart, which is used as a regexp to detect requests for
+# segments of previously-chopped-up pages.  It captures $1 as the segment file
+# name. 
+$html::HtmlSeg =
+    '^http://ref%([\da-f]+)%/?$';
+
+# sub filename_from_hash { "$main::Tempdir/" . $_[0] . ".html"}
+sub filename_from_hash { "$main::Tempdir/" . $_[0] }
+
+#  write_tempfile: create a temporary file and write a bunch of stuff to it.
+#  ARGS: Key; content to be written.
+#  DESCRIPTION: Creates a file in Pythia's temporary directory and writes the
+#       content to it.  Also establishes an "age" entry for this key if one
+#       doesn't already exist, which
+#       counts the number of *different* keys that have been seen since this
+#       one was established; when that count exceeds the $AgeThresh threshold,
+#       the aged key is deleted along with its associated file(s).  If an age
+#       entry for this key already exists, its age counter is reset to 0.
+#  ASSUMPTIONS: Pythia temporary directory named by $TempDir is writable.
+#  SIDE EFFECTS: Modifies the %html::FileAges array.
+#  RETURNS: the (unqualified) filename of the temp file that was written.
+
+sub write_tempfile {
+    my ($filename,$content) = @@_;
+    $filename = &filename_from_hash($filename);
+    open(F, "> $filename")
+        or die "Can't write $filename: $!";
+    print F $content;
+    close F;
+    $filename;    
+}
+
+=head1 NEW PARSER METHODS
+
+The following instance methods are added to the parser object to support HTML
+distillation and segmenting.  Yes, this should really be a new subclass that
+inherits from L<html_parser(3)>, but that's the way the ball rolls.  :)
+Note that these are instance methods, so
+you should call them using the $obj->method() syntax.  Some of these
+methods create additional instance variables in the parser object to
+track state, so don't use a clone of the parser object unless you know
+what you're doing.
+
+=over 3
+
+=item $prs->html_new_page($content [,$lastone])
+
+Break an html page.  $content is the HTML content that should constitute
+this "screenful" of the page.  If $lastone is true, this is assumed to be the
+last screenful corresponding to this page, so a "next screen" link will not 
+be generated for it.
+
+The function encapsulates the HTML content in a "screen frame", which
+includes navigation buttons to request next and previous frames, etc.  If this
+is the first "screenful", the 
+encapsulated content is also immediately sent to the client, which means
+your END tag callback should probably not send anything
+to the client.
+
+The implicit statefulness of this routine implies two things for you if you're
+writing parser callbacks:
+
+=over 3
+
+=item 1.
+
+Your callback functions should "accumulate" HTML text seen so far into a
+buffer, which you can then pass to C<html_new_page> as the next
+screenful.
+
+=item 2.
+
+Your callback functions should remember whether C<html_new_page> was
+ever called.  If it was, your END callback should not send anything to
+the client; if not, your END callback should send the entire HTML text
+of the page to the client.
+
+=back
+
+A tag of the form:
+<BASE="http://...">
+is also added to the HTML.  The reason for this is that segments
+generated using this mechanism will end up being fetched using "fake"
+URL's, which will mess up any HREF's in the HTML that were not fully
+qualified.  (Read the design document for more details.  The segmentation
+process actually manages a nontrivial state machine whose states depend on the
+original HTML content.)
+
+The encapsulated content is also written to an automatically-managed
+temporary file, whose name happens to be returned as the result of this
+call (but you shouldn't muck with it).  If the user later navigates
+among the pieces of the file using the navigation buttons, it will be
+handled automagically.  If the user later wants to retrieve the whole
+page at once, then we currently lose, since there is no way right now
+for the setup_parser function to be told not to do any segmenting.
+
+When this call returns, you can continue parsing the rest of the
+original HTML.  The state about which screenfuls have been generated so
+far (i.e. the calling history of this function with respect to a
+particular original page) is kept in the parser object.
+
+=cut
+
+sub html_parser::html_new_page {
+    my $self = shift;                       # parser object
+    my $html = shift;
+    my $lastone = shift;
+
+    # have we saved any segments so far?
+    $self->{"seg_count"}++;
+
+    # "frame" the HTML to include some nice buttons, etc.  This requires
+    # knowing what the "next" and "previous" filenames will be.
+
+    my ($thispage, $prevpage, $nextpage);
+    my $count = $self->{"seg_count"};
+    my $url = $self->{"url"};
+    $thispage = join('.',$url,$count);
+    # BUG::what if this is the last page?
+    $nextpage = join('.', $url, $count+1);
+    $prevpage = ($count > 1
+                 ? join('.', $url, $count-1)
+                 : $thispage);
+    
+    my ($thisurl,$nexturl,$prevurl);
+    $thisurl =  &hash($thispage);
+    $nexturl =  $lastone ? '' : &hash($nextpage);
+    $prevurl =  &hash($prevpage);
+    # URL for "top" of this page.  if this is the first segment, then it should
+    # be the URL for this segment.
+    $self->{"_top"} = $thisurl unless defined $self->{"_top"};
+    $html = &framify($html,$url, $self->{"_top"}, $prevurl, $nexturl);
+    
+    # write the framified HTML to a temp file.
+    &main::debug('seg', "Writing segment $thispage to $thisurl");
+    my $filename = &html::write_tempfile($thisurl, $html);
+
+    # send file to client...
+    if ($count == 1) {
+        &main::debug('seg', "Sending first segment");
+        $self->send_html($html,$self->{"resp"});
+    }
+
+    return $filename;
+}
+
+#
+#  Hash a URL into a (hopefully unique) hash pattern.  For now, uses the first
+#  eight digits of MD5 signature, but could easily be modified to be something
+#  else. 
+#
+sub hash {  substr(MD5->hexhash(shift), 0, 8); }
+
+#  framify:  "Enframe" a segment of HTML for sending.
+#  ARGS: HTML to send; orig URL of this page (used to construct BASE=foo
+#  tag);  unique id's of prev,next segment, to make the buttons.
+#       The  id's are used to construct "refinement URLs" which are
+#       interceptable by Pythia.
+#  RETURNS: new HTML with nav buttons, etc
+
+sub framify { 
+    my($html, $url, $top,$prev,$next) = @@_;
+    if ($next) {
+        $html .= sprintf($html::Navigate,
+                         sprintf($html::RefineUrl,$top),
+                         sprintf($html::RefineUrl,$prev),
+                         sprintf($html::RefineUrl,$next));
+    } else {
+        $html .= sprintf($html::NavigateLast,
+                         sprintf($html::RefineUrl,$top),
+                         sprintf($html::RefineUrl,$prev));
+    }
+    # in case we need to add a slash to end of URL...
+    #$url .= '/' unless $url =~ m!/$!;
+    $html = "<HEAD><BASE HREF=\"$url\"></HEAD>" . $html;
+    return $html;
+}
+
+=item $prs->send_html($html)
+
+Send the given HTML text to the client.  Since the function also
+constructs the appropriate status line, headers, etc., you should only
+use this in your end-of-parsing callback (see L<html_parser(3)/tag_begin>)
+and only if you have not previously called L</html_new_page>, which would
+have sent the first segment of the HTML as its own document.
+
+=cut
+
+
+sub html_parser::send_html {
+    my($self,$html) = @@_;
+    my($newlen,$oldlen,$diff);
+    $newlen = length($html);
+    $oldlen = length($self->{"resp"}->content);
+    $diff = $oldlen-$newlen;
+    &main::debug('stats', "HTML bytes saved (-added): $oldlen-$newlen=$diff");
+    $self->{"con"}->send_html($html,$self->{"resp"});
+}
+    
+=item &html::remove_attribs($tagtext,@@attribs)
+
+Given $tagtext (verbatim text of a tag, e.g "IMG SRC=foo WIDTH=blah
+HEIGHT=blah"), removes 
+the attributes listed by modifying the string in place.
+E.g. &munge_html::remove_attribs($tag, "WIDTH", "HEIGHT") would modify the
+example string above to read simply "IMG SRC=foo".
+
+=cut
+
+sub remove_attribs {
+    # Remove specific attribs from a tag.  Modify it in place.
+    my @@atts = @@_;
+    shift @@atts;
+    my $at;
+    
+    foreach $at (@@atts) {
+        $_[0] =~  s/\b$at\s*=\s*\"[^\"]+\"//ig  && next;    #" 
+        $_[0] =~ s/\b$at\s*=\s*\S+//ig && next;
+        # for "empty" attribs
+        $_[0] =~ s/\b$at\b//ig;
+    }
+}
+
+sub main::forward_html {
+    my $con = shift;
+    my $resp = shift;
+    %html::Prefs = % {shift @@_};              # user prefs
+    %html::Client = %{$con->{"client"}};
+    my(@@refinetags);
+    local($") = '';                         #" 
+
+    my $url = $con->{"URL"};                # orig. URL sans refinetag
+    my $refinetag = $con->{"refine"};       # refinetag if any
+
+    my($html) = $resp->content;
+
+    my $prs = &html::setup_parser($html,$url);
+
+    # the URL of the original page; used by the page segmentation stuff to
+    # generate new URL's.
+
+    $prs->{"url"} = $url;
+    $prs->{"con"} = $con;
+    $prs->{"resp"} = $resp;
+
+    # the connection object; used to send stuff back to the client from parser
+    # callbacks, if necessary (e.g. page segmenting).
+
+    
+    $resp->remove_header("Content-length");
+    
+    $prs->parse_html_string;
+
+    # don't send HTML to client -- the parser callback should already have done
+    # that. 
+}
+    
+=back
+
+=head1 IMPLEMENTATION DETAILS
+
+The filenames for the temporary files are generated from a (truncated)
+MD5 hash of the URL (using the Perl MD5 module, available from your
+local CPAN mirror).  Since the URL's are not canonicalized before doing
+this, there is a potential performance (but not correctness) bug wherein
+multiple copies of the same content may be kept in distinct temporary
+files whose names were generated from hashing the various noncanonical
+URL's.
+
+=head1 BUGS
+
+The URL passed to setup_parser is not canonicalized.
+
+The return value from setup_parser is currently not checked for error.
+
+There should really be a C<clone> method for the L<html_parser(3)>.
+
+The names of internally managed state variables in the parser object
+should be preceded by some standard prefix, to avoid possible collisions
+with additional user-managed state variables.
+
+Better yet...these routines should subclass from L<html_parser> rather than
+using it and adding more instance variables, which breaks abstraction.
+
+=cut
+
+
+1;
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+a2 1
+#  $Id: munge_html.pl,v 1.6 1996/09/09 23:04:19 fox Exp $
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

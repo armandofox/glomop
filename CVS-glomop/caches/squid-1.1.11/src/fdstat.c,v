@@ -1,0 +1,269 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  caches-tag:1.1.1.1 caches-tag:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.08.11.05.36.10;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.08.11.05.36.10;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
+ * $Id: fdstat.c,v 1.1 1997/06/26 19:14:30 gribble Exp $
+ *
+ * DEBUG: section 7     File Descriptor Status
+ * AUTHOR: Harvest Derived
+ *
+ * SQUID Internet Object Cache  http://squid.nlanr.net/Squid/
+ * --------------------------------------------------------
+ *
+ *  Squid is the result of efforts by numerous individuals from the
+ *  Internet community.  Development is led by Duane Wessels of the
+ *  National Laboratory for Applied Network Research and funded by
+ *  the National Science Foundation.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  
+ */
+
+/*
+ * Copyright (c) 1994, 1995.  All rights reserved.
+ *  
+ *   The Harvest software was developed by the Internet Research Task
+ *   Force Research Group on Resource Discovery (IRTF-RD):
+ *  
+ *         Mic Bowman of Transarc Corporation.
+ *         Peter Danzig of the University of Southern California.
+ *         Darren R. Hardy of the University of Colorado at Boulder.
+ *         Udi Manber of the University of Arizona.
+ *         Michael F. Schwartz of the University of Colorado at Boulder.
+ *         Duane Wessels of the University of Colorado at Boulder.
+ *  
+ *   This copyright notice applies to software in the Harvest
+ *   ``src/'' directory only.  Users should consult the individual
+ *   copyright notices in the ``components/'' subdirectories for
+ *   copyright information about other software bundled with the
+ *   Harvest source code distribution.
+ *  
+ * TERMS OF USE
+ *   
+ *   The Harvest software may be used and re-distributed without
+ *   charge, provided that the software origin and research team are
+ *   cited in any use of the system.  Most commonly this is
+ *   accomplished by including a link to the Harvest Home Page
+ *   (http://harvest.cs.colorado.edu/) from the query page of any
+ *   Broker you deploy, as well as in the query result pages.  These
+ *   links are generated automatically by the standard Broker
+ *   software distribution.
+ *   
+ *   The Harvest software is provided ``as is'', without express or
+ *   implied warranty, and with no support nor obligation to assist
+ *   in its use, correction, modification or enhancement.  We assume
+ *   no liability with respect to the infringement of copyrights,
+ *   trade secrets, or any patents, and are not responsible for
+ *   consequential damages.  Proper use of the Harvest software is
+ *   entirely the responsibility of the user.
+ *  
+ * DERIVATIVE WORKS
+ *  
+ *   Users may make derivative works from the Harvest software, subject 
+ *   to the following constraints:
+ *  
+ *     - You must include the above copyright notice and these 
+ *       accompanying paragraphs in all forms of derivative works, 
+ *       and any documentation and other materials related to such 
+ *       distribution and use acknowledge that the software was 
+ *       developed at the above institutions.
+ *  
+ *     - You must notify IRTF-RD regarding your distribution of 
+ *       the derivative work.
+ *  
+ *     - You must clearly notify users that your are distributing 
+ *       a modified version and not the original Harvest software.
+ *  
+ *     - Any derivative product is also subject to these copyright 
+ *       and use restrictions.
+ *  
+ *   Note that the Harvest software is NOT in the public domain.  We
+ *   retain copyright, as specified above.
+ *  
+ * HISTORY OF FREE SOFTWARE STATUS
+ *  
+ *   Originally we required sites to license the software in cases
+ *   where they were going to build commercial products/services
+ *   around Harvest.  In June 1995 we changed this policy.  We now
+ *   allow people to use the core Harvest software (the code found in
+ *   the Harvest ``src/'' directory) for free.  We made this change
+ *   in the interest of encouraging the widest possible deployment of
+ *   the technology.  The Harvest software is really a reference
+ *   implementation of a set of protocols and formats, some of which
+ *   we intend to standardize.  We encourage commercial
+ *   re-implementations of code complying to this set of standards.  
+ */
+
+#include "squid.h"
+
+typedef enum {
+    FDSTAT_CLOSE,
+    FDSTAT_OPEN
+} File_Desc_Status;
+
+typedef struct _FDENTRY {
+    File_Desc_Status status;
+    File_Desc_Type type;
+} FDENTRY;
+
+static FDENTRY *fd_stat_tab = NULL;
+
+static void fdstat_update _PARAMS((int fd, File_Desc_Status status));
+
+File_Desc_Type
+fdstatGetType(int fd)
+{
+    return fd_stat_tab[fd].type;
+}
+
+const char *fdstatTypeStr[] =
+{
+    "None",
+    "Log",
+    "File",
+    "Socket",
+    "Pipe",
+    "Unknown"
+};
+
+/* init fd stat module */
+void
+fdstat_init(void)
+{
+    int i;
+    fd_stat_tab = xcalloc(Squid_MaxFD, sizeof(FDENTRY));
+    meta_data.misc += Squid_MaxFD * sizeof(FDENTRY);
+    for (i = 0; i < Squid_MaxFD; ++i) {
+	fd_stat_tab[i].status = FDSTAT_CLOSE;
+	fd_stat_tab[i].type = FD_UNKNOWN;
+    }
+    Biggest_FD = -1;
+}
+
+/* call for updating the current biggest fd */
+static void
+fdstat_update(int fd, File_Desc_Status status)
+{
+    if (fd < Biggest_FD)
+	return;
+    if (fd >= Squid_MaxFD) {
+	debug_trap("Running out of file descriptors.\n");
+	return;
+    }
+    if (fd > Biggest_FD) {
+	if (status == FDSTAT_OPEN)
+	    Biggest_FD = fd;
+	else
+	    debug_trap("fdstat_update: Biggest_FD inconsistency");
+	return;
+    }
+    /* if we are here, then fd == Biggest_FD */
+    if (status == FDSTAT_CLOSE) {
+	while (fd_stat_tab[Biggest_FD].status != FDSTAT_OPEN)
+	    Biggest_FD--;
+    } else {
+	debug_trap("fdstat_update: re-opening Biggest_FD?");
+    }
+}
+
+/* call when open fd */
+void
+fdstat_open(int fd, File_Desc_Type type)
+{
+    fd_stat_tab[fd].status = FDSTAT_OPEN;
+    fd_stat_tab[fd].type = type;
+    fdstat_update(fd, FDSTAT_OPEN);
+    Number_FD++;
+}
+
+int
+fdstat_isopen(int fd)
+{
+    return (fd_stat_tab[fd].status == FDSTAT_OPEN);
+}
+
+/* call when close fd */
+void
+fdstat_close(int fd)
+{
+    fd_stat_tab[fd].status = FDSTAT_CLOSE;
+    fdstat_update(fd, FDSTAT_CLOSE);
+    Number_FD--;
+}
+
+int
+fdstat_are_n_free_fd(int n)
+{
+    int fd;
+    int n_free_fd = 0;
+
+    if (n == 0) {
+	for (fd = 0; fd < Squid_MaxFD; ++fd)
+	    if (fd_stat_tab[fd].status == FDSTAT_CLOSE)
+		++n;
+	return (n);
+    }
+    if ((Squid_MaxFD - Biggest_FD) > n)
+	return 1;
+    else {
+	for (fd = Squid_MaxFD - 1; ((fd > 0) && (n_free_fd < n)); --fd) {
+	    if (fd_stat_tab[fd].status == FDSTAT_CLOSE) {
+		++n_free_fd;
+	    }
+	}
+	return (n_free_fd >= n);
+    }
+}
+
+void
+fdstatFreeMemory(void)
+{
+    safe_free(fd_stat_tab);
+}
+@
+
+
+1.1.1.1
+log
+@Harvest and squid caches.
+@
+text
+@@

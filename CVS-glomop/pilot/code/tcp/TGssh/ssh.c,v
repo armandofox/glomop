@@ -1,0 +1,719 @@
+head	1.3;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	99.01.04.17.43.03;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.11.11.20.40.10;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.11.22.49.21;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Added the ability to choose a non-standard port.
+@
+text
+@#include <Pilot.h>
+#include "ssh.h"
+#include "bn.h"
+#include "rsa.h"
+#include "rand.h"
+#include "md5.h"
+#include "callback.h"
+
+#define PILOTSSH_VERSTR "SSH-1.5-TGssh-1.21\n"
+
+typedef struct {
+    unsigned char cookie[8];
+    RSA *servkey;
+    RSA *hostkey;
+    unsigned long flags;
+    unsigned long cipher_mask;
+    unsigned long auth_mask;
+} ServKey;
+
+void *ssh_init(long (*down_write)(unsigned char *,long,void *,Erf,void*),
+		void *down_state, Erf erf, void *erfp)
+{
+    ssh_state *state;
+
+    state = MemPtrNew(sizeof(ssh_state));
+    if (!state) {
+	ssh_fatal("Out of mem");
+	return NULL;
+    }
+
+    state->down_write = down_write;
+    state->down_state = down_state;
+    state->up_dispatch = NULL;
+    state->up_setconnid = NULL;
+    state->up_state = NULL;
+    state->dispatchread = 0;
+    state->dispatchpkt = NULL;
+    state->dispatchsizeread = 0;
+
+    state->sshprefs = NULL;
+    state->protophase = SSH_PHASE_VERSION_WAIT;
+
+    state->encrypt = NULL;
+    state->decrypt = NULL;
+    state->cryptclean = NULL;
+
+    state->term = NULL;
+    state->termrows = state->termcols = state->termx = state->termy = 0;
+    state->connid = NULL;
+
+    return state;
+}
+
+void ssh_set_prefs(ssh_prefs *prefs, void *state_, Erf erf, void *erfp)
+{
+    ssh_state *state = state_;
+
+    state->sshprefs = prefs;
+}
+
+static int put_int(unsigned char *buf, unsigned long l);
+
+/* Send a SSH_CMSG_WINDOW_SIZE describing the current terminal */
+static void send_term(ssh_state *state, Erf erf, void *erfp)
+{
+    Long ret;
+    unsigned char buf[16];
+
+    put_int(buf, state->termrows);
+    put_int(buf+4, state->termcols);
+    put_int(buf+8, state->termx);
+    put_int(buf+12, state->termy);
+
+    ret = ssh_write_type(SSH_CMSG_WINDOW_SIZE, buf, 16, state, erf, erfp);
+    if (ret < 16) {
+	ssh_fatal("Connection closed");
+    }
+}
+
+void ssh_setterm(char *term, int rows, int cols, int x, int y, void *state_,
+    Erf erf, void *erfp)
+{
+    ssh_state *state = state_;
+
+    CALLBACK_PROLOGUE
+
+    if (state->term) {
+	MemPtrFree(state->term);
+	state->term = NULL;
+    }
+    if (term) {
+	state->term = MemPtrNew(StrLen(term)+1);
+	if (!state->term) {
+	    ssh_fatal("Out of mem");
+	    goto setterm_out;
+	}
+	StrCopy(state->term, term);
+    }
+    state->termrows = rows;
+    state->termcols = cols;
+    state->termx = x;
+    state->termy = y;
+
+    /* Send the new terminal if it's appropriate to do so */
+    if (state->protophase == SSH_PHASE_INTERACTIVE) {
+	send_term(state,erf,erfp);
+    }
+
+setterm_out:
+    CALLBACK_EPILOGUE
+}
+
+/* This is called from below, giving a textual description of the connection */
+void ssh_setconnid(char *connid, void *state_, Erf erf, void *erfp)
+{
+    ssh_state *state = state_;
+
+    CALLBACK_PROLOGUE
+
+    if (state->connid) {
+	MemPtrFree(state->connid);
+	state->connid = NULL;
+    }
+    if (connid) {
+	state->connid = MemPtrNew(StrLen(connid)+1+5);
+	if (!state->connid) {
+	    ssh_fatal("Out of mem");
+	    goto connid_out;
+	}
+	StrCopy(state->connid, "SSH: ");
+	StrCopy(state->connid+5, connid);
+    }
+
+    if (state->up_setconnid) {
+	(state->up_setconnid)(state->connid, state->up_state,erf,erfp);
+    }
+
+connid_out:
+    CALLBACK_EPILOGUE
+}
+
+void ssh_set_dispatch(
+    void (*up_dispatch)(unsigned char *,long,void *,Erf,void*),
+    void *up_state, void *state_, Erf erf, void *erfp)
+{
+    ssh_state *state = state_;
+
+    state->up_dispatch = up_dispatch;
+    state->up_state = up_state;
+}
+
+void ssh_set_setconnid(void (*up_setconnid)(char *, void *, Erf, void *),
+    void *state_, Erf erf, void *erfp)
+{
+    ssh_state *state = state_;
+
+    state->up_setconnid = up_setconnid;
+    if (state->up_setconnid) {
+	(state->up_setconnid)(state->connid, state->up_state,erf,erfp);
+    }
+}
+
+static int get_bytes(unsigned char **buf, long *amt, int n, unsigned char *b)
+{
+    if (*amt < n) return 1;
+    MemMove(b, (*buf), n);
+    (*buf) += n;
+    (*amt) -= n;
+    return 0;
+}
+
+static int get_int(unsigned char **buf, long *amt, unsigned long *l)
+{
+    if (*amt < 4) return 1;
+    *l = (*buf)[0]; (*l) <<= 8;
+    *l += (*buf)[1]; (*l) <<= 8;
+    *l += (*buf)[2]; (*l) <<= 8;
+    *l += (*buf)[3];
+    (*buf) += 4;
+    (*amt) -= 4;
+    return 0;
+}
+
+static int get_bn(unsigned char **buf, long *amt, BIGNUM **bn)
+{
+    int len;
+    if (*amt < 2) return 1;
+    len = (*buf)[0]; len <<= 8; len += (*buf)[1];
+    (*buf) += 2;
+    (*amt) -= 2;
+    if (*amt < (len+7)/8) return 1;
+    *bn = BN_bin2bn(*buf, (len+7)/8, NULL);
+    if (! *bn) return 1;
+    (*buf) += (len+7)/8;
+    (*amt) -= (len+7)/8;
+    return 0;
+}
+
+static int put_int(unsigned char *buf, unsigned long l)
+{
+    buf[3] = l & 0xff; l >>= 8;
+    buf[2] = l & 0xff; l >>= 8;
+    buf[1] = l & 0xff; l >>= 8;
+    buf[0] = l & 0xff;
+    return 0;
+}
+
+static int put_bn(unsigned char *buf, BIGNUM *bn)
+{
+    unsigned int bits = BN_num_bits(bn);
+    *(buf++) = bits >> 8;
+    *(buf++) = bits & 0xff;
+    BN_bn2bin(bn, buf);
+    return 0;
+}
+
+static int get_servkey(unsigned char **buf, long *amt, ServKey *sk)
+{
+    unsigned long servbits, hostbits;
+    long bdiff;
+
+    sk->servkey = RSA_new();
+    sk->hostkey = RSA_new();
+    if (get_bytes(buf, amt, 8, sk->cookie)) goto servkey_err;
+    if (get_int(buf, amt, &servbits)) goto servkey_err;
+    if (get_bn(buf, amt, &sk->servkey->e)) goto servkey_err;
+    if (get_bn(buf, amt, &sk->servkey->n)) goto servkey_err;
+    if (get_int(buf, amt, &hostbits)) goto servkey_err;
+    if (get_bn(buf, amt, &sk->hostkey->e)) goto servkey_err;
+    if (get_bn(buf, amt, &sk->hostkey->n)) goto servkey_err;
+    if (get_int(buf, amt, &sk->flags)) goto servkey_err;
+    if (get_int(buf, amt, &sk->cipher_mask)) goto servkey_err;
+    if (get_int(buf, amt, &sk->auth_mask)) goto servkey_err;
+    servbits = BN_num_bits(sk->servkey->n);
+    hostbits = BN_num_bits(sk->hostkey->n);
+    bdiff = (long)servbits - (long)hostbits;
+    if (bdiff < 0) bdiff = -bdiff;
+    if (bdiff < 104) goto servkey_err;
+    if (servbits < 512 || hostbits < 512) goto servkey_err;
+    return 0;
+
+servkey_err:
+    if (sk->servkey) RSA_free(sk->servkey);
+    if (sk->hostkey) RSA_free(sk->hostkey);
+    return 1;
+}
+
+static int gen_sesskey(ServKey *sk, unsigned char *sesskey, BIGNUM **encs)
+{
+    unsigned char sessid[16];
+    unsigned char *sidbuf = NULL;
+    int servlen, hostlen, longlen;
+    int i;
+    
+    /* Generate the session id.  The RFC says to do:
+	MD5(servkey->n || hostkey->n || cookie)
+       but the sshd distribution actually does:
+	MD5(hostkey->n || servkey->n || cookie)
+       We do it the "wrong" way (the way that's implemented).
+    */
+    sidbuf = MemPtrNew(BN_num_bytes(sk->servkey->n) +
+		  BN_num_bytes(sk->hostkey->n) + 8);
+    if (!sidbuf) goto gen_sesskey_err;
+    hostlen = BN_bn2bin(sk->hostkey->n, sidbuf);
+    servlen = BN_bn2bin(sk->servkey->n, sidbuf+hostlen);
+    MemMove(sidbuf+servlen+hostlen, sk->cookie, 8);
+    RAND_seed(sidbuf, servlen+hostlen+8);
+    MD5(sidbuf, servlen+hostlen+8, sessid);
+
+    /* Generate session key: 32 random bytes */
+    RAND_bytes(sesskey, 32);
+
+    /* Encrypt (sesskey XOR sessid) with the shorter, then the longer, of the
+    servkey and hostkey. */
+    longlen = (hostlen > servlen) ? hostlen : servlen;
+    MemMove(sidbuf+longlen-32, sesskey, 32);
+    for(i=0;i<16;++i) sidbuf[longlen-32+i] ^= sessid[i];
+    if (hostlen > servlen) {
+	if (RSA_public_encrypt(32, sidbuf+hostlen-32, sidbuf+hostlen-servlen,
+	    sk->servkey, RSA_PKCS1_PADDING) < 0) goto gen_sesskey_err;
+	if (RSA_public_encrypt(servlen, sidbuf+hostlen-servlen, sidbuf,
+	    sk->hostkey, RSA_PKCS1_PADDING) < 0) goto gen_sesskey_err;
+    } else {
+	if (RSA_public_encrypt(32, sidbuf+servlen-32, sidbuf+servlen-hostlen,
+	    sk->hostkey, RSA_PKCS1_PADDING) < 0) goto gen_sesskey_err;
+	if (RSA_public_encrypt(hostlen, sidbuf+servlen-hostlen, sidbuf,
+	    sk->servkey, RSA_PKCS1_PADDING) < 0) goto gen_sesskey_err;
+    }
+    *encs = BN_bin2bn(sidbuf, longlen, NULL);
+    if (!*encs) goto gen_sesskey_err;
+    
+    MemPtrFree(sidbuf); sidbuf = NULL;
+    return 0;
+
+gen_sesskey_err:
+    if (sidbuf) MemPtrFree(sidbuf);
+    return 1;
+}
+
+/* This is the "state machine" routine that handles incoming packets. */
+void ssh_handle_packet_type(ssh_msg_type type, unsigned char *buf, long amt, 
+    ssh_state *state, Erf erf, void *erfp)
+{
+    long ret;
+    ServKey servkey;
+    BIGNUM *enc_sesskey = NULL;
+    int enc_sesskey_bytes;
+    unsigned long len;
+    unsigned long prefciphers;
+    ssh_cipher_type use_cipher = SSH_CIPHER_3DES;
+    char *trypw;
+    unsigned long trypwlen;
+    unsigned char buf4[4];
+    unsigned char *prefttymodes;
+    int prefttymodelen;
+    int termlen;
+    unsigned long datalen;
+
+    /* Handle things that may be sent at any time */
+    switch(type) {
+    case SSH_MSG_DISCONNECT:
+	/* Dump the connection. */
+	/* NUL-terminate the string (the memory is allocated because that's
+	   where the CRC used to live) */
+	if (!get_int(&buf, &amt, &len)) {
+	    buf[len] = '\0';
+	    ssh_fatal(buf);
+	}
+	return;
+
+    case SSH_MSG_IGNORE:
+    case SSH_MSG_DEBUG:
+	/* Just ignore these */
+	return;
+
+    default:
+	break;
+    }
+
+    /* Where are we in the protocol? */
+    switch(state->protophase) {
+    case SSH_PHASE_VERSION_WAIT:
+	/* We are expecting the server's version number */
+	switch(type) {
+	case SSH_MSG_NONE:
+	    /* See what we got */
+	    if (amt < 9 || amt == 80 || StrNCompare(buf, "SSH-1.5-", 8)) {
+		/* Nope */
+		state->protophase = SSH_PHASE_NONE;
+		ssh_fatal("Unknown remote SSH protocol version");
+		return;
+	    }
+
+	    /* Looks good here; advance the phase */
+	    state->protophase = SSH_PHASE_GET_KEYS;
+	    ret = ssh_write_type(SSH_MSG_NONE, PILOTSSH_VERSTR,
+		StrLen(PILOTSSH_VERSTR), state, erf, erfp);
+	    if (ret < StrLen(PILOTSSH_VERSTR)) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+	    ssh_info("Exchanging Keys");
+	    break;
+	
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    case SSH_PHASE_GET_KEYS:
+	/* We are expecting the server's keys */
+	switch(type) {
+	case SSH_SMSG_PUBLIC_KEY:
+	    /* Get the keys */
+	    if (get_servkey(&buf, &amt, &servkey)) {
+		ssh_fatal("Bad public key received");
+		return;
+	    }
+	    if (amt) {
+		RSA_free(servkey.servkey);
+		RSA_free(servkey.hostkey);
+		ssh_fatal("Bad public key received");
+		return;
+	    }
+	    /* Create the session key */
+	    if (gen_sesskey(&servkey, state->sesskey, &enc_sesskey)) {
+		RSA_free(servkey.servkey);
+		RSA_free(servkey.hostkey);
+		ssh_fatal("Unable to generate session key");
+		return;
+	    }
+	    RSA_free(servkey.servkey);
+	    RSA_free(servkey.hostkey);
+
+	    /* Find a compatible cipher */
+	    /* 3DES is mandatory to support */
+	    prefciphers = state->sshprefs ? state->sshprefs->ciphers :
+			    ((1 << SSH_CIPHER_IDEA) | (1 << SSH_CIPHER_3DES));
+	    prefciphers |= (1 << SSH_CIPHER_3DES);
+	    servkey.cipher_mask &= prefciphers;
+
+	    if ((servkey.cipher_mask & (1 << SSH_CIPHER_IDEA))) {
+		use_cipher = SSH_CIPHER_IDEA;
+	    } else if ((servkey.cipher_mask & (1 << SSH_CIPHER_3DES))) {
+		use_cipher = SSH_CIPHER_3DES;
+	    } else {
+		BN_free(enc_sesskey);
+		ssh_fatal("No compatible ciphers found");
+		return;
+	    }
+	    state->auth_mask = servkey.auth_mask;
+
+	    /* Send the SSH_CMSG_SESSION_KEY */
+	    enc_sesskey_bytes = BN_num_bytes(enc_sesskey);
+	    buf = MemPtrNew(15+enc_sesskey_bytes);
+	    if (!buf) {
+		BN_free(enc_sesskey);
+		ssh_fatal("Out of mem");
+		return;
+	    }
+	    buf[0] = use_cipher;
+	    MemMove(buf+1, servkey.cookie, 8);
+	    put_bn(buf+9, enc_sesskey);
+	    buf[enc_sesskey_bytes+11] = 0;
+	    buf[enc_sesskey_bytes+12] = 0;
+	    buf[enc_sesskey_bytes+13] = 0;
+	    buf[enc_sesskey_bytes+14] = 0;
+	    BN_free(enc_sesskey);
+	    ret = ssh_write_type(SSH_CMSG_SESSION_KEY, buf,
+		enc_sesskey_bytes+15, state, erf, erfp);
+	    MemPtrFree(buf);
+	    if (ret < enc_sesskey_bytes+15) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+
+	    /* Set up the crypto */
+	    ssh_crypto_setup(use_cipher, state, erf, erfp);
+	    break;
+
+	case SSH_SMSG_FAILURE:
+	    /* Hmmm. Something went wrong. */
+	    ssh_fatal("Unable to exchange keys");
+	    return;
+
+	case SSH_SMSG_SUCCESS:
+	    /* OK; go on, as long as we're encrypting now */
+	    if (state->encrypt) {
+		char *prefuser;
+		unsigned long prefuserlen;
+
+		/* Send the USER message */
+		if (!state->sshprefs || !state->sshprefs->username ||
+		    !*(state->sshprefs->username)) {
+		    /* No username was supplied */
+		    ssh_fatal("No username given");
+		    return;
+		} else {
+		    prefuser = state->sshprefs->username;
+		}
+		prefuserlen = StrLen(prefuser);
+		buf = MemPtrNew(prefuserlen+4);
+		put_int(buf, prefuserlen);
+		MemMove(buf+4, prefuser, prefuserlen);
+		ret = ssh_write_type(SSH_CMSG_USER, buf,
+		    prefuserlen+4, state, erf, erfp);
+		MemPtrFree(buf);
+		if (ret < prefuserlen+4) {
+		    ssh_fatal("Connection closed");
+		    return;
+		}
+		ssh_info("Logging In");
+
+		state->protophase = SSH_PHASE_AUTH;
+		state->triedpw = 0;
+
+		break;
+	    }
+	    /* FALLTHROUGH */
+
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    case SSH_PHASE_AUTH:
+	/* We are expecting SUCCESS or FAILURE to our login attempts */
+	switch(type) {
+	case SSH_SMSG_SUCCESS:
+	    /* Oh, good; they let us in.  Set a max packet size. */
+	    put_int(buf4, MAX_SSH_PACKET_LEN);
+	    ret = ssh_write_type(SSH_CMSG_MAX_PACKET_SIZE, buf4,
+		4, state, erf, erfp);
+	    if (ret < 4) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+	    state->protophase = SSH_PHASE_PREP;
+	    break;
+
+	case SSH_SMSG_FAILURE:
+	    /* Have we already tried the password? */
+	    if (state->triedpw) {
+		ssh_fatal("Permission Denied");
+		return;
+	    }
+
+	    /* Try a password */
+	    if (!state->sshprefs || !state->sshprefs->password ||
+		!*state->sshprefs->password) {
+		trypw = "";
+	    } else {
+		trypw = state->sshprefs->password;
+	    }
+	    state->triedpw = 1;
+
+	    trypwlen = StrLen(trypw);
+	    buf = MemPtrNew(trypwlen+4);
+	    put_int(buf, trypwlen);
+	    MemMove(buf+4, trypw, trypwlen);
+	    ret = ssh_write_type(SSH_CMSG_AUTH_PASSWORD, buf,
+		trypwlen+4, state, erf, erfp);
+	    MemPtrFree(buf);
+	    if (ret < trypwlen+4) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+	    break;
+
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    case SSH_PHASE_PREP:
+	/* We've sent the MAX_PACKET_SIZE request.  Accept either answer. */
+	switch(type) {
+	case SSH_SMSG_SUCCESS:
+	case SSH_SMSG_FAILURE:
+	    /* Get a pty */
+	    if (!state->sshprefs || !state->sshprefs->ttymodes) {
+		prefttymodes = SSH_DEF_TTYMODES;
+		prefttymodelen = SSH_DEF_TTYMODELEN;
+	    } else {
+		prefttymodes = state->sshprefs->ttymodes;
+		prefttymodelen = state->sshprefs->ttymodelen;
+	    }
+	    termlen = StrLen(state->term ? state->term : SSH_DEF_TERM);
+	    buf = MemPtrNew(prefttymodelen+20+termlen);
+	    put_int(buf, termlen);
+	    MemMove(buf+4, state->term ? state->term : SSH_DEF_TERM, termlen);
+	    put_int(buf+4+termlen, state->termrows);
+	    put_int(buf+8+termlen, state->termcols);
+	    put_int(buf+12+termlen, state->termx);
+	    put_int(buf+16+termlen, state->termy);
+	    MemMove(buf+20+termlen, prefttymodes, prefttymodelen);
+	    ret = ssh_write_type(SSH_CMSG_REQUEST_PTY, buf,
+		prefttymodelen+20+termlen, state, erf, erfp);
+	    MemPtrFree(buf);
+	    if (ret < prefttymodelen+20+termlen) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+	    state->protophase = SSH_PHASE_PREP1;
+	    break;
+
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    case SSH_PHASE_PREP1:
+	/* We asked for a pty.  We'd better get it. */
+	switch(type) {
+	case SSH_SMSG_FAILURE:
+	    ssh_fatal("Unable to allocate pty");
+	    return;
+
+	case SSH_SMSG_SUCCESS:
+	    /* Ready to go interactive. */
+	    ret = ssh_write_type(SSH_CMSG_EXEC_SHELL, NULL, 0, state,
+		    erf, erfp);
+	    if (ret < 0) {
+		ssh_fatal("Connection closed");
+		return;
+	    }
+	    state->protophase = SSH_PHASE_INTERACTIVE;
+	    connected(erf, erfp);
+	    break;
+
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    case SSH_PHASE_INTERACTIVE:
+	/* We expect data from the other side now */
+	switch(type) {
+	case SSH_SMSG_STDOUT_DATA:
+	case SSH_SMSG_STDERR_DATA:
+	    if (get_int(&buf, &amt, &datalen) || amt != datalen) {
+		ssh_fatal("bad packet");
+		return;
+	    }
+	    if (state->up_dispatch) {
+		(state->up_dispatch)(buf, amt, state->up_state, erf, erfp);
+	    }
+	    break;
+	    
+	case SSH_SMSG_EXITSTATUS:
+	    /* The session is over.  Send a confirmation and shut it down. */
+	    ssh_write_type(SSH_CMSG_EXIT_CONFIRMATION, NULL, 0, state,
+		erf, erfp);
+	    ssh_fatal("Connection closed");
+	    return;
+
+	default:
+	    /* Unknown packets? */
+	    ssh_fatal("unknown packet type");
+	    return;
+	}
+	break;
+
+    default:
+	/* Unknown phase? */
+	ssh_fatal("ssh in unknown phase");
+	return;
+    }
+}
+@
+
+
+1.2
+log
+@Recover from crash
+@
+text
+@d9 1
+a9 1
+#define PILOTSSH_VERSTR "SSH-1.5-pilotSSH-1.0\n"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d280 1
+a280 1
+	    sk->servkey) < 0) goto gen_sesskey_err;
+d282 1
+a282 1
+	    sk->hostkey) < 0) goto gen_sesskey_err;
+d285 1
+a285 1
+	    sk->hostkey) < 0) goto gen_sesskey_err;
+d287 1
+a287 1
+	    sk->servkey) < 0) goto gen_sesskey_err;
+@
+
+
+1.1.1.1
+log
+@Top Gun ssh
+@
+text
+@@

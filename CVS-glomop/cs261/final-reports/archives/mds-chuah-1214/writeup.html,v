@@ -1,0 +1,1166 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.12.14.20.13.29;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<HTML>
+  <HEAD>
+    <TITLE>CS261 Project Report</TITLE>
+  </HEAD>
+  <BODY TEXT="#1C0B5A" BGCOLOR="#FFFFFF" LINK="#1C0B5A" VLINK="#888888" ALINK="#FF0000">
+    
+    <CENTER>
+	  <h1>Infrastructure for a Secure Interface between<BR> Wireless
+	  and Data Networks</h1>
+      
+      <h3>CS 261 Fall 1998<br>
+		Chen-Nee Chuah & Mark D. Spiller</h3>
+	  <h4>(14 December 1998)</h4>
+	</center>
+    
+    <hr>
+
+    
+    <h2>Paper Outline</h2>
+    
+    <ol>
+      <li><a href="#intro">Introduction</a>
+		<ul>
+		  <li><a href="#target">1.1 Target Applications</a>
+		  <li><a href="#design">1.2 Design Criteria & Problem Scope</a>
+		</ul>
+	  <li><a href="#gsm">GSM Security & Service Access</a>
+		<ul>
+		  <li><a href="#gsmoverview">2.1 GSM overview</a>
+		  <li><a href="#gsmideal">2.2 Ideal GSM Service Access</a>
+		  <li><a href="#gsmreal">2.3 Realistic GSM Service Access</a>
+		  <li><a href="#gsmother">2.4 Other...</a>
+		</ul>
+	  <li><a href="#sg">Accessing the Service Gateway</a>
+		<ul>
+		  <li><a href="#slider">3.1 Different Levels of Security</a>
+		</ul>
+      <li><a href="#prototype">Prototype Implementation</a>
+      <li><a href="#related">Related Work</a>
+      <li><a href="#conclusions">Conclusion</a>
+      <li><a href="#acks">Acknowledgements</a>
+      <li><a href="#refs">References</a>
+    </ol>
+    
+    <hr>
+
+	<a name="intro">
+    <h1><u>1.0 Introduction</u></h1>
+    
+    The explosive growth of the Internet and wireless ad-hoc networks
+    has fueled a need for the integration of heterogeneous networks.
+    Mobile users want to be able to access services and information
+    available on the Internet as well as their desktop machines.  In
+    such an environment, it would be handy if wireless devices such
+    as cellular phones could be used to activate services in the
+    network, and thus empower mobile users.
+
+    
+    <p>However, the type of access desired will not be used without
+    various degrees of privacy and authentication.  A security
+    infrastructure that protects the communication between the
+    wireless device and the servers in the network is required.  This
+    project explores the design criteria and issues in securely
+    accessing network services from a cellular phone (using GSM), and
+    presents a simple prototype that demonstrates cross-network
+    security.
+      
+    <p>
+
+	<a name="target">
+	<h2><u>1.1 Target Applications</u></h2>
+
+	We envision that in the future mobile users may use their personal
+	communication devices to invoke many different kind of services,
+	which can be classified under several categories according to the
+	functionality involved:
+
+	<p>
+
+	<center>
+	  <table cellpadding=5 border=1 cellspacing=0>
+		<tr>
+		  <td><center><h3><u>Mode:</u></h3></center></td>
+		  <td><center><h3><u>Examples</u></h3></center></td>
+		</tr>
+
+		<tr>
+		  <td><center><h3>Access</h3></center></td>
+		  <td>
+			<ul>
+
+			  <li>Information databases (Stock quotes, weather
+				forecast, web...)
+
+			  <li>Check status (ping machines, car, home, etc.)
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><center><h3>Control</h3></center></td>
+		  <td>
+			<ul>
+
+			  <li>Remote home control (activate/deactivate:
+				e.g. doors, lights, appliances,...)
+
+			  <li>Reconfiguration of services (e.g. call forwarding)
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><center><h3>Communication</h3></center></td>
+		  <td>
+			<ul>
+
+			  <li>Voice connection to IP Phone
+
+			  <li>Mobile shopping (e.g. rent movies, place orders)
+
+			  <li>Specific online services and data applications
+				(e.g. translation and conversion proxies, cell phone
+				whiteboard)
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><center><h3>Reactive</h3></center></td>
+		  <td>
+			<ul>
+
+			  <li>Callbacks (e.g. return paging messages, respond to
+				alarms or emergencies)
+
+			</ul>
+		  </td>
+		</tr>
+	  
+	  </table>
+	</center>
+			
+	<p>
+
+	  It should be noted that the user will have different levels of
+	  trust and desired security for different services, for example
+	  weather forecast vs. controlling actions in a house.  One
+	  required system feature is user-selectable trust, security, and
+	  revokation.
+
+	<p>
+
+	  Given this scenario, we assume the following:<br>
+
+    <ul>
+      
+	  <li>The underlying GSM authentication protocol (described in
+		<a href="#gsmoverview">2.1</a>) is sufficient for secure
+		access to services i.e. issues such as those presented in
+		the references have somehow been resolved). 
+
+      <li>GSM phones are not programmable, and only have the ability
+		to:
+		<ul>
+		  <li>Select and call phone numbers
+	    
+		  <li>Send numeric data
+	    
+		  <li>Send messages to other GSM phones using the same
+			provider (limited text entry)
+	    
+		  <li>Transmit voice
+		</ul>
+
+	  <li>Services can run for any amount of time - the user may stay
+		connected, or may disconnect and reconnect again to get
+		results, but that in the latter case the phone does not
+		maintain any state.
+
+	  <li>Participants considered in the service access are:
+		<ul>
+		  <li>Handsets and SIM cards
+		  <li>Base station (BS)
+		  <li>Authentication station / GSM Network (AS)
+		  <li>Service gateway (SG)
+		  <li>Individual service server
+		  <li>Intermediate proxies
+		</ul>
+
+	  <li><b>Trust</b>: What does "trust" mean?  Specifically, what
+	  does "A trusts B" mean?
+
+		<ul>
+		  <li>B has the power to do something detrimental to A (such
+		  as release/distribute a shared secret), but A feels that
+		  this is not likely to happen for some reason, or accepts
+		  that risk.
+			
+		  <li>A feels sure that B will not invoke a service in A's
+		  name without authorization, and that if B knows private
+		  things about A, it will not act except on A's request or
+		  with A's knowledge.
+			
+		  <li>Compromise of B would make it easy to compromise A (B is
+		  in A's trusted computing base).
+			
+		</ul>
+
+	
+	</ul>
+
+	Our main objective was to explore the issues involved in providing
+	secure services to mobile users.  The contraints included (listed
+	in order of importance to us):
+
+	<ol>
+		  <li>The number of required changes to the existing
+		  protocols (especially GSM) and/or participants' equipment 
+
+		  <li>Potential attacks (spoofing, eavesdropping, replay, DOS,
+		  ...)
+
+		  <li>Trust extent/duration for participants
+
+		  <li>Memory/functionality required
+
+		  <li>Complexity
+
+		  <li>The execution time/delay for service access and the
+		  number of control messages or hops involved
+
+	</ol>
+
+	Our work focussed on the first three constraints.  The following
+	sections (2 and 3) first look at the GSM area, and then at ways in
+	which the service gateway could be integrated in and the trust
+	relationships between the participants in each case.  Section 4
+	discusses our implementation efforts, Section 5 mentions related
+	work, and Section 6 contains our conclusions.
+
+    </ul>
+
+    <hr>
+
+    <p>
+      
+	<a name="gsm">
+    <h1><u>2.0 GSM Security & Service Access</u></h1>
+
+	Groupe Special Mobile(GSM) is the first mobile digital cellular
+	network architecture that provides security services, as detailed
+	in GSM 11.14 V5.1.0 <A
+	HREF="refs.html
+	#refs">(GSM references)</A>. Since GSM is originally designed with
+	voice applications in mind, it does not provide for facilities to
+	access services or transmit data securedly.  A new packet
+	data service called GPRS (General Packet Radio Service) has been
+	standardized and implemented in the GSM system. However, the security
+	functionality for GPRS is equivalent to the existing GSM
+	security. An agent in the fixed network performs authentication and
+	cipher setting procedures based on the same algorithms, keys, and
+	criteria as in existing GSM. GPRS uses a ciphering algorithm
+	optimized for packet data transmission.
+
+	<p>
+	In this section, we will briefly describe the GSM security model
+	in and several possible solutions to integrate it with existing
+	network security modules.
+
+ 
+	<a name="gsmverview">
+    <h2><u>2.1 GSM Security Overview</u></h2>
+
+	The real identity of a GSM subscriber is a permanently attached
+	number (IMSI) stored in the SIM (Subscriber Identity Module)
+	card. There are four basic security services provided by GSM:
+	<ul>
+
+	  <li>Anonymity: A temporary identifier (TMSI) is assigned to a
+	  user so that the user's IMSI need not be transmitted over the
+	  air interface.
+		<p>
+
+	  <li>User Authentication: A technique involving challenge and
+	  response is used to identify the user to the network operator.
+		<p>
+
+	  <li>Traffic Confidentiality: Signaling data and voice are
+	  protected against eavesdropping via encryption.
+		<p>
+
+	  <li>Key distribution: The user's SIM card contains an IMSI, a secret
+	  key <i>K<sub>i</sub></i> known only by the HLR (Home Location
+	  Register), a pin number, and other card holder verification
+	  numbers. The mobile handset also has a unique ID. 
+		<p>
+	</ul>
+
+	The establishment of communication between mobile users and fixed
+	phone networks is controlled by the authentication center (AS),
+	which is co-located with the local message switching center (MSC).
+	When the user turns on the handset and makes a phone call, the MS
+	sends a call set-up message to the MSC, and transmits its own
+	identity and IMSI.  Upon every call the MSC/VLR allocates to the
+	IMSI a new TMSI and transmits it to the MS with the order to
+	substitute the TMSI for the IMSI in all future communications
+	within the GSM system. From then on, the IMSI is not sent
+	over the radio path again.
+
+	After the IMSI is known by the network, the AS generates a
+	"challenge" in the form of a triplet: <i>(RAND, SRES,
+	K<sub>c</sub>)</i> and forwards it back to the base station,
+	BS. <i>RAND</i> is a 128-bit random value generated by the AS. The
+	<i>SRES</i> (Signed RESponse authentication result) and ciphering
+	key, <i>K<sub>c</sub></i> are computed with the A<sub>3</sub> and
+	A<sub>8</sub> algorithms, respectively, using RAND and the secret
+	key <i>K<sub>i</sub></i>:
+
+	<ul>
+	  <li><i>SRES = A<sub>3</sub>(K<sub>i</sub>,RAND)</i>
+
+	  <li><i>K<sub>c</sub> = A<sub>8</sub>(K<sub>i</sub>,RAND)</i>
+	</ul>
+	
+    <i>RAND</i> is forwarded by the BS to the MS, where it is used to
+    generate <i>(SRES, K<sub>c</sub>)</i>. Another input required is
+    <i>K<sub>i</sub></i> which is stored in the SIM card. The BS
+    compares the SRESs from the AS and the MS. If they agree, user
+    authentication is complete. All the subsequent traffic
+    between the MS and the fixed network (BS/MSC) is encrypted with
+    <i>K<sub>c</sub></i> using the  A<sub>5</sub> algorithm.
+
+	Note that the BS/MSC are trusted per session by the handset and
+	the AS, because they know the ciphering key, <i>K<sub>c</sub></i>.
+	One weakness in the GSM authentication approach is its reliance on
+	the security of the links in internal GSM networks (MSC-HLR,
+	VLR-HLR, HLR-AS, some of which may be air links). Another weakness
+	is the security of the SIM card itself.  However, in this
+	project, we assume that GSM authentication and data encryption are
+	reliable for service access purposes.
+
+	<a name="gsmideal">
+    <h2><u>2.2 Ideal GSM Service Access</u></h2>
+
+	Ideally, we would like to limit the trust we put in the phone
+	company (both the BS and the AS, as well as the links). In this
+	section, we develop a solution for service access authentication
+	that only assumes data confidentiality of the GSM air link.
+	<p>
+
+	<center><img src="cases/case1.gif"><br></center>
+
+	<h4>Basic Protocol</h4>
+
+	This solution requires the SIM card to have two sets of keys,
+	<i>K<sub>i1</sub></i> and <i>K<sub>i2</sub></i>. The service
+	gateway is fully trusted and has knowledge of all keys (although
+	it doesn't really need <i>K<sub>i1</sub></i> - in this case, we
+	assume the SG is trusted completely by the MS). For instance,
+	another key is added to the SIM card at a later time.  The phone
+	company (HLR) only knows <i>K<sub>i1</sub></i>. We assume the
+	traditional security model of GSM. Therefore the BS only knows the
+	authentication key, <i>K<sub>c</sub></i> (generated the same way
+	as described in the previous section) for authentication and
+	billing purposes.
+
+    On call connect, we assume the mobile user is authenicated with a
+    traditional GSM challenge-based authentication. The air link is
+    now encrypted using <i>K<sub>c</sub></i>. The BS then detects service
+    requests (i.e. when the user dials special phone number) and notifies
+    the service gateway (SG) for secondary authentication.
+	<p>
+    In detail:
+	<ul>
+	  <ol>
+		  <li>The SG generates a nonce, <i>RAND<sub>2</sub></i> and
+		  computes <i>K<sub>s</sub></i> and <i>SRES<sub>2</sub></i>
+		  using the second key, <i>K<sub>i2</sub></i>. The challenge
+		  <i>(RAND<sub>2</sub>, SRES<sub>2</sub>)</i> is sent to the
+		  BS.
+
+		  <li>The BS forwards <i>(RAND<sub>2</sub>)</i> to the MS. 
+
+		  
+		  <li>The MS receives <i>(RAND<sub>2</sub>)</i> and generates
+		  response <i>(SRES<sub>2</sub>, K<sub>s</sub>)</i>. It
+		  forwards <i>SRES<sub>2</sub></i> to the BS. (Note -
+			SRES<sub>2</sub> could also stay at the SG, it works
+			either way).
+
+		  <li>The BS compares the <i>SRES<sub>2</sub></i>s from the SG
+		  and the MS. If they agree, the secondary authentication
+		  is completed.
+
+		  <li>From then on, the link between the SG and the MS uses
+		  end-to-end encryption, i.e. all data are encrypted using
+		  <i>K<sub>s</sub></i> at MS before it is encypted with
+		  <i>K<sub>c</sub></i> and forwarded to the BS. Therefore, the
+		  BS can dicipher the traffic from MS and process the control
+		  messages as before, but it cannot totally decipher the data
+		  since it does not have <i>K<sub>s</sub></i>.
+
+		</ol>
+	</ul>
+
+
+	<h4>Trust models</h4>
+	<ul>
+	  <li>The SG is trusted to authenticate and protect privacy of
+	  input.
+			
+	  <li>The AS trusts the BS (per session).
+
+	  <li>The bobile user trusts the SG/Service.  The BS and the AS are
+	  trusted for authentication and connection (network access)
+
+	</ul><p>
+
+
+	<h4>Required Changes</h4>
+
+	<ul>
+
+	  <li>The SIM card must be changed to include the second key.
+
+	  <li>The phone must support double encryption.
+
+	  <li>The BS must detect a service request, and make a second
+	  connection to the SG.
+
+	  <li>Key distribution gets a lot harder.
+			
+	  <li>The SG must be very secure/trusted.
+			
+	</ul><p>
+
+	<h4>Advantages & Limitations</h4>
+
+	One of the main advantages of this approach is the end-to-end
+	protection from the MS to the SG, and therefore limiting the trust
+	of the phone company. In addition there are no replay attacks
+	possible. The only possible attack is the denial of service
+	attack. The third advantage is that although this solution works
+	only for known SIM cards, users can use any GSM phones that
+	support the double encryption.
+	<p>
+	
+	However, we there are numerous limitations that make this approach
+	less attractive, as listed below:
+	<ul>
+		  <li>Inherent limitations in existing GSM infrastructure - At
+		  present, all encryption is done on the handset, not in the
+		  SIM card. In addition, the GSM phones are not programmable,
+		  and therefore it would be expensive to replace the existing handsets
+		  with newer versions that could perform double encryption.
+
+		  <li>Realistically - This approach is not feasible for
+		  prototyping yet, but it can be simulated.  It would be
+		  feasibile if one could program an application module on the
+		  phone...
+
+	</ul><p>
+
+    </ul>
+
+	<a name="gsmreal">
+    <h2><u>2.3 Realistic GSM Service Access</u></h2>
+
+	The inherent limitations of the GSM phones force some trust to be
+	put in the BS. We rely on the GSM user authentication mechanism
+	and some shared secret between the phone company and the service
+	gateway, SG. The remaining questions are
+	<ul>
+		<li>Which party will be communicating with the SG: the AS or
+		the BS? 
+		
+		<li>What level of security exists in that link, and how is it set up? 
+
+	</ul>
+
+	There are several solutions to the problem of authenticating users
+	for service access.  One possibility is to somehow use the
+	rechallenge capability in GSM to get a second <i>SRES</i> or key
+	that could be uses for the service. It is crucial to be able to
+	distinguish a service request versus a voice call in progress in
+	the challenge.  (Please refer to <a href="#sg">Section 3</a> for
+	further discussion of the design of service gateways and
+	interaction between the SG with the BS/AS).
+	<p>
+
+
+    <h3><u>2.3.1 Fully Trusted SG & AS (a la Rechallenge)</u></h3>
+    <center><img src="cases/case4.gif"></center>
+
+    <h4>Basic Protocol</h4> 
+
+    This approach is similar to the previous case, where a call still
+    goes through the AS for billing/authentication. The
+    encrypted channel is set up between the BS and the MS in the same
+    way as described in <a href="#gsmoverview">Section 2.1</a>.
+	
+
+    Upon the service request, a GSM re-challenge, i.e. a new triplet
+    <i>(RAND<sub>2</sub>, SRES<sub>2</sub>, K<sub>c2</sub>)</i> is
+    sent by the SG to the BS, and the phone re-authenticates itself, this
+    time to the SG. 
+	<p>
+
+	  In details:
+	
+	<ul>After the usual GSM authentication,
+		<ul><ol>
+		  <li>The BS contacts the SG.
+
+		  <li>the SG sends <i>(RAND<sub>2</sub>,
+		  SRES<sub>2</sub>, K<sub>c2</sub>)</i> to the BS.
+
+		  <li>The BS forwards <i>RAND<sub>2</sub></i> to the SIM.
+
+		  <li>The SIM computes <i>(SRES<sub>2</sub>,
+		  K<sub>c2</sub>)</i> and sends <i>(SRES<sub>2</sub>)</i> to
+		  the BS.
+
+		  <li>The BS compares <i>SRES<sub>2</sub></i> and
+		  authenticates the user for the SG. <i>K<sub>c2</sub></i> is
+		  used to encrypt future packets over the air link.
+		  </ol></ul>
+	</ul>
+
+	An alternative scheme might be to have the handset send the new
+	<i>K<sub>c2</sub></i> to the BS via the encrypted (still with
+	<i>K<sub>c1</sub></i>) air channel.  At that point, the air
+	channel can switch over to <i>K<sub>c2</sub></i> without
+	<i>K<sub>c2</sub></i> ever having been exposed to the BS-SG or
+	BS-AS links.  <i>K<sub>c2</sub></i> could then also be used to
+	encrypt the BS-SG channel.  (The BS could decrypt the information, 
+	check control data, and then forward a copy of the encrypted
+	voice/data).  This set-up would, of course, depend on how the GSM
+	standard handles re-challenge.  We could not find sufficient data
+	on this.
+	<p>
+
+	<h4>Trust Model</h4>
+	<ul>
+	  <li>The MS trusts the AS and the SG (either can impersonate the user).
+		
+	  <li>The MS has to trust the BS more per session, since the BS
+	  handles both the GSM authentication and the service
+	  authentication.  Both the AS and the SG trust the BS for
+	  authentication, and for <u>everything</u> after authentication,
+	  including data integrity, since the BS knows the ciphering keys
+	  in both cases, <i>K<sub>c1</sub></i> and <i>K<sub>c2</sub></i>.
+
+	  <li>The AS & the SG are trusted to authenticate user.
+
+	  <li>The AS & the SG trust each other on a per-user bases, since
+		both know the user's secret key,
+	  K<sub>i</sub></i>.
+
+	  <li>The following connections: MS-BS, AG-BS, SG-BS, SG-S are
+	  trusted.  Note that additional encryption can be used to make
+	  most of these links safe (some of which are discusses in section 
+		3). </ul><p>
+
+    <h4>Required Changes</h4>
+    <ul>
+
+      <li>Additional intelligence is needed in the BS in
+		the optional case (if it is feasible):
+	<ul>
+
+	  <li>It needs to be able to retrieve and store the
+	  second key, <i>K<sub>c2</sub></i> transmitted over the encrypted
+	  air channel.
+
+	  <li>It must be able to use <i>K<sub>c2</sub></i> to decrypt and
+	  re-encrypt (or decrypt, store, and re-packetize) the service
+	  request/data that it receives from the MS and forward it to the
+	  SG. Similarly, it has to be able to process the packets from the
+	  SG, decipher them and re-encrypt them with the proper key before
+	  sending them over the air to the MS. This will be more
+	  processing- and/or memory-intensive.
+	</ul>
+
+      <li>The SIM card needs to store two <i>K<sub>c</sub></i>s
+      and has to be able to distinguish between them. 
+
+      <li>The MS must be able to send K<sub>c2</sub></i> as data to the BS.
+
+    </ul><p>
+
+    <h4>Advantages & Limitations</h4>
+
+    One of the obvious advantages is that we do not need double
+    encryption in this approach. However the trade off is that 
+    we have to trust the BS more. Other disadvantages include the
+    following:
+    <ul>
+
+      <li>A lot more intelligence is needed in BS. The cost involved
+      in upgrading the BS software is probably not insignificant.
+      Also, if the BS hardware is insufficient it may be necessary to
+      replace all the base stations, which would be VERY expensive.
+
+      <li>It is heavily dependent on what happens after a
+      re-challenge... (Can you still use the old key?)  There may
+      still be some hardware, software, and protocol changes here.  If
+      so, this case could be used to invoke a service while in the
+      middle of a call... (Question - so what happens with call
+      waiting on GSM phones, or dialing a second call?).  </ul><p>
+
+    <hr width=100>
+
+    <h3><u>2.3.2 Semi Trusted SG & Fully Trusted AS</u></h3>
+    <center><img src="cases/case2.gif"></center>
+
+    <h4>Basic Idea</h4> 
+
+    To work around the inherent limitation of the GSM network, we
+    introduce some modifications to the previous cases. In this
+    approach, the SG is no longer completely trusted by the user - now
+    the phone company (AS) is trusted to negotiate with the SG, using
+    some shared secret.  Optionally, the AS could pass a temporary
+    ticket of some sort to the BS/MSC/WCP, to improve performance. We
+    make the same assumptions: a phone number indicates the service,
+    and user authentication is as in the GSM spec.<p>
+
+    <h4>Trust models</h4>
+    <ul>
+      <li>The MS user trusts the AS completely for (a)authentication,
+      and to (b)access the SG correctly. The MS trusts the BS per
+      session.
+			
+      <li>The AS trusts the SG (shared secret - we do not discuss how
+      this is set up). The AS trusts the BS per session.
+
+      <li>The SG trusts the GSM provider. Perhaps we can limit the
+      trust by requesting the user to punch in some keyswords on the
+      handset - this would protect against attacks against the static
+      phone company database, but not "sniffer" attacks.
+
+      <li>The connections: MS-BS, BS-AS, AS-SG, and SG-S are trusted. 
+    </ul>
+
+    <h4>Required Changes</h4>
+    <ul>
+      <li>The AS/GSM Network has to be changed to be able to connect
+      to the SG, or to grant keys/tickets in the optional case.
+
+      <li>No changes to the phone are required. We just need the user
+		to know a special access phone number to call...  
+    </ul>
+
+    <h4>Advantages</h4>
+    <ul>
+      <li>Don't have to trust the service gateway as much (similar to
+		phone orders with credit cards...).
+
+      <li>Don't have to change the handset/SIM (Usual GSM authentication).
+    </ul>
+
+    <h4>Limitations</h4>
+    <ul>
+      <li>We need a way to ensure privacy & prevent replay attacks. 
+
+      <li>The MS ends up trusting the AS and the BS.  It is especially bad
+      if the AS gets compromised. (Effects of BS compromise can be
+      reduced by the use of time-based tickets.)  </ul><p>
+		  
+	<h4>Possible Extensions</h4>
+	<ul>
+
+	  <li>Some kind of higher-layer authentication request can be
+	  forwarded to the phone through the GSM network, to provide
+	  separate stackable authentication for the SG .  For instance,
+	  after connecting to the SG, the user can be required to use a
+	  special security device, such as a hardware random number
+	  generator...
+
+	</ul>
+		
+    <hr width=100>
+
+	<h3><u>2.3.3 Open Trust</u></h3>
+	
+    <center><img src="cases/case6.gif"></center>
+   
+	There is no need to protect the communication with the service
+	proxy, and the services do not require authentication of any sort.
+	Everything follows GSM authentication, and a special phone number
+	indicates service request.<p>
+
+	This approach does not require any changes beyond the BS detection
+	and forwarding of the service request. It is simple! No
+	modifications to handset, SIM, or AS.
+
+	Of course, there are lots of limitations - it's totally unsafe.
+	(i.e. after authentication, the BS can invoke services...)
+
+	<a name="gsmother">
+    <h2><u>2.4 Other (Infeasible) Cases Considered</u></h2>
+
+	While brain-storming for GSM we came upon two other possibilities
+	that we thought had merit, but are currently not feasible.  The
+	first would be to change the handling of K<sub>c</sub> so that the
+	handset-AS link would be end-to-end encrypted.  Unfortunately,
+	since all of the signaling data is encrypted using K<sub>c</sub>,
+	and since the encrypted air link is the first thing set up, the
+	base station has to know K<sub>c</sub>.
+
+	<p>
+
+	  The second option was to have a separate set of base stations
+	  for services, that would then do their own authentication and
+	  bypass the phone company completely.  The cost of infrastructure
+	  for this would clearly be majorly prohibitive, but the
+	  possibility of dual-band digital phones or perhaps having the
+	  handset and base station determine whether something is a phone
+	  call or service or types of services based on frequency seems
+	  somewhat interesting.
+
+	<p>
+    <hr>
+
+	<a name="sg">
+	<h1><u>3.0 Accessing the Service Gateway</u></h1>
+
+	The role of the service gateway is slightly ambiguous.  The
+	service gateway could be, among other things,
+
+	<ul>
+	  <li>The firewall / security checkpoint that re-authenticates or
+	  decrypts access requests going into one's home.
+
+	  <li>The authentication point for a pay-per-use service that is
+	  independent of and does not trust the phone company.  In this
+	  case, the SG may provide a ticket to the base station that
+	  allows the base station to access subscribed services on the
+	  behalf of the user for a certain time period. (Thus making the
+	  SG itself less of a bottleneck.)
+
+	  <li>The front-end for a free service (perhaps a server farm that
+	  provides search or data functionality).
+
+	  <li>The front end for a phone-company-provided service.
+
+	  <li>The actual service itself...
+
+	</ul>
+
+	Clearly, there are multiple types of re-authentication and
+	security that one would want depending on the situation.  In some
+	of the cases the user may not care whether anyone else sees the
+	requests and it doesn't matter who the user is, but in many this
+	is an important issue.  Since, from section 2, we know that we
+	need to trust the base station a great deal, the danger of a
+	compromised base station is potentially very large - it would be
+	nice to have some way of allowing the user to generate a temporary
+	session key that would become obsolete soon after the service
+	access was complete.  One notion that we had was to use a personal
+	hardware number generator such as those used for authenticating
+	logins in some companies (perhaps someday make that part of the
+	phone?)  and have the service send a challenge to the phone.
+	Unfortunately, this is not an option with the current batch of
+	phones, but the capability really isn't that far out in the future.
+
+	<a name="slider">
+	<h2><u>3.1 Different Levels of Security</u> (aka The Security
+	Access Slider)</h2>
+	
+	(Slider notion borrowed from Dave Wagner :)<p>
+
+	<center>
+	  <table cellpadding=5 border=1 cellspacing=0>
+		<tr>
+		  <td><center><h3><u>Model</u></h3></center></td>
+		  <td><center><h3><u>Basic Idea / Features</u></h3></center></td>
+		</tr>
+
+		<tr>
+		  <td><h4>1. <u>Keys/tickets (a la Charon)</u><br>
+			  <dd>Proxy-assisted Kerberos, <br>
+			  <dd>BS gets a ticket</h4></td>
+		  <td>
+			<ul>
+
+			  <li>Infeasible due to current GSM capabilities (double encryptions)
+
+			  <li>Encrypted end-to-end from handset to the Service Gateway
+			  (SG).  Handset-entered password gets a ticket, gives it
+			  to the Base Station.
+
+			  <li>Handset only trusts the BS for length of time-out period.
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><h4>2. <u>Keys/tickets (a la Kerberos)</u><br>
+			<dd>BS knows the password</h4></td>
+		  <td>
+			<ul>
+
+			  <li>The BS uses handset-entered password to get service
+			  ticket, and acts on user's behalf (BS-to-SG link encrypted)
+
+			  <li>The set of trusted base stations reduced to those in use
+				when password used, out-of-band method for changing
+				passwords allows simple (but perhaps delayed) revokation.
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><h4>3. <u>Keys and Certificates</u><br>
+			  <dd>(e.g. SSL, Public <br><dd>Key or SSH)</h4></td>
+		  <td>
+			<ul>
+
+			  <li>A central authority signs service certificates, which
+				are used to build an encrypted channel between the BS
+				and the SG. (SSL-like) [or]
+
+			  <li>The BS downloads service key once, uses that to build
+				future encrypted channels to that service, (SSH-like)
+				[or]
+
+			  <li>Public keys for all required parties (BS & SG) are
+			  known beforehand, and are used to build an encrypted
+			  channel between the BS and SG. (Public Key-like, phone
+			  company and services negotiate exchange of key lists).
+
+			  <li>The BS sees all the user actions in the open and can
+			  impersonate user indefinitely.
+
+			</ul>
+		  </td>
+		</tr>
+
+		<tr>
+		  <td><h4>4. <u>Open</u></h4></td>
+		  <td>
+			<ul>
+
+			  <li>No password, no encrypted channel, the BS forwards
+			  request in the open.
+
+			</ul>
+		  </td>
+		</tr>
+
+	  </table>
+	</center>
+
+	<p>
+
+	  The first two models are clearly more secure, since the length
+	  of time during which the base station is trusted is limited.
+	  The user must, of course, trust the service gateway with some
+	  sort of shared secret.  Eavesdroppers may be able to get a
+	  general idea of which services users are accessing, and very
+	  technology-equipped eavesdroppers may be able to figure out who
+	  is accessing which service based on the setup times and
+	  connections - an option would be to have some sort of noise
+	  traffic as well.  Finally, the phone network provider can cause
+	  denial of service.
+
+	<p>
+
+	  The third model can use several different methods to set up an
+	  encrypted channel between base stations and services, but
+	  requires greater (= complete) trust in the phone company to
+	  handle access properly and not leak secrets or access patterns.
+	  Something similar to SSL would work if there was a common
+	  trusted agency that authorized services, but it is not clear at
+	  this point that such an agency will ever exist.  Public key
+	  distribution is difficult, but if the number of phone companies
+	  and service gateways (perhaps a "service gateway portal", and
+	  some sort of hierarchical system?) is small, the exchange of key
+	  lists might be feasible.  Something like SSH might work, with a
+	  per-SG key downloaded when used the first time, but then one
+	  needs to deal with the issue of attackers intercepting the
+	  initial and subsequent communications (up until they miss
+	  one...).  The same eavesdropping and DOS attacks as in models 1
+	  and 2 apply.
+
+	<p>
+    <hr>
+
+	<a name="prototype">
+	<h1><u>4.0 Prototype Implementation</u></h1>
+
+	We began our project with grand dreams and visions of the
+	interesting services that we would soon be able to access via our
+	phones.  While the benefit of simulating in software was suggested
+	instead of implementing using the actual hardware, we thought that
+	it would be much more interesting to have a working
+	proof-of-concept.  Thus, our goal was to:
+
+	<ul>
+
+	  <li>Recognize a service request on the base station, and forward 
+		the request to the ip pad subsystem.
+
+	  <li>Set up a service gateway and several services that would
+		present a variety of different levels of trust and security.
+
+	</ul>
+
+	Our experience in building this infrastructure and dealing with
+	the complexity of the available GSM infrastructure was a bit
+	frustrating.
+
+	<p>
+
+	  In the ICEBERG setup, the base station is connected via an E1
+	  (European standard ethernet) line to two machines, the UPSIM and
+	  the IPPAD.  The base station exchanges control packets with the
+	  UPSIM, which can run programs written in a proprietary language
+	  to control the base station.  When a connection is made, the
+	  base station forwards the actual (voice) data to the IPPAD,
+	  which can then format it for other applications (for example,
+	  the IPPAD can support the RTP format for realtime vat audio.
+	  The ICEBERG group has implemented proxies that handle the timing
+	  and convert the European ethernet packets coming into the IPPAD
+	  from the base station into udp packets.).  The current ICEBERG
+	  prototype system does not provide any authentication, but that
+	  is not a problem, since all of our prototyping occurs only
+	  after the connection event itself, which the base station
+	  simulates.
+
+	<p>
+
+	  Given the limited means of indicating the desire to access a
+	  service, we decided that the logical initial step would be to
+	  use a special phone number (numeric data) to indicate a service
+	  request, since using GSM messaging and voice recognition would add too
+	  much complexity to the situation.  However, getting even the
+	  dialed phone number proved to be a significant challenge.  After
+	  spending some time trying to understand the proprietary language
+	  used to control the base station, which is very verbose and
+	  fairly low-level, we were fortunate to be able to gain access to
+	  a piece of code just completed by another ICEBERG member that
+	  allowed us to get three digits of the phone number punched into
+	  the mobile handset.  This code simplified the data streams by
+	  gathering together both the control and data streams in an
+	  intermediate java proxy, which we incorporated into our system
+	  flow.  We added another component, still considered part of the
+	  base station in our model in section 2.3, that looked at the
+	  phone number and determined the service type based on the
+	  number.  The base station service intelligence uses the service
+	  type to determine whether it should connect to a kerberos server
+	  (using the rest of the number as the password) and then connect
+	  to the service using the ticket, or just connect to a service in
+	  the open.  The secure prototype code is based on and works with
+	  kerberos 4, since that was the security set up on the cluster,
+	  but we also confirmed that it can be easily extended to kerberos
+	  5.  <b>The implementation, while simple, does work, and can be
+	  demonstrated upon request.</b>
+
+
+
+	<p>
+	<center><h3>Prototype System Diagram:</h3><br><img src="cases/iceberg.gif"></center>
+	<p>
+
+    <hr>
+	<a name="related">
+    <h1><u>5.0 Related Work/Analysis</u></h1>
+
+	The need for wireless access to fixed networks is evident, but
+	there are difficult issues in designing a secure communication
+	protocol that provides for both the confidentiality of wireless
+	data communications and authenticity of the communicating
+	parties. Besides the additional risks posed by the wireless
+	medium, the existing wireless devices usually have limited
+	capabilities and impose software/hardware constraints.
+
+	<p>
+	  It is not enough just to secure the wireless link itself, but
+	  one also needs to integrate the security model of the wireless
+	  applications seamlessly into existing wired networks. There are
+	  two likely alternatives that the research community has looked
+	  at: end-to-end security at the application layer and end-to-end
+	  security at the transport layer. However, either approach would
+	  require modifying the software base of either the fixed-node
+	  network, or the wireless infrastructure.
+
+	<p>
+	  The lack of satisfactory solutions and standard protocol stacks
+	  across heterogencous networks has gradually drawn the attention of
+	  researchers from both academia and industry, especially now that
+	  PDAs such as the Pilot have become extremely popular, and have
+	  begun to be integrated into cell phones.  The following are some
+	  of the related research efforts we came across:
+	
+	<ul>
+	  <li><A
+	  HREF="http://www.qualcomm.com/cdma/phones/portables/theq/theq.html"
+	  ><b>The Qualcomm Q CDMA digital PCS phone</b></A><br>
+
+		The Qualcomm Q<sup>TM</sup> phone provides secured connection
+		with clear digital voice quality using CDMA technology. It
+		also works as an alphanumeric pager, and provides access to
+		stock quotes, online schedules, weather and email. It is
+		claimed to provide private and secure communications, but we
+		do not have any detailed information about the security
+		infrastructure that is used.
+		<p>
+		
+      <li><A
+      HREF="http://www.cs.berkeley.edu/~fox/charon.html"><b>Charon:
+      Safer Mobile Computing by Proxy</b></A><br>
+		
+		Charon is a Kerberos-based mechanism for indirect
+		authentication and secure communications with PDA-class mobile
+		devices, proposed by Armando Fox and Steve Gribble at
+		U.C. Berkeley.<br>
+
+		Most of the computational resources needed for user
+		authentication (via Kerberos) and for the establishment of a
+		secured channel (key negotiation) are located in a proxy in
+		the wired infrastructure. Since the functionality has been
+		partitioned, the client module is extremely lightweight and
+		could be run on a PDA (the Sony Magiclink PDA is used). The
+		proxy is trusted with a temporary session ticket, but it does
+		not have access to the user password that is entered at the
+		client module. Charon's security is at least as strong as that
+		of Kerberos -- the user's password never leaves the mobile
+		device. For detailed information, please refer to <A
+		HREF="refs.html
+		#charon">[FG 96]</A>.<br>
+		<p>
+
+      <li><A
+      HREF="http://www.ericsson.com.au/Review/er1b_98/art6/art6.html"><b>Ericsson's
+      Wireless Inernet Solution-WISE<sup>TM</sup></b></A><br>
+
+		WISE<sup>TM</sup> is a new program defined by Ericsson to help
+		connect GSM to the Internet and Intranet. The goal is to
+		extend mobile users' access beyond information and
+		applications in the GSM network. The first step in the program
+		is a more direct data link from the GSM network to the
+		Internet to improve data-communication capabilities.
+
+		<p>
+
+		Ericsson uses a concept known as virtual private dial-up
+		networking (VPDN) in its intranet solution, where it secures a
+		tunnel for carrying data protocols through the public
+		network. The tunneling techniques demonstrate that secure
+		virtual private networks may be created through the
+		Internet. The tunneled data can be encrypted to provide
+		privacy and data confidentiality to users. However no
+		additional security solutions are provided. It is up to the
+		corporate organizations to implement their own security
+		mechanisms to authenticate users.
+		<p>
+
+	  <li><A
+	  HREF="http://www.ee.oulu.fi/~fiat/gprs.html"><b>GPRS</b></A><br>
+	  As mentioned earlier in <a href="#gsm">Section 2.0</a>.
+
+	</ul>
+	<p>
+    <HR>
+
+	<a name="conclusions">
+	<h1><u>6.0 Conclusion</u></h1>
+
+	In conclusion, we believe that extending the capabilities of
+	wireless clients to be able to access the Internet securely will
+	enable a vast number of useful and beneficial services to mobile
+	users.  However, our project, which ended up exploring the design
+	space more than the implementation space, indicated that both the
+	protocols as well as the basic (hardware and software)
+	capabilities in this area are still somewhat lacking (although
+	improving).  Device advances that have brought cell phones to the level
+	of PDAs promise to make secure mobile service access much more
+	feasible.  It is not clear that trying to adapt currently deployed
+	protocols and soon-to-be-outdated hardware is worthwhile when
+	technology is advancing so rapidly.  Hopefully the next generation
+	of protocols will have built-in support for services and more
+	robust security.
+
+	<p>
+	  We were not able to implement the ideal level of security that
+	  we wished for because of protocol and device limitations, but we
+	  were able to pinpoint some options that could be easily deployed
+	  to improve the existing (open) trust model.  Our implementation
+	  requires only time-limited trust in the base station while
+	  securing a channel between the base station and the services.
+
+	<p>
+
+	  <h3>Future Trends</h3>
+
+	We expect that, as the cost of handsets drops and capabilities and
+	usage increase, there will be phenomenal progress in this area.
+	It will be crucial to have a clear set of service APIs and
+	standard protocols for choosing and interacting with services.
+	One important future issue will be how to fit proxies into the
+	trust model for secure mobile services - proxies will certainly be 
+	very useful for providing device- or user-specific service
+	enhancements, but fitting them into the security picture looks like 
+	a daunting task.
+
+	<hr>
+	<p>
+
+	<a name="acks">
+	<h1><u>Acknowledgements</u></h1>
+
+	We would like to thank Bhaskar Raman for his help and especially
+	for sharing his base station control code with us!!!  It would
+	have taken us months to duplicate his work.  Sreedhar Mukkamalla
+	was helpful in answering questions about the base station as well.
+	Finally, we would like to thank Dave Wagner and Randy Katz for
+	their input and feedback...
+
+	<p>
+	<hr>
+
+	<a name="refs">
+    <H1><a href="refs.html#links">Links</a> <br> 
+	  <a href="refs.html#refs">References</a></H1>
+	
+    <P>
+      
+    <HR>
+
+    <A HREF="http://www.cs.berkeley.edu/~chuah/">Chen-Nee Chuah</A><br>
+    <A HREF="http://www-cad.eecs.berkeley.edu/~mds/">Mark D. Spiller</A>
+    
+  </BODY>
+</HTML>
+@

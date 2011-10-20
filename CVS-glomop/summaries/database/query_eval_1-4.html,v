@@ -1,0 +1,289 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.06.17.43.59;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Query evaluation techniques paper summary for sections 1-4.
+@
+text
+@<html>
+<title>
+Query Evaluation Techniques (1-4)
+</title>
+<body>
+<a href=index.html><i>Back to index</i></a>
+<h1>
+Query Evaluation Techniques for Large Databases (1-4)
+</h1>
+<strong>
+Goetz Graefe
+</strong>
+
+<P>
+<i>Summary by:  Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+An encyclopoedic survey of query evaluation techniques - sorting,
+hashing, disk access, and aggregation/duplicate removal are dealt
+with in these sections (1-4) of the paper.
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> Steps to process a query:  parsing, validation, resolution,
+	  optimization, plan compilation, execution.  This paper focuses
+	  on the last step (execution).
+
+     <li> <b>Architecture of query engines</b>:
+	  <ul>
+	       <li> Query processing algorithms iterate over members of
+		    input sets;  algorithms are algebra operators.  The
+		    <i>physical algebra</i> is the set of operators,
+		    data representations, and associated cost functions that
+		    the database execution engine supports, while the
+		    <i>logical algebra</i> is more related to the data
+		    model and expressible queries of the data model
+		    (e.g. SQL).
+
+	       <li> Synchronization and transfer between operators is key.
+		    Naive methods include creation of temporary
+		    files/buffers, or using one process per operator and
+		    use IPC.  Practical method is to implement all
+		    operators as a set of procedures (open, next, and
+		    close), and have operators schedule each other within a
+		    single process via simple function calls.  Each time an
+		    operator needs another piece of data
+		    (&quot;granule&quot;), it calls its data input
+		    operator's <i>next</i> function to produce one.  Operators
+		    structured in such a manner are called <i>iterators</i>.
+
+	       <li> Query plans are algebra expressions and can be
+		    represented as trees.  Left-deep (every right subtree
+		    is a leaf), right-deep (every left-subtree is a leaf),
+		    and bushy (arbitrary) are the three common structures.
+		    In a left-deep tree, each operator draws input from one
+		    input, and an inner loop interates over the other input.
+	  </ul>
+
+     <li> <b>Sorting</b>:
+	  <ul>
+	       <li> All sorting in &quot;real&quot; database systems use
+		    merging techniques, since very large data sets are
+		    expected.  Sorting modules' interfaces should follow
+		    the structure of iterators.
+
+	       <li> Exploit duality of quicksort and mergesort.  Sort
+		    proceeds in <i>divide</i> phase and <i>combine</i>
+		    phase.  One of the two phases is based on logical keys
+		    (indexes), the physically arranges data items (which
+		    phase is logical is particular to an algorithm).
+		    Two subalgorithms: one for sorting a run within main
+		    memory, another for managing runs on disk or tape.
+		    Degree of fan-in (number of runs merged in a given
+		    step) is a key parameter.
+
+	       <li> Quicksort and replacement-selection are the two
+		    algorithms of choice for creating the set of initial
+		    (level-0) runs.  Replacement selection fills memory in
+		    a priority
+		    heap, smallest key is written to a run and replaced
+		    from next in input;  this replacement will probably be
+		    bigger than the just written item, so we can then
+		    iterate.  If not, put mark replacement for next run
+		    file.  Quicksort has bursty I/O pattern, RS smoothly
+		    alternates between read and write operations.
+
+	       <li> Level-0 runs are merged into level-1 runs.  Buffer
+		    space must be dedicated to each input run and the merge
+		    output;  unit of I/O is a <i>cluster</i>.  Efficiency
+		    concerns are:
+		    <ol>
+			 <li> scans are faster if read-ahead/write-behind
+			      are used.
+			 <li> large cluster sizes for run files is
+			      beneficial. Determine optimal either by
+			      physical disk characteristics, or by matching
+			      processor and I/O latencies.
+			 <li> the number of runs is usually not a power of
+			      the fan-in F, and therefore some merges proceed
+			      with less than F inputs.  Optimizations can
+			      take place.
+			 <li> Some operators require multiple sorted
+			      inputs, so memory must be divided among
+			      multiple final merges;  this final fan-in and
+			      the normal fan-in of each sort should be
+			      specified separately.
+		    </ol>
+
+	  </ul>
+     <li> <B>Hashing</b>:
+	  <ul>
+	       <li> Hashing should be consider for equality matches, in
+		    general.
+	       <li> Hashing-based query processing algos use in-memory hash
+		    table of database objects;  if data in hash table is
+		    bigger than main memory (common case), then <i>hash
+		    table overflow</i> occurs.   Three techniques for
+		    overflow handling exist:
+		    <ul>
+			 <li> Avoidance:  input set is partitioned into F
+			      files before any in-memory hash table is
+			      built.  Partitions can be dealt with
+			      independently.  Partition sizes must be
+			      chosen well, or recursive partitioning will
+			      be needed.
+			      
+			 <li> Resolution: assume overflow won't occur;  if
+			      it does, partition dynamically.
+
+			 <li> Hybrid:  like resolution, but when partition,
+			      only write one partition to disk, keep the
+			      rest in memory.
+		    </ul>
+
+	       <li> Assigning hash buckets to partitions needs to be
+		    optimized so that disk accesses result in clustered
+		    buckets both physically and logically.  Three ways to
+		    assign hash buckets to partitions.  First, each time a
+		    hash overflow occurs, fixed number of hash buckets
+		    assigned to a new output partition;  i.e. fan out set
+		    a-priori.  Second (bucket tuning/dynamic destaging) a
+		    large number of small partition files is collapsed into
+		    fewer files no larger than main memory.  Third,
+		    statistics gathering before hybrid hashing commences is
+		    used.
+
+	       <li> Quality of hash function is key, so you don't end up
+		    with skewed recursive partition depths, leading to poor
+		    performance and much disk I/O.
+	  </ul>
+
+     <li> <B>Disk Access</B>:
+	  <ul>
+	       <li> File scans can be made fast with read-ahead
+		    (track-at-a-crack).  Requires contiguous file
+		    allocation, so may need to bypass OS/file system.
+	       <li> <b>Indices</b>:
+		    <ul>
+			 <li> B-trees, B+-trees, B*-trees are your
+			      friends.  So are hashing structures.  We've
+			      seen this in other papers, so I won't go into
+			      it here.
+			 <li> Leafs of indices should point to data
+			      records, not contain them, so one can
+			      separate record lookup from index scanning.
+			      Advantages:
+			      <ul>
+				   <li> it is possible to scan an index
+					without ever retrieving records,
+					i.e. if only salary values needed
+					and the index is on salary.
+				   <li> even if none of the indices is
+					sufficient by itself, multiple
+					indices can be joined to satisfy
+					query requirements.
+				   <li> if two or more indicies apply to
+					individual clauses of a query, take
+					union/intersection of two index
+					scans.
+				   <li> joining two tables can be done by
+					joining indices on the two join
+					attributes and then doing record
+					retrievals in underlying data sets.
+			      </ul>
+		    </ul>
+	       <li> <b>Buffer management</b>:
+		    <ul>
+			 <li> Cache data in I/O buffer.  LRU is wrong for
+			      many database operations.  Buffer mgmt
+			      mechanisms usually provide fix/unfix
+			      semantics on a buffer page, which iterator
+			      implementations can take advantage of when
+			      passing buffer pages amongst themselves.
+		    </ul>
+	  </ul>
+	  
+     <li><b>Aggregation/duplicate removal</b>:
+	  <ul>
+	       <li> <i>Scalar aggregate</i> calculates a single scalar
+		    value from a unary input relation, can be computed in
+		    single pass over data.  <i>Aggregate functions</i>
+		    determine set of values from a binary input relation,
+		    e.g. sum of salaries from each department
+		    (&quot;group-by&quot; semantics).
+
+	       <li> Aggregate functions require grouping;  this grouping is
+		    virtually identical to what is required in duplicate
+		    removal, so aggration and duplicate removal are treated
+		    as the same.
+
+	       <li> <b>Nested loop aggregation</b>: naive method: using
+		    temporary file to
+		    accumulate output, loop for each input item
+		    over output file, and either aggregate in the
+		    new item into appropriate output item, or
+		    append new output item to file.  Inefficient for large
+		    data sets.
+	       <li> <b>Aggregation based on sorting</b>: sorting brings
+		    items together.  Use to detect and remove duplicates or
+		    do aggregation as
+		    soon as possible;  implement in routines that create
+		    the run files.  &quot;Early aggregation&quot;.
+	       <li> <b>Aggregation based on hashing</b>: if hash function
+		    puts items of same group in same bucket (or nearby
+		    bucket), duplicate removal/aggregatation can be done
+		    when inserting into hash table.
+	       <li> Early aggregation is a big win, performance-wise, as
+		    size of run files or hash table is reduced.  Both sort
+		    and hash result in logarithmic performance based on
+		    input data set size.
+	       <li> Multilevel aggregation?  Difficult to avoid multiple
+		    joins.
+	       <li> Some applications don't require exact aggregation
+		    functions; approximations that are more efficient will
+		    do (e.g. real-time systems' trade off between precision
+		    and response time).
+	  </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+An encyclopoedic survey of techniques, with good commentary explaining
+relevance and comparing relative merits of all of the techniques.  Overall,
+an excellent paper.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> Lots of effort is spent deriving cost equations, but many
+	  assumptions are made in the derivations that may make the final
+	  equations somewhat unrealistic.  Also, are the costs worst-case,
+	  best-case, or average case in general?
+
+     <li> The paper always talks about &quot;large data sets&quot; as a
+	  motivation for some of the techniques, but exact or specific
+	  semantics of the large data sets may dictate how techniques will
+	  perform in reality - e.g. multimedia video data v.s. human genome
+	  data v.s. multi-dimensional geographic data probably all have
+	  individual optimizations that affect these techniques, but such
+	  possible optimizations are not discussed.
+</ul>
+<hr>
+<a href=index.html><i>Back to index</i></a>
+
+</body></html>
+@

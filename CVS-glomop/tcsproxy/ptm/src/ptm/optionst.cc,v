@@ -1,0 +1,154 @@
+head	1.2;
+access;
+symbols
+	Yatin-final:1.1.2.1
+	Yatin:1.1.0.2
+	pre-yatin-merge:1.1;
+locks; strict;
+comment	@// @;
+
+
+1.2
+date	98.01.16.22.16.28;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.23.21.32.57;	author tkimball;	state Exp;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.11.17.22.07.09;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include <sys/types.h>
+#include <sys/stat.h>
+#include "ptm.h"
+#include "options.h"
+
+OptionsFileTimer::OptionsFileTimer(EventSystem *evs, UINT32 beaconingPeriod_ms,
+                                   OptionDatabase *opt)
+    : gm_Timer(evs, SECONDS(beaconingPeriod_ms),
+               USECONDS(beaconingPeriod_ms)), options(opt) 
+{
+   struct stat buf;
+   if (options->Find(Opt_OptionsFile) != NULL) {
+      stat(options->Find(Opt_OptionsFile), &buf);
+      lastModified = buf.st_mtime;
+   } else {
+      lastModified = -1;
+   }
+};
+
+gm_Bool OptionsFileTimer::EvTimer(EventSystem */*evs*/)
+{ 
+  char filename[MAXPATH];
+  struct stat buf;
+  if (options->Find(Opt_OptionsFile)) {
+     stat(options->Find(Opt_OptionsFile), &buf);
+     if (lastModified != buf.st_mtime) {
+        lastModified = buf.st_mtime;
+        assert(options->Find(Opt_OptionsFile) != NULL);
+        strncpy(filename, options->Find(Opt_OptionsFile), MAXPATH);
+        gm_Log("Checking options database: " << filename << "\n");
+        options->Update(filename);
+        PTM::getInstance()->OptionsUpdate(options);
+     } 
+  }
+  return gm_True; 
+}
+
+@
+
+
+1.1
+log
+@Updating PTM with changes for the options reload every N ms
+Added field to options file of 'ptm.optionsrefresh' where the
+value of the field is how often to check the options file for modifications,
+in ms
+@
+text
+@d6 1
+a6 1
+OptionsFileTimer::OptionsFileTimer(EventSystem *evs, UINT32 beaconingPeriod_ms, 
+d20 1
+a20 1
+gm_Bool OptionsFileTimer::EvTimer(EventSystem *evs)
+@
+
+
+1.1.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d6 1
+a6 1
+OptionsFileTimer::OptionsFileTimer(EventSystem *evs, UINT32 beaconingPeriod_ms,
+d20 1
+a20 1
+gm_Bool OptionsFileTimer::EvTimer(EventSystem */*evs*/)
+@

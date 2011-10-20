@@ -1,0 +1,521 @@
+head	1.15;
+access;
+symbols
+	v15b:1.15
+	v10b3:1.15
+	v10b2:1.15
+	v10b1:1.15;
+locks; strict;
+comment	@# @;
+
+
+1.15
+date	97.09.08.00.24.27;	author lcddave;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.06.02.26.28;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.06.02.18.58;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.08.29.23.25.02;	author lcddave;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.08.29.22.58.12;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.08.29.19.53.46;	author aspolito;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.22.18.59.37;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.14.22.30.17;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.14.18.08.30;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.14.17.34.39;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.14.17.28.15;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.12.02.10.19;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.11.20.02.45;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.07.10.23.11.41;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.07.08.01.57.32;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@#!/usr/bin/perl
+
+use Socket;
+
+$PROXYHOST = "vancouver-wl.cs.berkeley.edu";
+$PROXYPORT = 4447;
+$AGENT = "Top Gun Wingman (Pilot OS/2.0)";
+
+## Set up socket
+$proto = getprotobyname('tcp');
+socket(S, PF_INET, SOCK_STREAM, $proto) or die "Cannot create socket: $!\n";
+$sin = sockaddr_in(4446, INADDR_ANY);
+setsockopt(S, SOL_SOCKET, SO_REUSEADDR, pack("l",1)) or die "setsockopt: $!\n";
+bind(S, $sin) or die "Cannot bind: $!\n";
+listen(S, 5) or die "Cannot listen: $!\n";
+
+
+## Wait for a connection
+while(1) {
+    accept(C, S) or die "accept: $!\n";
+    if (fork) {
+	close(C);
+	wait;
+    } else {
+	exit if fork;
+	close(S);
+	&handle_conn;
+	close(C);
+	exit;
+    }
+}
+
+sub handle_conn
+{
+    select(C); $| = 1; select(STDOUT); $/=0777;
+
+    while(1) {
+	## Read a 20 byte header
+	read(C, $data, 20) or last;
+	($version, $rid, $metasize, $datasize, $comp) = unpack('NNNNN', $data);
+
+	## Read the data
+	if ($metadata) {
+	    read(C, $metadata, $metasize) or last;	
+	}
+	read(C, $data, $datasize) or last;
+	$data =~ s/\0$//;
+
+	print STDERR "Received \"${data}\"\n";
+
+	if ($data =~ /^splash/) {
+	    $file = "files/$data";
+	    open(IN, $file) or open(IN, "files/notfound") or
+		die "Cannot open $file: $!\n";
+	    $content_type = 'application/x-wingman';
+	    $retcode = '200';
+	} else {
+	    while ($data !~ /^$/) {
+		my ($host);
+		my ($remote,$port, $iaddr, $paddr, $proto, $line);
+		$remote = $PROXYHOST;
+		$port = $PROXYPORT;
+		$iaddr   = inet_aton($remote) || die "no host: $remote";
+		$paddr   = sockaddr_in($port, $iaddr);
+		$proto   = getprotobyname('tcp');
+		socket(IN, PF_INET, SOCK_STREAM, $proto)  || die "socket: $!";
+		connect(IN, $paddr)    || die "connect: $!";
+		if ($data !~ /^.*:\/\//) {
+		    $data = "http://" . $data;
+		}
+		$data =~ /:\/\/([^\/]*)/;
+		$host = $1;
+		select (IN); $| = 1; select(STDOUT);
+		$magicdata = &tomagic($data, "s11=wingman");
+#		if ($data =~ /\?/) {
+#		    $magicdata = $` . "*^s11=wingman^?" . $';
+#		} else {
+#		    $magicdata = $data . "*^s11=wingman^";
+#		}
+		print IN <<EOF;
+GET ${magicdata} HTTP/1.0\r
+User-Agent: $AGENT\r
+Host: $host\r
+Accept: application/x-wingman\r
+\r
+EOF
+                ## Read silly headers
+                $/ = "\r\n";
+	        $content_type = '';
+	        $retcode = "";
+	        $content_type = "";
+	        $redirect = "";
+	        $retcode = <IN>;
+	        while(<IN>) {
+		    last if /^\s*$/;
+		    if (/^Content-type:\s*(\S+)/i) {
+			$content_type = $1;
+		    }
+		    if (/^Location:\s*(\S+)/i) {
+			$redirect = $1;
+		    }		    
+		    if (/[Ll]ength:/) {
+			unlink ("bar");
+			open (BAR, ">bar");
+			print BAR $_;
+			close BAR;
+		    }
+		}
+	        $/ = 0777;
+	        
+	        if ($retcode =~ /3\d\d/) {
+		    print STDERR "Redirecting $data to $redirect\n";
+		    $loopcheck{$data} = 1;		    
+		    if ($loopcheck{$redirect} == 1) {			
+			print STDERR "Redirect would cause loop!\n";
+			undef (%loopcheck);
+			$data = "";
+		    } else {
+			$data = $redirect;
+			close (IN);
+		    }
+		} else {
+		    undef (%loopcheck);
+		    $data = "";
+		}
+	    }
+        }   
+        $respdata = <IN>;
+	close(IN);
+	## Send the response
+	if ($retcode !~ /200/ || $content_type ne 'application/x-wingman') {
+	    ## Construct something like an error message to send back
+	    $err = <<EOERR;
+0000 0018 0000 0000 001a 000b 0001 0006
+4572 726f 7220 0000 ffda 0036 0000 000b
+009f 000b 0000 0024 596f 7520 7472 6965
+6420 746f 2064 6f77 6e6c 6f61 6420 6120
+6669 6c65 2077 6974 6820 616e 0000 ffbc
+0020 0000 0016 003e 000b 0000 000e 756e
+6b6e 6f77 6e20 7479 7065 2e20 0000 ffff
+EOERR
+	    $err =~ s/[^0-9a-f]//ig;
+	    $respdata = pack('H*', $err);
+	}
+
+	$resphead = pack('NNNNN', 0x00010001, $rid, 0, length($respdata), 0);
+	print C $resphead, $respdata;
+    }
+}
+
+sub tomagic {
+    my $src = shift;
+    my $magic =  shift;
+    my ($m, $nm);
+
+    if ($src =~ /\*\^(.*)\^(\?.*)?$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\$1/g;
+	$nm = quotemeta ($m);
+	$src =~ s/$nm/$m\^$magic/;
+    } elsif ($src =~ /\?(.*)$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\$1/g;
+	$nm = quotemeta ($m);
+	$src =~ s/\?$nm/\*\^$magic\^\?$m/; 
+    } else {
+	$src .= "*^$magic^";	
+    }
+
+    $src;
+}
+
+@
+
+
+1.14
+log
+@Globals.c points to avro 4446 now
+@
+text
+@d101 6
+@
+
+
+1.13
+log
+@version numbers added to the protocol
+@
+text
+@d5 2
+a6 2
+$PROXYHOST = "flanker.cs.berkeley.edu";
+$PROXYPORT = 2222;
+d12 1
+a12 1
+$sin = sockaddr_in(4444, INADDR_ANY);
+@
+
+
+1.12
+log
+@fixed ALT_LINK bad URL problem, now viewing original and following link on an
+image work properly when there are both a LINK and an ALT_LINK url.
+@
+text
+@d38 3
+a40 3
+	## Read a 16 byte header
+	read(C, $data, 16) or last;
+	($rid, $metasize, $datasize, $comp) = unpack('NNNN', $data);
+d140 1
+a140 1
+	$resphead = pack('NNNN', $rid, 0, length($respdata), 0);
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d5 2
+a6 2
+$PROXYHOST = "avro.cs.berkeley.edu";
+$PROXYPORT = 3333;
+@
+
+
+1.10
+log
+@fixed magic bug
+@
+text
+@d74 1
+a74 1
+		$data = &tomagic($data, "s11=wingman");
+@
+
+
+1.9
+log
+@Fixed magicifying URLs with ?
+@
+text
+@d74 6
+a79 5
+		if ($data =~ /\?/) {
+		    $magicdata = $` . "*^s11=wingman^?" . $';
+		} else {
+		    $magicdata = $data . "*^s11=wingman^";
+		}
+d145 21
+@
+
+
+1.8
+log
+@redirects work now
+@
+text
+@d74 5
+d80 1
+a80 1
+GET ${data}*^s11=wingman^ HTTP/1.0\r
+@
+
+
+1.7
+log
+@.
+@
+text
+@d58 1
+a58 6
+	    if (0) {
+		system("cd ../tcsproxy/perl_dir/; perl harness transend.text.piml $data");
+		$file = "../tcsproxy/perl_dir/tSTR07cf.bin";
+		open(IN, $file) or open(IN, "files/notfound") or
+		    die "Cannot open $file: $!\n";
+	    } else {
+d63 1
+a63 2
+		$iaddr   = inet_aton($remote)               || die "no host: $remote"
+;
+d81 8
+a88 5
+		## Read silly headers
+		$/ = "\r\n";
+		$content_type = '';
+		$retcode = <IN>;
+		while(<IN>) {
+d93 20
+a113 1
+		$/ = 0777;
+d115 2
+a116 3
+	}
+
+	$respdata = <IN>;
+a117 1
+
+d138 2
+@
+
+
+1.6
+log
+@.
+@
+text
+@d47 1
+a47 1
+	chop $data;  ## $data was nul-terminated
+d56 1
+d90 1
+d105 1
+a105 1
+	if ($content_type ne 'application/x-wingman') {
+d116 1
+a116 1
+	    $err =~ s/[0-9a-f]//ig;
+@
+
+
+1.5
+log
+@o linked images work
+o better handling of unknown MIME types
+@
+text
+@d55 2
+a56 3
+	}
+
+	else {
+d114 1
+a114 1
+	    $err =~ s/^[0-9a-f]//ig;
+@
+
+
+1.4
+log
+@better...
+@
+text
+@d84 1
+d89 1
+a90 1
+		    print STDERR "-->$_";
+d92 3
+a100 1
+	print STDERR "** ",length($respdata),"\n";
+d104 15
+@
+
+
+1.3
+log
+@fakeserver
+@
+text
+@d47 1
+d81 4
+a84 3
+GET ${data}*^s11=wingman^ HTTP/1.0
+User-Agent: $AGENT
+Host: $host
+a85 1
+		
+d87 1
+d89 2
+a90 1
+		    last if /^$/;
+d92 1
+d97 1
+@
+
+
+1.2
+log
+@FIXED OBNIXOUS HANDLE BUGS THAT WERE KILLING THE PILOT.
+@
+text
+@d7 1
+a7 1
+$AGENT = "Wingman (Pilot OS/2.0)";
+d57 1
+a57 1
+	    if (1) {
+d80 1
+a80 1
+GET $data HTTP/1.0
+d84 5
+a99 1
+
+@
+
+
+1.1
+log
+@use database memory to stroe pages
+@
+text
+@d5 4
+d17 1
+d51 3
+a53 1
+	    $data = "http://www";
+d56 30
+a85 5
+#	## Find the right response
+#	$data =~ s/[^\w\.-]//g;
+#	$file = "files/${data}";
+	
+	system("cd ../tcsproxy/perl_dir/; perl t1 $data\n");
+a86 4
+	$file = "../tcsproxy/perl_dir/tSTR07cf.bin";
+
+	open(IN, $file) or open(IN, "files/notfound") or
+	    die "Cannot open $file: $!\n";
+d95 1
+@

@@ -1,0 +1,733 @@
+/**** 
+** This file implements the functions necessary to create a memory based
+** source and destination manager for the JPEG library.  This will let the
+** JPEG library read data from memory instead of a FILE *.
+**
+** Steve Gribble, Jan 25/1997
+**
+** $Id: gj_mem_src_dst_mgr.c,v 1.7 1997/04/30 07:55:21 fox Exp $
+****/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <limits.h>
+#include "jpeglib.h"
+#include "gifjpg_munge.h"
+#include "gj_mem_src_dst_mgr.h"
+
+#include "cderror.h"
+
+/**** Data destination object for memory output ****/
+
+void mem_init_destination(j_compress_ptr cinfo)
+{
+  mem_dest_ptr dest = (mem_dest_ptr) cinfo->dest;
+
+  dest->copybuf = (JOCTET *)
+    (*cinfo->mem->alloc_small) ((j_common_ptr) cinfo, JPOOL_IMAGE,
+			        COPYBUF_BLOCK_SIZE * SIZEOF(JOCTET));
+  dest->pub.next_output_byte = dest->copybuf;
+  dest->pub.free_in_buffer = COPYBUF_BLOCK_SIZE;
+}
+
+boolean mem_empty_output_buffer(j_compress_ptr cinfo)
+{
+  mem_dest_ptr dest = (mem_dest_ptr) cinfo->dest;
+  JOCTET      *ptr;
+
+  /* First we must see if we need to realloc */
+  if ( ( (INT32) (dest->bufsize) - dest->offset) < 
+       (INT32) COPYBUF_BLOCK_SIZE) {
+    JOCTET *tmp;
+
+    tmp = realloc((void * ) *(dest->origbuf),
+		  ((INT32) (dest->bufsize) + 
+		   (INT32) ORIGBUF_REALLOC_BLOCK_SIZE) *
+		  SIZEOF(JOCTET));
+    if (tmp == NULL) {
+      fprintf(stderr, "Out of memory in mem_empty_output_buffer\n");
+      ERREXIT1(cinfo, JERR_OUT_OF_MEMORY, 0);
+    }
+    *(dest->origbuf) = tmp;
+    (dest->bufsize) += (UINT32) ORIGBUF_REALLOC_BLOCK_SIZE;
+  }
+  ptr = *(dest->origbuf) + dest->offset;
+  memcpy((void *) ptr, (void *) dest->copybuf, COPYBUF_BLOCK_SIZE);
+  dest->offset += COPYBUF_BLOCK_SIZE;
+
+  dest->pub.next_output_byte = dest->copybuf;
+  dest->pub.free_in_buffer = COPYBUF_BLOCK_SIZE;
+  return TRUE;
+}
+
+void mem_term_destination(j_compress_ptr cinfo)
+{
+  mem_dest_ptr dest = (mem_dest_ptr) cinfo->dest;
+  size_t datacount = COPYBUF_BLOCK_SIZE - dest->pub.free_in_buffer;
+  JOCTET      *ptr;
+
+  if (datacount > 0) {
+    if ( ( (INT32) (dest->bufsize) - dest->offset) < (INT32) datacount) {
+      JOCTET *tmp;
+
+      tmp = realloc((void * ) *(dest->origbuf),
+		    ((INT32) (dest->bufsize) + (INT32) COPYBUF_BLOCK_SIZE) *
+		    SIZEOF(JOCTET));
+      if (tmp == NULL) {
+	fprintf(stderr, "Out of memory in mem_term_destination\n");
+	ERREXIT1(cinfo, JERR_OUT_OF_MEMORY, 1);
+      }
+      *(dest->origbuf) = tmp;
+      (dest->bufsize) += (UINT32) COPYBUF_BLOCK_SIZE;
+    }
+    ptr = *(dest->origbuf) + dest->offset;
+    memcpy((void *) ptr, (void *) dest->copybuf, datacount);
+    dest->offset += datacount;
+  }
+  *(dest->size) = (UINT32) dest->offset;
+}
+
+void jpeg_mem_dest(j_compress_ptr cinfo, void **buf, UINT32 *size)
+{
+  mem_dest_ptr dest;
+
+  if (cinfo->dest == NULL) {   /* first time for this JPEG object */
+    cinfo->dest = (struct jpeg_destination_mgr *)
+      (*cinfo->mem->alloc_small)((j_common_ptr) cinfo, JPOOL_PERMANENT,
+				 SIZEOF(mem_destination_mgr));
+  }
+  dest = (mem_dest_ptr) cinfo->dest;
+  dest->origbuf = (JOCTET **) buf;
+  dest->bufsize = (UINT32) *size;
+  dest->size = (UINT32 *) size;
+  dest->offset = (INT32) 0;
+  dest->pub.init_destination = mem_init_destination;
+  dest->pub.empty_output_buffer = mem_empty_output_buffer;
+  dest->pub.term_destination = mem_term_destination;
+}
+
+
+/**** Data source object for memory input ****/
+
+void mem_init_source(j_decompress_ptr cinfo)
+{
+  mem_src_ptr src = (mem_src_ptr) cinfo->src;
+
+  src->offset = 0;
+}
+
+boolean mem_fill_input_buffer(j_decompress_ptr cinfo)
+{
+  /* This is called whenever the buffer is emptied.  It should never
+     really be called, since we've provided ALL of the data up front. */
+  ERREXIT(cinfo, JERR_INPUT_EOF);
+  return TRUE;
+}
+
+void mem_skip_input_data(j_decompress_ptr cinfo, long num_bytes)
+{
+  mem_src_ptr src = (mem_src_ptr) cinfo->src;
+
+  src->offset+=num_bytes;
+  src->pub.bytes_in_buffer -= (size_t) num_bytes;
+  src->pub.next_input_byte += (size_t) num_bytes;
+}
+
+void mem_term_source(j_decompress_ptr cinfo)
+{
+  /* do nothing here */
+}
+
+void jpeg_mem_src(j_decompress_ptr cinfo, void *buf, UINT32 size)
+{
+  mem_src_ptr src;
+
+  if (cinfo->src == NULL) {   /* first time for this JPEG object */
+    cinfo->src = (struct jpeg_source_mgr *)
+      (*cinfo->mem->alloc_small)((j_common_ptr) cinfo, JPOOL_PERMANENT,
+				 SIZEOF(mem_source_mgr));
+  }
+  src = (mem_src_ptr) cinfo->src;
+  src->srcbuf = (JOCTET *) buf;
+  src->size = (INT32) size;
+  src->offset = (INT32) 0;
+  src->pub.init_source = mem_init_source;
+  src->pub.fill_input_buffer = mem_fill_input_buffer;
+  src->pub.skip_input_data = mem_skip_input_data;
+  src->pub.resync_to_restart = jpeg_resync_to_restart;  /* default */
+  src->pub.term_source = mem_term_source;
+  src->pub.bytes_in_buffer = size;
+  src->pub.next_input_byte = (JOCTET *) buf;
+}
+
+/*
+ * rdgif.c
+ *
+ * Copyright (C) 1991-1996, Thomas G. Lane.
+ * This file is part of the Independent JPEG Group's software.
+ * For conditions of distribution and use, see the accompanying README file.
+ * This file contains routines to read input images in GIF format.
+ * These routines may need modification for non-Unix environments or
+ * specialized applications.  They have been modified to accept
+ * input from a memory buffer.
+ */
+
+/*
+ * This code is loosely based on giftoppm from the PBMPLUS distribution
+ * of Feb. 1991.  That file contains the following copyright notice:
+ * +-------------------------------------------------------------------+
+ * | Copyright 1990, David Koblas.                                     |
+ * |   Permission to use, copy, modify, and distribute this software   |
+ * |   and its documentation for any purpose and without fee is hereby |
+ * |   granted, provided that the above copyright notice appear in all |
+ * |   copies and that both that copyright notice and this permission  |
+ * |   notice appear in supporting documentation.  This software is    |
+ * |   provided "as is" without express or implied warranty.           |
+ * +-------------------------------------------------------------------+
+ *
+ * We are also required to state that
+ *    "The Graphics Interchange Format(c) is the Copyright property of
+ *    CompuServe Incorporated. GIF(sm) is a Service Mark property of
+ *    CompuServe Incorporated."
+ */
+
+#include "cdjpeg.h"		/* Common decls for cjpeg/djpeg applications */
+
+int ReadByte (gif_source_ptr sinfo)
+/* Read next byte from GIF file */
+{
+  JOCTET *inptr = (sinfo->pub).srcbuf + (long int) (sinfo->pub).offset;
+  int c;
+
+  c = (int) (*inptr);
+  (sinfo->pub).offset += 1;
+  return c;
+}
+
+
+int GetDataBlock (gif_source_ptr sinfo, char *buf)
+/* Read a GIF data block, which has a leading count byte */
+/* A zero-length block marks the end of a data block sequence */
+{
+  int count;
+
+  count = ReadByte(sinfo);
+  if (count > 0) {
+    if (! ReadOK(sinfo, buf, count))
+      ERREXIT(sinfo->cinfo, JERR_INPUT_EOF);
+  }
+  return count;
+}
+
+
+void SkipDataBlocks (gif_source_ptr sinfo)
+/* Skip a series of data blocks, until a block terminator is found */
+{
+  char buf[256];
+
+  while (GetDataBlock(sinfo, buf) > 0)
+    /* skip */;
+}
+
+
+void ReInitLZW (gif_source_ptr sinfo)
+/* (Re)initialize LZW state; shared code for startup and Clear processing */
+{
+  sinfo->code_size = sinfo->input_code_size + 1;
+  sinfo->limit_code = sinfo->clear_code << 1;	/* 2^code_size */
+  sinfo->max_code = sinfo->clear_code + 2;	/* first unused code value */
+  sinfo->sp = sinfo->symbol_stack;		/* init stack to empty */
+}
+
+void InitLZWCode (gif_source_ptr sinfo)
+/* Initialize for a series of LZWReadByte (and hence GetCode) calls */
+{
+  /* GetCode initialization */
+  sinfo->last_byte = 2;		/* make safe to "recopy last two bytes" */
+  sinfo->last_bit = 0;		/* nothing in the buffer */
+  sinfo->cur_bit = 0;		/* force buffer load on first call */
+  sinfo->out_of_blocks = FALSE;
+
+  /* LZWReadByte initialization: */
+  /* compute special code values (note that these do not change later) */
+  sinfo->clear_code = 1 << sinfo->input_code_size;
+  sinfo->end_code = sinfo->clear_code + 1;
+  sinfo->first_time = TRUE;
+  ReInitLZW(sinfo);
+}
+
+int GetCode (gif_source_ptr sinfo)
+/* Fetch the next code_size bits from the GIF data */
+/* We assume code_size is less than 16 */
+{
+  register INT32 accum;
+  int offs, ret, count;
+
+  while ( (sinfo->cur_bit + sinfo->code_size) > sinfo->last_bit) {
+    /* Time to reload the buffer */
+    if (sinfo->out_of_blocks) {
+      WARNMS(sinfo->cinfo, JWRN2_GIF_NOMOREDATA);
+      return sinfo->end_code;	/* fake something useful */
+    }
+    /* preserve last two bytes of what we have -- assume code_size <= 16 */
+    sinfo->code_buf[0] = sinfo->code_buf[sinfo->last_byte-2];
+    sinfo->code_buf[1] = sinfo->code_buf[sinfo->last_byte-1];
+    /* Load more bytes; set flag if we reach the terminator block */
+    if ((count = GetDataBlock(sinfo, &sinfo->code_buf[2])) == 0) {
+      sinfo->out_of_blocks = TRUE;
+      WARNMS(sinfo->cinfo, JWRN2_GIF_NOMOREDATA);
+      return sinfo->end_code;	/* fake something useful */
+    }
+    /* Reset counters */
+    sinfo->cur_bit = (sinfo->cur_bit - sinfo->last_bit) + 16;
+    sinfo->last_byte = 2 + count;
+    sinfo->last_bit = sinfo->last_byte * 8;
+  }
+
+  /* Form up next 24 bits in accum */
+  offs = sinfo->cur_bit >> 3;	/* byte containing cur_bit */
+#ifdef CHAR_IS_UNSIGNED
+  accum = sinfo->code_buf[offs+2];
+  accum <<= 8;
+  accum |= sinfo->code_buf[offs+1];
+  accum <<= 8;
+  accum |= sinfo->code_buf[offs];
+#else
+  accum = sinfo->code_buf[offs+2] & 0xFF;
+  accum <<= 8;
+  accum |= sinfo->code_buf[offs+1] & 0xFF;
+  accum <<= 8;
+  accum |= sinfo->code_buf[offs] & 0xFF;
+#endif
+
+  /* Right-align cur_bit in accum, then mask off desired number of bits */
+  accum >>= (sinfo->cur_bit & 7);
+  ret = ((int) accum) & ((1 << sinfo->code_size) - 1);
+  
+  sinfo->cur_bit += sinfo->code_size;
+  return ret;
+}
+
+
+int LZWReadByte (gif_source_ptr sinfo)
+/* Read an LZW-compressed byte */
+{
+  register int code;		/* current working code */
+  int incode;			/* saves actual input code */
+
+  /* First time, just eat the expected Clear code(s) and return next code, */
+  /* which is expected to be a raw byte. */
+  if (sinfo->first_time) {
+    sinfo->first_time = FALSE;
+    code = sinfo->clear_code;	/* enables sharing code with Clear case */
+  } else {
+
+    /* If any codes are stacked from a previously read symbol, return them */
+    if (sinfo->sp > sinfo->symbol_stack)
+      return (int) *(-- sinfo->sp);
+
+    /* Time to read a new symbol */
+    code = GetCode(sinfo);
+
+  }
+
+  if (code == sinfo->clear_code) {
+    /* Reinit state, swallow any extra Clear codes, and */
+    /* return next code, which is expected to be a raw byte. */
+    ReInitLZW(sinfo);
+    do {
+      code = GetCode(sinfo);
+    } while (code == sinfo->clear_code);
+    if (code > sinfo->clear_code) { /* make sure it is a raw byte */
+      WARNMS(sinfo->cinfo, JWRN2_GIF_BADDATA);
+      code = 0;			/* use something valid */
+    }
+    /* make firstcode, oldcode valid! */
+    sinfo->firstcode = sinfo->oldcode = code;
+    return code;
+  }
+
+  if (code == sinfo->end_code) {
+    /* Skip the rest of the image, unless GetCode already read terminator */
+    if (! sinfo->out_of_blocks) {
+      SkipDataBlocks(sinfo);
+      sinfo->out_of_blocks = TRUE;
+    }
+    /* Complain that there's not enough data */
+    WARNMS(sinfo->cinfo, JWRN2_GIF_ENDCODE);
+    /* Pad data with 0's */
+    return 0;			/* fake something usable */
+  }
+
+  /* Got normal raw byte or LZW symbol */
+  incode = code;		/* save for a moment */
+  
+  if (code >= sinfo->max_code) { /* special case for not-yet-defined symbol */
+    /* code == max_code is OK; anything bigger is bad data */
+    if (code > sinfo->max_code) {
+      WARNMS(sinfo->cinfo, JWRN2_GIF_BADDATA);
+      incode = 0;		/* prevent creation of loops in symbol table */
+    }
+    /* this symbol will be defined as oldcode/firstcode */
+    *(sinfo->sp++) = (UINT8) sinfo->firstcode;
+    code = sinfo->oldcode;
+  }
+
+  /* If it's a symbol, expand it into the stack */
+  while (code >= sinfo->clear_code) {
+    *(sinfo->sp++) = sinfo->symbol_tail[code]; /* tail is a byte value */
+    code = sinfo->symbol_head[code]; /* head is another LZW symbol */
+  }
+  /* At this point code just represents a raw byte */
+  sinfo->firstcode = code;	/* save for possible future use */
+
+  /* If there's room in table, */
+  if ((code = sinfo->max_code) < LZW_TABLE_SIZE) {
+    /* Define a new symbol = prev sym + head of this sym's expansion */
+    sinfo->symbol_head[code] = sinfo->oldcode;
+    sinfo->symbol_tail[code] = (UINT8) sinfo->firstcode;
+    sinfo->max_code++;
+    /* Is it time to increase code_size? */
+    if ((sinfo->max_code >= sinfo->limit_code) &&
+	(sinfo->code_size < MAX_LZW_BITS)) {
+      sinfo->code_size++;
+      sinfo->limit_code <<= 1;	/* keep equal to 2^code_size */
+    }
+  }
+  
+  sinfo->oldcode = incode;	/* save last input symbol for future use */
+  return sinfo->firstcode;	/* return first byte of symbol's expansion */
+}
+
+void ReadColorMap (gif_source_ptr sinfo, int cmaplen, JSAMPARRAY cmap)
+/* Read a GIF colormap */
+{
+  int i;
+
+  for (i = 0; i < cmaplen; i++) {
+#if BITS_IN_JSAMPLE == 8
+#define UPSCALE(x)  (x)
+#else
+#define UPSCALE(x)  ((x) << (BITS_IN_JSAMPLE-8))
+#endif
+    cmap[CM_RED][i]   = (JSAMPLE) UPSCALE(ReadByte(sinfo));
+    cmap[CM_GREEN][i] = (JSAMPLE) UPSCALE(ReadByte(sinfo));
+    cmap[CM_BLUE][i]  = (JSAMPLE) UPSCALE(ReadByte(sinfo));
+  }
+}
+
+void DoExtension (gif_source_ptr sinfo)
+/* Process an extension block */
+/* Currently we ignore 'em all (!!!XXX!!! - SG '97) */
+{
+  int extlabel;
+  
+  /* Read extension label byte */
+  extlabel = ReadByte(sinfo);
+  /* if transparent (or animated?), and below threshold size, bail out now and
+     allow frontend to bypass.  */
+  if (extlabel == 0xf9) {
+    extern int bailout_now;
+    bailout_now = 1;            /* flag will be read later by caller */
+  }
+  TRACEMS1(sinfo->cinfo, 1, JTRC2_GIF_EXTENSION, extlabel);
+  /* Skip the data block(s) associated with the extension */
+  SkipDataBlocks(sinfo);
+}
+
+/*
+ * Read the GIF header; return image size and component count.
+ */
+
+void start_input_gif (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  gif_source_ptr source = (gif_source_ptr) sinfo;
+  char hdrbuf[10];		/* workspace for reading control blocks */
+  unsigned int width, height;	/* image dimensions */
+  int colormaplen, aspectRatio;
+  int c;
+
+  /* Allocate space to store the colormap */
+  source->colormap = (*cinfo->mem->alloc_sarray)
+    ((j_common_ptr) cinfo, JPOOL_IMAGE,
+     (JDIMENSION) MAXCOLORMAPSIZE, (JDIMENSION) NUMCOLORS);
+
+  /* Read and verify GIF Header */
+  if (! ReadOK(source, hdrbuf, 6))
+    ERREXIT(cinfo, JERR2_GIF_NOT);
+  if (hdrbuf[0] != 'G' || hdrbuf[1] != 'I' || hdrbuf[2] != 'F')
+    ERREXIT(cinfo, JERR2_GIF_NOT);
+  /* Check for expected version numbers.
+   * If unknown version, give warning and try to process anyway;
+   * this is per recommendation in GIF89a standard.
+   */
+  if ((hdrbuf[3] != '8' || hdrbuf[4] != '7' || hdrbuf[5] != 'a') &&
+      (hdrbuf[3] != '8' || hdrbuf[4] != '9' || hdrbuf[5] != 'a'))
+    TRACEMS3(cinfo, 1, JTRC2_GIF_BADVERSION, hdrbuf[3], hdrbuf[4], hdrbuf[5]);
+
+  /* Read and decipher Logical Screen Descriptor */
+  if (! ReadOK(source, hdrbuf, 7))
+    ERREXIT(cinfo, JERR_INPUT_EOF);
+  width = LM_to_uint(hdrbuf[0],hdrbuf[1]);
+  height = LM_to_uint(hdrbuf[2],hdrbuf[3]);
+  colormaplen = 2 << (hdrbuf[4] & 0x07);
+  /* we ignore the color resolution, sort flag, and background color index */
+  aspectRatio = hdrbuf[6] & 0xFF;
+  if (aspectRatio != 0 && aspectRatio != 49)
+    TRACEMS(cinfo, 1, JTRC2_GIF_NONSQUARE);
+
+  /* Read global colormap if header indicates it is present */
+  if (BitSet(hdrbuf[4], COLORMAPFLAG))
+    ReadColorMap(source, colormaplen, source->colormap);
+
+  /* Scan until we reach start of desired image.
+   * We don't currently support skipping images, but could add it easily.
+   */
+  for (;;) {
+    c = ReadByte(source);
+
+    if (c == ';')		/* GIF terminator?? */
+      ERREXIT(cinfo, JERR2_GIF_IMAGENOTFOUND);
+
+    if (c == '!') {		/* Extension */
+      DoExtension(source);
+      continue;
+    }
+    
+    if (c != ',') {		/* Not an image separator? */
+      WARNMS1(cinfo, JWRN2_GIF_CHAR, c);
+      continue;
+    }
+
+    /* Read and decipher Local Image Descriptor */
+    if (! ReadOK(source, hdrbuf, 9))
+      ERREXIT(cinfo, JERR_INPUT_EOF);
+    /* we ignore top/left position info, also sort flag */
+    width = LM_to_uint(hdrbuf[4],hdrbuf[5]);
+    height = LM_to_uint(hdrbuf[6],hdrbuf[7]);
+    source->is_interlaced = BitSet(hdrbuf[8], INTERLACE);
+
+    /* Read local colormap if header indicates it is present */
+    /* Note: if we wanted to support skipping images, */
+    /* we'd need to skip rather than read colormap for ignored images */
+    if (BitSet(hdrbuf[8], COLORMAPFLAG)) {
+      colormaplen = 2 << (hdrbuf[8] & 0x07);
+      ReadColorMap(source, colormaplen, source->colormap);
+    }
+
+    source->input_code_size = ReadByte(source); /* get min-code-size byte */
+    if (source->input_code_size < 2 || source->input_code_size >= MAX_LZW_BITS)
+      ERREXIT1(cinfo, JERR2_GIF_CODESIZE, source->input_code_size);
+
+    /* Reached desired image, so break out of loop */
+    /* If we wanted to skip this image, */
+    /* we'd call SkipDataBlocks and then continue the loop */
+    break;
+  }
+
+  /* Prepare to read selected image: first initialize LZW decompressor */
+  source->symbol_head = (UINT16 FAR *)
+    (*cinfo->mem->alloc_large) ((j_common_ptr) cinfo, JPOOL_IMAGE,
+				LZW_TABLE_SIZE * SIZEOF(UINT16));
+  source->symbol_tail = (UINT8 FAR *)
+    (*cinfo->mem->alloc_large) ((j_common_ptr) cinfo, JPOOL_IMAGE,
+				LZW_TABLE_SIZE * SIZEOF(UINT8));
+  source->symbol_stack = (UINT8 FAR *)
+    (*cinfo->mem->alloc_large) ((j_common_ptr) cinfo, JPOOL_IMAGE,
+				LZW_TABLE_SIZE * SIZEOF(UINT8));
+  InitLZWCode(source);
+
+  /*
+   * If image is interlaced, we read it into a full-size sample array,
+   * decompressing as we go; then get_interlaced_row selects rows from the
+   * sample array in the proper order.
+   */
+  if (source->is_interlaced) {
+    /* We request the virtual array now, but can't access it until virtual
+     * arrays have been allocated.  Hence, the actual work of reading the
+     * image is postponed until the first call to get_pixel_rows.
+     */
+    source->interlaced_image = (*cinfo->mem->request_virt_sarray)
+      ((j_common_ptr) cinfo, JPOOL_IMAGE, FALSE,
+       (JDIMENSION) width, (JDIMENSION) height, (JDIMENSION) 1);
+    source->pub.get_pixel_rows = load_interlaced_image;
+  } else {
+    source->pub.get_pixel_rows = get_pixel_rows;
+  }
+
+  /* Create compressor input buffer. */
+  source->pub.buffer = (*cinfo->mem->alloc_sarray)
+    ((j_common_ptr) cinfo, JPOOL_IMAGE,
+     (JDIMENSION) width * NUMCOLORS, (JDIMENSION) 1);
+  source->pub.buffer_height = 1;
+
+  /* Return info about the image. */
+  cinfo->in_color_space = JCS_RGB;
+  cinfo->input_components = NUMCOLORS;
+  cinfo->data_precision = BITS_IN_JSAMPLE; /* we always rescale data to this */
+  cinfo->image_width = width;
+  cinfo->image_height = height;
+
+  TRACEMS3(cinfo, 1, JTRC2_GIF, width, height, colormaplen);
+}
+
+
+/*
+ * Read one row of pixels.
+ * This version is used for noninterlaced GIF images:
+ * we read directly from the GIF file.
+ */
+
+JDIMENSION get_pixel_rows (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  gif_source_ptr source = (gif_source_ptr) sinfo;
+  register int c;
+  register JSAMPROW ptr;
+  register JDIMENSION col;
+  register JSAMPARRAY colormap = source->colormap;
+  
+  ptr = source->pub.buffer[0];
+  for (col = cinfo->image_width; col > 0; col--) {
+    c = LZWReadByte(source);
+    *ptr++ = colormap[CM_RED][c];
+    *ptr++ = colormap[CM_GREEN][c];
+    *ptr++ = colormap[CM_BLUE][c];
+  }
+  return 1;
+}
+
+
+/*
+ * Read one row of pixels.
+ * This version is used for the first call on get_pixel_rows when
+ * reading an interlaced GIF file: we read the whole image into memory.
+ */
+
+JDIMENSION load_interlaced_image (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  gif_source_ptr source = (gif_source_ptr) sinfo;
+  JSAMPARRAY image_ptr;
+  register JSAMPROW sptr;
+  register JDIMENSION col;
+  JDIMENSION row;
+
+  /* Read the interlaced image into the virtual array we've created. */
+  for (row = 0; row < cinfo->image_height; row++) {
+    image_ptr = (*cinfo->mem->access_virt_sarray)
+      ((j_common_ptr) cinfo, source->interlaced_image,
+       row, (JDIMENSION) 1, TRUE);
+    sptr = image_ptr[0];
+    for (col = cinfo->image_width; col > 0; col--) {
+      *sptr++ = (JSAMPLE) LZWReadByte(source);
+    }
+  }
+
+  /* Replace method pointer so subsequent calls don't come here. */
+  source->pub.get_pixel_rows = get_interlaced_row;
+  /* Initialize for get_interlaced_row, and perform first call on it. */
+  source->cur_row_number = 0;
+  source->pass2_offset = (cinfo->image_height + 7) / 8;
+  source->pass3_offset = source->pass2_offset + (cinfo->image_height + 3) / 8;
+  source->pass4_offset = source->pass3_offset + (cinfo->image_height + 1) / 4;
+
+  return get_interlaced_row(cinfo, sinfo);
+}
+
+
+/*
+ * Read one row of pixels.
+ * This version is used for interlaced GIF images:
+ * we read from the virtual array.
+ */
+
+JDIMENSION get_interlaced_row (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  gif_source_ptr source = (gif_source_ptr) sinfo;
+  JSAMPARRAY image_ptr;
+  register int c;
+  register JSAMPROW sptr, ptr;
+  register JDIMENSION col;
+  register JSAMPARRAY colormap = source->colormap;
+  JDIMENSION irow;
+
+  /* Figure out which row of interlaced image is needed, and access it. */
+  switch ((int) (source->cur_row_number & 7)) {
+  case 0:			/* first-pass row */
+    irow = source->cur_row_number >> 3;
+    break;
+  case 4:			/* second-pass row */
+    irow = (source->cur_row_number >> 3) + source->pass2_offset;
+    break;
+  case 2:			/* third-pass row */
+  case 6:
+    irow = (source->cur_row_number >> 2) + source->pass3_offset;
+    break;
+  default:			/* fourth-pass row */
+    irow = (source->cur_row_number >> 1) + source->pass4_offset;
+    break;
+  }
+  image_ptr = (*cinfo->mem->access_virt_sarray)
+    ((j_common_ptr) cinfo, source->interlaced_image,
+     irow, (JDIMENSION) 1, FALSE);
+  /* Scan the row, expand colormap, and output */
+  sptr = image_ptr[0];
+  ptr = source->pub.buffer[0];
+  for (col = cinfo->image_width; col > 0; col--) {
+    c = GETJSAMPLE(*sptr++);
+    *ptr++ = colormap[CM_RED][c];
+    *ptr++ = colormap[CM_GREEN][c];
+    *ptr++ = colormap[CM_BLUE][c];
+  }
+  source->cur_row_number++;	/* for next time */
+  return 1;
+}
+
+
+/*
+ * Finish up at the end of the file.
+ */
+
+void finish_input_gif (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  /* no work */
+}
+
+
+/*
+ * The module selection routine for GIF format input.
+ */
+
+cjpeg_source_ptr jinit_read_gif (j_compress_ptr cinfo, JOCTET *srcbuf, 
+				 INT32 size)
+{
+  gif_source_ptr source;
+
+  /* Create module interface object */
+  source = (gif_source_ptr)
+      (*cinfo->mem->alloc_small) ((j_common_ptr) cinfo, JPOOL_IMAGE,
+				  SIZEOF(gif_source_struct));
+  source->cinfo = cinfo;	/* make back link for subroutines */
+  /* Fill in method ptrs, except get_pixel_rows which start_input sets */
+  source->pub.start_input = start_input_gif;
+  source->pub.finish_input = finish_input_gif;
+  source->pub.srcbuf = srcbuf;
+  source->pub.size = size;
+  source->pub.offset = 0;
+
+  return (cjpeg_source_ptr) source;
+}
+
+int ReadOK(gif_source_ptr sinfo, char *buf, int count)
+{
+  JOCTET *srcptr;
+
+  if (count + (sinfo->pub).offset > (sinfo->pub).size)
+    return 0;
+
+  srcptr = (sinfo->pub).srcbuf + (sinfo->pub).offset;
+  memcpy(buf, srcptr, count);
+  (sinfo->pub).offset += count;
+  return 1;
+}
+

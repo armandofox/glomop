@@ -1,0 +1,988 @@
+head	1.22;
+access;
+symbols
+	Yatin-final:1.22
+	Yatin:1.22.0.2
+	pre-yatin-merge:1.22
+	transend-beta2:1.21
+	fox-dev:1.21
+	jpg_munge-ng:1.19
+	transend-beta-latest:1.19
+	Aggregators:1.19
+	NoAggregators:1.19
+	iang:1.19.0.2
+	transend-beta:1.18.0.2
+	SOSP:1.10;
+locks; strict;
+comment	@ * @;
+
+
+1.22
+date	97.08.30.21.34.39;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.06.19.00.27.09;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.06.14.15.30.46;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.04.30.07.55.26;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.04.16.01.18.44;	author gribble;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.04.11.05.06.41;	author gribble;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.04.11.03.27.24;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.04.08.02.46.57;	author gribble;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.04.06.23.27.44;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.04.06.23.21.07;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.04.06.23.03.31;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.03.17.20.22.18;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.26.04.14.41;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.15.22.14.48;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.14.22.29.54;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.14.20.58.59;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.07.22.35.14;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.29.09.10.34;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.01.28.01.56.35;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.01.26.01.27.57;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.24.01.42.58;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.23.23.11.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.22
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  jpg_munge.c
+ *
+ *  $Id: jpg_munge.c,v 1.21 1997/06/19 00:27:09 fox Exp $
+ *
+ *  This code acts as a JPG distillation server for tcsproxy.
+ */
+
+#include <limits.h>
+#include <string.h>
+#include <math.h>
+#include <stdio.h>
+#include "jpeglib.h"
+#include "jpg_munge.h"
+#include "distinterface.h"
+#include "mem_src_dst_mgr.h"
+
+#include "../include/ARGS.h"
+#include "../../frontend/include/ARGS.h"
+
+typedef struct jpgd_error_mgr_st {
+  struct  jpeg_error_mgr pub;
+} jpgd_error_mgr, *jpgd_error_ptr;
+
+/* Some long-lived globals;  will be reused for each distillation
+   for the lifetime of this distiller. */
+
+jmp_buf jumpbuffer;                                 /* for setjmp */
+struct  jpeg_decompress_struct srcinfo;             /* jpg->bytes */
+struct  jpeg_compress_struct   dstinfo;             /* bytes->jpg */
+jpgd_error_mgr                 jsrc_err, jdst_err;  /* error handlers */
+MonitorClientID                monID;
+
+C_DistillerType dType;
+
+/* Quality tables for the beginner's interface */
+int ismap_denom[5] = {1,1,1,1,1};    /* Don't want to lose text detail */
+int ismap_qual[5] = {15, 25, 35, 50, 75};  /* Want high quality ismaps */
+int noscale_denom[5] = {1,1,1,1,1};    /* Don't scale down this image */
+int noscale_qual[5] = {10, 15, 20, 40, 75};  /* Just a guess */
+int norm_denom[5] = {2, 2, 1, 1, 1}; /* Scale away! */
+int norm_qual[5] =  {15, 35, 20, 40, 75};  /* Again, just a guess! */
+
+void jpgd_error_exit(j_common_ptr cinfo);
+void jpgd_output_message(j_common_ptr cinfo);
+
+int compute_scale_denom(int max_x, int max_y, int min_x, int min_y, 
+			int in_x, int int_y, double scale);
+
+DistillerStatus jpg_passthrough(DistillerInput *din, DistillerOutput *dout);
+
+DistillerStatus
+ComputeDistillationCost(Argument *args, int numArgs,
+			DistillerInput *din,
+                        DistillationCost *cost)
+{
+  cost->estimatedTime_ms = DataLength(din);
+  return distOk;
+}
+
+DistillerStatus
+DistillerInit(C_DistillerType distType, int argc, const char * const *argv)
+{
+  if (0)
+    return (distFatalError);
+
+  dType = distType;
+  /* Tell the JPEG library to report errors on STDERR, and call the
+     gifjpg_error_exit() routine if a fatal error occurs.  This handler
+     will do a longjmp back to the beginning... */
+
+  srcinfo.err = jpeg_std_error(&jsrc_err.pub);
+  jsrc_err.pub.error_exit = jpgd_error_exit;
+  jsrc_err.pub.output_message = jpgd_output_message;
+  dstinfo.err = jpeg_std_error(&jdst_err.pub);
+  jdst_err.pub.error_exit = jpgd_error_exit;
+  jdst_err.pub.output_message = jpgd_output_message;
+
+  /* Create the compression/decompression objects.  This will allocate
+     a whole bunch of stuff buried inside these structures. */
+
+  jpeg_create_compress(&dstinfo);
+  jpeg_create_decompress(&srcinfo);
+
+  monID = DistillerGetMonitorClientID();
+
+  DEBUG("distiller initialized ok\n");
+  return distOk;
+}
+
+void
+DistillerExit(void)
+{
+  jpeg_destroy_decompress(&srcinfo);
+  jpeg_destroy_compress(&dstinfo);
+}
+  
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+	      DistillerInput *din,
+	      DistillerOutput *dout)
+{
+  JSAMPROW handoff;
+  JDIMENSION handoff_height, num_scanlines;
+  int      max_x=-1, max_y=-1, min_x=-1, min_y=-1, qual=55, i;
+  int      expert=0, resize=0, quality=3, nodistill=0, ismap=0;
+  double   scale = 0.5;
+  int      fin_denom, fin_qual;
+
+  SetData(dout, NULL);
+
+  if (setjmp(jumpbuffer) != 0) {
+    /*
+     *  fatal error occurred, so return immediately.
+     */
+    MonitorClientSend(monID, "Distiller Errors", "Resetting distiller...\n", "Log");
+    DistillerExit();
+    DistillerInit(dType, 0, NULL);
+
+    if (DataPtr(dout) != NULL)
+      DataNeedsFree(dout, gm_True);
+    else
+      DataNeedsFree(dout, gm_False);
+    return distFatalError;
+  }
+  
+  /*
+   *  parse distillation arguments.  set default values for some
+   *  things, then override them if args are specified.  Default will
+   *  be to scale each axis by 0.5, turn quality down to 55%.
+   */
+
+  for (i=0; i<nargs; i++) {
+    INT32 argval = ARG_INT(args[i]);
+
+    switch(ARG_ID(args[i])) {
+    case JPG_MAX_X:
+      max_x = (int) argval;
+      break;
+    case JPG_MAX_Y:
+      max_y = (int) argval;
+      break;
+    case JPG_MIN_X:
+      min_x = (int) argval;
+      break;
+    case JPG_MIN_Y:
+      min_y = (int) argval;
+      break;
+    case JPG_SCALE:
+      scale = (double) ARG_DOUBLE(args[i]);
+      break;
+    case JPG_QUAL:
+      qual = (int) argval;
+      break;
+    case FRONT_RESIZE:
+      resize = (int) argval;
+      break;
+    case FRONT_NO_DISTILL:
+      nodistill = (int) argval;
+      break;
+    case FRONT_QUALITY:
+      if (argval >= 1 && argval <= 5) 
+        quality = (int) argval;
+      break;
+    case FRONT_EXPERT:
+      expert = (int) argval;
+      break;
+    case FRONT_ISMAP:
+      ismap = (int) argval;
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (1 || expert) {
+    char buffer[300];
+    sprintf(buffer, "Expert=%d Quality=%d Scale=%0.2g Xmax=%d Ymax=%d\n",
+            expert, quality, scale, max_x, max_y);
+    MonitorClientSend(monID, "Distiller Errors", buffer, "Log");
+  }
+  
+  if (nodistill) {
+    return jpg_passthrough(din, dout);
+  }
+
+  if (expert) {
+    /* Do expert-like things here.  Need to work out still. */
+    fin_qual = qual;
+    fin_denom = compute_scale_denom(max_x, max_y, min_x, min_y,
+				    srcinfo.image_width,
+				    srcinfo.image_height, scale);
+  } else {
+    /* We're in beginner mode.  Life is easier. */
+    if (ismap) {
+      fin_qual = ismap_qual[quality-1];
+      fin_denom = ismap_denom[quality-1];
+    } else if (resize) {
+      fin_qual = noscale_qual[quality-1];
+      fin_denom = noscale_denom[quality-1];
+    } else {
+      fin_qual = norm_qual[quality-1];
+      fin_denom = norm_denom[quality-1];
+    }
+  }
+
+  /* Prep the input decompressor */
+  jpeg_mem_src(&srcinfo, DataPtr(din), DataLength(din));
+  jpeg_read_header(&srcinfo, TRUE);
+
+  srcinfo.scale_num = 1;
+  srcinfo.scale_denom = fin_denom;
+  srcinfo.dither_mode = JDITHER_ORDERED;  /* moderate speed/quality */
+  srcinfo.dct_method = JDCT_FASTEST;      /* rippin' fast DCT */
+  jpeg_start_decompress(&srcinfo);
+
+  /* Prep the output compressor */
+  DataLength(dout) = 0;
+  SetData(dout, NULL);
+  sprintf(dout->mimeType, "image/jpeg");
+  jpeg_mem_dest(&dstinfo, (void **) &(DataPtr(dout)), 
+		(UINT32 *) &(DataLength(dout)));
+
+  dstinfo.image_width = srcinfo.output_width;
+  dstinfo.image_height = srcinfo.output_height;
+  dstinfo.input_components = srcinfo.output_components;
+  dstinfo.in_color_space = srcinfo.out_color_space;
+  jpeg_set_defaults(&dstinfo);
+  jpeg_set_quality(&dstinfo, fin_qual, TRUE);
+  jpeg_start_compress(&dstinfo, TRUE);
+
+  /* We're going to need some buffer space to hand off data
+     from the decompressor to the compressor. */
+  handoff_height = (JDIMENSION) 1;
+  handoff = (JSAMPROW)
+    malloc(srcinfo.output_width*sizeof(JSAMPLE)*srcinfo.output_components);
+  
+  while (srcinfo.output_scanline < srcinfo.output_height) {
+    num_scanlines = jpeg_read_scanlines(&srcinfo, &handoff, handoff_height);
+    jpeg_write_scanlines(&dstinfo, &handoff, num_scanlines);
+  }
+
+  free(handoff);
+  jpeg_finish_decompress(&srcinfo);
+  jpeg_finish_compress(&dstinfo);
+  DataNeedsFree(dout,gm_True);
+  if (DataLength(dout) > DataLength(din)) {
+    SetDataLength(dout, DataLength(din));
+    memcpy(DataPtr(dout), DataPtr(din), DataLength(din));
+    sprintf(dout->mimeType, "image/jpeg");
+  }
+  DEBUG("finished processing\n");
+  return distOk;
+
+}
+
+int compute_scale_denom(int max_x, int max_y, int min_x, int min_y,
+			int in_x, int in_y, double scale)
+{
+  int int_scale, outx, outy;
+
+  if (scale == 1.0)
+    int_scale = 1;
+  else if (scale == 0.5)
+    int_scale = 2;
+  else if (scale == 0.25)
+    int_scale = 4;
+  else if (scale == 0.125)
+    int_scale = 8;
+  else
+    int_scale = 2;
+
+  /* test null arg case */
+  if ((max_x == -1) && (max_y == -1) && (min_x == -1) && (min_y == -1))
+    return int_scale;
+
+  /* if image smaller than min, we're done already */
+  if ((in_x <= min_x) || (in_x <= min_y))
+    return 1;
+
+  /* compute theoretically what the requested scale factor would give us */
+  outx = in_x / int_scale;
+  outy = in_y / int_scale;
+
+  if ((min_x != -1) && (outx < min_x)) {  /* must try to satisfy min_x */
+    while ((outx < min_x) && (int_scale > 1)) {
+      int_scale >>= 1;
+      outx = in_x / int_scale;
+      outy = in_y / int_scale;
+    }
+    return int_scale;
+  }
+
+  if ((min_y != -1) && (outy < min_y)) {  /* must try to satisfy min_y */
+    while ((outy < min_y) && (int_scale > 1)) {
+      int_scale >>= 1;
+      outx = in_x / int_scale;
+      outy = in_y / int_scale;
+    }
+    return int_scale;
+  }
+
+  if ((max_x != -1) && (outx > max_x)) {  /* must try to satisfy max_x */
+    while ((outx > max_x) && (int_scale < 8)) {
+      int_scale <<= 1;
+      outx = in_x / int_scale;
+      outy = in_y / int_scale;
+    }
+    return int_scale;
+  }
+
+  if ((max_y != -1) && (outy > max_y)) {  /* must try to satisfy max_y */
+    while ((outy > max_y) && (int_scale < 8)) {
+      int_scale <<= 1;
+      outx = in_x / int_scale;
+      outy = in_y / int_scale;
+    }
+    return int_scale;
+  }
+
+  return int_scale;
+}
+
+void jpgd_error_exit(j_common_ptr cinfo)
+{
+  (*cinfo->err->output_message)(cinfo);
+  longjmp(jumpbuffer, 1);
+}
+
+void jpgd_output_message(j_common_ptr cinfo)
+{
+  char buffer[JMSG_LENGTH_MAX+1];
+
+  (*cinfo->err->format_message)(cinfo, buffer);
+  strcat(buffer, "\n");
+  MonitorClientSend(monID, "Distiller Errors", buffer, "Log");
+}
+
+DistillerStatus jpg_passthrough(DistillerInput *din, DistillerOutput *dout)
+{
+  strcpy(dout->mimeType, din->mimeType);
+  SetDataLength(dout, DataLength(din));
+  SetData(dout, DataPtr(din));
+  DataNeedsFree(dout,gm_False);
+  return distOk;
+}
+@
+
+
+1.21
+log
+@changes and additions to transend.text.piml (pilot markup language html
+distiller).  commented the ARGS.h file for distillers.  distillers now
+only observe Quality arg if it has a reasonable value.  Changes to main
+prefs to make values of FRONT_SHOW_ICON arg agree with perl html distiller.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.20 1997/06/14 15:30:46 yatin Exp $
+d18 2
+a19 1
+#include "../../frontend/include/ALLARGS.h"
+@
+
+
+1.20
+log
+@changes to the DistillerInit() API
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.19 1997/04/30 07:55:26 fox Exp $
+d161 2
+a162 5
+      quality = (int) argval;
+      if (quality > 5)
+	quality = 5;
+      else if (quality < 1)
+	quality = 1;
+d175 7
+@
+
+
+1.19
+log
+@frontend and ptm changes for new distiller api
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.18 1997/04/16 01:18:44 gribble Exp $
+d61 1
+a61 1
+DistillerInit(C_DistillerType distType)
+d117 1
+a117 1
+    DistillerInit(dType);
+@
+
+
+1.18
+log
+@More changes....fixed up distillers so that the DistillerInit() function
+accepts type information.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.17 1997/04/11 05:06:41 gribble Exp $
+d49 1
+a49 2
+DistillerStatus jpg_passthrough(DistillerInput *din, DistillerOutput *dout,
+				 gm_Bool *free_output);
+d56 1
+a56 1
+  cost->estimatedTime_ms = din->length;
+d100 1
+a100 2
+	      DistillerOutput *dout,
+              gm_Bool *free_output)
+d109 1
+a109 1
+  dout->data = NULL;
+d119 2
+a120 2
+    if (dout->data != NULL)
+      *free_output = gm_True;
+d122 1
+a122 1
+      *free_output = gm_False;
+d179 1
+a179 1
+    return jpg_passthrough(din, dout, free_output);
+d203 1
+a203 1
+  jpeg_mem_src(&srcinfo, din->data, din->length);
+d213 2
+a214 2
+  dout->length = 0;
+  dout->data = NULL;
+d216 2
+a217 2
+  jpeg_mem_dest(&dstinfo, (void **) &(dout->data), 
+		(UINT32 *) &(dout->length));
+d241 4
+a244 4
+  *free_output = gm_True;
+  if (dout->length > din->length) {
+    dout->length = din->length;
+    memcpy(dout->data, din->data, din->length);
+d334 1
+a334 2
+DistillerStatus jpg_passthrough(DistillerInput *din, DistillerOutput *dout,
+				 gm_Bool *free_output)
+d337 3
+a339 3
+  dout->length = din->length;
+  dout->data = din->data;
+  *free_output = gm_False;
+@
+
+
+1.17
+log
+@more changes...obvious ones...if distilled version is bigger than
+original (for gifjpg and jpg mungers) then send original.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.16 1997/04/11 03:27:24 gribble Exp $
+d33 2
+d62 1
+a62 1
+DistillerInit(void)
+d67 1
+d119 1
+a119 1
+    DistillerInit();
+@
+
+
+1.16
+log
+@More fixes/tweaks.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.15 1997/04/08 02:46:57 gribble Exp $
+d241 5
+@
+
+
+1.15
+log
+@More aggressive.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.14 1997/04/06 23:27:44 gribble Exp $
+d37 3
+a39 3
+int noscale_qual[5] = {10, 15, 20, 30, 75};  /* Just a guess */
+int norm_denom[5] = {2, 2, 2, 1, 1}; /* Scale away! */
+int norm_qual[5] =  {15, 35, 55, 35, 75};  /* Again, just a guess! */
+@
+
+
+1.14
+log
+@fixed range bug.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.13 1997/04/06 23:21:07 gribble Exp $
+d35 1
+a35 1
+int ismap_qual[5] = {20, 35, 45, 65, 90};  /* Want high quality ismaps */
+d37 3
+a39 3
+int noscale_qual[5] = {10, 25, 35, 55, 90};  /* Just a guess */
+int norm_denom[5] = {4, 2, 2, 1, 1}; /* Scale away! */
+int norm_qual[5] =  {30, 50, 65, 55, 90};  /* Again, just a guess! */
+@
+
+
+1.13
+log
+@Fixed up ismap aggressiveness prefs.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.12 1997/04/06 23:03:31 gribble Exp $
+d161 4
+@
+
+
+1.12
+log
+@Fixed up so that obeys FRONT_EXPERT, FRONT_RESIZE, FRONT_QUALITY, and
+FRONT_ISMAP.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.11 1997/03/17 20:22:18 gribble Exp $
+d35 1
+a35 1
+int ismap_qual[5] = {20, 45, 60, 75, 90};  /* Want high quality ismaps */
+@
+
+
+1.11
+log
+@Fixed up so uses ARGS.h
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.10 1997/02/26 04:14:41 yatin Exp $
+d18 1
+a18 1
+#include "../include/ARGS.h"
+d33 8
+d47 3
+d65 3
+a67 3
+  /* Tell the JPEG library to report errors on STDERR, and do an
+     exit() if a fatal error occurs.  I could write my own error handler,
+     but let's get the basics working first. */
+d104 1
+d106 1
+d153 15
+d173 24
+d202 1
+a202 4
+  srcinfo.scale_denom = compute_scale_denom(max_x, max_y, min_x, min_y, 
+					    srcinfo.image_width,
+					    srcinfo.image_height, 
+					    scale);
+d219 1
+a219 1
+  jpeg_set_quality(&dstinfo, qual, TRUE);
+d322 10
+@
+
+
+1.10
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.9 1997/02/15 22:14:48 gribble Exp $
+d18 1
+a18 1
+#include "JPG_ARGS.h"
+@
+
+
+1.9
+log
+@Fixed up so that distiller sets free_output correctly after a long_jmp
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.8 1997/02/14 22:29:54 gribble Exp $
+d44 1
+a44 1
+  cost->estimatedTime = din->length;
+@
+
+
+1.8
+log
+@Fixed up floating point divide error.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.7 1997/02/14 20:58:59 gribble Exp $
+d95 2
+d105 4
+@
+
+
+1.7
+log
+@Fixed up so that computes scale factor correctly.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.6 1997/02/07 22:35:14 gribble Exp $
+d217 1
+a217 1
+      int_scale >>= 2;
+d226 1
+a226 1
+      int_scale >>= 2;
+d235 1
+a235 1
+      int_scale <<= 2;
+d244 1
+a244 1
+      int_scale <<= 2;
+@
+
+
+1.6
+log
+@Now jpg_munge will handle errors gracefully, reporting the error to the
+monitor and resetting the distiller state with a longjmp.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.5 1997/01/29 09:10:34 gribble Exp $
+d202 1
+a202 1
+  
+d216 1
+a216 1
+    while ((outx < min_x) && (int_scale > 1))
+d218 3
+d225 1
+a225 1
+    while ((outy < min_y) && (int_scale > 1))
+d227 3
+d234 1
+a234 1
+    while ((outx > max_x) && (int_scale < 8))
+d236 3
+d243 1
+a243 1
+    while ((outy > max_y) && (int_scale < 8))
+d245 3
+@
+
+
+1.5
+log
+@Fixed up the jpg distiller to accept arguments, and to use the brand
+spanking new distiller interface.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.4 1997/01/28 01:56:35 gribble Exp $
+d20 4
+d28 7
+a34 3
+struct jpeg_decompress_struct srcinfo;              /* jpg->bytes */
+struct jpeg_compress_struct   dstinfo;              /* bytes->jpg */
+struct jpeg_error_mgr         jsrc_err, jdst_err;   /* error handlers */
+d58 6
+a63 2
+  srcinfo.err = jpeg_std_error(&jsrc_err);
+  dstinfo.err = jpeg_std_error(&jdst_err);
+d71 2
+d99 4
+d240 15
+@
+
+
+1.4
+log
+@cool!  partitioning scheme adapts as partitions die, and when you send
+any component using the client library a SIGUSR1, it rereads the partition
+list and assumes the partitioning is back to normal.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.3 1997/01/26 01:27:57 gribble Exp $
+d18 2
+d28 3
+d33 1
+a33 1
+                        void *input, UINT32 inputLen,
+d36 1
+a36 1
+  cost->estimatedTime = inputLen;
+d72 2
+a73 2
+              void *input, UINT32 inputLen,
+              void **output, UINT32 *outputLen,
+d78 2
+d94 27
+d122 1
+a122 1
+  jpeg_mem_src(&srcinfo, (void *) input, inputLen);
+d124 6
+a129 2
+  srcinfo.scale_num = 1;  srcinfo.scale_denom = 2;  /* scale by 1/2 */
+                                         /* 1/4, 1/8, 1/16 possible */
+d135 6
+a140 3
+  *outputLen = 0;
+  *output = (void *) NULL;
+  jpeg_mem_dest(&dstinfo, (void **) output, (UINT32 *) outputLen);
+d146 1
+a146 1
+  jpeg_set_quality(&dstinfo, 55, TRUE);  /* 55% quality */
+d169 33
+a201 1
+    
+d203 20
+@
+
+
+1.3
+log
+@We now have a working JPEG distiller, and it's fast, and it's stable as
+all hell.  I will optimize some more later, and add the distillation
+argument handling routines in a bit.
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.2 1997/01/24 01:42:58 gribble Exp $
+d91 1
+d105 1
+a105 1
+  jpeg_set_quality(&dstinfo, 55, TRUE);
+@
+
+
+1.2
+log
+@Did some nastie hacks to get INT16/UINT16 etc. collisions between
+libjpeg and config.h to be happy with each other - I added #ifdef
+LIBJPEG_H's to the config.h.in file, so if libjpeg has defined them
+already they are not redefined.  (I checked, they are the same.)
+@
+text
+@d4 1
+a4 1
+ *  $Id: jpg_munge.c,v 1.1 1997/01/23 23:11:16 gribble Exp $
+d16 1
+d18 2
+a19 3
+/*
+ *  for setjmp
+ */
+d21 4
+a24 1
+jmp_buf jumpbuffer;
+d40 14
+d61 2
+d71 2
+a72 1
+  int x;
+a73 1
+  *free_output = 0;
+d80 1
+a80 1
+
+d84 1
+a84 1
+   *  be to scale each axis by 0.5, quant to 16 colors.
+d87 29
+a115 5
+  for (x = 0; x < nargs; x++) {
+    switch(ARG_ID(args[x])) {
+    default:
+      break;
+    }
+d118 6
+a123 3
+  /*
+   *  Actual image processing happens here.
+   */
+a124 6
+  DEBUG("finished quant\n");
+  *free_output = gm_False;
+  *output = input;
+  /**outputLen = ppmtogif_main(1, 0, 0, "", &B2, *output);*/
+  *outputLen = inputLen;
+  return distOk;
+d128 1
+@
+
+
+1.1
+log
+@Added skeleton for the jpeg munger, in jpg_munger.  Fixed up top-level
+Makefile.in to include it, and fixed up configure.in to deal with
+the needed libjpeg.a library.
+@
+text
+@d4 1
+a4 1
+ *  $Id: $
+a8 2
+#include "jpg_munge.h"
+#include "jpeglib.h"
+d13 2
+@

@@ -1,0 +1,257 @@
+head	1.2;
+access;
+symbols
+	v1_2:1.1
+	v1_1:1.1
+	v1_0:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	98.07.24.02.55.41;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.30.05.33.43;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@took out duplicate #include <sys/types.h> so it wouldnt break with new gcc
+@
+text
+@#include <Pilot.h>
+// #include <sys/types.h>
+#include <sys/socket.h>
+#include "TGpostman.h"
+#include "822date.h"
+
+typedef char Boolean822;
+#define false822 0
+#define true822  1
+
+char *
+FindCharacterInLiteral(char *literal, char characterToFind)
+{
+	while (*literal != characterToFind) {
+		if (*literal == 0)
+			break;
+		literal++;
+	}
+	return literal;
+}
+
+char *
+SkipWhiteSpace(char *literal)
+{
+	while (*literal == ' ')
+		literal++;
+
+	return literal;
+}
+
+unsigned long
+CountAlpha(char *literal)
+{
+	char c;
+	unsigned long count = 0;
+
+	while (((c = *literal++) >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+		count++;
+	return count;
+}
+
+unsigned long
+CountDigits(char *literal)
+{
+	char c;
+	unsigned long count = 0;
+
+	while ((c = *literal++) >= '0' && c <= '9')
+		count++;
+	return count;
+}
+
+unsigned long
+ConvertDigits(char *start, unsigned long length)
+{
+	unsigned long count, value;
+
+	value = 0;
+	for (count = 0; count < length; ++count)
+		value = 10 * value + (*start++ - '0');
+
+	return value;
+}
+
+int
+MailStore_ExtractRFC822Date(char *inputLine, int *year, int *month,
+			    int *dayofmonth, int *hour, int *minute)
+{
+	char monthNames[12][4];
+	char *scanPoint;
+	unsigned long count;
+	Boolean822 valid;
+	unsigned long timeArray[4];
+	unsigned long dateArray[4];
+	
+	monthNames[0][0] = 'J';  monthNames[0][1] = 'a';  monthNames[0][2] = 'n';  monthNames[0][3] = '\0';
+	monthNames[1][0] = 'F';  monthNames[1][1] = 'e';  monthNames[1][2] = 'b';  monthNames[1][3] = '\0';
+	monthNames[2][0] = 'M';  monthNames[2][1] = 'a';  monthNames[2][2] = 'r';  monthNames[2][3] = '\0';
+	monthNames[3][0] = 'A';  monthNames[3][1] = 'p';  monthNames[3][2] = 'r';  monthNames[3][3] = '\0';
+	monthNames[4][0] = 'M';  monthNames[4][1] = 'a';  monthNames[4][2] = 'y';  monthNames[4][3] = '\0';
+	monthNames[5][0] = 'J';  monthNames[5][1] = 'u';  monthNames[5][2] = 'n';  monthNames[5][3] = '\0';
+	monthNames[6][0] = 'J';  monthNames[6][1] = 'u';  monthNames[6][2] = 'l';  monthNames[6][3] = '\0';
+	monthNames[7][0] = 'A';  monthNames[7][1] = 'u';  monthNames[7][2] = 'g';  monthNames[7][3] = '\0';
+	monthNames[8][0] = 'S';  monthNames[8][1] = 'e';  monthNames[8][2] = 'p';  monthNames[8][3] = '\0';
+	monthNames[9][0] = 'O';  monthNames[9][1] = 'c';  monthNames[9][2] = 't';  monthNames[9][3] = '\0';
+	monthNames[10][0] = 'N';  monthNames[10][1] = 'o';  monthNames[10][2] = 'v';  monthNames[10][3] = '\0';
+	monthNames[11][0] = 'D';  monthNames[11][1] = 'e';  monthNames[11][2] = 'c';  monthNames[11][3] = '\0';
+
+	valid = true822;
+	scanPoint = SkipWhiteSpace(inputLine);
+
+	/* day of week */
+	count = CountAlpha(scanPoint);
+	if (count != 0) {			/* skip day of week */
+		if (count != 3)
+		  valid = false822;
+		scanPoint = SkipWhiteSpace(scanPoint + count);
+		if (*scanPoint == ',')
+			scanPoint = SkipWhiteSpace(scanPoint + 1);
+		else
+			valid = false822;
+	}
+	/* date */
+	count = CountDigits(scanPoint);
+	if (count < 1 || count > 2)
+		valid = false822;
+	
+	dateArray[kDayOfMonth] = ConvertDigits(scanPoint, count);
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	count = CountAlpha(scanPoint);
+	if (count == 3) {
+		unsigned long monthIndex;
+
+		for (monthIndex = 0; monthIndex < 12; ++monthIndex)
+			if (MemCmp((void *) scanPoint, (void *) monthNames[monthIndex], 3) == 0)
+				break;
+		if (monthIndex < 12)
+			dateArray[kMonth] = monthIndex + 1;
+		else
+			valid = false822;
+	} else
+		valid = false822;
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	count = CountDigits(scanPoint);
+	if (count != 2 && count != 4)
+		valid = false822;
+	dateArray[kYear] = ConvertDigits(scanPoint, count);
+	if (count == 2)
+		dateArray[kYear] += 1900;
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+
+	/* time */
+	count = CountDigits(scanPoint);
+	if (count != 2)
+		valid = false822;
+	timeArray[kHour] = ConvertDigits(scanPoint, count);
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	if (*scanPoint == ':')
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+	else
+		valid = false822;
+	count = CountDigits(scanPoint);
+	if (count != 2)
+		valid = false822;
+	timeArray[kMinute] = ConvertDigits(scanPoint, count);
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	if (*scanPoint == ':') {
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+		count = CountDigits(scanPoint);
+		if (count != 2)
+			valid = false822;
+		timeArray[kSecond] = ConvertDigits(scanPoint, count);
+		scanPoint = SkipWhiteSpace(scanPoint + count);
+	} else
+		timeArray[kSecond] = 0;
+	timeArray[kMillisecond] = 0;
+
+/*	c = *scanPoint;
+	if (c == '+' || c == '-') {
+		sign = c;
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+		count = CountDigits(scanPoint);
+		if (count != 4)
+			valid = false822;
+		timeOffset = ConvertDigits(scanPoint, count);
+	} else {
+		sign = '-';
+		timeOffset = 0;
+		count = CountAlpha(scanPoint);
+		if (count == 2) {
+			if (scanPoint[0] != 'U' || scanPoint[1] != 'T')
+				valid = 0;
+		} else if (count == 3) {
+			switch (scanPoint[0]) {
+			case 'E':
+				timeOffset = 500;
+				break;		
+			case 'C':
+				timeOffset = 600;
+				break;
+			case 'M':
+				timeOffset = 700;
+				break;
+			case 'P':
+				timeOffset = 800;
+				break;
+			case 'G':
+				break;
+			default:
+				valid = false822;
+			if (timeOffset != 0) {
+				if (scanPoint[1] == 'D')
+					timeOffset -= 100;
+				else if (scanPoint[1] != 'S')
+					valid = false822;
+			}
+			if (scanPoint[2] != 'T')
+				valid = false822;
+		} else if (count != 1)	
+			valid = false822;
+	} */
+
+	if (valid) {
+	  *year = dateArray[kYear] - 1904;
+	  *month = dateArray[kMonth];
+	  *dayofmonth = dateArray[kDayOfMonth];
+	  *hour = timeArray[kHour];
+	  *minute = timeArray[kMinute];
+	} else {
+	  return 1;
+	}
+	return 0;
+}
+
+
+@
+
+
+1.1
+log
+@Date scanning.
+@
+text
+@d2 1
+a2 1
+#include <sys/types.h>
+@

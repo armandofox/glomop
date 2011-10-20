@@ -1,0 +1,98 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 soda445:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.05.14.16.55.37;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.05.14.16.55.37;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/bin/perl
+
+$state = 0;
+
+while(<>) {
+    if (/\|\s*(0x\w+)/) {
+	$addr = $1;
+	next;
+    }
+    if ($state == 0) {
+	## Looking for NV
+	if (/\.ascii \"NV\"/) {
+	    $saddr = $addr;
+	    $state = 1;
+	} else {
+	    $state = 0;
+	}
+    } elsif ($state == 1) {
+	## Found NV, looking for Nu or Ns
+	if (/\.ascii \"NV\"/) {
+	    ## Wonk; another NV came first
+	    $saddr =~ /([0-9a-f]{5,5})$/;
+	    print "$saddr Entry$1\n";
+	    $saddr = $addr;
+	    $state = 1;
+	} elsif (/\.ascii \"N[us]\"/) {
+	    $byteok = 1;
+	    $state = 2;
+	} else {
+	    $state = 1;
+	}
+    } elsif ($state == 2) {
+	## Looking for optional .byte, then .asciz
+	if (/\.ascii \"NV\"/) {
+	    ## Wonk; another NV came first
+	    $saddr =~ /([0-9a-f]{5,5})$/;
+	    print "$saddr Entry$1\n";
+	    $saddr = $addr;
+	    $state = 1;
+	} elsif ($byteok && /\.byte /) {
+	    $byteok = 0;
+	    $state = 2;
+	} elsif (/\.asciz \"(\S{5,})\"/) {
+	    ## Got the symbol name
+	    $sym = $1;
+	    if (defined $seen{$sym}) {
+		$try = 1;
+		++$try while defined $seen{$sym . "_" . $try};
+		$sym = $sym . "_" . $try;
+	    }
+	    print "$saddr $sym\n";
+	    $seen{$sym} = 1;
+	    $state = 0;
+	} else {
+	    $saddr =~ /([0-9a-f]{5,5})$/;
+	    print "$saddr Entry$1\n";
+	    $state = 0;
+	}
+    }
+}
+@
+
+
+1.1.1.1
+log
+@Reverse-engineering the Pilot kernel
+@
+text
+@@

@@ -1,0 +1,462 @@
+head	1.2;
+access;
+symbols
+	pre-camera-edits:1.2
+	sigmetrics:1.1.1.1
+	sigmetrics:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.2
+date	97.11.03.10.03.08;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.30.21.43.25;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.10.30.21.43.25;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Added confidence intervals.  Added On/off model section.
+@
+text
+@\section{On Modeling a File System}\label{model_sec}
+
+In this section of the paper, we first explain our motivation for
+building a model for high-level file system events.  Then, we discuss
+the behaviour that an ideal model should demonstrate.  Lastly, we
+justify the design of our model and then describe its details.
+
+\subsection{Why a Flexible File System Model?}\label{why_flexible}
+
+Current methods for testing the efficacy of a new file system fall
+into two broad categories: simulation through file system trace playback
+(as in \cite{Dahl94}), and simulation through the use of simple file system
+heuristics (for example, the repeated creation and deletion of a mix
+of large and small files, as in \cite{Smit94}). Both methods suffer
+from several shortcomings. 
+
+As argued in \cite{Dahl94}, simulation
+through trace playback limits the simulation to characteristics
+of the file system for which the trace was gathered.  Quantities such
+as the number of file system clients, density of file system activity,
+and peak load presented to a file server cannot be easily modified. 
+Simple heuristic methods often suffer from the problem that
+synthesized trace data is unrealistic;  the methods employed in this
+paper can easily distinguish between real file system trace data and
+such heuristically generated events.
+
+The model that we propose strives to alleviate these limitations.  By
+synthesizing traffic artificially, we can generate a workload of arbitrary
+length and peak activity.  Since we base our synthesis technique on a known
+property of real file system traffic, the synthesized workload also
+exhibits this property, and is therefore more realistic.
+
+%The model that we propose suffers
+%from none of the aforementioned limitations.
+
+\subsection{An Ideal Model}
+
+It is clear that there is a need for a scalable file system model, such as
+that presented in \cite{Chen94}.  In addition to scalability, it would be
+beneficial to use a representative portion of trace data as input to the
+model, and then output arbitrarily large amounts of file system events
+which exhibit the same bulk properties as the traces fed to it.  An ideal
+model should be able to capture file events to the finest granularity
+possible (at the level of bytes).  It should synthesize a time series for
+file events, and with each event it should associate the client name, a
+fileID (or i-node), the event type (open, close, read, etc.), and other
+attributes relevant to the the specific event type generated such as offset
+and number of bytes read/written in the case of a write event.
+
+The choice of fileIDs and event types should not be arbitrary; the file
+events generated should exhibit empirically observed file access patterns;
+some files should be accessed more often than others, some access patterns
+should exhibit random modifications while others are sequential, and files
+within a directory should tend to be created and deleted together.
+
+%Moreover, all file systems make decisions about the placement of newly
+%created files and disk block allocations for appending to old
+%files. These decisions are based on the relationships of the file with
+%already existing files. For example, it is desirable to place all
+%files within a directory in the same cylinder group\cite{Mkus84}. This
+%creates the need for the model to be able to associate a path-name
+%with every fileID.
+
+\subsection{Towards a Preliminary File System Model}
+
+\begin{figure*}[tbhp]
+\epsfxsize 0.80\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 547 205]{./figures/open_w_interarrival.eps}
+}
+\end{center}
+\caption{Sprite file open (W) inter-arrival times}
+\label{open_w_interarrival}
+\end{figure*}
+
+%However, the set of traces we have at hand suffer from several
+%limitations.  The foremost among them is the absence of the mapping
+%between fileIDs and the path-name of the file. We cannot distinguish
+%between directories and other files, thereby ruling out the
+%possibility of studying file access patterns within
+%directories. Moreover, because of the postprocessing performed on the
+%Auspex file traces, they contain inaccurate time-stamps for file-open
+%and close events.  Fortunately, the Sprite file traces have accurate
+%time-stamps, but they do not contain most read/write events. Instead,
+%they record only seek events, from which we cannot accurately deduce
+%the number of bytes read/written.
+
+Clearly the ideal model described in the previous section is virtually
+impossible to implement.  This model
+would require a very large number of parameters, and the validation of such
+a model would require a large volume of traces and extremely complex
+analysis techniques.  It is not clear, however, that capturing the full
+complexity of a file system is wholly necessary for a model to be
+useful or representative.
+
+We have designed and implemented an extensible file system model that
+alleviates the limitations of the modeling techniques described in section
+\ref{why_flexible}.  A goal of our model is to generate large amounts
+of trace data, so that we can study the state of a file system in the long
+run.  For this purpose, we only need to model state changing events, such
+as opens, writes, deletes and closes, and can safely ignore other
+events.\footnote{For some file systems such as xFS\cite{Ande95}, even read
+events can change the state of the system.}
+
+%The primary goal of our model is to generate large
+%amounts of synthesized trace data to help {\it age} a file system
+%artificially, so that one can study the state of the system in the long
+%run.  
+%
+%
+%such a model would require a very large volume of traces. Second, the traces
+%themselves have deficiencies and inadequate information. For instance,
+%the pathnames assocaited with fileIDs are unavailable.
+%artificially in order to study its state in the long run. For this purpose,
+%we need to model only the state-changing events (opens, writes and closes)
+%and can safely ignore other events (file reads and attribute reads). These
+%three considerations allow us to focus on a small subset of all file-system
+%events and build a simple model based only on file open, write and close
+%events.
+
+Our model generates a time series of file system requests
+from individually clients.  The aggregation of a number of these
+time series results in the traffic seen by the file server.  In section
+\ref{on_off_model}, we demonstrated that the file open (W)
+event series generated by a client exhibits ON-OFF behaviour.  Our model
+therefore generates ON and OFF periods whose length is Pareto distributed,
+and we populate the ON periods by generating a succession of file open
+events within each of these periods.  To do this correctly, we require
+knowledge of the distribution for inter-arrival times between file-open
+events, which we study in the next section.
+
+Having generated an open event, we then generate subsequent write
+events and finally a close event.  We must therefore decide on an
+appropriate fileID, file size, and the time for which the file remains
+active.  These parameters, of course, depend upon semantic details such as
+whether the file is new or old and whether the file is being updated
+sequentially or randomly.  The next section describes our measurement of
+the required parameters and distributions needed to model these basic
+semantics.
+
+%In particular, we
+%measure the probability that the open event is for a {\it new}
+%file. We assume that new files are not randomly updated. There is not
+%enough evidence in the traces to show that there are a significant
+%number of new files which are randomly updated.  Next, we measure the
+%probability that an already existing file is updated randomly or
+%sequentially. And lastly, we measure the distribution of sizes of
+%files and their life-times, separately for sequential and random
+%files.
+
+%Our model generates the write and close events for a particular open
+%file as follows: we toss an appropriately biased coin and decide
+%whether the file is old or new. If it is new, we assume that the file
+%updated sequentially. If it is old, we toss another biased coin to
+%decide whether it is sequential or random. For a sequential file, we
+%determine its size according to a measured distribution of the file
+%sizes.  For a random file, we fix the amount of updates performed on
+%the file, again based on a measured distribution. The size of the file
+%and amount of updates performed is then used to place a lower bound on
+%the amount of time that the file must be opened, based on the fact
+%that there must be an upper bound on the bandwidth of the underlying
+%network and responsiveness of a file server.
+
+%Finally, to decide upon
+%the placement of the file close event,  the life of a
+%file, we measure the joint distribution of the size and life of a file
+%and use the conditional distribution for the life, having fixed the
+%size.
+
+%Our model may appear somewhat simplistic at first sight. However, it
+%is more robust and extensible than existing simulation paradigms such
+%as those presented in section \ref{why_flexible}.  
+
+By increasing the number of clients modeled and by changing the parameters,
+distributions, and probabilities used as input to the model, we can easily
+generate loads of widely different characteristics. Our model is capable of
+generating very large amounts of file system events which exhibit the same
+bulk properties as the traces from which the measured parameters are
+derived.
+
+\subsection{Measurement of Probabilities and Distributions}
+\label{distributions}
+
+In order to test our file system model, we extracted a number
+of distributions and probabilities from the Sprite and NFS file system
+traces to use as inputs to the model.  The parameter $\alpha$
+extracted from the Hill plot in section \ref{on_off_model} was used to
+create ON/OFF periods.  In order to populate the ON periods with open
+events, the distribution of file open (W) inter-arrival time was
+measured and used.
+
+Figure \ref{open_w_interarrival}a shows the measured distribution of file
+open (W) events from the Sprite traces.\footnote{We chose to measure
+distributions from the Sprite file traces in order to avoid the
+post-processing anomalies present in the NFS traces.}  The illustrated
+distribution was truncated at 4 seconds for the sake of clarity, but in
+reality it extended as far out as 900 seconds.  Clearly this distribution
+is heavy-tailed (which is consistent, since we previously demonstrated that
+Sprite open events are self-similar).  In order to model this distribution,
+we fit the data against the general form of a Pareto distribution:
+\begin{equation}
+P(x) = c_3 \: x^{-\alpha}.
+\label{pareto_gen}
+\end{equation}
+Taking the logarithm of both sides of equation \ref{pareto_gen} results
+in the linear relation $\log( P(x) ) = \log(c_3) - \alpha \log(x)$.
+Thus, a log-log plot of the measured distribution should result in a
+linear function with slope $-\alpha$ and intercept $\log(c_3)$.  Figure
+\ref{open_w_interarrival}b illustrates the log-log plot of
+distribution \ref{open_w_interarrival}a.  The least-squares fit of
+this plot resulted in an estimated $\alpha$ value of $1.105$ and $c_3$
+value of $52.66$.  These values were then substituted into equation
+\ref{pareto_gen}, and the resulting distribution overlayed on top of
+figure \ref{open_w_interarrival}a.  The strong resemblance between
+this generated distribution and the observed data indicates that the
+choice of a Pareto distribution as a model for file open inter-arrival
+times is reasonable.  Note that for the purposes of modeling, only the
+$\alpha = 1.105$ value is important, since $c_3$ is only an indicator
+of the number of events in our measured distribution, and is
+replaced by a normalization constant in the model.
+
+\begin{figure*}[tbh]
+\epsfxsize 0.70\hsize
+\begin{center}
+\makebox{
+\epsfbox[50 50 662 226]{./figures/synth-client.eps}
+}
+\end{center}
+\caption{{\bf Textured dot strip plot:}  All synthesized file system
+events generated for client 15 over 50,000 seconds.}
+\label{fig:synth-client}
+\end{figure*}
+
+Given the value $\alpha$, we can now generate file open events within ON
+periods.  To generate the file close events to match the open events, we
+need the distribution of times between file open events and their
+corresponding closes.  A similar analysis revealed that this distribution
+(for the Sprite traces) was also well represented by a Pareto distribution
+with $\alpha = 1.131$.  The distribution of file sizes (measured at the
+time of close (W) events) was also seen to be heavy-tailed.  Analysis of
+this distribution resulted in an estimated $\alpha=1.481$.
+
+Two more parameters to our model are the probability that a given file open
+(W) event will trigger the creation of a new file, and the probability that
+a file is being open for a serial rewrite or a random update.  While
+neither the NFS traces nor the Sprite traces contained enough information
+to exactly measure these probabilities, we were able to estimate them using
+a heuristic method applied to the NFS traces.  We estimated that the ratio
+of file open (W) events performed on existing files to those on new files
+was 4.71:1.  Also, the ratio of serial rewrites to random updates was
+estimated to be 12.9:1.  Both of these estimations correspond well
+with previously reported values in \cite{Bake91}.
+
+%Our model requires knowledge of the probability that a given file open
+%(W) event will trigger the creation of new file.  Unfortunately,
+%neither the NFS nor the Sprite file system traces carry indications of
+%file creations.  In order to estimate this probability, a simple
+%heuristic was used.  The NFS traces were parsed, and state kept for
+%each file ID that appeared.  The first time a file ID appeared, we
+%examined the size of the file (as reported in the trace) at the time
+%it was opened.  If the file size was nonzero, we optimistically
+%assumed that the file previously existed, otherwise we assumed it was
+%a new file.  We then modify the state of that file according to
+%subsequent file open, close, and deletion operations.  The result of
+%this heuristic was that the ratio of file open (W) events of
+%previously existing files to file open (W) events of new files was
+%4.71:1.  Only 7.9\% of files classified were done optimistically - the
+%other 92.1\% of the classifications were known to be correct because
+%of the state kept for the file.
+
+%Finally, since the model distinguishes between serial rewrites and
+%random updates of an existing file, we needed to measure the
+%probabilities of these two classes of file open events.  Another
+%simple heuristic was used to estimate these probabilities; we kept
+%track of the amount of updates following the opening of a previously
+%existing file.  If the total amount of updates matched the size of the
+%file at the time it was closed, we assumed that this transaction
+%corresponded to a serial rewrite of the file, otherwise we classified
+%it as a random rewrite.  Using this heuristic, we estimated that the
+%ratio of serial rewrites of a file to random updates of a file was
+%12.9:1.  This corresponds well with a previously reported percentage
+%of over 90\% serial rewrites in \cite{Bake91}.
+
+\subsection{Model Results}
+
+To test the validity of our model, we synthesized file system event
+time series for 20 clients and aggregated them to obtain the overall
+traffic for the server.  The textured plot for all events generated by
+a representative individual client (number 15) is shown in figure
+\ref{fig:synth-client}.  The plot looks remarkably similar to the ones
+encountered by us during our studies.  To verify that the OFF period
+lengths for this source indeed follow the Pareto distribution, we
+generated a qq-plot (figure \ref{fig:synth-hill-qq}a) and Hill plot
+(figure \ref{fig:synth-hill-qq}b) for synthesized client 15.  The Hill
+estimate stabilizes at a value of approximately 1.25, which is
+the same value that had been used as parameter to our model.  The
+qq-plot also verifies this result.
+
+\begin{figure*}[tbh]
+\epsfxsize 0.75\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 529 202]{./figures/synth_qq_hill.eps}
+}
+\end{center}
+\caption{{\bf Analysis of synthesized ON/OFF sources:}  (a) shows the
+qq-plot and (b) the Hill plot generated for synthesized client number 15.}
+\label{fig:synth-hill-qq}
+\end{figure*}
+
+\begin{figure*}[tbh]
+\epsfxsize 0.75\hsize
+\begin{center}
+\makebox{
+\epsfbox[0 0 534 219]{./figures/synth_var_rs.eps}
+}
+\end{center}
+\caption{{\bf Aggregate synthetic data analysis:} (a) shows a
+variance-time plot for the aggregate synthetic data, and (b) shows
+a Pox plot for the same data.}
+\label{fig:synth-var-rs}
+\end{figure*}
+
+To test the behaviour of the aggregate traffic, we generated the
+Pox-plot (figure \ref{fig:synth-var-rs}a) and the variance-time plot
+(figure \ref{fig:synth-var-rs}b) diagrams.  The value for the Hurst
+parameter calculated from both is 0.615 and 0.697 respectively - this
+clearly shows that the aggregate synthesized traffic is self-similar,
+thereby lending credence to the effectiveness of our model.
+
+The main strength of our model lies in being able to exhibit the same
+bulk properties as those of the traces input to it. Its main
+weaknesses lie in its inability to associate a pathname with a
+generated fileID and its failure to take into account some common file
+access patterns, such as the clustering of file opens and deletes
+within a directory. Also, our model ignores some other events like
+deletes, reads and seeks.
+However, any application-specific and semantic information, if available,
+can easily be taken advantage of by building an extension to our
+file-event synthesizer.  This extension could use measured semantic
+properties to modify the output generated by our synthesizer. 
+
+%Similarly, if the distributions
+%for deletes, reads etc. are known, they can be used to refine the output
+%of our synthesizer.
+%   - strengths:  correct bulk properties, load easily tunable and scalable
+%       
+%   -  shortcomings and extensions - other events - deletions, seeks,
+%      reads, etc.  - semantic structure - directories, sizes
+%      clustering,
+%\subsection{Future Work}
+
+Although our file system event synthesizer currently has narrow
+capability, it would be interesting to actually direct the synthetic
+trace at a file system (or simulator).  The long-term effects of the
+synthetic trace could then be measured in terms of the resulting
+utilization, fragmentation, and other such bulk properties of the file
+system.  The real trace data from which we extracted our synthesizer's
+parameters could then also be played out, and the resulting file
+system properties compared with that of the synthetically driven file
+system.  By gradually augmenting the features of our synthesizer and
+repeatedly comparing the resulting file system properties, we could
+then hope to determine a minimal subset of file system semantics that
+should be modeled during file system performance analysis, although
+the exact subset required is of course application-specific.
+
+One of our underlying assumptions was that it was reasonable to
+consider a single host or workstation as the ``source'' in the ON/OFF
+source model.  We could instead consider individual users, processes,
+or applications as sources, and repeat our analysis.  Through such
+refined examination, it may be possible to identify the cause of the
+ON/OFF behaviour, and by extension determine what is ultimately
+responsible for the self-similarity in the high-level file system
+events.
+
+%Finally, it is clear that our attempts at modeling file system events
+%were hampered by traces that were inadequate for our purposes.  A
+%better set of traces should be obtained at the source-level - file
+%system routine trace hooks should be placed in the kernel so that
+%detailed information can be gathered about the behaviour of the
+%applications themselves.  Timestamps accurate to about 10ms, full path
+%names, all read, write, open, seek, and close events, attribute
+%information, and other file state information should be recorded in
+%such a trace.
+
+Our file system modeling endeavors revealed the following facts:
+\begin{itemize}
+\item the distributions of file open event interarrival times, the time between
+file open and close events, and file sizes are all represented well by a
+Pareto distribution.
+\item the ON/OFF behaviour of file system clients can be used to
+      model aggregate file system traffic that exhibits self-similarity.
+\end{itemize}@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+building a model for high-level file-system events.  Then, we discuss
+d8 1
+a8 1
+\subsection{Why a Flexible File-System Model?}\label{why_flexible}
+d38 1
+a38 1
+It is clear that there is a need for a scalable file-system model, such as
+d64 1
+a64 1
+\subsection{Towards a Preliminary File-System Model}
+d100 1
+a100 1
+of trace data, so that we can study the state of a file-system in the long
+@
+
+
+1.1.1.1
+log
+@Sigmetrics paper
+
+@
+text
+@@

@@ -1,0 +1,200 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.04.09.15.37.06;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.09.15.17.35;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+RLM
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Receiver-Driven Layered Multicast
+</h1>
+<strong>
+Steve McCanne and Van Jacobson, LBL
+</strong>
+
+<p><b>One-line summary:</b> Each IP mcast group adds an incremental
+"layer" of a multimedia session transmission.  Receiver's decision to
+subscribe/unsubscribe groups is based on periodically running
+adaptive-timer-controlled "experiments" to see if adding a layer will
+cause congestion.  Other receivers near you observe your experiments,
+learn from them, and conditionally suppress their own experiments when
+others in progress, so number of experiments doesn't grow linearly with
+number of participants.  </p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Idea: deliver multiple layers of multimedia/realtime signals on
+       different "channels" (IP mcast grps).
+  <li> RLM focuses on
+       "cumulative" (adding layers increases quality incrementally) but
+       can also work with "simulcast" (each channel carries a complete
+       copy of the signal, but at different qualities/rates).
+  <li> Why not use priority-dropping of packets to achieve?
+       Priority-drop curve has no unique maximum (see fig 2 in paper),
+       therefore no convergence to single stable operating point, and a
+       misbehaving user has no incentive to reduce the requested rate so
+       would drive network into constant congestion.
+  <li> RLM doesn't ensure fairness itself, but should coexist well with
+       router-based schemes that do.
+  <li> Join experiment: test to see if adding another layer will improve
+       your quality or cause congestion (lower your quality).
+       <ul>
+         <li> Separate join-timer w/exponential backoff used for each
+              layer of subscription.
+         <li> If join-experiment outlasts detection-time without
+              congestion, experiment is successful and the layer is
+              added.  If expt. fails, the layer is quickly removed.
+              Detection time and its variance are tracked and adapted
+              using failed join-expts.
+         <li> Scaling: "shared learning". Local receivers listen and
+              learn from (adjust their join-timers from) local peers'
+              failed join-expts.
+         <li> Local receivers suppress starting an expt if they detect
+              one in progress (reduce probability of expts interfering
+              w/each other).
+         <li> Exception: allow overlap of an expt. at same or lower
+              level with one already in progress, to allow newer
+              receivers with lower subscription levels to converge to
+              optimum point more quickly.
+       </ul>
+  <li> Protocol operation:
+       <ul>
+         <li> Formally described by a 4-state machine: steady state,
+              hysteresis, 
+              measurement, drop-layer.  See state diag. in fig 6.
+         <li> Join-timer <i>backoff</i>: multiplicative increase of join
+              timer when an expt fails, clamped to a maximum which is
+              based on current number of receivers.  This qty is
+              estimated from RTCP control messages, so that
+              <i>aggregate</i> join-expt rate is fixed indept of
+              session size.
+         <li> Join-timer <i>relaxation:</i> (slower) geometric decrease by Beta
+              at every detection-timer interval, clamped to a minimum.
+         <li> Detection-time estimate: since detection is the time
+              between initiation of an experiment and feedback as to
+              what it caused, detection time is computed by correlating
+              failed-experiment start times with onset of congestion.
+              Congestion is detected by latency measurements from failed
+              experiments, passed through a low-pass filter.
+       </ul>
+  <li> Simulations:
+       <ul>
+         <li> Claim: don't necessarily show that RLM is absolutely
+              scalable, but do show that scaling behavior matches
+              authors' intuitions in coming up with the mechanisms.
+         <li> CBR streams have interarrival times that are constant
+              perturbed by zero-mean noise process.  Fails to capture
+              burstiness in video streams, but bursty
+              sources can be smoothed by applying rate control.
+              (Therefore not clear how applicable RLM is to bursty
+              sources.)
+         <li> Simulated 4 different topologies (fig 7):
+              <ol>
+                <li> point to point
+                     w/bottleneck link (PP), one source, one receiver
+                <li> PP with one "endpoint" being a
+                     subtree (LAN), (one source, many receivers)
+                <li> PP with subtrees hanging off a couple of
+                     intermediate links (one source, many receivers)
+                <li> PP with both endpoints being subtrees: many
+                     sources, many receivers
+              </ol>
+         <li> Latency scalability: as expected, packet loss rate
+              increases rapidly (exponentially!) with join/leave
+              latency, since it takes longer for failed experiments to
+              be stopped and timers to be backed off, prolonging
+              congestion periods.
+         <li> Session scalability (topology 2):
+              packet loss rate is about constant independent of number
+              of receivers.  Therefore shared-learning mechanisms seem
+              to be aiding scalability.
+         <li> Bandiwdth heterogeneity: 
+              packet loss rate is about constant across receivers with
+              many different bandwidth constraints, though short-term
+              congestion periods slightly larger at larger session
+              sizes.
+         <li> Superposition of sessions (topology 4): when independent
+              single-source/single-receiver sessions share a common
+              link, the bottleneck link utilization steadied out at
+              close to 1, but often was unfair (though there wasn't
+              starvation). 
+       </ul>
+  <li> Network implications/assumptions:
+       <ul>
+         <li> All users assumed to cooperate
+         <li> Performance depends critically on mcast join/leave latency
+         <li> When multiple sources, "good" performance not well defined
+              (partitioning across sessions or users?).  Similarly: what
+              is "good" interaction with TCP?
+       </ul>
+  <li> Interesting future work: since video compression used produces a
+       prefix code, can partition bit rate arbitrarily among layers, and
+       vary allocation dynamically.
+</ul>
+
+<h2>Relevance</h2>
+
+Elegant leveraging of mcast routing work (can assume traffic only
+flowing on a branch if there's an interested receiver downstream) and
+application of SRM-like ideas (receiver-based "learn from your peers"
+mechanisms) to achieve a scalable and versatile heterogeneous-network
+multimedia transmission scheme.
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Bursty sources - ugh
+  <li> Interaction of multiple RLM sessions that share some but not all
+       of the multicast tree?  What effects on fairness?
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@added rlm
+@
+text
+@d14 8
+a21 3
+<p><b>One-line summary:</b>
+
+</p>
+d37 2
+d60 62
+d137 6
+d146 3
+a148 1
+
+@

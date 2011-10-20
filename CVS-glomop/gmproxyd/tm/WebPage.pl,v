@@ -1,0 +1,345 @@
+head	1.6;
+access;
+symbols
+	current:1.6
+	prewink:1.2
+	stable:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	96.08.23.19.37.27;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.07.26.20.32.17;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.07.09.02.53.48;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.07.07.00.04.03;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.07.01.04.01.04;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.07.00.34.19;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  WebPage document type
+#  $Id: WebPage.pl,v 1.1 96/08/19 14:40:28 glomop Exp $
+#
+
+package doc::WebPage;
+require "layout.pl";
+require "htmltowml.pl";
+require "giftoppm.pl";
+require "ppmtoicap.pl";
+
+# This module parses HTML and outputs an intermediate form (call it "HTML
+# prime").  The HTML' spec is described elsewhere. (BUG::where?)
+
+sub segment {
+    my ($doc,$client,$prefs) = @@_;
+    my $doc_id = $doc->id;
+    my $filename = $doc->filename;
+    my %prefs = %{$prefs} if ref($prefs) eq 'HASH';
+    my $textchunk;
+    my $remain;
+
+    my @@newchunks;
+
+    @@chunks = &doc::htmltowml::convert($doc,$client,$prefs);
+    my ($ntextchunks, $nimagechunks) = (0,0);
+
+    my $ly = new layout (0,0,320,1000);
+
+    foreach $ch (@@chunks) {
+        if ($ch->mime_type =~ m!text/.*! ) {
+            $ntextchunks++;
+            $_ = $ch->data;
+            s/\n\n+/\n/gm;                  # squeeze multiple newlines to a
+                                            # single newline
+            $ch->data($_);
+            # lay out the text chunk; if necessary continue flowing until all
+            # text is done
+            my $leftover;
+            do {
+                $leftover = $ly->pack_dynamic($ch, \&layout::meas, -1);
+                # HACK::since client doesn't have access to metadata yet...
+                if ($leftover != -1) {
+                    $ch->data($ch->metadata . "\n" . $ch->data);
+                    push(@@newchunks, $ch);
+                }
+                $ch = $leftover;
+            } while (defined ($ch) && $ch != -1);
+        } elsif ($ch->mime_type =~ m!image/.*!) {
+            # HACK: we are clandestinely importing the doc::UA object.
+            # it should be cleanly available as a service interface, not
+            # an object. 
+            $nimagechunks++;
+            # fetch it - ignore errors for now
+            my $url = $ch->data->[0];
+            my $attribs = $ch->data->[1];
+            &util::debug('WebPage', "Fetching $url");
+            my $res = new HTTP::Request "GET", $url;
+            my $s = $doc::UA->request($res);
+            # hopefully, $s->is_success is true....
+            # run the GIF to PPMlite converter
+            if (! ($s->is_success)) {
+                &util::debug('WebPage',
+                             join(' ', "Warning: Fetch failed:",
+                                  $s->code, $s->message));
+                $ch->mime_type("text/plain");
+                $ch->data("MISSING IMAGE");
+                push(@@newchunks,$ch);
+            } else {
+                #
+                # BEGIN MANY HACKS
+                #
+                $ch->data($s->content);
+                # convert to ppm; will leave dimensions as "NNxNN" in metadata.
+                my $newchunk = &doc::giftoppm::convert($ch,$client,$prefs);
+                # 
+                $newchunk = &doc::ppmtoicap::convert($newchunk, $client, $prefs);
+                # pack the image; will update metadata to "NNxNN+NN+NN".
+                my $res = $ly->pack_static($newchunk,
+                                 ($attribs->{"ALIGN"} =~ /right/i
+                                  ? 1
+                                  : -1));
+                last if $res == -1;         # out of space on form!
+                # BUG::need to check for errors
+                my $filename = &util::dump($newchunk->data);
+                $newchunk->data($newchunk->metadata . "\n" . $filename . chr(0));
+                push(@@newchunks, $newchunk);
+                &util::debug('WebPage',
+                             "Image from '$url' dumped to file '$filename'");
+            }
+        }
+    }
+    &util::debug('WebPage', sprintf("%d text and %d image chunks",
+                                    $ntextchunks, $nimagechunks));
+    unshift(@@newchunks, (toc chunk $doc_id, "", @@newchunks));
+    return @@newchunks;
+}
+
+1;
+@
+
+
+1.5
+log
+@WebPage can now actually parse web pages, sort of.... html_parser was
+moved (perhaps unwisely?) to gmproxyd main directory.
+@
+text
+@d3 1
+d7 1
+d28 2
+d37 12
+a48 2
+            # should call wmltoicap here to make icap text object...
+            push(@@newchunks,$ch);
+d71 1
+a71 1
+                # BEGIN HACK
+d74 1
+d76 1
+d78 6
+d86 1
+a86 1
+                $newchunk->data($filename . chr(0));
+@
+
+
+1.4
+log
+@imported from wink, 7/8 pm.  major changes to WebPage to actually do the
+chunking, and minor enhancmenets to html parser to support it.
+@
+text
+@d6 3
+a8 1
+require "./html_parser.pl";
+a12 25
+sub single {
+    my ($content, $client, $prefs) = @@_;
+
+    my $parser = new html_parser ($content,
+                                  \&doc::WebPage::html_content,
+                                  \&doc::WebPage::html_whitespace,
+                                  \&doc::WebPage::html_debug);
+
+    $parser->{"bigtextchunk"} = '';
+    $parser->tag_begin("IMG", \&doc::WebPage::inline_img);
+
+    # parse until an IMG tag is seen.
+    
+    my $remaining = $parser->parse_html_string;
+
+    # an IMG tag was seen, or the end of the html was reached....
+    $parser->{"bigtextchunk"} =~ s/\n\n+/\n/gm;
+
+    # return as single chunk
+    return ($remaining,
+            new chunk ("text/plain", undef, undef, 1,
+                      $parser->{"bigtextchunk"}, undef, undef,
+                       "HTML-lite intermediate form"));
+}
+        
+a16 1
+    my @@chunks = ();
+a19 2
+    
+    $remain = &util::slurp($filename);
+d21 3
+a23 16
+    my $parser = new html_parser (&util::slurp($filename),
+                                  \&doc::WebPage::html_content,
+                                  \&doc::WebPage::html_content,
+                                  \&doc::WebPage::html_debug
+                                  );
+
+    $parser->{"chunks"} = [];
+    $parser->{"chunknum"} = 0;
+    $parser->{"current"} = '';
+    
+    $parser->tag_begin("IMG", \&doc::WebPage::do_img);
+    $parser->parse_html_string;
+
+    # When done, parser->chunks will be an array reference pointing to the list
+    # of chunks generated.  Some will be "text/plain", others "image/ppm".
+    
+d25 1
+a25 1
+    my @@chunks = @@{$parser->{"chunks"}};
+d30 2
+a31 1
+            s/\n\n+/\n/gm;
+d33 6
+a38 2
+            warn "Text: " . $ch->data;
+        } elsif ($ch->mime_type eq 'image/ppm') {
+d40 29
+a68 5
+            # transcode to icap
+            my $tmp = &util::dump($ch->data);
+            my $tmp2 = &util::mktemp;
+            warn "Image URL: " . $ch->data;
+            warn("ppmtoicap -ifp $tmp -ofp $tmp2 -colors 4");
+d71 4
+a74 22
+    warn (sprintf("%d text and %d image chunks", $ntextchunks, $nimagechunks));
+    unshift(@@chunks, (toc chunk $doc_id, "", @@chunks));
+    return @@chunks;
+}
+
+sub do_img {
+    my ($parser, $tag, $text, $attr) = @@_;
+    if ($parser->{"current"}) {
+        ($parser->{"chunknum"})++;
+        push(@@{$parser->{"chunks"}},
+             new chunk ("text/plain", undef, undef, $parser->{"chunknum"},
+                        $parser->{"current"}, undef, undef,
+                        "Text " . $parser->{"chunknum"}));
+        $parser->{"current"} = '';
+    }
+    my $url = ($attr->{"src"} || $attr->{"SRC"});
+    warn "Fetching image: $url";
+    ($parser->{"chunknum"})++;
+    push(@@{$parser->{"chunks"}},
+         new chunk ("image/ppm", undef, undef, $parser->{"chunknum"},
+                    $url, undef, undef,
+                    "Image " . $parser->{"chunknum"}));
+a76 9
+sub html_content {
+    my ($parser,$content) = @@_;
+    $parser->{"current"} .= $content;
+}
+
+sub html_debug {
+    my ($parser,$warning) = @@_;
+    warn "HTML parser: $warning\n";
+}
+@
+
+
+1.3
+log
+@Various bugs fixed in html parser; new IcapImage module (for testing
+only right now)
+@
+text
+@d8 28
+d42 5
+d53 5
+a57 2
+    $parser->{"bigtextchunk"} = '';
+
+d60 22
+a81 7
+    # When done, the parser->bigtextchunk will contain a bunch of HTML (or HTML
+    # lite, or whatever) text.
+
+    $parser->{"bigtextchunk"} =~ s/\n\n+/\n/gm;
+    push(@@chunks, new chunk
+         ("text/plain", undef, $doc_id, 1, $parser->{"bigtextchunk"}, undef,
+          undef, "HTML page"));
+d86 19
+d107 1
+a107 1
+    $parser->{"bigtextchunk"} .= $content;
+@
+
+
+1.2
+log
+@Added the beginnings of a WebPage module, including the "obj oriented"
+version of the free HTML parser
+@
+text
+@d6 1
+a6 1
+require "html_parser.pl";
+d9 3
+a11 1
+    my ($doc_id, $filename, $prefs) = @@_;
+d27 1
+@
+
+
+1.1
+log
+@Added files for Image and WebPage document types (htypes).
+@
+text
+@d6 1
+d8 33
+@

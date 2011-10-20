@@ -1,0 +1,636 @@
+head	1.15;
+access;
+symbols
+	Yatin-final:1.14.2.3
+	Yatin:1.14.0.2
+	pre-yatin-merge:1.14
+	transend-beta2:1.13
+	fox-dev:1.13
+	ptm-ng:1.13
+	transend-beta-latest:1.13
+	Aggregators:1.13
+	NoAggregators:1.13
+	iang:1.13.0.4
+	transend-beta:1.13.0.2
+	SOSP:1.12
+	stable_ptm:1.11
+	merged_preintegrate:1.10
+	heisenbug:1.10
+	PRE_INTEGRATION:1.10;
+locks; strict;
+comment	@ * @;
+
+
+1.15
+date	98.01.16.22.16.24;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.15.03.09.38;	author yatin;	state Exp;
+branches
+	1.14.2.1;
+next	1.13;
+
+1.13
+date	97.04.17.21.45.19;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.17.03.01.21;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.29.06.00.55;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.12.07.01.47.47;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.12.05.01.40.22;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.05.01.27.23;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.11.24.08.12.23;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.23.06.03.25;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.23.00.51.20;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.09.42.49;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.08.21.40;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.56;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.55;	author yatin;	state Exp;
+branches;
+next	;
+
+1.14.2.1
+date	97.12.01.22.19.36;	author iang;	state Exp;
+branches;
+next	1.14.2.2;
+
+1.14.2.2
+date	97.12.02.21.04.37;	author iang;	state Exp;
+branches;
+next	1.14.2.3;
+
+1.14.2.3
+date	97.12.02.22.04.48;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "config_tr.h"
+#include "distinterface.h"
+#include "proxyinterface.h"
+#include "monitor.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define Message(x) MonitorClientSend(mon,"Distiller Errors",(x),"Log")
+
+MonitorClientID mon;
+
+DistillerStatus
+DistillerInit(C_DistillerType distType, int argc, const char * const * argv)
+{
+  mon = DistillerGetMonitorClientID();
+  
+  Message("distengine started\n");
+
+  InitializeDistillerCache(Options_DefaultDb(),
+			   MonitorClientUnitID(DistillerGetMonitorClientID()));
+  return distOk;
+}
+
+
+void DistillerCleanup()
+{
+}
+
+
+DistillerStatus
+ComputeDistillationCost(Argument *args, int numberOfArgs,
+			DistillerInput *input, DistillationCost *cost)
+{
+  cost->estimatedTime_ms = 0;
+  return distOk;
+}
+
+
+DistillerStatus
+DistillerMain(Argument *args, int  numberOfArgs,
+	      DistillerInput *input, DistillerOutput *output)
+{
+  char msg[200];
+  int t = 0;
+  DistillerStatus status;
+  C_DistillerType type;
+  struct {
+    DistillerRequestType dr;
+    DistillerOutput output;
+  } as[5];
+  int i, left;
+  sprintf(type.string, "foo/%s", MimeType(input));
+  left = 0;
+  for(i=0;i<5;++i) {
+      status = DistillAsync(&type, args, numberOfArgs, input, &as[i].dr);
+      if (status != distOk) {
+	DistillDestroy(&as[i].dr);
+	fprintf(stderr, "number %d destroyed\n", i);
+	return status;
+      } else {
+	left++;
+      }
+  }
+  i = 0;
+  do {
+      struct timeval tv;
+      tv.tv_sec = 0;
+      tv.tv_usec = 500000;
+      ++t;
+      ++i; if (i == 5) i = 0;
+      if (!as[i].dr) continue;
+      status = DistillRendezvous(&as[i].dr, i ? &as[i].output : output, &tv);
+      if (status != distRendezvousTimeout) --left;
+      fprintf(stderr, "try %d left = %d status = %d\n", t, left, status);
+      sprintf(msg, "%p %p %p %p %p\n",
+	as[0].dr, as[1].dr, as[2].dr, as[3].dr, as[4].dr);
+      Message(msg);
+  } while (left);
+  return status;
+}
+@
+
+
+1.14
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d9 3
+d16 4
+d44 3
+d48 5
+d54 27
+a80 1
+  return Distill(&type, args, numberOfArgs, input, output);
+a81 1
+
+@
+
+
+1.14.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@a8 3
+#define Message(x) MonitorClientSend(mon,"Distiller Errors",(x),"Log")
+
+MonitorClientID mon;
+a12 4
+  mon = DistillerGetMonitorClientID();
+  
+  Message("distengine started\n");
+
+a36 3
+  char msg[80];
+  int t = 0;
+  DistillerStatus status;
+a37 5
+  struct {
+    DistillerRequestType dr;
+    DistillerOutput output;
+  } as[5];
+  int i, left;
+d39 1
+a39 26
+  left = 0;
+  for(i=0;i<5;++i) {
+      status = DistillAsync(&type, args, numberOfArgs, input, &as[i].dr);
+      if (status != distOk) {
+	DistillDestroy(&as[i].dr);
+	fprintf(stderr, "number %d destroyed\n", i);
+	return status;
+      } else {
+	left++;
+      }
+  }
+  i = 0;
+  do {
+      struct timeval tv;
+      tv.tv_sec = 0;
+      tv.tv_usec = 10000;
+      ++t;
+      ++i; if (i == 5) i = 0;
+      if (!as[i].dr) continue;
+      status = DistillRendezvous(&as[i].dr, &as[i].output, &tv);
+      if (status != distRendezvousTimeout) --left;
+      fprintf(stderr, "try %d left = %d status = %d\n", t, left, status);
+      fprintf(stderr, "%p %p %p %p %p\n",
+	as[0].dr, as[1].dr, as[2].dr, as[3].dr, as[4].dr);
+  } while (left);
+  return status;
+d41 1
+@
+
+
+1.14.2.2
+log
+@.
+@
+text
+@d44 1
+a44 1
+  char msg[200];
+d69 1
+a69 1
+      tv.tv_usec = 100000;
+d73 1
+a73 1
+      status = DistillRendezvous(&as[i].dr, i ? &as[i].output : output, &tv);
+d76 1
+a76 1
+      sprintf(msg, "%p %p %p %p %p\n",
+a77 1
+      Message(msg);
+@
+
+
+1.14.2.3
+log
+@DistillRendezvous() now works on Solaris
+@
+text
+@d69 1
+a69 1
+      tv.tv_usec = 500000;
+@
+
+
+1.13
+log
+@config.h is now config_tr.h
+@
+text
+@d3 1
+a9 3
+static MonitorClientID mc;
+
+
+d11 1
+a11 1
+DistillerInit()
+d13 2
+a14 2
+  mc = DistillerGetMonitorClientID();
+  srand(time(NULL));
+a20 1
+  MonitorClientDestroy(mc);
+d25 2
+a26 3
+ComputeDistillationCost(Argument *args,   int    numberOfArgs,
+			DistillerInput *input,
+			DistillationCost *cost)
+d28 1
+a28 1
+  cost->estimatedTime = rand() % 250;
+d34 2
+a35 4
+__DistillerMain(Argument *args,    int    numberOfArgs,
+		void     *input,   UINT32 inputLength,
+		void     **output, UINT32 *outputLength, 
+		gm_Bool  *freeOutputBuffer)
+d37 3
+a39 46
+  char blank[] = "                     ";
+  int i;
+  fprintf(stderr, "%sNumber of arguments = %d\n", blank, numberOfArgs);
+  for (i=0; i<numberOfArgs; i++) {
+    switch(getArgumentFromId(args, numberOfArgs, i)->type) {
+    case typeInt:
+      fprintf(stderr, "%sInt = %lu, Id = %lu\n", blank, ARG_INT(args[i]), 
+	      args[i].id);
+      break;
+    case typeString:
+      fprintf(stderr, "%sString = %s, Id = %lu\n", blank, ARG_STRING(args[i]),
+	      args[i].id);
+      break;
+    case typeDouble:
+      fprintf(stderr, "%sDouble = %f, Id = %lu\n", blank, ARG_DOUBLE(args[i]),
+	      args[i].id);
+      break;
+    default:
+      fprintf(stderr, "%sUnknown type, Id = %lu\n", blank, args[i].id);
+      break;
+    }
+  }
+
+  fprintf(stderr, "%sInput = %s\n", blank, (char*)input);
+  *output = DistillerMalloc(50+inputLength);
+  sprintf((char*)*output, "The input received was %s", (char*)input);
+  *outputLength = strlen((char*)*output) + 1;
+  sleep(2);
+  *freeOutputBuffer = gm_True;
+  return distOk;
+}
+
+
+DistillerStatus
+DistillerMain(Argument *args,    int    numberOfArgs,
+	      DistillerInput *input, DistillerOutput *output,
+	      gm_Bool  *freeOutputBuffer)
+{
+  char buffer[256];
+  fprintf(stderr, "Dist: Received input of size %lu\n", input->length);
+  //MonitorClientSend(mc, "Distiller Log", buffer, "Log");
+  *output = *input;
+  *freeOutputBuffer = gm_False;
+  usleep(rand() % 350);
+  //sleep(6*60);
+  return distOk;
+@
+
+
+1.12
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d1 1
+a1 1
+#include "config.h"
+@
+
+
+1.11
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d82 2
+a83 2
+  sprintf(buffer, "Received input of size %lu\n", input->length);
+  MonitorClientSend(mc, "Distiller Log", buffer, "Log");
+d87 1
+@
+
+
+1.10
+log
+@Just doing a commit before leaving for India
+@
+text
+@d15 1
+a15 1
+  mc = MonitorClientCreate("all/passthru", "228.8.8.8", 8888, 1);
+d29 1
+a29 1
+			void     *input,  UINT32 inputLength,
+d57 1
+a57 1
+      fprintf(stderr, "%sDouble = %lf, Id = %lu\n", blank, ARG_DOUBLE(args[i]),
+d78 1
+a78 2
+	      void     *input,   UINT32 inputLength,
+	      void     **output, UINT32 *outputLength, 
+d82 1
+a82 1
+  sprintf(buffer, "Received input of size %lu\n", inputLength);
+d84 1
+a84 2
+  *output = input;
+  *outputLength = inputLength;
+@
+
+
+1.9
+log
+@Added DistillerMalloc and DistillerFree to distiller.cc
+@
+text
+@d3 1
+d9 3
+d15 2
+d23 1
+d38 4
+a41 3
+DistillerMain(Argument *args,   int    numberOfArgs,
+	      void     *input,  UINT32 inputLength,
+	      void     **output,UINT32 *outputLength, gm_Bool *freeOutputBuffer)
+d72 17
+@
+
+
+1.8
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@a66 11
+void *DistillerMalloc(size_t size)
+{
+  return malloc(size);
+}
+
+
+void DistillerFree(void *pointer)
+{
+  if (pointer!=NULL) free(pointer);
+}
+
+@
+
+
+1.7
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d33 1
+a33 1
+	      void     **output,UINT32 *outputLength, Bool *freeOutputBuffer)
+d63 1
+a63 1
+  *freeOutputBuffer = TRUE;
+@
+
+
+1.6
+log
+@Removed bugs from stub.cc etc.
+@
+text
+@d5 1
+d20 8
+d61 1
+a61 1
+  *outputLength = strlen((char*)*output);
+@
+
+
+1.5
+log
+@Update after merging config.h.in
+@
+text
+@d4 1
+d50 1
+a50 1
+  *output = DistillerMalloc(300);
+@
+
+
+1.4
+log
+@The proxy front-ends can now spawn new PTM if it detects that there isn't
+any PTM running.
+@
+text
+@d1 1
+a1 1
+#include "c_defines.h"
+@
+
+
+1.3
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d29 1
+a29 1
+    switch(args[i].type) {
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d1 1
+d7 14
+d23 1
+a23 1
+	      void     **output,UINT32 *outputLength)
+d53 1
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d16 1
+a16 1
+      fprintf(stderr, "%sInt = %lu, Id = %lu\n", blank, args[i].arg_int, 
+d20 1
+a20 1
+      fprintf(stderr, "%sString = %s, Id = %lu\n", blank, args[i].arg_string, 
+d24 1
+a24 1
+      fprintf(stderr, "%sDouble = %lf, Id = %lu\n", blank, args[i].arg_double, 
+d37 1
+@

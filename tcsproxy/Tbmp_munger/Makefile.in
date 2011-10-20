@@ -1,0 +1,67 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+
+INCLUDEPATH = @INCLUDEPATH@ include .
+INCLUDE = $(patsubst %,-I%,$(INCLUDEPATH))
+CFLAGS = @CFLAGS@ @CPPFLAGS@ $(INCLUDE)
+LDFLAGS = -L. @LDFLAGS@
+DISTLIB = -L../lib -ldist -lclib -lmon
+
+LIBS = @LIBS@ -lppm -lpgm -lpbm -ljpeg -lm @LIBTHREAD@
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef DEBUGGING
+	CFLAGS += -DDEBUGGING
+endif
+
+# Make sure common code in giftoppm_munge and jpgtoppm_munge is included only once
+CFLAGS += -DBUNDLED
+
+TARGETS = Tbmp_munger
+
+all: $(TARGETS)
+
+install: ../sbin/$(TARGETS)
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+$(TARGETS): ppmbufs.o ppmbufquant.o pnmbufscale.o jpgtoppm_munge.o giftoppm_munge.o gj_mem_src_dst_mgr.o Tbmp_munge.o ../lib/libdist.a
+	$(LD) -O2 -o $@ $^ $(LDFLAGS)  $(DISTLIB) $(LIBS)
+
+
+test_jpgtoppm: jpgtoppm_munge.o gj_mem_src_dst_mgr.o test_jpgtoppm.o
+	$(LD) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) -lm -ljpeg
+
+test_giftoppm: giftoppm_munge.o gj_mem_src_dst_mgr.o test_giftoppm.o
+	$(LD) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) -lm -ljpeg
+
+test_pnmbufscale: pnmbufscale.o test_pnmbufscale.o ppmbufs.o
+	$(LD) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) -lm
+
+test_tbmp: ppmbufs.o ppmbufquant.o pnmbufscale.o jpgtoppm_munge.o giftoppm_munge.o gj_mem_src_dst_mgr.o Tbmp_munge.o
+	$(LD) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) -lm
+
+../lib/libdist.a:
+	cd ../ptm && $(MAKE) install
+
+%.o: src/%.c ../config_tr.h include/ARGS.h
+	$(CC) $(CFLAGS) -o $@ -c $< 
+
+tags:
+	etags src/*.[ch]
+
+clean:
+	rm -f *.o *~ test_jpgtoppm test_giftoppm test_pnmbufscale test out.jpg
+
+distclean: clean
+	rm -f Makefile

@@ -1,0 +1,3017 @@
+head	1.31;
+access;
+symbols
+	release:1.30
+	geoworks:1.30.2.1
+	pregeo:1.30
+	geoworks-0701:1.30.2.1
+	geoworks-062696:1.30
+	dev:1.25
+	demo:1.23.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.31
+date	96.07.04.02.38.45;	author fox;	state Exp;
+branches;
+next	1.30;
+
+1.30
+date	96.04.04.01.46.29;	author fox;	state Exp;
+branches
+	1.30.2.1;
+next	1.29;
+
+1.29
+date	96.03.12.22.25.21;	author fox;	state Exp;
+branches;
+next	1.28;
+
+1.28
+date	96.03.09.23.36.08;	author fox;	state Exp;
+branches;
+next	1.27;
+
+1.27
+date	96.02.21.22.35.02;	author fox;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	96.02.16.21.47.16;	author fox;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	95.12.08.00.27.38;	author fox;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	95.11.28.01.01.36;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	95.11.15.10.10.53;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	95.11.14.06.54.10;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	95.11.10.08.52.18;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	95.11.10.08.27.45;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	95.11.03.21.46.54;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	95.10.31.07.08.12;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	95.10.28.01.53.55;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	95.10.24.06.24.37;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.10.24.01.16.31;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.10.17.01.46.50;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.09.27.20.34.20;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.09.19.21.03.55;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.09.17.23.02.18;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.09.17.20.42.53;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.09.15.20.38.53;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.09.13.02.09.39;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.09.12.02.39.35;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.09.11.20.23.44;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.09.10.00.34.17;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.09.07.21.02.58;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.09.07.18.06.27;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.30.00.00.38;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.29.21.44.09;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches;
+next	;
+
+1.30.2.1
+date	96.07.04.03.18.43;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.31
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#  Child process instantiation for proxy server
+#
+#  When reading this code, remember that this process is instantiated per HTTP
+#  connection!  So a lot of globals that look unsafe are actually safe, because
+#  their state is reinitialized on each new HTTP request.
+#
+
+# Regexp that, if anchored at the end of a URL, indicates that the client is
+# requesting a refinement of a previously-returned image, rather than a new
+# document.  The refinement request contains the four bbox coords of the
+# requested refinement area.
+
+#----------------------------------------------------------------------
+#  global constants
+#----------------------------------------------------------------------
+
+# BUG: the key should include a magic cookie unlikely to have been generated at
+# random.  Not clear what kind of magic cookie value would work well.  Should
+# it be preserved across sessions?
+
+$Const{SubblockKey} = ';(\d+)$';                   # for detecting refine tag 
+$Const{SubblockKeyPrint} = ';%s';                  # for generating refine tag
+$Const{Crlf} = "\r\012";
+$Const{HTTPVersion} = 'HTTP/1.0';           # http version for headers going
+                                            # back to client
+
+#----------------------------------------------------------------------
+#  global variables
+#----------------------------------------------------------------------
+
+$HTTPstatus = 200;                          # status returned by server
+$HTTPmessage = '';                          # and status message
+$MaxRefine = 2;                             # indicates max refinement level
+$Refinement = '';                           # if nonempty, contains refine tag
+%MyPrefs = ();                              # user prefs (to be looked up)
+$Request = '';                              # req first line
+$ReqType = SimpleRequest;                   # req type (see HTTP spec)
+$URL = '';                                  # full URL of request
+%ClientHeaders = ();                        # headers from client req
+$Protocol = $Const{HTTPVersion};            # def protocol for svr request
+$Method = "GET";                            # req method, if not present
+$Socket = '';                               # socket back to client
+$Svr = '';                                  # Socket to HTTP  server
+
+######################################################################
+#  Here after fork to handle new HTTP connection.
+#
+#  Returns: nothing (exits when done, through child_cleanup routine)
+#
+#  Side effects:
+#       Handles all interaction associated with satisfying a collected HTTP
+#       request from client
+#
+#  Arguments:
+#       Open socket object from client
+#       URL of requested object
+#       HTTP method to use (GET, POST, etc), copied from HTTP request
+#       Protocol and version from HTTP req.  Should be HTTP/xx.xx
+#       Request type: SimpleRequest or FullRequest.  See HTTP 1.0 spec.
+#       Client headers: hash of all headers in request.  Hash keys are field
+#       names, values are field contents. Case is preserved.
+#
+#  Side effects:
+#       Sets globals $Socket, $URL, $Method, $Proto, $ReqType, %ClientHeaders
+#               according to args passed in.
+#       Sets global $Refinement to the "refinement tag" associated with this
+#               request (empty=fetch original).  The relay_reply routine knows
+#               how to parse this (whether to call a distiller).
+#       Sets global %MyPrefs to hash of user preferences; if unauthorized
+#               access, forces user to go to Registration page.
+######################################################################
+
+sub handle_conn {
+    my %replyhash;
+    my $newurl;
+    my %requestdata;
+    
+
+    ($Socket, $URL, $Method, $Proto, $ReqType, %ClientHeaders) = @@_;
+
+    # NOK::If this appears to be a Nokia Responder, remap the IP address so we
+    # can identify the client easily.
+
+    if ($ClientHeaders{"User-Agent"} =~ /\bnokia\b/i) {
+    }
+
+    #$SIG{'INT'} = child_interrupted;
+    &debug('conn',"From $IPaddr: $Request");
+
+    # if this isn't a registered user, make some default prefs.
+
+    %MyPrefs = &get_prefs($IPaddr);
+    if (keys(%MyPrefs) < 1) {
+        # access to unallowed page: create a default registration
+        # for client, and proceed.  
+        my $dummy = &register("", $IPaddr);
+        %MyPrefs = &get_prefs($IPaddr);
+    }
+
+    #
+    # If the SubblockKey string ends the URL, this is a request for refinement,
+    # rather than a whole new request.  In this case, remove the subblock key,
+    # refetch the original document (BUG: should be caching documents for a
+    # short time, e.g. 10 minutes), and perform the subblock extraction.
+    #
+    
+    if ($URL =~ s#$Const{SubblockKey}##o) {
+        $Refinement = $1;
+        &debug('refine',"Refinement request (level=$Refinement) for $URL");
+    } else {
+        $Refinement = '';
+    }
+
+    # forward request to http server.
+
+    &forward_request unless $Method =~ /post/i;
+
+    # get reply headers from http server.  the default reply status is "200
+    # OK".  if we see a different status from the server, we will use it
+    # instead. 
+
+    ($HTTPstatus, $HTTPmessage) = ("200", "OK");
+    while (($_ = $Svr->readsock()) !~ /^\s*$/ ) {
+        # look for http status
+        (($HTTPstatus, $HTTPmessage) = ($1,$2), 
+         &main::debug('http', "Status: $_"),
+         next)
+            if ( /^[^:]+\s+(\d+)\s+(.*)$/ ) ;
+        $replyhash{$1} = $2 if /^(\S+):\s*(.*)$/ ;
+        &debug('server',"svr-->: $_");
+    }
+
+    # relay the headers and the content, possibly after distilling it.
+
+    &relay_reply(\%replyhash)
+        || &http_error("500 Internal relay-reply failed");
+
+    # all done. clean up after ourselves (close sockets, etc.)
+
+    &child_cleanup;
+}
+
+#--------------------------------------------------------------------------
+#   do_register
+#
+#   Send the registration page to the client, either because it was explicitly
+#   requested (for a prefs change) or because an unauthorized access has been
+#   attempted.
+#
+#   Arguments:
+#       IP address (as string) of requesting client
+#---------------------------------------------------------------------------
+
+sub do_register {
+    # Send the registration page. If this is a client we know about (based on
+    # IP addr), fill in client's prefs first - a nice personal touch
+    local($ipad) = shift;
+    local($html) = &regpage_with_prefs($ipad);
+    &http_error("", $html, "Change Pythia Prefs");
+}
+
+#---------------------------------------------------------------------------
+#   send_client
+#
+#   send stuff to the client.  wrapper is provided so the content can also be
+#   echoed to debugging output.
+#---------------------------------------------------------------------------
+
+sub send_client {
+    local($,) = '';
+    local($") = '';                         #"
+    $Socket->writesock(@@_);
+    &debug('echoall',"SEND >>>@@_<<<");
+}
+
+######################################################################
+#  forward request
+#
+#   send the client request on to the server indicated by the URL.
+#       If a gateway (firewall) was specified on cmd line,
+#       send the original HTTP request to the gateway
+#       instead.
+#
+#  Assumptions:
+#    Globals $URL, $Method, $Protocol, %ClientHeaders have been set (see
+#    handle_conn). 
+#    $Const{SubblockKey} is a template used to check URL for refinement info.
+#    $Const{Proxy}, $Const{Rev} are name and revision of this program.
+#    $Const{Crlf} contains the CR+LF necessary for HTTP.
+#    $g{gateway}, if not empty, is a firewall gateway that should handle the
+#       request.
+#
+#  Side effects:
+#    Global $Refinement is set to refinement tag portion of URL (may be empty
+#    string, meaning "send original").
+#    Global $Svr is created: socket object to HTTP server.
+#    Request gets forwarded to server.
+#
+#  Exceptions:
+#    Error conditions cause exit through http_error with appropriate error
+#    message sent to client:
+#       - protocol specified but no default port known
+#       - parsing error: URL can't be resolved into a hostname+port+objname
+#       - connection to http server can't be established
+######################################################################
+
+sub forward_request {
+    my($hostname,$http_port,$how,$obj);
+
+    if ($g{gateway} =~ /([^:]+):(\d+)/) {
+        ($hostname, $http_port) = ($1,$2);
+        $obj = $URL;
+    } else {
+        # determine hostname of server and open socket connection.  If no port
+        # number is given, assume port 80 (default http port)
+
+        if ($URL =~ m|^(\w+)://([^/:]+):(\d*)(/.*)$|) { # format is host:port
+            ($how,$hostname,$http_port, $obj) = ($1,$2,$3,$4);
+            ($http_port = $Port{$how}) ||
+                (&http_error("500 Don't know port for '$how'"))
+                    if $http_port eq '';
+        } elsif ($URL =~ m|^(\w+)://([^/:]+):?(/.*)$|) {
+            ($how,$hostname,$obj) = ($1,$2,$3);
+            ($http_port = $Port{$how})
+                || &http_error("500 Don't know port for '$how'");
+        } else {
+            &http_error("507 Weird HTTP parsing error - this is a Pythia bug");
+        }
+    }
+
+    # open socket to the real server
+
+    $Svr  = connectsock gm_sock $hostname,$http_port
+        or &http_error("500 Connection refused by $hostname:$http_port");
+
+    # write the whole request to the  server socket.  Cleverly add ourselves to
+    # the "User-agent" field if one was supplied.
+
+    $ClientHeaders{"User-Agent"} = "$Const{Proxy} $Const{Rev} for " .
+        ($ClientHeaders{"User-Agent"} || "anonymous");
+    
+    if ($ReqType eq 'FullRequest') {
+        $Svr->writesock( "$Method $obj $Protocol$Const{Crlf}");
+        &debug('http',"To server-->$Method $obj $Protocol");
+
+        foreach $key (keys %ClientHeaders) {
+            $Svr->writesock("$key: $ClientHeaders{$key}$Const{Crlf}");
+            $Svr->writesock($Const{Crlf});
+            &main::debug('http', "-->svr: $key: $ClientHeaders{$key}");
+        }
+    } else {
+        # simple request
+        $Svr->writesock("$Method $obj$Const{Crlf}$Const{Crlf}");
+        &debug('http',"-->svr: GET $obj");
+    }
+}
+
+#----------------------------------------------------------------------
+#  relay_reply:  Wait for reply from remote http server.  When Content-type and
+#  Content-length lines are seen, decide whether to do distillation or just
+#  forward the original document to client.
+#----------------------------------------------------------------------
+
+sub relay_reply {
+
+    # wait for reply, and send everything back to orig. client
+    #  Use line-at-a-time buffering until we see the Content-Type.
+
+    local($") = '';                         # "
+    my %replyhash = %{shift @@_};
+    my @@data = ();
+    my($pipe,$tmpfile,$len);
+    my $pkg;
+    my $mime;
+    my $data;
+    my @@endtime;
+        
+    # slurp rest of data
+    $data .= $_ while ($_ = $Svr->readsock_raw());
+    $FetchTime = time - $FetchTime;
+
+    # send client the HTTP status line.
+
+    &send_client("$Const{HTTPVersion} $HTTPstatus $HTTPmessage$Const{Crlf}");
+    
+    # If server reply was anything but 'OK', send the headers now, and
+    # immediately exit.
+
+    unless (1 || ($HTTPstatus =~ /^2/)) {
+        &main::log("*** Sending headers only for status $HTTPstatus $HTTPmessage");
+        &send_headers(\%replyhash);
+        $Socket->closesock();
+        $Svr->killsock();
+        return 1;
+    }
+    
+    if ($replyhash{"Content-type"} =~ m!(\S+/\S+)! ) {
+        $mime = lc $1;
+    } else {
+        &main::log("*** Bad Content-type `$_' from $URL; ".
+                   "assuming text/plain");
+        $mime = 'text/plain';
+    }
+    if ($distiller = &distiller::get_distiller($mime)) {
+        $pkg = $distiller->pkg . "::decide_distill";
+        #
+        # Get parameters for distillation, or determine that none is needed.
+        #
+        $params = &$pkg(\%replyhash, \%MyPrefs, \$data, $distiller->args);
+        if ($Refinement == $MaxRefine) {
+            &main::debug('refine',
+                         "Forwarding original $URL " .
+                         "(type=$mime max refinement='$Refinement')");
+            &forward_original(\%replyhash, \$data);
+        } elsif ($params eq '') {
+            &main::debug('refine', "Forwarding original $URL (null params)");
+            &forward_original(\%replyhash, \$data);
+        } else {
+            if ($distiller->is_server) {
+                #
+                #  forward via distillation server
+                #
+                my $host = $distiller->host;
+                my $port = $distiller->port;
+                &main::debug('refine',
+                             "Distilling $URL via $host:$port: $params");
+                &forward_via_distill_server($host,$port,$params,
+                                            \%replyhash, \$data);
+            } else {
+                #
+                #  forward by distilling via a shell pipeline. The actual
+                #  pipeline command was returned in $params, above.
+                #
+                &main::debug('refine',
+                             "Distilling $URL via external pipeline");
+                &forward_via_pipeline($params,\%replyhash, \$data);
+            }
+        }
+        #
+        #  Here if no distiller is known for this datatype
+        #
+    } elsif ($mime eq 'text/html') {
+        &debug('refine', "Munging HTML");
+        &forward_html($URL, $Refinement, \%replyhash, \$data, \%MyPrefs);
+    } else {
+        # Not a distillable type: forward original.
+        &debug('refine',"Ignoring Content-type: `$_'");
+        &forward_original(\%replyhash, \$data);
+    }
+
+    $Socket->closesock();
+
+    # all done: close server.
+
+    $Svr->killsock();
+
+    return 1;
+}
+
+sub forward_original {
+    my %headers = %{shift @@_};
+    my $data = $ {shift @@_};
+
+    &send_headers(\%headers);
+    &send_client($data);
+}
+
+#
+# send all headers to client, followed by blank line
+#
+sub send_headers {
+    my %headers = %{shift @@_};
+    foreach $k (keys %headers) {
+        &send_client("$k: $headers{$k}$Const{Crlf}");
+        &main::debug('client', "-->client: $k: $headers{$k}");
+    }
+    &send_client($Const{Crlf});
+}
+
+
+#---------------------------------------------------------------------------
+#  forward distillation by getting it from a running distillation server.
+#
+#  ARGS:
+#     hostname & port number of the distill server
+#     params to pass before data content
+#     headers from server (hash table)
+#  ACTION:
+#     open socket to distill server
+#     write params to socket
+#     read content data from server (socket $Svr), and write to distiller
+#     read output from distiller and use send_client to return it to client
+#---------------------------------------------------------------------------
+
+sub forward_via_distill_server {
+    my $data = $ {pop @@_};
+    my %headers = %{pop @@_};
+    my($host,$port,$params) = @@_;
+    my $newdata;
+    my ($sock, $contenttype);
+    my $osz = length($data);
+    my $nsz;
+    unless ($sock = connectsock gm_sock $host,$port) {
+        &main::log("*** Warning: connectsock failed to $host:$port, ".
+                   "deleting it from service registry");
+        # BUG: do it!
+        die;
+    }
+    #
+    #  write source document to distill server
+    #
+    $sock->writesock("d $params $data");
+    #
+    #  read new content-type line
+    #
+    if (($_ = $sock->readsock()) =~ m!(\S+)/(\S+)!) {
+        $contenttype = $_;
+    } else {
+        &main::log("*** Warning! Bad Content-type `$_' received from " .
+                   "distiller at $host:$port");
+    }
+    $newdata .= $_ while ($_ = $sock->readsock_raw());
+    $nsz = length($newdata);
+
+    # If new data is in fact smaller, send it.  Otherwise send original.
+
+    if ($nsz < $osz) {
+        $headers{"Content-type"} = $contenttype if $contenttype;
+        $headers{"Content-length"} = $nsz;
+        $data = $newdata;
+        &main::debug('stats',
+                     "$URL osz=$osz nsz=$nsz server=$FetchTime ".
+                     "distill=$DistillTime");
+    }
+    &send_headers(\%headers);
+    &send_client($data); # blank line sep
+    &send_client("$Const{Crlf}$Const{Crlf}"); # needed?
+    $sock->closesock();
+}
+
+#---------------------------------------------------------------------------
+#  forward distillation by sending it thru a pipeline.
+#---------------------------------------------------------------------------
+
+sub forward_via_pipeline {
+    my $params = shift;
+    my %hdrs = %{shift @@_};
+    my $data = $ {shift @@_};
+    my $nsz;
+    my $osz = length($data);
+    my $writes_stdout = 1;
+    
+    my $refineurl = "${URL};$MaxRefine";
+
+    # create temporary filenames for input and output files.
+    my ($ifile,$ofile,$errfile);
+
+    $errfile =  $hdrs{"Content-type"};
+    $errfile =~ s!/!_!g;
+
+    $ifile = "/tmp/${errfile}_i_$$";
+    $ofile = "/tmp/${errfile}_o_$$";
+    $errfile = "/tmp/${errfile}_err_$$";
+
+    $writes_stdout = 0 if ($params =~ s/%o/$ofile/g);
+    $params =~ s/%i/$ifile/g;
+    $params =~ s/%u/$refineurl/g;
+    unless (open(IFILE, ">$ifile")) {
+        &main::log("*** $URL: can't write $ifile: $!");
+        goto DONE_PIPELINE;
+    }
+    print IFILE $data;
+    close IFILE;
+
+    # run the pipeline.  if the pipeline writes to STDOUT, pipe the output
+    # directly to the client as it becomes available; otherwise wait for the
+    # pipeline to complete, and then send the output file.
+
+    &main::debug('refine', "Distilling $URL: `$params'");
+
+    if ($writes_stdout) {
+        unless (open(PIPE, "$params 2> $errfile |")) {
+            &main::log("$URL: popen `$params': $!");
+            goto DONE_PIPELINE;
+        }
+        delete $hdrs{"Content-length"};
+        chop($hdrs{"Content-type"} = <PIPE>);
+        &send_headers(\%hdrs);
+        &send_client($_) while <PIPE>;
+    } else {
+        if (system("$params 2> $errfile")) {
+            # error occurred during pipeline execution!
+            open(ER, $errfile) 
+                and $err = join ('', (<ER>)) 
+                    and close ER;
+            &main::log("$URL: `$params' ==> exit $? [$err]");
+            goto DONE_PIPELINE;
+        }
+        &main::debug('refine', "Distillation appears to succeed");
+        
+        # if new version is smaller, send it; otherwise, or if new version wasn't
+        # written, send original
+        
+        if ($nsz = -s $ofile) {
+            if ($nsz < $osz) {
+                unless (open(OFILE, $ofile)) {
+                    &main::log("*** $URL: can't read $ofile: $!");
+                    goto DONE_PIPELINE;
+                }
+                $hdrs{"Content-length"} = $nsz;
+                $data = '';
+                $data .= $_ while ($_ = <OFILE>);
+                close OFILE;
+            }
+        } else {
+            &main::log("*** WARNING! $URL: output size=0, using original");
+        }
+        
+        &send_headers(\%hdrs);
+        &send_client($data);
+    }        
+    unlink $ifile,$ofile,$errfile;
+    return;
+  DONE_PIPELINE:
+    unlink $ifile,$ofile,$errfile;
+    &http_error("500 Internal error");
+}
+
+    
+
+
+#----------------------------------------------------------------------
+#  collect a 'simple' or 'full' http request.  Return 0 if the request appears
+#  to be malformed.  If the request is a POST, be sure to also collect all the
+#  stuff the client sends that goes along with it.  Currently we do this by
+#  looking for the Content-length field and waiting until that many bytes are
+#  read.  There may be a more stable way to do it.
+#
+#  Returns:
+#    If successful:
+#    List: 
+#          $URL
+#          $Method      (GET, POST, etc)
+#          $Protocol    (normally "HTTP/xx.xx")
+#          $ReqType     either 'SimpleRequest' or 'FullRequest', the two types
+#                       allowed by HTTP 1.0 spec
+#          @@Headers     Any other headers collected thus far
+#
+#   If unsuccessful:
+#          calls http_error, then returns empty list
+#
+#  Side effects:
+#       Possible call to http_error if something is wrong w/request
+#
+#  Assumptions:
+#    First arg is an initialized (from client) socket object.
+#
+sub collect_request {
+    my $client = shift;
+    my $result = 1;
+    local($len);
+    local($request);
+    my %headers;
+    my($url, $method, $reqtype, $protocol);
+
+    my $request = $client->readsock();
+    &debug('http', $request);
+
+    if ($request =~ /^(\S+)\s+(\S+)\s*$/) {      # simple request
+        $method = $1;
+        $url = $2;
+        $reqtype = SimpleRequest;
+        $protocol = $Const{HTTPVersion};
+    } elsif ($request =~ /^(\S+)\s+(\S+)\s+(\S+)\s*$/) {
+        $reqtype = FullRequest;
+        $url = $2;
+        $method = $1;
+        $protocol = $3;
+    } else {
+        $result = 0;
+    }
+
+    # collect header lines till blank
+    while (($_ = $client->readsock()) !~ /^\s*$/) {
+        $headers{$1} = $2 if /^(\S+):\s*(.*)/;
+    }
+
+    if ($method =~ /post/i) {
+        #
+        # BUG: THIS IS ALL BROKEN
+        #
+        # push blank line we just got onto headers, we'll need it since we're
+        # going to forward the whole POST request with all the auxiliary data
+        # from the client.
+        push(@@headers, $_);
+        # wait for Content-Length bytes to arrive
+        $len = (grep(/content-length:/i, @@headers))[0]
+            || &http_error("500 Form submitted without Content-length header");
+        $len = $& if $len =~ /\d+/;
+        push(@@headers, ($_ = $client->readsock_raw()))
+            while (($len -= length($_)) >= 0);
+    }
+    &debug('echoall', "RECV >>> ", %headers );
+    return ($result?
+            ($url, $method, $protocol, $reqtype, %headers)
+            : ());
+}
+
+1;
+@
+
+
+1.30
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@a80 1
+    local($glomopsubtree) = $Const{GlomopSubtree};
+d82 7
+a88 1
+    $SIG{'INT'} = child_interrupted;
+d91 1
+a91 1
+    # if this isn't a registered user, barf.
+a93 1
+
+d95 4
+a98 12
+        if ($URL =~ m#$glomopsubtree#io) {
+            #  Unregistered Access to GloMOp pages is allowed; use some default
+            #  prefs.
+            %MyPrefs = &get_prefs("default");
+        } else {
+            # access to unallowed page: create a default registration
+            # for client, and proceed.  
+            my $dummy = &register("", $IPaddr);
+            %MyPrefs = &get_prefs($IPaddr);
+            #&client_disallowed($IPaddr);
+            #&child_cleanup;
+        }
+d160 1
+a160 2
+    &http_error("505 Change Preferences for $ipad", $html,
+                "$Const{Proxy} Registration");
+d305 2
+a306 3
+    if ( $pkg = $Services->servpkg($mime) ) {
+        $pkg .= "::decide_distill";
+        local(@@opaque_args) = $Services->distiller_path($mime);
+d310 1
+a310 1
+        $params = &$pkg(\%replyhash, \%MyPrefs, \$data, \@@opaque_args);
+d314 1
+a314 1
+                         "(type=$mime refinement='$Refinement')");
+d320 10
+a329 7
+            #
+            #  if this is a distill server, do the socket dance.  otherwise
+            #  spawn a pipeline.
+            #
+            $DistillTime = time;
+            if ($#opaque_args >= 0) {
+                &forward_via_pipeline($params,\%replyhash, \$data);
+d331 4
+a334 1
+                my($talkhost, $talkport) = $Services->servaddr($mime);
+d336 2
+a337 3
+                             "Distilling $URL via $talkhost:$talkport: $params");
+                &forward_via_distill_server($talkhost,$talkport,$params,
+                                            \%replyhash, \$data);
+d340 3
+d604 1
+a604 1
+    &debug('echoall', "RECV >>> %headers \n");
+@
+
+
+1.30.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d35 1
+d37 2
+d75 1
+a75 1
+    my $con = shift;
+a78 1
+    my $IPaddr = $con->{"IPaddr"};
+d80 2
+a81 2
+    # NOK::If this appears to be a Nokia Responder, remap the IP address so we
+    # can identify the client easily.
+d83 2
+a84 2
+    #$SIG{'INT'} = child_interrupted;
+    &debug('conn',join(' ',"From", $IPaddr,$con->{"request"}));
+d86 1
+a86 1
+    # if this isn't a registered user, make some default prefs.
+d89 1
+d91 12
+a102 4
+        # access to unallowed page: create a default registration
+        # for client, and proceed.  
+        &register("", $IPaddr);
+        %MyPrefs = &get_prefs($IPaddr);
+d112 5
+a116 4
+    if ($con->{"URL"} =~ s#$Const{SubblockKey}##o) {
+        $con->{"refine"} = $1;
+        &debug('refine',join(' ', "Refine level ", $con->{"refine"}, "for",
+                             $con->{"URL"}));
+d121 1
+a121 1
+    &forward_request($con) unless $Method =~ /post/i;
+a127 1
+    my $Svr = $con->{"server"};
+a128 10
+        # look for a header - common case
+        if (  /^(\S+):\s*(.*)$/ ) {
+            # Canonicalize HTTP header capitalization, e.g.
+            #  "Content-Type" --> "Content-type". Shouldn't have to do this,
+            # but not all servers do the same thing.
+            my ($key,$val) = ($1,$2);
+            $key =~ s/-(\u\w)/-\l$1/g;
+            $con->{"server_headers"}->{$key} = $val;
+            &main::debug('server',"svr-->: $key: $val");
+            next;
+d130 6
+a135 7
+        } elsif ( /^[^:]+\s+(\d+)\s+(.*)$/ ) {
+            ($HTTPstatus, $HTTPmessage) = ($1,$2);
+            &main::debug('http', "Status: $_");
+            next;
+        } else {
+            &main::log("*** Bad header line: $_");
+        }
+d140 2
+a141 2
+    &relay_reply($con)
+        || &http_error($con,"500 Internal relay-reply failed");
+d145 1
+a145 1
+    &child_cleanup($con);
+d164 2
+a165 1
+    &http_error($con,"", $html, "Change Pythia Prefs");
+d178 1
+a178 1
+    shift->{"sock"}->writesock(@@_);
+a213 5
+    my $con = shift;
+
+    my $URL = $con->{"URL"};
+    my $Svr;
+
+d226 1
+a226 1
+                (&http_error($con,"500 Don't know port for '$how'"))
+d231 1
+a231 1
+                || &http_error($con,"500 Don't know port for '$how'");
+d233 1
+a233 2
+            &http_error($con,
+                        "507 Weird HTTP parsing error - this is a Pythia bug");
+d240 1
+a240 1
+        or &http_error($con,"500 Connection refused by $hostname:$http_port");
+d245 2
+a246 2
+    $con->{"client_headers"}->{"User-Agent"} = "$Const{Proxy} $Const{Rev} for " .
+        ($con->{"client_headers"}->{"User-Agent"} || "anonymous");
+d248 1
+a248 5
+    my $Method = $con->{"method"};
+    my $Protocol = $con->{"proto"};
+    my %ClientHeaders = %{$con->{"client_headers"}};
+    if ($con->{"reqtype"} eq 'FullRequest') {
+
+d251 1
+a261 3
+
+    $con->{"server"} = $Svr;
+    return $con;
+a270 2
+    my $con = shift;
+    my %replyhash = %{$con->{"server_headers"}};
+a271 3
+    my $Svr = $con->{"server"};
+    my $URL = $con->{"URL"};
+    
+d276 1
+a284 1
+    
+a285 1
+    $con->{"data"} = $data;
+d290 1
+a290 1
+    &send_client($con,"$Const{HTTPVersion} $HTTPstatus $HTTPmessage$Const{Crlf}");
+d297 2
+a298 2
+        &send_server_headers($con);
+        $con->{"sock"}->closesock();
+d310 3
+a312 2
+    if ($distiller = &distiller::get_distiller($mime)) {
+        $pkg = $distiller->pkg . "::decide_distill";
+d316 2
+a317 2
+        $params = &$pkg(\%replyhash, \%MyPrefs, \$data, $distiller->args);
+        if ($con->{"refine"} == $MaxRefine) {
+d319 3
+a321 3
+                         join(' ', "Forwarding original $URL",
+                              "(max refine=", $con->{"refine"}));
+            &forward_original($con);
+d324 1
+a324 1
+            &forward_original($con);
+d326 7
+a332 9
+            if ($distiller->is_server) {
+                #
+                #  forward via distillation server
+                #
+                my $host = $distiller->host;
+                my $port = $distiller->port;
+                &main::debug('refine',
+                             "Distilling $URL via $host:$port: $params");
+                &forward_via_distill_server($host,$port,$params,$con);
+d334 1
+a334 4
+                #
+                #  forward by distilling via a shell pipeline. The actual
+                #  pipeline command was returned in $params, above.
+                #
+d336 3
+a338 2
+                             "Distilling $URL via external pipeline");
+                &forward_via_pipeline($params,$con);
+a340 3
+        #
+        #  Here if no distiller is known for this datatype
+        #
+d343 1
+a343 1
+        &forward_html($con, \%MyPrefs);
+d347 1
+a347 1
+        &forward_original($con);
+d350 1
+a350 1
+    $con->{"sock"}->closesock();
+d360 5
+a364 3
+    my $con = shift;
+    &send_server_headers($con);
+    &send_client($con,$con->{"data"});
+d370 2
+a371 3
+sub send_server_headers {
+    my $con = shift;
+    my %headers = %{$con->{"server_headers"}};
+d373 1
+a373 1
+        &send_client($con,"$k: $headers{$k}$Const{Crlf}");
+d376 1
+a376 1
+    &send_client($con,$Const{Crlf});
+d395 3
+a397 5
+    my ($host,$port,$params,$con) = @@_;
+    
+    my $data = $con->{"data"};
+    my $headers_p = $con->{"server_headers"};
+
+d427 3
+a429 3
+        $headers_p->{"Content-type"} = $contenttype if $contenttype;
+        $headers_p->{"Content-length"} = $nsz;
+        $con->{"data"} = $data = $newdata;
+d434 3
+a436 3
+    &send_server_headers($con);
+    &send_client($con,$data); # blank line sep
+    &send_client($con,"$Const{Crlf}$Const{Crlf}"); # needed?
+d445 3
+a447 6
+    my ($params,$con) = @@_;
+
+    my %hdrs = %{$con->{"server_headers"}};
+    my $data = $con->{"data"};
+    my $URL = $con->{"URL"};
+
+d487 2
+a488 3
+        $con->{"server_headers"} = \%hdrs;
+        &send_server_headers($con);
+        &send_client($con,$_) while <PIPE>;
+a489 1
+        my $err;
+a512 2
+                $con->{"server_headers"} = \%hdrs;
+                $con->{"data"} = $data;
+d517 3
+a519 2
+        &send_server_headers($con);
+        &send_client($con,$data);
+d522 1
+a522 1
+    return 1;
+d525 1
+a525 1
+    &http_error($con,"500 Internal error");
+d558 1
+a558 3
+    my $con = shift;
+    my $client = $con->{"sock"};
+    
+d567 1
+d597 1
+a597 2
+            || &http_error($con,
+                           "500 Form submitted without Content-length header");
+d602 4
+a605 13
+    &debug('echoall', "RECV >>> ", %headers );
+
+    if ($result) {
+        $con->{"URL"} = $url;
+        $con->{"method"} = $method;
+        $con->{"proto"} = $protocol;
+        $con->{"reqtype"} = $reqtype;
+        $con->{"client_headers"} = \%headers;
+        $con->{"request"} = $request;
+        return 1;
+    } else {
+        return undef;
+    }
+@
+
+
+1.29
+log
+@grayscale now works for gifs and jpegs.  handoff behavior is
+considerably less boneheaded (accounted for in prefs dialogs).
+NetCondom now works.
+@
+text
+@d96 6
+a101 3
+            # access to unallowed page: force to Registration page.
+            &client_disallowed($IPaddr);
+            &child_cleanup;
+d331 1
+a331 1
+            if ($#opaque_args > 0) {
+@
+
+
+1.28
+log
+@latest version: uses perl HTML parser from net (with some additions and
+bug fixes by me); SafeSurf (NetCondom) removes Java/JavaScript tags; no
+longer has problems accidentally nesting <A>'s for refinement tags;
+understands new format handoff messages; pathnames for external
+distillers now in .cf file, not in code; minor changes to registration
+page; "About Pythia" link (to reg page) now appears on every page served
+by Pythia; random other buglets fixed.
+@
+text
+@d161 1
+a161 1
+    &http_error("505 Change Preferences", $html,
+@
+
+
+1.27
+log
+@*** empty log message ***
+@
+text
+@d97 1
+a97 1
+            &client_disallowed;
+d111 3
+a113 1
+        &debug('refine',"Refinement info for $URL: $Refinement");
+d308 3
+d312 2
+a313 2
+        $pkg .= "::decide_distill";
+        $params = &$pkg(\%replyhash, \%MyPrefs, \$data);
+d316 2
+a317 1
+                         "Forwarding original $URL (type=$mime refinement='$Refinement')");
+d328 4
+a331 2
+            my($talkhost, $talkport) = $Services->servaddr($mime);
+            if ($talkport) {
+a335 2
+            } else {
+                &forward_via_pipeline($params,\%replyhash, \$data);
+d340 1
+a340 1
+        &forward_html($URL, $Refinement, \%replyhash, \$data);
+a392 1
+    my $newdata;
+d395 1
+d412 6
+a417 5
+    $_ = $sock->readsock();
+    &main::log("*** Warning! Bad Content-type `$_' received from " .
+               "distiller at $host:$port")
+        unless m!(\S+)/(\S+)!;
+    $contenttype = $_;
+a419 1
+    $DistillTime = time - $DistillTime;
+d424 1
+a424 1
+        $headers{"Content-type"} = $contenttype;
+@
+
+
+1.26
+log
+@various modularity changes
+@
+text
+@d309 1
+a309 1
+        if ($Refinement eq '' || $Refinement == $MaxRefine) {
+d441 1
+d443 2
+d455 1
+a455 1
+    $params =~ s/%o/$ofile/g;
+d457 1
+d465 3
+a467 1
+    # run the pipeline
+a469 9
+    if (system("$params 2> $errfile")) {
+        # error occurred during pipeline execution!
+        open(ER, $errfile) 
+            and $err = join ('', (<ER>)) 
+                and close ER;
+        &main::log("$URL: `$params' ==> exit $? [$err]");
+        goto DONE_PIPELINE;
+    }
+    &main::debug('refine', "Distillation appears to succeed");
+d471 33
+a503 8
+    # if new version is smaller, send it; otherwise, or if new version wasn't
+    # written, send original
+    
+    if ($nsz = -s $ofile) {
+        if ($nsz < $osz) {
+            unless (open(OFILE, $ofile)) {
+                &main::log("*** $URL: can't read $ofile: $!");
+                goto DONE_PIPELINE;
+d505 2
+a506 4
+            $hdrs{"Content-length"} = $nsz;
+            $data = '';
+            $data .= $_ while ($_ = <OFILE>);
+            close OFILE;
+a507 3
+    } else {
+        &main::log("*** WARNING! $URL: output size=0, using original");
+    }
+d509 3
+a511 3
+    &send_headers(\%hdrs);
+    &send_client($data);
+    &send_client("$Const{Crlf}$Const{Crlf}"); # needed?
+@
+
+
+1.25
+log
+@this is the demo version (also the released version until further notice)
+@
+text
+@a8 13
+$Const{GenericError} = <<EndHtml;
+    <p>This error was reported by <I>$Const{Proxy}</I>,
+    not by the remote HTTP server.</P>
+    If you believe you have reached this recording in error,
+    <A HREF=mailto:fox\@@cs.berkeley.edu>send us email</A>
+    explaining how to reproduce this problem.
+EndHtml
+
+# BUG: we must be able to use djpeg -scale option somehow!
+$Const{DistillJpeg} =
+    "/usr/sww/bin/djpeg -pnm -fast|pnmscale -xysize %d %d|ppmquant %d|".
+    "ppmtogif %s >%s";
+
+d14 4
+a21 1
+# Note, second pair of coords may be -1,-1, so must allow for this in regexp.
+d25 2
+d29 1
+a29 1
+#  globals
+d32 2
+d35 10
+a44 50
+$Refinement = '';                           # if nonempty, contains bbox coords
+
+#
+#  User prefs as associative array, returned by the prefs.pl module which looks
+#  it up based on IP addr.
+#
+
+%MyPrefs = ();
+
+#
+#  First line of incoming HTTP request
+#
+$Request = '';
+
+#
+#  Request time: SimpleRequest or FullRequest, corresponding to the two types
+#  of request described in the HTTP 0.9 standard
+#
+$ReqType = SimpleRequest;
+
+#
+#  Original request URL
+#
+$URL = '';
+
+#
+#  All headers found in request, with their value fields
+#
+%Headers = ();
+
+#
+#  Default protocol to request document from server, if not specified in
+#  request
+#
+$Protocol = "HTTP/1.0";                     # by default
+
+#
+#  Default request method
+#
+$Method = "GET";                            # default
+
+#
+#  Socket's binding, in packed form
+#
+$Addr = '';
+
+#
+#  Socket object talking to http server
+#
+$Svr = '';
+d52 2
+a53 6
+#       sets global IPaddr to printable representation of client's IP
+#         address.
+#       sets global Addr to packed representation of client's socket addr.
+#       Sets signal handler for interrupt to do proper cleanup.
+#       Calls subroutines to collect and forward incoming request, 
+#         receive reply from server, distill, and send back to client.
+d55 17
+a71 6
+#  Assumptions:
+#       First arg is *open* filehandle (socket) back to client.
+#       Second arg is packed socket address of client.
+#       Global $Const{Sockaddr} contains template for unpacking packed socket adr.
+#       Globals $URL, $Method, $Port etc have been set by a call to
+#       collect_request (made by parent, before fork).
+d75 6
+a80 2
+    $Socket = shift;
+    ($URL, $Method, $Proto, $ReqType, @@Headers) = @@_;
+d94 1
+a94 1
+            %MyPrefs = &get_prefs(default);
+a96 4
+            #
+            #   NOTE  See comments at start of register.html.pl to determine
+            #         what needs to be substituted in this sprintf!!
+            #
+d102 13
+a114 1
+    # forward request to server and act as intermediary for retrieve.
+d118 22
+a139 1
+    &relay_reply || &http_error("500 Internal relay-reply failed");
+d143 11
+d163 6
+a168 7
+sub client_disallowed {
+    local($html) = &regpage_with_prefs("default");
+    &http_error("502 Unregistered User", $html,
+                "$Const{Proxy} Registration");
+    1;
+}
+
+d177 2
+a178 21
+sub http_error {
+    local($msg) = shift;
+    local($body) = shift || $Const{GenericError};
+    local($title) = shift || "Pythia Error";
+    local($errstr);
+    local(@@errstr) = ("HTTP/1.0 $msg") ;
+    push(@@errstr, "Server: $Const{Proxy} $Const{Rev}");
+    push(@@errstr, "Content-type: text/html");
+    push(@@errstr, "");                      # blank line separator
+    push(@@errstr,"<HEAD><TITLE>Pythia Error</TITLE></HEAD>");
+    push(@@errstr,"<BODY><H1>$msg</H1>");
+    push(@@errstr, $body);
+    push(@@errstr,"</BODY>");
+    &send_client($errstr = join($Const{Crlf},@@errstr));
+    &send_client("$Const{Crlf}$Const{Crlf}");
+    &debug('echo',$msg);
+    &child_cleanup;                         # never returns
+}
+    
+#
+#  This subr is called if SIGINT is received by an executing child
+d180 3
+a182 15
+sub child_interrupted {
+    &http_error("500 someone sent me a SIGINT, bye bye...");
+    &child_cleanup;
+}
+
+sub child_cleanup {
+    $Socket->killsock();
+    &debug('fork', "*** Cleaned up child $$\n");
+    # only exit if we are a child.
+    exit 0 unless $$ == $Const{Ppid};
+}
+
+######################################################################
+#  forward request: send the request on to the server indicated by the URL.
+#       If a gateway is named, send the original HTTP request to the gateway
+d186 2
+a187 1
+#    $URL is set to original request url.
+d189 2
+d195 3
+a197 1
+#    $Refinement is set to refinement tag portion of URL (may be empty string).
+d199 7
+d209 1
+a209 13
+    local($hostname,$http_port,$how,$obj);
+
+    #
+    # If the SubblockKey string ends the URL, this is a request for refinement,
+    # rather than a whole new request.  In this case, remove the subblock key,
+    # refetch the original document (BUG: should be caching documents for a
+    # short time, e.g. 10 minutes), and perform the subblock extraction.
+    #
+    
+    if ($URL =~ s#$Const{SubblockKey}##o) {
+        $Refinement = $1;
+        &debug('refine',"Refinement info for $URL: $Refinement");
+    }
+a235 1
+    &debug('conn', "Got socket to $hostname:$http_port");
+d240 6
+a245 4
+    grep(s/(user-agent:)\s*(\S.*)/\1 $Const{Proxy} $Const{Rev} for \2/oi,
+         @@Headers)
+        or push(@@Headers, "User-Agent: $Const{Proxy} $Const{Rev} ".
+                "on behalf of anonymous");
+d247 4
+a250 6
+    if ($ReqType eq FullRequest) {
+        $Svr->writesock( "$Method $obj $Protocol$Const{Crlf}");
+        &debug('echo',"To server-->$Method $obj $Protocol");
+        for (@@Headers) {
+            $Svr->writesock($_,$Const{Crlf});
+            &debug('echoall',"To server-->$_");
+a251 1
+        $Svr->writesock("$Const{Crlf}$Const{Crlf}"); # indicates end of req
+d254 2
+a255 2
+        $Svr->writesock("$Method $obj$Const{Crlf}");
+        &debug('echo',"To server-->GET $obj");
+d264 1
+a269 2
+    local(@@reply,@@data) = ();
+    local($pipe,$tmpfile,$len);
+d271 33
+a303 5
+
+    while ($_ = $Svr->readsock_raw()) {
+        last if /^\s*Content-type:/i;
+        &debug('echoall',"Server says-->$_");
+        push(@@reply,$_);
+d305 34
+a338 26
+
+    #
+    # Make sure we actually got the content-type, as opposed to exiting the
+    # loop because the socket got closed.
+    #
+    #&http_error("500 Server not responding; timeout?")
+    #unless  /^\s*Content-type:/i;
+        
+    if ( m!image/gif!i ) {
+        # GIF: distill and forward.  Refinement tag should be just a single
+        # number (refinement level for *this* image), or empty (forward
+        # original image); otherwise, error.
+        &http_error("501 Bad refinement tag: `$Refinement'")
+            unless ((length($Refinement) == 1) || ($Refinement eq ''));
+        &forward_gif($1, $Refinement, @@reply);
+    } elsif ( m|text/html|i ) {
+        # HTML: scan for IMG tags to add "refine" buttons; then fwd.
+        &forward_html($URL, $Refinement, @@reply);
+        # } elsif ( m|image/jpe?g|i ) {
+    } elsif ( m|application/postscript|i ) {
+        &forward_postscript($URL, $Refinement, @@reply);
+    } else { 
+        # anything else: just forward verbatim.
+        &debug('refine',"Ignoring content-type: `$_'");
+        &send_client( @@reply,$_ );
+        &send_client( $_ ) while ($_ = $Svr->readsock_raw());
+d350 10
+a359 2
+#---------------------------------------------------------------------------
+#  collect postscript from server, distill it
+d361 8
+a369 11
+sub forward_postscript {
+    my ($url,$refinelevel,@@hdrs) = @@_;
+    my $origsize, @@reply;
+    my $psdebug = (exists $Debug{'postscript'} ? "" : "2>/dev/null");
+    
+    # If we already received content-length header, delete it from the headers
+    # list
+    
+    $origsize = (grep(/Content-length/i, @@hdrs))[0];
+    @@hdrs = grep((! /Content-length/i), @@hdrs);
+    @@hdrs = grep((! /Content-type/i), @@hdrs);
+d371 13
+a383 2
+    # collect remainder of http header...
+    @@reply = ();
+d385 44
+a428 38
+    push(@@reply, $_) while (($_ = $Svr->readsock_raw()) && (! /^\s*$/));
+    
+    &http_error("501 Premature EOF from server while fetching PS")
+        if eof(($Svr->filehandles())[0]);
+    
+    $origsize = (grep(/Content-length/i, @@reply))[0]
+        unless $origsize;                   # maybe we set it before.
+    chop( $origsize );
+    $origsize =~ s/.*:\s+//;
+
+    # suck the rest of the PS into a file
+    # BUG: demo mode, no error checking!
+    # BUG: this whole fucking mechanism needs to be generalized
+
+    my $file = "/tmp/ps$$";
+    $file .= ".gz"    if (grep(/Content-encoding: x-gzip/i, @@reply));
+    $file .= ".Z"     if (grep(/Content-encoding: x-compress/i, @@reply));
+    open(PS, ">$file");
+    print PS $_ while ($_ = $Svr->readsock_raw());
+    close PS;
+
+    # uncompress or ungzip if necessary
+
+    system("gunzip -f $file") if $file =~ /\.gz$/;
+    system("/bin/uncompress -f $file") if $file =~ /\.Z$/;
+
+    my $len = -s $file;
+
+    &send_client(@@hdrs);
+    &send_client("Content-type: text/html$Const{Crlf}");
+    &send_client("Content-length: $len$Const{Crlf}$Const{Crlf}");
+
+    &debug('postscript', "Calling pstotext on /tmp/ps$$");
+    open(PS, "/disks/barad-dur/now/pythia/fox/demo/pstotext.$Const{Arch} ".
+         "-html </tmp/ps$$ $psdebug |");
+    select(PS); $| = 1; select STDOUT;
+    &send_client($_) while <PS>;
+    close PS;
+a429 1
+    
+d432 2
+a433 21
+#  collect a GIF from the real server, distill it, and pass it to client
+#
+sub forward_gif {
+    local($imgtype, $refinelevel, @@hdrs) = @@_; # GIF/JPEG, refine level, hdrs
+                                               # recd so far. 
+    local(@@reply);
+    local($") = '';                         # "
+    local($len);
+    local($time,$comp);
+    local($origsize);
+    local($gifbytes);
+    local($listenhost,$listenport);
+    local($talkhost,$talkport);
+    local($data) = '';
+    
+    # If we already received content-length header, delete it from the headers
+    # list
+    
+    $origsize = (grep(/Content-length/i, @@hdrs))[0];
+    
+    @@hdrs = grep((! /Content-length/i), @@hdrs);
+d435 25
+a459 6
+    # suck the rest of the gif into a pipeline (distillation), which will
+    # write distilled output to a temp file.
+    
+    # collect remainder of http header...
+    @@reply = ();
+    push(@@reply, $_) while (($_ = $Svr->readsock_raw()) && (! /^\s*$/));
+d461 1
+a461 34
+    &http_error("501 Premature EOF from server while fetching GIF")
+        if eof(($Svr->filehandles())[0]);
+    
+    $origsize = (grep(/Content-length/i, @@reply))[0]
+        unless $origsize;                   # maybe we set it before.
+    chop( $origsize );
+    $origsize =~ s/.*:\s+//;
+
+    # if the content length is below the specified threshold for distillation,
+    # OR if the refinement level is $MaxRefine,
+    # send the whole thing as is.  otherwise, distill.
+
+    if (($origsize <= int($MyPrefs{t}) << 10)
+        || ($refinelevel == $MaxRefine)
+        || ($refinelevel eq ''))  {
+        &debug('refine',"Forwarding original (size=$origsize)");
+        &send_client(@@hdrs);                    # headers so far
+        &send_client( "Content-type: image/$imgtype$Const{Crlf}");
+        # send remainder of headers, including content-length
+        &send_client( @@reply);
+        &send_client( $Const{Crlf});                # blank line separator
+        @@reply = ();
+        $gifbytes .=  ($Svr->readsock_raw()) until $Svr->eof();
+        &log(sprintf("***content length %d, expected $origsize!\n",
+                     length($gifbytes))) 
+            unless length($gifbytes) == $origsize;
+
+        #&send_client(@@reply);               # send actual data
+        &send_client($gifbytes);
+        &send_client($Const{Crlf});
+    } else {
+        local($gifread, $gifread2, $gifwrite);
+        
+        # must be distilled.  Collect GIF data and send it to distillation pipe
+d463 10
+a472 2
+        ($listenhost,$listenport) = ($Const{Hostname}, &getport);
+        ($talkhost,$talkport) = $Services->servaddr("gifmunch");
+d474 13
+a486 7
+        $gifread = listensock gm_sock $listenport 
+            or warn "*** Warning: listensock failed\n";
+        unless ($gifwrite = connectsock gm_sock $talkhost, $talkport) {
+            warn "*** Warning: connectsock failed to $talkhost:$talkport, " .
+                "deleting it from services registry\n";
+            $Services->death($talkhost, $talkport, "gifmunch");
+            &http_error("506 Distiller died: Try reloading page");
+d488 3
+a490 17
+
+        &debug('gif',">>>> Writing to socket $talkhost:$talkport");
+        $gifwrite->writesock (join(" ", $MyPrefs{s}, $MyPrefs{s},
+                                   $MyPrefs{c}, "#ffffff",
+                                   $listenhost, $listenport));
+        $gifwrite->writesock(" ");
+        $gifwrite->writesock( $_ ) while ($_ = $Svr->readsock_raw());
+        $gifwrite->closesock;
+        #
+        #  Now listen for reply data
+        #
+        &debug('gif',">>>> Reading from socket $listenhost:$listenport");
+
+        $gifread2 = $gifread->acceptsock()
+            or warn "*** Warning: accept: " . $gifread->lasterror();
+        $data .= $_ while ($_ = $gifread2->readsock_raw());
+        $gifread2->closesock();
+d492 9
+a500 1
+        # send distilled output to client.
+d502 1
+a502 7
+        &debug('gif',">>>> Forwarding");
+        $len = length($data);
+        &send_client(@@hdrs);
+        &send_client("Content-type: image/gif$Const{Crlf}");
+        &send_client("Content-length: $len$Const{Crlf}$Const{Crlf}");
+
+        &send_client($data);
+a504 10
+        # Log what we did: orig size, new size, compression ratio, time taken
+
+        if (0) {
+            $comp = sprintf("%.2f", ($len/$origsize));
+            $time= $timeu+$times;
+            &statcollect("$origsize $len $comp $time\n");
+        }
+    }
+}
+
+d532 2
+a533 2
+    $Socket = shift;
+    local($result) = 1;                     # return value, nonzero==OK
+d536 1
+a536 1
+    local(@@headers) = ();
+d538 4
+a541 3
+    @@headers = ();
+    &debug('echo', $_ =  $Socket->readsock());
+    $request = $_;
+d546 1
+a546 1
+        $protocol = "HTTP/1.0";
+d557 2
+a558 2
+    while (($_ = $Socket->readsock()) !~ /^\s*$/) {
+        push(@@headers, $_);
+d562 3
+d573 1
+a573 1
+        push(@@headers, ($_ = $Socket->readsock_raw()))
+d576 1
+a576 1
+    &debug('echoall', "RECV >>>@@headers\n");
+d578 1
+a578 1
+            ($url, $method, $protocol, $reqtype, @@headers)
+a579 10
+}
+
+#
+#  Return the hostname and port for talking to and listening from the GIF
+#  muncher, respectively.
+#
+
+sub getport
+{
+    return ($$ > 32766? $$: 32767+$$);
+@
+
+
+1.24
+log
+@Demo code, munged to allow PS to work.  still need to generalize
+"distillation by MIME type" mechanism
+@
+text
+@d115 2
+a116 1
+    local($glomopsubtree);
+a125 1
+        $glomopsubtree = $Const{GlomopSubtree};
+d214 1
+a214 1
+#    $SubblockKey is a template used to check URL for refinement info.
+d245 1
+a245 1
+        if ($URL =~ m|^(\w+)://([^/:]+):(\d+)(/.*)$|) { # format is host:port
+d247 3
+d270 1
+a270 1
+        || push(@@Headers, "User-Agent: $Const{Proxy} $Const{Rev} ".
+d494 1
+a494 1
+            or warn "*** Warning: accept: " . $gifread->last_error();
+d526 13
+d540 1
+a540 1
+#    sets globals $Socket, $Request,$URL, $Method, $Protocol, $ReqType
+d543 1
+a543 1
+#    First arg is an initialized (from client) socket filehandle.
+d549 4
+a552 2
+
+    @@Headers = ();
+d554 11
+a564 10
+    $Request = $_;
+    if ($Request =~ /^(\S+)\s+(\S+)\s*$/) {      # simple request
+        $Method = $1;
+        $URL = $2;
+        $ReqType = SimpleRequest;
+    } elsif ($Request =~ /^(\S+)\s+(\S+)\s+(\S+)\s*$/) {
+        $ReqType = FullRequest;
+        $URL = $2;
+        $Method = $1;
+        $Protocol = $3;
+d571 1
+a571 1
+        push(@@Headers, $_);
+d574 1
+a574 1
+    if ($Method =~ /post/i) {
+d578 1
+a578 1
+        push(@@Headers, $_);
+d580 1
+a580 1
+        $len = (grep(/content-length:/i, @@Headers))[0]
+d583 1
+a583 1
+        push(@@Headers, ($_ = $Socket->readsock_raw()))
+d586 4
+a589 2
+    &debug('echoall', "RECV >>>@@Headers\n");
+    return $result;
+@
+
+
+1.23
+log
+@various fixes: handoff hack is working, and pstotext converter.  need to
+generalize mechanism for launching distillers and pythia.cf syntax for
+specifying how to call them.
+@
+text
+@d348 1
+d359 1
+d361 2
+a362 2
+
+    &http_error("501 Premature EOF from server while fetching GIF")
+d374 4
+a377 1
+    open(PS, ">/tmp/ps$$");
+d380 7
+a386 1
+    my $len = -s "/tmp/ps$$";
+d394 1
+a394 1
+         "-html </tmp/ps$$ 2>/dev/null |");
+d471 6
+a476 2
+        $gifwrite = connectsock gm_sock $talkhost, $talkport
+            or warn "*** Warning: connectsock failed\n";
+@
+
+
+1.22
+log
+@random bug fixes
+@
+text
+@d118 1
+a118 1
+    &debug(conn,"From $IPaddr: $Request");
+d170 1
+a170 1
+    &debug('echo',"SEND >>>@@_<<<") if $gb{echoall};
+d235 1
+a235 1
+        &debug('refine',"Refinement info for $URL: $Refinement") if $gb{debug};
+d251 2
+d260 1
+d272 1
+a272 1
+        &debug('echo',"To server-->$Method $obj $Protocol") if $gb{echo};
+d275 1
+a275 1
+            &debug('echo',"To server-->$_") if $gb{echo};
+d281 1
+a281 1
+        &debug('echo',"To server-->GET $obj") if $gb{debug};
+d301 1
+a301 1
+        &debug('echo',"Server says-->$_") if $gb{echoall};
+d323 2
+d342 49
+d552 1
+a552 1
+    &debug('echo', "RECV >>>@@Headers\n") if $gb{echo};
+@
+
+
+1.21
+log
+@foo
+@
+text
+@d247 1
+a247 1
+        } elsif ($URL =~ m|^(\w+)://([^/:]+)(/.*)$|) {
+@
+
+
+1.20
+log
+@Remapping your prefs from different IP addrs now works. spurious
+pythia.prefs removed once and for all.  tcp_sock.pl and
+unregistered.html are gone (obsolete).  prefs are now read from
+pythia.cf instead of being hardwired in prefs.pl.
+@
+text
+@d159 1
+a159 1
+    local($html) = &regpage_with_prefs("");
+@
+
+
+1.19
+log
+@Registration, etc works well enough to release this version...
+@
+text
+@a20 2
+$Const{DistillGif} =
+    "/usr/sww/bin/giftopnm|pnmscale -xysize %d %d|ppmquant %d |ppmtogif %s>%s";
+@
+
+
+1.18
+log
+@the seeds of scalability have been sown.
+@
+text
+@d151 9
+d161 1
+a161 3
+    local($html) = sprintf($Const{RegistrationPage},
+                           $Const{RegisterURL},
+                           "", "", 1, 128);
+@
+
+
+1.17
+log
+@Closer....basic registration works, remapping doesn't seem to
+@
+text
+@d120 1
+a120 1
+    &log("From $IPaddr: $Request");
+d165 1
+a165 1
+    &log("SEND >>>@@_<<<") if $gb{echoall};
+d183 1
+a183 1
+    &log($msg);
+d197 1
+a197 1
+    warn "*** Cleaned up child $$\n";
+d230 1
+a230 1
+        &log("Refinement info for $URL: $Refinement") if $gb{debug};
+d264 1
+a264 1
+        &log("To server-->$Method $obj $Protocol") if $gb{echo};
+d267 1
+a267 1
+            &log("To server-->$_") if $gb{echo};
+d273 1
+a273 1
+        &log("To server-->GET $obj") if $gb{debug};
+d293 1
+a293 1
+        &log("Server says-->$_") if $gb{echoall};
+d317 1
+a317 1
+        &log("Ignoring content-type: `$_'");
+d373 1
+a373 1
+    if (($origsize <= int($MyPrefs{thresh}) << 10)
+d376 1
+a376 1
+        &log("Forwarding original (size=$origsize)");
+d396 2
+a397 2
+        ($listenhost,$listenport) = &getlistenaddr;
+        ($talkhost,$talkport) = &getgifmunchaddr;
+d404 3
+a406 3
+        &log(">>>> Writing to socket $talkhost:$talkport");
+        $gifwrite->writesock (join(" ", $MyPrefs{size}, $MyPrefs{size},
+                                   $MyPrefs{bpp}, "#ffffff",
+d414 1
+a414 1
+        &log(">>>> Reading from socket $listenhost:$listenport");
+d423 1
+a423 1
+        &log(">>>> Forwarding");
+d461 1
+a461 1
+    &log($_ =  $Socket->readsock());
+a480 2
+
+
+d493 1
+a493 1
+    &log("RECV >>>@@Headers\n") if $gb{echo};
+d502 1
+a502 1
+sub getlistenaddr
+d504 1
+a504 2
+    return ("full-sail.cs.berkeley.edu",
+            ($$ > 32766? $$: 32767+$$));
+a506 5
+sub getgifmunchaddr
+{
+    return ("full-sail.cs.berkeley.edu", "6666");
+}
+        
+@
+
+
+1.16
+log
+@Works ok with gifmuncher, must modify to be scalable.
+@
+text
+@d9 1
+a9 1
+$Const{GenericError} = <<EndHtml
+a15 14
+    ;
+
+$Const{Unregistered} = <<End2Html
+    <p>Your machine does not appear to be registered to use the Pythia proxy
+    service.  Unregistered users can access only the
+    <a href=http://www.cs.berkeley.edu/~fox/glomop/>GloMop
+    Project area</a>. </p>
+    <p>Registration is free, takes only a few seconds, and allows you to
+    customize Pythia's behavior on your machine.
+    <a href=http://www.cs.berkeley.edu/~fox/glomop/register.html>Click
+    here to register</a>, or else unset your HTTP
+    proxy in your browser preferences.</p>
+End2Html
+    ;
+d85 1
+a85 2
+#  Name of filehandle which is already initialized as a (two-way) socket from
+#  the requesting client
+d87 1
+a87 1
+$Socket = '';
+d90 1
+a90 1
+#  Socket's binding, in packed form
+d92 1
+a92 1
+$Addr = '';
+d116 1
+a116 1
+    ($Socket, $Addr) = @@_;
+a117 1
+    local($af,$port,$inetaddr) = unpack($Const{Sockaddr}, $addr);
+d120 1
+a120 1
+    &log("From $IPaddr:$port, $Request");
+d133 6
+a138 2
+            # access to unallowed page: handle as http error
+            &http_error("502 Unregistered User", $Const{Unregistered});
+d151 10
+d164 1
+a164 1
+    print $Socket @@_;
+d171 1
+a180 1
+    select($Socket); $| = 1;
+d183 1
+a183 1
+    &log($errstr);
+d196 1
+a196 2
+    shutdown($Socket, 2);
+    close ($Socket);
+d251 2
+a252 2
+    &open_tcp_socket(SVR, $hostname, $http_port)
+        || &http_error("500 Connection refused by $hostname:$http_port");
+d263 1
+a263 1
+        print SVR "$Method $obj $Protocol$Const{Crlf}";
+d266 1
+a266 1
+            print SVR $_,$Const{Crlf};
+d269 1
+a269 1
+        print SVR "$Const{Crlf}$Const{Crlf}";                   # indicates end of req
+d272 1
+a272 1
+        print SVR "$Method $obj$Const{Crlf}";
+d291 1
+a291 3
+    select($Socket); $| = 0; select(STDOUT);
+
+    while (<SVR>) {
+d304 2
+a305 2
+    if ( m!image/(gif|jpeg)!i ) {
+        # GIF/Jpg: distill and forward.  Refinement tag should be just a single
+d314 1
+d319 1
+a319 1
+        &send_client( $_ ) while <SVR>;
+d322 1
+a322 1
+    close($Socket);
+d326 1
+a326 3
+    setsockopt(SVR, &SOL_SOCKET, &SO_REUSEADDR, 1);
+    shutdown(SVR, 2);
+    close(SVR);
+d343 2
+a344 2
+    local($listenhost,$listensock);
+    local($talkhost,$talksock);
+d359 1
+a359 1
+    push(@@reply, $_) while (($_=<SVR>) && (! /^\s*$/));
+d362 1
+a362 1
+        if eof(SVR);
+d383 1
+a383 2
+        #select(SVR); local($/) = '';        # slurp GIF as a single line...
+        $gifbytes .=  <SVR> until eof(SVR);
+d392 1
+d396 2
+a397 2
+        ($listenhost,$listensock) = &getlistenaddr;
+        ($talkhost,$talksock) = &getgifmunchaddr;
+d399 12
+a410 12
+        &open_for_listening(GIFREAD, $listensock)
+            || warn "*** Warning: $Err\n";
+        &open_tcp_socket(GIFWRITE, $talkhost, $talksock)
+            || warn "*** Warning: $Err\n";
+
+        &log(">>>> Writing to socket $talkhost:$talksock");
+        print GIFWRITE join(" ", $MyPrefs{size}, $MyPrefs{size},
+                            $MyPrefs{bpp}, "#ffffff",
+                            $listenhost, $listensock);
+        print GIFWRITE " ";
+        print GIFWRITE $_ while <SVR>;
+        close GIFWRITE;
+d414 6
+a419 4
+        &log(">>>> Reading from socket $listenhost:$listensock");
+        accept(GIFREAD2, GIFREAD);
+        $data .= $_ while <GIFREAD2>;
+        close(GIFREAD2);
+d461 1
+a461 2
+    &log($_ =  <$Socket>);
+    chop, chop;           # remove CR, LF
+d477 1
+a477 2
+    while (($_ = <$Socket>) !~ /^\s*$/) {
+        chop, chop;
+d492 1
+a492 1
+        push(@@Headers, ($_ = <$Socket>))
+d512 1
+a512 1
+    return ("mocha.cs.berkeley.edu", "6666");
+@
+
+
+1.15
+log
+@Added SO_LINGER option to tcp_sock.pl; proxy seems to work with gifmuncher.
+@
+text
+@d412 1
+a412 1
+                            $MyPrefs{bpp}, "#999999",
+d518 1
+a518 1
+    return ("full-sail.cs.berkeley.edu", "6666");
+@
+
+
+1.14
+log
+@smaller "refine" markers
+@
+text
+@d344 3
+a346 3
+    local($") = '';
+    local($tmpfile, $pipe, $len);
+    local($timeu,$times,@@endtime,$time,$comp);
+d348 4
+a351 2
+        local($gifbytes);
+
+a362 1
+    ($timeu,$times) = (times)[0,1];
+a400 12
+        $tmpfile = "/tmp/gif$$";
+        $pipe = sprintf(($imgtype =~ /gif/ ? $Const{DistillGif} :
+                         $Const{DistillJpeg}),
+                        $MyPrefs{size}, $MyPrefs{size},
+                        $MyPrefs{bpp},
+                        ($MyPrefs{ilace} eq 'i'? '-interlace': ''),
+                        $tmpfile);
+        open(PIPE, "| $pipe") || &Die("`$pipe': $!");
+        print PIPE $_ while <SVR>;   # collect data
+        close PIPE;
+        @@endtime = times;
+        ($timeu,$times) = ($endtime[0]-$timeu, $endtime[1]-$times);
+d402 2
+d405 20
+d427 2
+a428 2
+        $len = -s ($tmpfile);
+        open(GIF, $tmpfile) || &Die("open $tmpfile: $!");
+d433 2
+a434 4
+        select (GIF); local($/) = '';
+        &send_client($_) while <GIF>;
+        close(GIF);
+        unlink($tmpfile);
+d437 6
+a442 4
+        
+        $comp = sprintf("%.2f", ($len/$origsize));
+        $time= $timeu+$times;
+        &statcollect("$origsize $len $comp $time\n");
+d505 15
+@
+
+
+1.13
+log
+@Successfully uses POSIX nonblocking waitpid to reap children.  Need to
+be sure that POSIX nonblocking waitpid is supported on host, even tho
+Perl5 provides POSIX interface.
+@
+text
+@d292 1
+a292 1
+    local($") = '';
+@
+
+
+1.12
+log
+@Registration works.  Misfeature: when updating prefs, you should be able
+to start from your old prefs and make incremental changes, instead of
+starting from a default prefs screen.  Posting still doesn't work.
+@
+text
+@d105 1
+a105 1
+#  Client's IP address as printable string, and socket address in packed form
+a106 1
+$IPaddr = '[none]';
+a133 1
+    $IPaddr = join('.',unpack('C4', $inetaddr));
+d155 1
+a155 1
+    # forward request to server and act as intermediary for retrieve
+d157 1
+a157 1
+    &forward_request;
+d201 2
+a202 1
+    exit 0;
+d207 3
+d213 2
+d222 2
+d236 6
+a241 2
+    # determine hostname of new server and open socket connection.  If no port
+    # number is given, assume port 80 (default http port)
+d243 7
+a249 7
+    local($hostname,$http_port,$how,$obj);
+
+    if ($URL =~ m|^(\w+)://([^/:]+):(\d+)(/.*)$|) { # format is host:port
+        ($how,$hostname,$http_port, $obj) = ($1,$2,$3,$4);
+    } elsif ($URL =~ m|^(\w+)://([^/:]+)(/.*)$|) {
+        ($how,$hostname,$obj) = ($1,$2,$3);
+        $http_port = $Port{$how} || &http_error("500 Don't know port for '$how'");
+a251 1
+
+d260 4
+a263 2
+    grep(s/(user-agent:)\s*(\S.*)/\1 $Const{Proxy} $Const{Rev} for \2/oi, @@Headers)
+        || push(@@Headers, "User-Agent: $Const{Proxy} $Const{Rev} on behalf of anonymous");
+d378 1
+a378 1
+    if (($origsize <= int($g{threshold}) << 10)
+d488 1
+a488 1
+            while (($len -= length($_)) > 0);
+@
+
+
+1.11
+log
+@registration mostly works.  email and name info is currently dropped on
+the floor, but the mechanism for recording prefs info is sound.  prefs
+info is not yet used in distillation decisions though.
+@
+text
+@d10 2
+a11 2
+    <p>This error was reported by the <I>$Const{Proxy}</I>, 
+    HTTP proxy, not by the remote HTTP server.</P>
+d33 2
+a34 1
+    "/usr/sww/bin/djpeg -pnm -fast|pnmscale -xysize %d %d|ppmquant %d|ppmtogif >%s";
+d36 1
+a36 1
+    "/usr/sww/bin/giftopnm|pnmscale -xysize %d %d|ppmquant %d |ppmtogif >%s";
+d279 1
+a279 1
+    local(@@reply,@@data);
+d390 6
+a395 8
+        if ($imgtype =~ /gif/) {
+            $pipe = sprintf($Const{DistillGif}, $g{bboxsize},$g{bboxsize},
+                            $g{stampcolors},$tmpfile);
+        } else {
+            $pipe = sprintf($Const{DistillJpeg}, $g{bboxsize}, $g{bboxsize},
+                            $g{stampcolors},$tmpfile);
+        }
+
+d441 2
+a442 2
+    local($register_response);
+    
+@
+
+
+1.10
+log
+@registration broken because it needs to occur in parent, not child,
+process. d'oh!
+@
+text
+@d9 21
+a29 3
+# Magic URL for registration.
+
+$Const{RegisterURL} = '^.*full-sail.cs.berkeley.edu(:\d+)?/register/\?';
+d59 7
+d125 3
+a127 1
+#       Global $Sockaddr contains template for unpacking packed socket adr.
+d132 2
+a133 1
+    local($af,$port,$inetaddr) = unpack($Sockaddr, $addr);
+d137 1
+d139 1
+a139 1
+    # collect HTTP request line.
+d141 14
+a154 3
+    &collect_request || &http_error("400 Bad request");
+    
+    &log("From $IPaddr:$port, $Request");
+d159 1
+a159 1
+    
+d172 2
+d175 1
+a175 1
+    local(@@errstr) = ("HTTP/1.0 $_[0]") ;
+d179 3
+a181 7
+    push(@@errstr,"<HEAD><TITLE>$_[0]</TITLE></HEAD>");
+    push(@@errstr,"<BODY><H1>$_[0]</H1>");
+    push(@@errstr, "<P>This error was reported by the <I>$Const{Proxy}</I>"), 
+    push(@@errstr, " HTTP proxy, not by the remote HTTP server.</P>");
+    push(@@errstr,"If you believe you have reached this recording in error, ");
+    push(@@errstr,"<A HREF=mailto:fox\@@cs.berkeley.edu>send us email</A>");
+    push(@@errstr," explaining how to reproduce this problem.");
+d286 1
+a286 1
+        print STDERR "Server says-->$_" if $gb{debug};
+d432 5
+a436 1
+#  Side effects: sets globals $Request,$URL, $Method, $Protocol, $ReqType
+a437 1
+
+d439 1
+a439 1
+
+a465 14
+    # If this is a new registration request, go handle it.
+
+    if ($URL =~ s/$Const{RegisterURL}//o) {
+        &log("Registration request from $IPaddr");
+        # 1 while <$Socket>;                  # drain input
+        &log("Calling register function");
+        $register_response = &register($URL);
+        # &send_client("200 OK$Const{Crlf}");
+        # &send_client("Content-type: text/html$Const{Crlf}");
+        # &send_client(sprintf("Content-length: %d$Const{Crlf}$Const{Crlf}",
+        #length($register_response)));
+        &send_client($register_response);
+        &child_cleanup;
+    }
+@
+
+
+1.9
+log
+@Working version that can also do jpeg distillation, and omit irritating
+background patterns on pages.
+@
+text
+@d9 3
+d14 4
+a17 2
+$DistillJpeg = "/usr/sww/bin/djpeg -pnm -fast|pnmscale -xysize %d %d|ppmquant %d|ppmtogif >%s";
+$DistillGif = "/usr/sww/bin/giftopnm|pnmscale -xysize %d %d|ppmquant %d |ppmtogif >%s";
+d29 3
+a31 2
+$SubblockKey = ';(\d+)$';                   # for detecting refine tag 
+$SubblockKeyPrint = ';%s';                  # for generating refine tag
+a38 1
+$Crlf = "\r\012";
+a77 2
+#---------------------------------------------------------------------------
+#  here after fork to handle new HTTP connection.
+d79 23
+d104 1
+a104 2
+    $Socket = shift;
+    local($addr) = shift;
+d106 1
+a106 1
+    local(@@inetaddr) = unpack('C4', $inetaddr);
+d114 1
+a114 3
+    local($") = ".";
+    &log("From @@inetaddr:$port, $Request");
+    local($") = " ";
+d118 1
+a118 1
+    &forward_request($af, $port, $inetaddr);
+d134 1
+a134 1
+    push(@@errstr, "Server: $Proxy $Rev");
+d139 1
+a139 1
+    push(@@errstr, "<P>This error was reported by the <I>$Proxy</I>"), 
+d146 2
+a147 2
+    &send_client($errstr = join($Crlf,@@errstr));
+    &send_client("$Crlf$Crlf");
+d166 3
+a168 6
+#---------------------------------------------------------------------------
+#  forward request: send the request on to the server indicated by the URL;
+#  when it returns a reply, forward all data 
+#  directly through to requester indicated by inet addr, port, and adddress
+#  family.
+#
+d171 1
+d175 2
+a176 2
+#    
+
+a178 2
+    local($af, $port, $inetaddr) = @@_;
+    
+d186 1
+a186 1
+    if ($URL =~ s#$SubblockKey##o) {
+d212 2
+a213 2
+    grep(s/(user-agent:)\s*(\S.*)/\1 $Proxy $Rev for \2/oi, @@Headers)
+        || push(@@Headers, "User-Agent: $Proxy $Rev on behalf of anonymous");
+d216 1
+a216 1
+        print SVR "$Method $obj $Protocol$Crlf";
+d219 1
+a219 1
+            print SVR $_,$Crlf;
+d222 1
+a222 1
+        print SVR "$Crlf$Crlf";                   # indicates end of req
+d225 1
+a225 1
+        print SVR "$Method $obj$Crlf";
+d333 1
+a333 1
+        &send_client( "Content-type: image/$imgtype$Crlf");
+d336 1
+a336 1
+        &send_client( $Crlf);                # blank line separator
+d346 1
+a346 1
+        &send_client($Crlf);
+d352 1
+a352 1
+            $pipe = sprintf($DistillGif, $g{bboxsize},$g{bboxsize},
+d355 1
+a355 1
+            $pipe = sprintf($DistillJpeg, $g{bboxsize}, $g{bboxsize},
+d371 2
+a372 2
+        &send_client("Content-type: image/gif$Crlf");
+        &send_client("Content-length: $len$Crlf$Crlf");
+d401 2
+a402 1
+
+d424 16
+@
+
+
+1.8
+log
+@Fixed munge_html so that line breaks are mostly preserved.  Posting
+still doesn't work right.
+@
+text
+@d10 3
+a12 1
+$DistillPipe = "/usr/sww/bin/giftopnm|pnmscale -xysize %d %d|ppmquant %d |ppmtogif >%s";
+d105 1
+a105 1
+    &log("SEND >>>@@_<<<") if $gb{echo};
+d111 1
+a111 1
+    push(@@errstr, "Server: gmwebproxyd $Rev");
+d116 1
+a116 1
+    push(@@errstr, "<P>This error was reported by the <I>pythia</I>"), 
+a186 1
+    # &log("connecting to $hostname:$http_port");
+d190 2
+a191 1
+    # "$$: $Request $$   --> $hostname:$http_port...";
+d193 2
+a194 1
+    # write the whole request to the  server socket
+d240 2
+a241 2
+    if ( m|image/gif|i ) {
+        # GIF: distill and forward.  Refinement tag should be just a single
+d246 1
+a246 1
+        &forward_gif($Refinement, @@reply);
+d272 2
+a273 1
+    local($refinelevel, @@hdrs) = @@_;       # refine level, hdrs recd so far.
+d314 1
+a314 1
+        &send_client( "Content-type: image/gif$Crlf");
+d321 2
+a322 2
+        warn (sprintf("***content length %d, expected $origsize!\n",
+                      length($gifbytes))) 
+d332 8
+a339 2
+        $pipe = sprintf("$DistillPipe", $g{bboxsize},$g{bboxsize},
+                        $g{stampcolors},$tmpfile);
+d406 4
+a415 3
+        # push blank line after content-length
+        grep(@@Headers, s/content-length.*/$&$Crlf/i)
+            || &http_error("501 Can't add blank line after Content-length");
+@
+
+
+1.7
+log
+@Bug fix in child.pl: don't try setting $/ for a socket! the semantics
+seem to be fucked up.  The proxy no longer chokes on certain GIFs where
+the effect of setting $/ on a socket caused the amount of data read to
+be off by one or two bytes.
+@
+text
+@d86 1
+d94 1
+d114 3
+a116 3
+    push(@@errstr, "<P>This error was reported by <I>gmwebproxyd</I>"), 
+    push(@@errstr, "not by the remote HTTP server.</P>");
+    push(@@errstr,"If you believe you have reached this recording in error,");
+d118 1
+a118 1
+    push(@@errstr,"explaining how to reproduce this problem.");
+d194 2
+a195 2
+        print SVR "GET $obj $Protocol$Crlf";
+        &log("To server-->GET $obj $Protocol") if $gb{echo};
+d203 1
+a203 1
+        print SVR "GET $obj$Crlf";
+d360 4
+a363 1
+#  to be malformed.
+d371 2
+a372 1
+    
+d376 3
+a378 2
+    if ($Request =~ /^GET\s+(\S+)\s*$/) {      # simple request
+        $URL = $1;
+d385 3
+d389 5
+a393 1
+        # collect header lines till blank
+d395 10
+a404 8
+        while (($_ = <$Socket>) !~ /^\s*$/) {
+            print;
+            chop, chop;
+            push(@@Headers, $_);
+        }
+        # &log(@@Headers);
+    } else {
+        $result = 0;
+d406 1
+@
+
+
+1.6
+log
+@stable child with "bare GIF" bug fixed
+@
+text
+@d101 1
+a101 1
+    &log("SEND >>>\n@@_\n<<<") if $gb{echo};
+d193 1
+d196 1
+a196 1
+            # &log($_);
+d202 1
+d224 1
+a224 1
+        print STDERR "Server: $_" if $gb{debug};
+d273 1
+d308 1
+a308 1
+        &send_client( "Content-type: image/gif\n");
+a309 2
+        local($,) = '';                     # since header elements already
+                                            # have a newline at end... 
+d312 41
+a352 3
+        local($/) = '';                     # slurp GIF as a single line...
+        &send_client($_) while <SVR>;       # send the actual data
+        goto DONE;
+a353 30
+    
+    # must be distilled.  Collect GIF data and send it to distillation pipe
+    $tmpfile = "/tmp/gif$$";
+    $pipe = sprintf("$DistillPipe", $g{bboxsize},$g{bboxsize},2,$tmpfile);
+    open(PIPE, "| $pipe") || &Die("`$pipe': $!");
+    print PIPE $_ while <SVR>;   # collect data
+    close PIPE;
+    @@endtime = times;
+    ($timeu,$times) = ($endtime[0]-$timeu, $endtime[1]-$times);
+
+
+    # send distilled output to client.
+
+    $len = -s ($tmpfile);
+    open(GIF, $tmpfile) || &Die("open $tmpfile: $!");
+    &send_client("Content-type: image/gif$Crlf");
+    &send_client("Content-length: $len$Crlf$Crlf");
+
+    local($/) = '';
+    &send_client($_) while <GIF>;
+    close(GIF);
+    unlink($tmpfile);
+
+    # Log what we did: orig size, new size, compression ratio, time taken
+    
+    $comp = sprintf("%.2f", ($len/$origsize));
+    $time= $timeu+$times;
+    &statcollect("$origsize $len $comp $time\n");
+
+  DONE:
+@
+
+
+1.5
+log
+@various minor changes.
+@
+text
+@d235 2
+a236 1
+        # number (refinement level for *this* image); otherwise, error.
+d238 1
+a238 1
+            unless length($Refinement) == 1;
+d265 2
+a266 1
+    local($refinelevel, @@reply) = @@_;       # refine level, hdrs recd so far.
+d276 1
+a276 1
+    $origsize = (grep(/Content-length/i, @@reply))[0];
+d278 1
+a278 2
+    @@reply = grep((! /Content-length/i), @@reply);
+    &send_client(@@reply);                   # headers so far
+d301 2
+a302 1
+        || ($refinelevel == $MaxRefine))  {
+d304 1
+a304 1
+        #&send_client( "Content-type: image/gif$Crlf");
+@
+
+
+1.4
+log
+@selective rerendering seems to sorta work
+@
+text
+@d302 2
+a303 1
+        &send_client( "Content-type: image/gif$Crlf");
+@
+
+
+1.3
+log
+@added http error reporting and robustness
+@
+text
+@d22 2
+a23 2
+$SubblockKey = '~(\d+)~(\d+)~(-?\d+)~(-?\d+)~(-?\d+)~$';
+$SubblockKeyStr = "~%d~%d~%d~%d~%d~";     # for use with sprintf
+d29 2
+a30 1
+@@Refinement = ();                           # if nonempty, contains bbox coords
+d92 1
+a92 1
+    &forward_request($URL, $af, $port, $inetaddr);
+d101 1
+a101 1
+    &log("SEND >>>\n@@_\n<<<") if $gb{debug};
+d112 2
+a113 2
+    push(@@errstr, "This error was reported by the proxy <I>gmwebproxyd</I>"),
+    push(@@errstr, "not by the remote HTTP server. ");
+d144 8
+d154 1
+a154 1
+    local($url, $af, $port, $inetaddr) = @@_;
+d163 3
+a165 3
+    if ($url =~ m#$SubblockKey#o) {
+        @@Refinement = ($1,$2,$3,$4,$5);        # x0,y0,x1,y1 coords for refine
+        $url =~ s#$SubblockKey##o;          # strip it from URL.
+d173 1
+a173 1
+    if ($url =~ m|^(\w+)://([^/:]+):(\d+)(/.*)$|) { # format is host:port
+d175 1
+a175 1
+    } elsif ($url =~ m|^(\w+)://([^/:]+)(/.*)$|) {
+d233 6
+a238 17
+    # Was a partial refinement requested?  if so, handle it specially.
+    if (@@Refinement) {
+        if ($Refinement[0] == 0
+            && $Refinement[1] == 0
+            && $Refinement[2] == -1
+            && $Refinement[3] == -1
+            && $Refinement[4] == 0) {
+            &log("Bypassing full refinement");
+            &send_client( @@reply, $_);
+            &send_client( $_ ) while <SVR>;
+        } else {
+            &log("Doing refinement");
+            &forward_refinement(@@reply);
+        }
+    } elsif ( m|image/gif|i ) {
+        # GIF: distill and forward.
+        &forward_gif(@@reply);
+d241 1
+a241 1
+        &forward_html(@@reply);
+a260 48
+#  Refinement requested.  Use the bbox coords and refinement level
+#  in the @@Refinement array to
+#  extract and return the (GIF-encoded) subblock requested.
+#
+
+sub forward_refinement {
+    local(@@reply) = @@_;                     # http hdrs rec'd so far.
+    local($x0,$x1,$y0,$y1,$refinelevel) = @@Refinement;
+    local($ncolors);
+    local($tmpfile, $pipe, $len);
+
+    # The GIF is curently coming back from the server.  Pipe it into the
+    # program that extracts subblocks from gifs, and direct the result into a
+    # tmp file, which we will then feed the client.
+    # A refinement level of N means to use 2^N grays/colors.  Exception: N<=0
+    # means use all original colors.
+
+    $ncolors = ($refinelevel <= 0? 0: 1 << $refinelevel);
+    $tmpfile = "/tmp/refine$$";
+    $pipe = sprintf($DistillPipe, $x0,$x1,$y0, $tmpfile);
+    # Collect rest of http header...
+    push(@@reply, $_) while ($_=<SVR>) !~ /^\s*$/;
+    # ...and the GIF itserlf, which goes into the pipe.
+    open(PIPE, "| $pipe") || &Die("`$pipe': $!");
+    print PIPE $_ while <SVR>;              # feed in the gif
+    close PIPE;                             # out comes the subblock...
+
+    # send distilled output to client.
+
+    $len = -s ($tmpfile);
+    open(GIF, $tmpfile) || &Die("open $tmpfile: $!");
+
+    &send_client( @@reply );                   # headers so far
+                                            # BUG: Content-length will be sent
+                                            # twice, first is original, second
+                                            # is post-distillation
+
+    &send_client( "Content-type: image/gif$Crlf");
+    &send_client( "Content-length: $len$Crlf$Crlf");
+
+    local($/) = '';
+    &send_client($_) while <GIF>;
+    close(GIF);
+    unlink($tmpfile);
+}
+
+
+#---------------------------------------------------------------------------
+d264 1
+a264 1
+    local(@@reply) = @@_;                     # http hdrs recd so far.
+d279 1
+a279 1
+    # suck the rest of the gif into a pipeline (distillation), wh9ich will
+d285 1
+a285 1
+    push(@@reply, $_) while ($_=<SVR>) !~ /^\s*$/;
+d287 3
+d296 1
+d299 3
+a301 2
+    if ($origsize <= int($g{threshold}) << 10) { # small enough
+        &log("Forwarding small original (size=$origsize)");
+@
+
+
+1.2
+log
+@added more robust error recovery for some cases
+@
+text
+@a10 1
+$SubblockPipe = "/home/orodruin/j/grad/fox/digest/bin/gifblock %d %d %d %d %d >%s";
+d30 1
+a30 1
+                                            # for refinement.
+d57 1
+a57 1
+$Protocol = "HTTP/0.9";                     # by default
+d88 1
+a88 1
+    
+d96 7
+d104 18
+a121 3
+    printf $Socket @@_;
+    &log(@@_);
+    exit 1;                                 # exit child
+d135 1
+d168 1
+a168 1
+        $http_port = $Port{$how} || &Die("Don't know port for '$how'");
+d175 3
+a177 1
+    &open_tcp_socket(SVR, $hostname, $http_port);
+d209 1
+a209 1
+    select($Socket); $| = 0; select(stdout);
+d213 1
+d221 2
+a222 2
+    &http_error("500 Server not responding; timeout?")
+        unless  /^\s*Content-type:/i;
+d232 2
+a233 2
+            print $Socket @@reply, $_;
+            print $Socket $_ while <SVR>;
+d247 2
+a248 2
+        print $Socket @@reply,$_;
+        print $Socket $_ while <SVR>;
+d295 1
+a295 1
+    print $Socket @@reply;                   # headers so far
+d300 2
+a301 2
+    print $Socket "Content-type: image/gif$Crlf";
+    print $Socket "Content-length: $len$Crlf$Crlf";
+d304 1
+a304 1
+    print $Socket $_ while <GIF>;
+d327 1
+a327 1
+    print $Socket @@reply;                   # headers so far
+d347 1
+a347 1
+        print $Socket "Content-type: image/gif$Crlf";
+d351 2
+a352 2
+        print $Socket @@reply;
+        print $Socket $Crlf;                # blank line separator
+d354 1
+a354 1
+        print $Socket $_ while <SVR>;       # send the actual data
+d372 2
+a373 2
+    print $Socket "Content-type: image/gif$Crlf";
+    print $Socket "Content-length: $len$Crlf$Crlf";
+d376 1
+a376 1
+    print $Socket $_ while <GIF>;
+d391 3
+a393 1
+#  to be malformed
+d400 1
+a400 1
+    print ($_ =  <$Socket>);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a8 1
+# use Socket;
+d28 1
+a28 1
+#
+d32 4
+d37 5
+d43 9
+a51 1
+$URL = '';                                  # original request URL
+d53 5
+d59 4
+d64 5
+d72 1
+a72 1
+#  here after fork to handle new connection
+d81 1
+a81 1
+    $SIG{'INT'} = child_cleanup;
+d85 1
+a85 1
+    &collect_request;
+d93 3
+a95 1
+    &relay_reply;
+d97 11
+a148 6
+    # open socket back to original client
+
+    # &log("Opening socket back to client...");
+    local($reply) = pack($Sockaddr, &AF_INET, $port, $inetaddr);
+    #connect($Socket, $reply) ||
+    # &Die( "forward_request: connect: $!");
+d171 5
+d192 7
+a200 1
+        # if ((@@Refinement) != (0,0,-1,-1,0)) {
+d206 1
+d210 1
+a210 1
+            &log("Bypassing full refinement");
+d228 1
+a228 1
+    # all done: close server
+a229 1
+    # &log("Closing server");
+d233 2
+d365 2
+a366 1
+#  collect a 'simple' or 'full' http request
+d371 3
+a373 1
+    $_ =  <$Socket>;
+a378 1
+        return;
+d388 1
+d394 1
+a394 2
+        print STDERR "Invalid request: \`$Request\'\n";
+        exit 0;
+d396 1
+@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

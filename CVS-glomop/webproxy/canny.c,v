@@ -1,0 +1,737 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	release:1.1.1.1
+	geoworks:1.1.1.1
+	pregeo:1.1.1.1
+	geoworks-0701:1.1.1.1
+	geoworks-062696:1.1.1.1
+	dev:1.1.1.1
+	demo:1.1.1.1.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	95.08.29.21.44.09;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*
+**
+** 		      Robot Vision Group
+** 		Dept. of Artificial Intelligence
+** 		    University of Edinburgh
+** 
+** Authors: Bob Fisher, Dave Croft, A Fitzgibbon
+** Date: September 86
+** Program: canny.c
+** Current Maintainer: andrewfg@@ed.ac.uk
+**
+** Purpose: to apply a simple symmetric canny operator to any size image
+**
+** Usage: canny [-l <thresh>] [-h <thresh>] [-o <file>]
+**              [-s <file>] [-p <file> <file>] [-d <standard dev>]
+**            < input_pic_file > output_pic_file
+**           input_pipe | canny [-l <thresh>] [-h <thresh>] [-o <file>]
+**            [-s <file>] [-p <file> <file>] [-d <standard dev>]
+**            | output_pipe
+**           (standard deviation defaults to 1 if not specified)
+**
+**    The -l and -h options allow you to set lower and upper threshold
+**    values for the edge tracker.  These default to 0 and 255 respectively.
+**    The -o and -s options allow you to
+**    specify filenames, which will be used to store orientation and
+**    edge strength data.  The -p option lets you specify two files, a
+**    strength file and an orientation file, which will be fed directly
+**    into the edge tracker - standard input will be ignored, and no
+**    attempt at edge detection will be made.
+**
+*/
+
+#include "canny.h"
+#include <math.h>
+
+/* scales angles in radians to fit within the 0-255 range of unsigned
+   char variables */
+#define ORIENT_SCALE 40.0
+
+/* predeclare gaussian function */
+double gaussian();
+
+static struct vector {
+    unsigned short x0,y0,x1,y1;
+} *vec;
+static long vecindex =0;
+
+char Progname[]="canny";
+
+extern void Quantize(pixel **pixels, int cols, int rows, pixval maxval,
+                     int newcolors, int floyd);
+
+int xor = 0;
+int trace = 0;
+struct header hd;
+pixel **P, **Q;
+
+static char *usage = "\nUsage: canny [options] < in.gif > out.gif\n\
+  -xor     2 bits/pixel, XOR the edge information into the image\n\
+  -trace   3 grays + trace edges in white\n\
+  -low n   Low threshold for Canny (0-255), default 0\n\
+  -high n  High threshold for Canny (0-255), default 255\n\
+";
+
+
+main(argc,argv)
+int argc;
+char *argv[];
+{
+    int i,j,k,n;
+    double s=1.0;            /* standard deviation of gaussian */
+    long picsize;
+    struct header shd,ohd;       /* HIPS headers */
+    int low=1,high=255;        /* tracker hysteresis parameters */
+    char strength_flag=0,orientation_flag=0;    /* output flags */
+    char magnitude_file[20],orientation_file[20];    /* i/o file names */
+    char gif_file[20];
+    FILE * sfd, *ofd;                    /*i/o file descriptors*/
+    char predigested_ip_flag=0;            /* input flag */
+    unsigned char *data;    /* input and output array */
+    unsigned char *derivative_mag; /*mag of del G before non-maximum suppression*/
+    unsigned char *magnitude,*orientation; /*mag & orient after non-max sppression*/
+
+    /* read low,high vals from cmd line if given */
+
+    for (i=1; i<argc; i++) {
+        if (strcmp(argv[i], "-help") == 0) { error(usage); }
+        if (strcmp(argv[i], "-xor") == 0) { xor = 1; continue; }
+        if (strcmp(argv[i], "-trace") == 0) { trace = 1; xor = 0; continue; }
+        if (strcmp(argv[i], "-high") ==0) {
+            sscanf(argv[++i], "%d", &high); continue;
+        }
+        if (strcmp(argv[i], "-low") ==0) {
+            sscanf(argv[++i], "%d", &low); continue;
+        }
+        sprintf(gif_file, "Bad switch %s\n", argv[i]);
+        error(gif_file);
+    }
+
+    /* Read the GIF image into a PPM array.  The img field of the struct 
+     * header passed to ReadGIF will end up pointing to the PPM array 
+     * containing the GIF contents.
+     */
+
+    ReadGIF(stdin, 1, &hd);     /* hd.img will point to the PPM array */
+    P = hd.img;
+
+    picsize=hd.cols*hd.rows;
+
+    /*
+     *  If we're building a 2-bit-per-pixel image with edge outlines
+     *  overlaid, quantize the P array to 3 colors (leaving the fourth
+     *  for edges) and copy it to array Q, to which the output edges
+     *  will ultimately be written.  If we're Xor'ing edges into a
+     *  4-gray quant, do same but quantize to 4.  If extracting edges ONLY,
+     *  fill Q with zeros instead.
+     */
+
+    Q = ppm_allocarray(hd.cols, hd.rows);
+    if (Q == NULL)
+      error("No memory to alloc dest array\n");
+    if (xor || trace) {
+        /* copy array P to Q & quantize */
+        memcpy((void *)Q, (void *)P, hd.cols * hd.rows * sizeof(pixel));
+        Quantize(Q, hd.cols, hd.rows, 255,
+                 (xor? 3: 4), USE_FLOYD_CORRECTION);
+    } else {
+        memset((void *)Q, 0, hd.cols * hd.rows * sizeof(pixel));
+    }
+    
+    /* allocate i/o array */
+    if ((data=(unsigned char *)malloc(picsize))==(unsigned char *)NULL)
+    {
+        fprintf(stderr,"canny: can't alloc data\n");
+        exit(0);
+    }
+    if ((derivative_mag=(unsigned char *)calloc(picsize,1))==
+        (unsigned char *)NULL)
+    {
+        fprintf(stderr,"canny: can't alloc derivative_mag\n");
+        exit(0);
+    }
+    if ((magnitude=(unsigned char *)calloc(picsize,1))
+        ==(unsigned char *)NULL)
+    {
+        fprintf(stderr,"canny: can't alloc magnitude\n");
+        exit(0);
+    }
+    if ((orientation=(unsigned char *)calloc(picsize,1))
+        ==(unsigned char *)NULL)
+    {
+        fprintf(stderr,"canny: can't alloc orientation\n");
+        exit(0);
+    }
+
+    /*
+     *  Convert the colors to grays using a fast transformation stolen
+     *  from ppmtopgm.  The input ppmarray P is copied to the buffer
+     *  named 'data'.
+     */
+    ColorToGray(data,picsize,&hd);
+    
+    /* call canny core routines - these perform a gaussian
+     *  smoothing, calculate a gradient array and suppress
+     * non- maximal points in this array.
+     *  These routines mutate the 'data' array in place.
+     */
+
+    canny_core(s,hd.cols,hd.rows,data,derivative_mag,magnitude,orientation);
+    
+    /*
+     *  Make a second pass thru the array and track edges starting from
+     *  each point whose gradient value exceeds the threshold.  This
+     *  copies the output edges to PPM array Q.
+     *
+     *  BUG: this is inefficient - maybe better to keep track of such
+     *  points as they are generated during the first pass, and use the
+     *  list to do the second pass.
+     */
+    thresholding_tracker(high,low,hd.rows,hd.cols,data,magnitude,orientation);
+
+    /* write tracked edges (array of pixels) as a gif, to stdout. Last 
+     * arg is a colorname in X11 form to use as transparent color (NULL to 
+     * disable transparency)
+     */
+
+    WriteGIF(Q, hd.cols, hd.rows, "#000");
+    
+    free(data);
+    free(magnitude);
+    free(orientation);
+}
+
+
+/*
+ *  BEGIN CANNY ROUTINES
+ */
+
+/* core routine for the canny family of programs */
+
+
+/* hypot can't cope when both it's args are zero, hence this hack.... */
+double hypotenuse(x,y)
+double x,y;
+{
+    if (x==0.0 && y==0.0) return(0.0);
+    else return(hypot(x,y));
+}
+
+canny_core(s,cols,rows,data,derivative_mag,magnitude,orientation)
+     double s;            /* standard deviation */
+     int cols,rows;            /* picture dimensions */
+     unsigned char *data,*derivative_mag,*magnitude,*orientation;
+{
+  int filter_width;               /* length of 1-D gaussian mask */
+  float *gsmooth_x,*gsmooth_y;
+  float *derivative_x,*derivative_y;
+  int i,j,k,n;            /* counters */
+  int t;                /* temp. grad magnitude variable */
+  double a,b,c,d,g0;        /* mask generation intermediate vars*/
+  double ux,uy;
+  double t1,t2;
+  double G[20],dG[20],D2G[20];    /*gaussian & derivative filter masks*/
+  double gc,gn,gs,gw,ge,gnw,gne,gsw,gse;
+  int picsize,jstart,jlimit;
+  int ilimit;
+  register jfactor;
+  int kfactor1,kfactor2;
+  int kfactor;
+  register cindex,nindex,sindex,windex,eindex,nwindex,neindex,swindex,seindex;
+  int low=1,high=255;        /* tracker hysteresis parameters */
+  int cols_plus,cols_minus;    /*cols+1 and cols-1 respectively*/
+  int mag_overflow_count=0;    /* used to measure how oft mag array overflows */
+  int mag_underflow_count=0;    /* used to measure how oft mag array underflows */
+
+  picsize=cols*rows;        /* picture area */
+
+  /* calc coeffs for 1-dimensional G, dG/dn and
+     Delta-squared G filters */
+  for(n=0; n<20; ++n)
+    {
+      a=gaussian(((double) n),s);
+      if (a>0.005 || n<2)
+        {
+	  b=gaussian((double)n-0.5,s);
+	  c=gaussian((double)n+0.5,s);
+	  d=gaussian((double)n,s*0.5);
+#ifdef VERBOSE
+	  fprintf(stderr,"a,b,c: %lf,%lf,%lf\n",a,b,c);
+#endif
+	  G[n]=(a+b+c)/3/(6.283185*s*s);
+	  dG[n]=c-b;
+	  D2G[n]=1.6*d-a; /* DOG */
+#ifdef VERBOSE
+	  fprintf(stderr,"G[%d]: %lf\n",n,G[n]);
+	  fprintf(stderr,"dG[%d]: %lf\n",n,dG[n]);
+	  fprintf(stderr,"D2G[%d]: %lf\n",n,D2G[n]);
+#endif
+                            
+        }
+      else break;
+    }
+  filter_width=n;
+
+#ifdef VERBOSE
+  fprintf(stderr,"canny_core: smooth pic\n");
+#endif
+  /* allocate space for gaussian smoothing arrays */
+  if ((gsmooth_x=(float *)calloc(picsize,sizeof(float)))==(float *)NULL)
+    {
+      fprintf(stderr,"can't alloc gsmooth_x\n");
+      exit(0);
+    }
+  if ((gsmooth_y=(float *)calloc(picsize,sizeof(float)))==(float *)NULL)
+    {
+      fprintf(stderr,"can't alloc gsmooth_y\n");
+      exit(0);
+    }
+
+  /* produce x- and y- convolutions with gaussian */
+
+  ilimit=cols-(filter_width-1);
+  jstart=cols*(filter_width-1);
+  jlimit=cols*(rows-(filter_width-1));
+  for (i=filter_width-1;i<ilimit;++i)
+    {
+      for(jfactor=jstart;
+	  jfactor<jlimit;
+	  jfactor+=cols)
+        {
+	  cindex=i+jfactor;
+	  t1=data[cindex]*G[0];
+	  t2=t1;
+	  for(k=1,kfactor1=cindex-cols,
+                kfactor2=cindex+cols;
+	      k<filter_width;
+	      k++,
+                kfactor1-=cols,
+                kfactor2+=cols)
+            {
+	      t1+=G[k]*(data[kfactor1]+
+			data[kfactor2]);
+	      t2+=G[k]*(data[cindex-k]+
+			data[cindex+k]);
+            }
+	  gsmooth_x[cindex]=t1;
+	  gsmooth_y[cindex]=t2;
+        }
+    }
+    
+  /* allocate space for gradient arrays */
+#ifdef VERBOSE
+  fprintf(stderr,"canny_core: find grad\n");
+#endif
+  if ((derivative_x=(float *)calloc(picsize,sizeof(float)))==(float *)NULL)
+    {
+      fprintf(stderr,"can't alloc x\n");
+      exit(0);
+    }
+  /* produce x and y convolutions with derivative of
+     gaussian */
+
+  for (i=filter_width-1;i<ilimit;++i)
+    {
+      for(jfactor=jstart;
+	  jfactor<jlimit;
+	  jfactor+=cols)
+        {
+	  t1=0;
+	  cindex=i+jfactor;
+	  for (k=1;k<filter_width;++k)
+	    t1+=dG[k]*(gsmooth_x[cindex-k]-
+                       gsmooth_x[cindex+k]);
+	  derivative_x[cindex]=t1;
+        }
+    }
+  free(gsmooth_x);
+  if ((derivative_y=(float *)calloc(picsize,sizeof(float)))==(float *)NULL)
+    {
+      fprintf(stderr,"can't alloc y\n");
+      exit(0);
+    }
+
+  for (i=n;i<cols-n;++i)
+    {
+      for(jfactor=jstart;jfactor<jlimit;jfactor+=cols)
+        {
+	  t2=0;
+	  cindex=i+jfactor;
+	  for (k=1,kfactor=cols;
+	       k<filter_width;
+	       k++,kfactor+=cols)
+	    t2+=dG[k]*(gsmooth_y[cindex-kfactor]-gsmooth_y[cindex+kfactor]);
+	  derivative_y[cindex]=t2;
+        }
+    }
+  free(gsmooth_y);
+    
+  /* non-maximum suppression (4 cases for orientation of line
+     of max slope) */
+
+#ifdef VERBOSE
+  fprintf(stderr,"canny_core: non-maximum suppression\n");
+#endif
+  ilimit=cols-filter_width;
+  jstart=cols*filter_width;
+  jlimit=cols*(rows-filter_width);
+
+  for (i=filter_width;i<ilimit;++i)
+    {
+      for (jfactor=jstart;
+	   jfactor<jlimit;
+	   jfactor+=cols)
+        {
+				/* calculate current indeces */
+	  cindex=i+jfactor;
+	  nindex=cindex-cols;
+	  sindex=cindex+cols;
+	  windex=cindex-1;
+	  eindex=cindex+1;
+	  nwindex=nindex-1;
+	  neindex=nindex+1;
+	  swindex=sindex-1;
+	  seindex=sindex+1;
+	  ux=derivative_x[cindex];
+	  uy=derivative_y[cindex];
+	  gc=hypotenuse(ux,uy);
+	  /* scale gc to fit into an unsigned char array */
+	  t=gc*20.0;
+/*fprintf(stderr,"canny_core: i,j=(%d,%d), t=%lf\n",i,jfactor/cols,t);*/
+	  derivative_mag[cindex]=(t<256 ? t : 255);
+	  gn=hypotenuse(derivative_x[nindex],derivative_y[nindex]);
+	  gs=hypotenuse(derivative_x[sindex],derivative_y[sindex]);
+	  gw=hypotenuse(derivative_x[windex],derivative_y[windex]);
+	  ge=hypotenuse(derivative_x[eindex],derivative_y[eindex]);
+	  gne=hypotenuse(derivative_x[neindex],derivative_y[neindex]);
+	  gse=hypotenuse(derivative_x[seindex],derivative_y[seindex]);
+	  gsw=hypotenuse(derivative_x[swindex],derivative_y[swindex]);
+	  gnw=hypotenuse(derivative_x[nwindex],derivative_y[nwindex]);
+	  if (ux*uy>0)
+            {
+	      if(fabs(ux)<fabs(uy))
+                {
+		  if((g0=fabs(uy*gc))
+                     < fabs(ux*gse+(uy-ux)*gs) ||
+                     g0<=fabs(ux*gnw+(uy-ux)*gn))
+                    continue;
+                }
+	      else
+                {
+		  if((g0=fabs(ux*gc))
+                     < fabs(uy*gse+(ux-uy)*ge) ||
+                     g0<=fabs(uy*gnw+(ux-uy)*gw))
+                    continue;
+                }
+            }
+	  else
+            {
+	      if(fabs(ux)<fabs(uy))
+                {
+		  if((g0=fabs(uy*gc))
+                     < fabs(ux*gne-(uy+ux)*gn) ||
+                     g0<=fabs(ux*gsw-(uy+ux)*gs))
+		    continue;
+                }
+	      else
+                {
+		  if((g0=fabs(ux*gc))
+                     < fabs(uy*gne-(ux+uy)*ge) ||
+                     g0<=fabs(uy*gsw-(ux+uy)*gw))
+		    continue;
+                }
+            }
+	  /* seems to be a good scale factor */
+	  magnitude[cindex]=derivative_mag[cindex];
+	  /* pi*40 ~= 128 - direction is (thought
+	     of as) a signed byte */
+	  orientation[cindex]=atan2(uy, ux)*ORIENT_SCALE;
+        }
+    } 
+
+  free(derivative_x);
+  free(derivative_y);
+}
+
+/*            canny_subr.c                */
+
+/* Subroutines used by *canny progs (but not by *canny_j progs) */
+
+/* gaussian function (centred at the origin and ignoring the factor
+   of 1/(s*sqrt(2*PI)) ) */
+double gaussian(x,s)
+double x,s;
+{
+    return(exp((-x*x)/(2*s*s)));
+}
+
+/* track the edges in the magnitude array, starting at points that exceed
+   the "high" threshold, and continuing to track as long as point values
+   don't duck below the "low" threshold (yes, it's hysteresis...I'm sure
+   that hyster means "womb" (as in hysterical), but I don't know what
+   it's doing in a common engineering term) */
+
+
+
+thresholding_tracker(high,low,rows,cols,data,magnitude,orientation)
+int high,low;        /* threshold values */
+int rows,cols;
+unsigned char *data;    /* o/p pic array */
+unsigned char *magnitude;    /* gradient magnitude array */
+unsigned char *orientation;    /* gradient direction array */
+{
+    int i,j,k;    /* counters */
+    int picsize;    /* picture area */
+    struct vector *v;
+    
+    
+    /* clear data array before tracking */
+    for (i=0; i<cols; i++)
+      for (j=0; j<rows; j++) {
+          data[i+j*cols] = 0;
+      }
+
+    /* threshold image with hysteresis: follow from
+       each strong edge point */
+
+    for (i=0;i<cols;++i)
+    {
+        for (j=0;j<rows;++j)
+            if (magnitude[i+cols*j]>=high) {
+                follow(i,j,low,cols,rows,data,magnitude,orientation,v);
+            }
+    }
+}
+
+/* follow a connected edge */
+follow(i,j,low,cols,rows,data,magnitude,orientation,v)
+int i,j;    /* start point */
+int low;    /* lower threshold value */
+int cols,rows;    /* picture dimensions */
+unsigned char *data;    /* o/p pic array */
+unsigned char *magnitude;    /* gradient magnitude array */
+unsigned char *orientation;    /* gradient direction array */
+struct vector *v;               /* pointer to curent vector being built up */
+{
+    int k,l;        /* counters */
+    int i_plus_1,i_minus_1,j_plus_1,j_minus_1;
+    long index,kindex;
+    char break_flag;
+
+    i_plus_1=i+1;
+    i_minus_1=i-1;
+    j_plus_1=j+1;
+    j_minus_1=j-1;
+    index=i+j*cols;
+    if (j_plus_1>=rows) j_plus_1=rows-1;
+    if (j_minus_1<0) j_minus_1=0;
+    if (i_plus_1>=cols) i_plus_1=cols-1;
+    if (i_minus_1<0) i_minus_1=0;
+
+    if (!data[index])
+    {
+        /* current point must be added to the list of tracked points */
+        /*        data[index]=magnitude[index]; */
+        data[index] =255;       /* AF */
+        if (xor) {
+            pixel *tmp = &Q[j][i];
+            PPM_ASSIGN(*tmp, 0xff ^ PPM_GETR(*tmp),
+                       0xff ^ PPM_GETG(*tmp), 0xff ^ PPM_GETB(*tmp));
+        } else {
+            PPM_ASSIGN(Q[j][i],255,255,255);
+        }
+        /* now we can check immediately adjacent points to see if
+           they too could be added to the track */
+        break_flag=0;
+        for (k=i_minus_1;k<=i_plus_1;k++)
+        {
+            for(l=j_minus_1;l<=j_plus_1;++l)
+            {
+                kindex=k+l*cols;
+                if (!(l==j && k==i) &&
+                    magnitude[kindex]>=low
+                    /* &&
+                    abs(abs(orientation[index]-orientation[kindex])-128)>120*/
+                    )
+                {
+                    if (follow(k,l,low,cols,rows,data,magnitude,orientation,v))
+                    {
+                        break_flag=1;
+                        break;
+                    }
+                }
+            }
+            if (break_flag) break;
+        }
+        return(1);
+    }
+    else return(0);
+}
+
+
+/*
+ *  END CANNY ROUTINES
+ */
+
+/*
+ *  Read an entire ppm.  Convert to graymap using rgb to hsv.
+ *  BUG: need to count colors to determine max gray level? how does
+ *  ppmtopgm do it?  maybe if we do a dt convolution?
+ */
+
+/* Lookup tables for fast RGB -> luminance calculation. */
+    static int times77[256] = {
+	    0,    77,   154,   231,   308,   385,   462,   539,
+	  616,   693,   770,   847,   924,  1001,  1078,  1155,
+	 1232,  1309,  1386,  1463,  1540,  1617,  1694,  1771,
+	 1848,  1925,  2002,  2079,  2156,  2233,  2310,  2387,
+	 2464,  2541,  2618,  2695,  2772,  2849,  2926,  3003,
+	 3080,  3157,  3234,  3311,  3388,  3465,  3542,  3619,
+	 3696,  3773,  3850,  3927,  4004,  4081,  4158,  4235,
+	 4312,  4389,  4466,  4543,  4620,  4697,  4774,  4851,
+	 4928,  5005,  5082,  5159,  5236,  5313,  5390,  5467,
+	 5544,  5621,  5698,  5775,  5852,  5929,  6006,  6083,
+	 6160,  6237,  6314,  6391,  6468,  6545,  6622,  6699,
+	 6776,  6853,  6930,  7007,  7084,  7161,  7238,  7315,
+	 7392,  7469,  7546,  7623,  7700,  7777,  7854,  7931,
+	 8008,  8085,  8162,  8239,  8316,  8393,  8470,  8547,
+	 8624,  8701,  8778,  8855,  8932,  9009,  9086,  9163,
+	 9240,  9317,  9394,  9471,  9548,  9625,  9702,  9779,
+	 9856,  9933, 10010, 10087, 10164, 10241, 10318, 10395,
+	10472, 10549, 10626, 10703, 10780, 10857, 10934, 11011,
+	11088, 11165, 11242, 11319, 11396, 11473, 11550, 11627,
+	11704, 11781, 11858, 11935, 12012, 12089, 12166, 12243,
+	12320, 12397, 12474, 12551, 12628, 12705, 12782, 12859,
+	12936, 13013, 13090, 13167, 13244, 13321, 13398, 13475,
+	13552, 13629, 13706, 13783, 13860, 13937, 14014, 14091,
+	14168, 14245, 14322, 14399, 14476, 14553, 14630, 14707,
+	14784, 14861, 14938, 15015, 15092, 15169, 15246, 15323,
+	15400, 15477, 15554, 15631, 15708, 15785, 15862, 15939,
+	16016, 16093, 16170, 16247, 16324, 16401, 16478, 16555,
+	16632, 16709, 16786, 16863, 16940, 17017, 17094, 17171,
+	17248, 17325, 17402, 17479, 17556, 17633, 17710, 17787,
+	17864, 17941, 18018, 18095, 18172, 18249, 18326, 18403,
+	18480, 18557, 18634, 18711, 18788, 18865, 18942, 19019,
+	19096, 19173, 19250, 19327, 19404, 19481, 19558, 19635 };
+    static int times150[256] = {
+	    0,   150,   300,   450,   600,   750,   900,  1050,
+	 1200,  1350,  1500,  1650,  1800,  1950,  2100,  2250,
+	 2400,  2550,  2700,  2850,  3000,  3150,  3300,  3450,
+	 3600,  3750,  3900,  4050,  4200,  4350,  4500,  4650,
+	 4800,  4950,  5100,  5250,  5400,  5550,  5700,  5850,
+	 6000,  6150,  6300,  6450,  6600,  6750,  6900,  7050,
+	 7200,  7350,  7500,  7650,  7800,  7950,  8100,  8250,
+	 8400,  8550,  8700,  8850,  9000,  9150,  9300,  9450,
+	 9600,  9750,  9900, 10050, 10200, 10350, 10500, 10650,
+	10800, 10950, 11100, 11250, 11400, 11550, 11700, 11850,
+	12000, 12150, 12300, 12450, 12600, 12750, 12900, 13050,
+	13200, 13350, 13500, 13650, 13800, 13950, 14100, 14250,
+	14400, 14550, 14700, 14850, 15000, 15150, 15300, 15450,
+	15600, 15750, 15900, 16050, 16200, 16350, 16500, 16650,
+	16800, 16950, 17100, 17250, 17400, 17550, 17700, 17850,
+	18000, 18150, 18300, 18450, 18600, 18750, 18900, 19050,
+	19200, 19350, 19500, 19650, 19800, 19950, 20100, 20250,
+	20400, 20550, 20700, 20850, 21000, 21150, 21300, 21450,
+	21600, 21750, 21900, 22050, 22200, 22350, 22500, 22650,
+	22800, 22950, 23100, 23250, 23400, 23550, 23700, 23850,
+	24000, 24150, 24300, 24450, 24600, 24750, 24900, 25050,
+	25200, 25350, 25500, 25650, 25800, 25950, 26100, 26250,
+	26400, 26550, 26700, 26850, 27000, 27150, 27300, 27450,
+	27600, 27750, 27900, 28050, 28200, 28350, 28500, 28650,
+	28800, 28950, 29100, 29250, 29400, 29550, 29700, 29850,
+	30000, 30150, 30300, 30450, 30600, 30750, 30900, 31050,
+	31200, 31350, 31500, 31650, 31800, 31950, 32100, 32250,
+	32400, 32550, 32700, 32850, 33000, 33150, 33300, 33450,
+	33600, 33750, 33900, 34050, 34200, 34350, 34500, 34650,
+	34800, 34950, 35100, 35250, 35400, 35550, 35700, 35850,
+	36000, 36150, 36300, 36450, 36600, 36750, 36900, 37050,
+	37200, 37350, 37500, 37650, 37800, 37950, 38100, 38250 };
+    static int times29[256] = {
+	    0,    29,    58,    87,   116,   145,   174,   203,
+	  232,   261,   290,   319,   348,   377,   406,   435,
+	  464,   493,   522,   551,   580,   609,   638,   667,
+	  696,   725,   754,   783,   812,   841,   870,   899,
+	  928,   957,   986,  1015,  1044,  1073,  1102,  1131,
+	 1160,  1189,  1218,  1247,  1276,  1305,  1334,  1363,
+	 1392,  1421,  1450,  1479,  1508,  1537,  1566,  1595,
+	 1624,  1653,  1682,  1711,  1740,  1769,  1798,  1827,
+	 1856,  1885,  1914,  1943,  1972,  2001,  2030,  2059,
+	 2088,  2117,  2146,  2175,  2204,  2233,  2262,  2291,
+	 2320,  2349,  2378,  2407,  2436,  2465,  2494,  2523,
+	 2552,  2581,  2610,  2639,  2668,  2697,  2726,  2755,
+	 2784,  2813,  2842,  2871,  2900,  2929,  2958,  2987,
+	 3016,  3045,  3074,  3103,  3132,  3161,  3190,  3219,
+	 3248,  3277,  3306,  3335,  3364,  3393,  3422,  3451,
+	 3480,  3509,  3538,  3567,  3596,  3625,  3654,  3683,
+	 3712,  3741,  3770,  3799,  3828,  3857,  3886,  3915,
+	 3944,  3973,  4002,  4031,  4060,  4089,  4118,  4147,
+	 4176,  4205,  4234,  4263,  4292,  4321,  4350,  4379,
+	 4408,  4437,  4466,  4495,  4524,  4553,  4582,  4611,
+	 4640,  4669,  4698,  4727,  4756,  4785,  4814,  4843,
+	 4872,  4901,  4930,  4959,  4988,  5017,  5046,  5075,
+	 5104,  5133,  5162,  5191,  5220,  5249,  5278,  5307,
+	 5336,  5365,  5394,  5423,  5452,  5481,  5510,  5539,
+	 5568,  5597,  5626,  5655,  5684,  5713,  5742,  5771,
+	 5800,  5829,  5858,  5887,  5916,  5945,  5974,  6003,
+	 6032,  6061,  6090,  6119,  6148,  6177,  6206,  6235,
+	 6264,  6293,  6322,  6351,  6380,  6409,  6438,  6467,
+	 6496,  6525,  6554,  6583,  6612,  6641,  6670,  6699,
+	 6728,  6757,  6786,  6815,  6844,  6873,  6902,  6931,
+	 6960,  6989,  7018,  7047,  7076,  7105,  7134,  7163,
+	 7192,  7221,  7250,  7279,  7308,  7337,  7366,  7395 };
+
+int ColorToGray(char *buf, long size, struct header *h)
+{
+    int x,y;
+
+    for (y=0; y < h->rows; y++)
+      for (x=0; x < h->cols; x++)
+            *buf++ = (unsigned char)
+              (( times77[PPM_GETR(P[y][x])] +
+                times150[PPM_GETG(P[y][x])] +
+                times29[PPM_GETB(P[y][x])] )   >> 8);
+}
+
+error(char *msg)
+{
+  fprintf(stderr, "canny: error in %s\n",msg);
+  exit(-1);
+}
+@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

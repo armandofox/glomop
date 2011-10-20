@@ -1,0 +1,258 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.06.11.03.56.32;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.06.11.03.56.32;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#!/usr/sww/bin/perl5
+
+# httpd analyzer
+
+# set some defaults
+
+# list of log files to look at (gzipped)
+# @@files = ("/usr/tmp/fox/httplogs/jan96-trunc.gz");
+@@files = ("/usr/tmp/fox/httplogs/jan96.gz", "/usr/tmp/fox/httplogs/feb96.gz");
+
+# list of GIF thresholds for which to output separate data files
+@@thresh = (1);
+
+# throw away data for clients with fewer than this many data points
+$minpoints = 10;
+
+# max #clients whose http access patterns to track
+$maxcli = 15000;
+
+# max #entries to read
+$max = 1e10;
+
+%months = ("Jan",0,"Feb",1,"Mar",2,"Apr",3,"May",4,"Jun",5,
+           "Jul",6,"Aug",7,"Sep",8,"Oct",9,"Nov",10,"Dec",11);
+
+sub datediff {
+    # BUG: assume there are 30 days in each month.
+    my($d1,$m1,$y1,$h1,$mi1,$s1,
+       $d2,$m2,$y2,$h2,$mi2,$s2) = @@_;
+    my($s,$mi,$h,$y,$m,$d);
+
+    # seconds
+    $s = $s1-$s2;
+    $mi = $mi1-$mi2;
+    $h = $h1-$h2;
+    $y = $y1-$y2;
+    $m = $months{$m1}-$months{$m2};
+    $d = $d1-$d2;
+    
+    if ($s<0) { $s += 60; $mi-- };
+    if ($mi < 0) { $mi += 60; $h--;}
+    if ($h < 0) { $h += 24; $d--; }
+    if ($d < 0) { $d += 30; $m--; }
+    if ($m < 0) { $m += 12; $y--};
+    if ($y < 0) {
+        warn "Error! negative time! returning zero";
+        return 0;
+    }
+    return $s + (60*$mi) + (60*60*$h) + (24*60*60*$d) +
+        (30*24*60*60*$m) + (365*24*60*60*$y);
+}
+
+
+sub read_line {
+    my $line = <F>;
+    my $file;
+    
+    return $line if $line;
+    close F;
+    $file = shift @@files;
+    return undef unless $file;
+    unless (open(F, "gunzip -c $file |")) {
+        warn "Opening $file; $!";
+        return undef;
+    }
+    return &read_line();
+}
+    
+while ($_ = shift @@ARGV) {
+    &usage, exit 1 if /^-help/;
+    $basename =  (shift @@ARGV || die "$_ needs string arg!\n"), next
+        if /^-basename/;
+    $minpoints = (shift @@ARGV || die "$_ needs numeric arg!\n"), next
+        if /^-atleast/;
+    @@thresh = split(/\s+/, (shift @@ARGV || die "$_ needs a list arg!\n")), next
+        if /^-thresh/;
+    $max = (shift @@ARGV || die "$_ needs numeric arg!\n"), next
+        if /^-max/;
+    @@files =  split(/\s+/, (shift @@ARGV || die "$_ needs a list arg!\n")), next
+        if /^-logs/;
+    $maxcli = (shift @@ARGV || die "$_ needs numeric arg!\n"), next
+        if /^-clients/;
+    die "Bad argument: $_";
+}
+
+
+#
+$file = shift @@files;
+open(F, "gunzip -c $file |") or die $!;
+open(G, ">${basename}.gifsizes") or die $!;
+open(J, ">${basename}.jpgsizes") or die $!;
+@@thresh = sort { $a <=> $b } @@thresh;
+$smallest_thresh = $thresh[0];
+foreach (@@thresh) {
+    open("G$_", "> ${basename}.clients_${_}") or die $!;
+}
+
+while (1) {
+    last if $count++ >= $max;
+    last unless $line = &read_line();
+    chomp $line;
+    next if $line =~ m!eanders/pictures!;            # eliminate picture
+                                                     # archive  hits
+    # example line from http log:
+    # ppp-10.ts-8.nyc.idt.net - - [01/Jan/1996:00:00:20 -0800] "GET /~eanders/pictures/thumbnails/ariel2.gif HTTP/1.0" 200 10402
+
+    $line =~ m!^(\S+)\s+-\s+-\s+\[(\d+)/(\w\w\w)/(\d+):(\d+):(\d+):(\d+)\s+\S+\]\s+"GET\s+(\S+)\s+\S+"\s+(\d+)\s+(\S+)!;
+    ($host,$day,$month,$yr,$hr,$min,$sec,$url,$resp,$size) =
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);
+
+    # collect info about GIF and JPEG sizes distribution
+    $size = 0+$size;                        # force to number
+    $gifbuckets[int(log($size)/log(2.0))]++
+        if $size && ( $url =~ /\.gif$/) && ++$seen{$url} == 1;
+    $jpgbuckets[int(log($size)/log(2.0))]++
+        if $size && ( $url =~ /\.jpg$/) && ++$seen{$url} == 1;
+
+    # collect info about client delta, only if this is a GIF file larger than
+    # the smallest threshold.
+    next unless (($url =~ /\.gif$/) && ($size >= $smallest_thresh));
+    for (@@thresh) {
+        next unless $size > $_;
+        $key = "$host,$_";
+        if (defined $lastdate{$key}) {
+            $cli{$key} .= ' ' .
+                &datediff($day,$month,$yr,$hr,$min,$sec, @@{$lastdate{$key}}) .
+                    ' ' .
+                        $size;
+        }
+        # in any case, reset lastdate for this client to current access.
+        $lastdate{$key} = [$day,$month,$yr,$hr,$min,$sec];
+    }
+}
+
+# print out gif histograms and stats.
+&print_histogram(\@@gifbuckets, G);
+close G;
+
+# and jpeg.
+&print_histogram(\@@jpgbuckets, J);
+close J;
+
+# write files for client interarrival times.  one file per threshold size.
+foreach $thresh (@@thresh) {
+    $fh = "G$thresh";
+    foreach $key (sort(keys %cli)) {
+        ($cli,$cthresh) = split(/,/, $key);
+        next unless $cthresh == $thresh;
+        # discard if too few data points
+        @@z = split(/\s+/, $cli{$key});
+        next unless $#z >= $minpoints*2;
+        # ok, print the data points to a file.
+        printf $fh ("%-40.40s $cli{$key}\n", $cli);
+    }
+    close $fh;
+}
+
+sub print_histogram {
+    my @@buckets = @@ {shift @@_ };            # array of histogram buckets; each
+                                            # elt is number of items in that
+                                            # bucket 
+    my $fh = shift;                         # filehandle to write output
+    my $max = 0;
+    foreach (@@buckets) {
+        $max = $_ if $_>$max;
+    }
+    my $grain = int($max/120+0.5);
+    $grain = 1 if $grain<1;
+    for ($k=0; $k <= $#buckets; $k++) {
+        printf $fh ("%2d %7d %s\n", $k, $buckets[$k],
+                    '#' x ($buckets[$k] / $grain) );
+    }
+}
+
+
+sub usage
+{
+    print STDERR <<endofhelp;
+$0:  http log analyzer
+Collects the following data:
+    - histograms of GIF and JPEG sizes; each bucket is a power-of-2 bytes.
+    - access patterns for a single http client, assuming each IP address
+        is a separate client.  Collects interarrival times for GIF
+        distillation requests, ie interarrival times of requests whose
+        document type is GIF and whose size is above some threshold.
+
+Usage:  $0 -basename name [-atleast n] [-thresh "n1 n2 n3..."] 
+                [-logs "file1 file2..."]
+
+-basename name  Provides base filename for result files to be written.
+-atleast n      Discard clients with fewer than n accesses (default 10)
+-thresh n1 n2 n3...
+                Output separate data files containing interarrival times
+                for all GIFS >n1 bytes, all GIFS >n2 bytes, etc.
+                Default is a single threshold of 1 byte.
+                *** YOU MUST QUOTE THIS ARGUMENT TO PROTECT SPACES FROM
+                THE SHELL ***
+-logs files...  Points to gzip'd http logs.  By default it goes to the
+                Right Place, so don't change this unless you know what
+                you are doing.  YOU MUST QUOTE THIS ARGUMENT as well.
+-clients n      Track at most n clients (default $maxcli)                    
+
+The following output files are produced (bn is the argument of the
+ -basename option you gave above):
+
+bn.gifsizes     Data and histogram of GIF sizes     
+bn.jpgsizes     Data and histogram of JPEG sizes 
+bn.client_NNN  (where NNN is one of the values in the '-thresh' list)
+                One file per threshold value.  Each row begins with a
+                client name, followed by a list of whitespace-separated
+                integers giving the interarrival times in seconds
+                between GIF requests that would have caused a
+                distillation because the GIF size exceeded NNN.
+
+endofhelp
+}
+@
+
+
+1.1.1.1
+log
+@Files to read thru CS HTTP logs and construct input for feeding to
+steve's simulator, for determining how many distillers a single WS can
+support given "typical" web access patterns.  Note that the program
+removes the (disproportionately large number of) refs to eric anderson's
+pictures page.
+@
+text
+@@

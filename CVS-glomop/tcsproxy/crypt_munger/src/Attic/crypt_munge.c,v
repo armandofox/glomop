@@ -1,0 +1,264 @@
+head	1.1;
+access;
+symbols
+	iang:1.1.0.2;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.05.08.23.29.04;	author iang;	state dead;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.05.08.23.29.05;	author iang;	state Exp;
+branches;
+next	1.1.2.2;
+
+1.1.2.2
+date	97.05.13.09.12.59;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@file crypt_munge.c was initially added on branch iang.
+@
+text
+@@
+
+
+1.1.2.1
+log
+@Type 1-style rewebber
+@
+text
+@a0 189
+/*
+ *  crypt_munge.c
+ *
+ *  $Id$
+ *
+ *  This code acts as a crypto distillation server for tcsproxy.
+ */
+
+#include <limits.h>
+#include <string.h>
+#include <stdio.h>
+#include "crypt_munge.h"
+#include "distinterface.h"
+#include "des.h"
+#include "rand.h"
+
+#include "../../frontend/include/ALLARGS.h"
+
+MonitorClientID                monID;
+
+C_DistillerType dType;
+
+DistillerStatus
+ComputeDistillationCost(Argument *args, int numArgs,
+			DistillerInput *din,
+                        DistillationCost *cost)
+{
+  cost->estimatedTime_ms = DataLength(din);
+  return distOk;
+}
+
+static unsigned char uudecode[256];
+
+DistillerStatus
+DistillerInit(C_DistillerType distType)
+{
+    int i;
+
+    monID = DistillerGetMonitorClientID();
+    for(i=0;i<256;++i) uudecode[i] = 0;
+    for(i=0;i<26;++i) uudecode['A'+i] = i;
+    for(i=0;i<26;++i) uudecode['a'+i] = 26+i;
+    for(i=0;i<10;++i) uudecode['0'+i] = 52+i;
+    uudecode['+'] = uudecode['-'] = 62;
+    uudecode['/'] = uudecode['_'] = 63;
+
+    return distOk;
+}
+
+void
+DistillerCleanup(void)
+{
+}
+
+static UINT32 unarmor(unsigned char *inbuf, unsigned char *outbuf,
+    UINT32 inlen)
+{
+    UINT32 i;
+    unsigned char *in = inbuf;
+    unsigned char *out = outbuf;
+    int fudge = 0;
+
+    for(i=0;i<inlen;i+=4) {
+        *out = uudecode[*in] << 2;
+        ++in;
+        *out |= uudecode[*in] >> 4;
+        ++out;
+        *out = uudecode[*in] << 4;
+        ++in;
+        *out |= uudecode[*in] >> 2;
+        ++out;
+        *out = uudecode[*in] << 6;
+        ++in;
+        *out |= uudecode[*in];
+        ++out;
+        ++in;
+    }
+
+    if (in - inbuf > 3) {
+        if (*(in-1) == '=') ++fudge;
+        if (*(in-2) == '=') ++fudge;
+    }
+    return out - outbuf - fudge;
+}
+
+DistillerStatus
+DistillerMain(Argument *args, int nargs,
+	      DistillerInput *din,
+	      DistillerOutput *dout)
+{
+    int i;
+    unsigned char *argkey = NULL;
+    unsigned char desxkey[24];
+    des_key_schedule desks;
+    unsigned char *dataend;
+    unsigned char *p;
+    unsigned long plen;
+    unsigned int mimelen;
+    unsigned char *datastart;
+    int padout = 0;
+    unsigned long padlen = 0;
+
+    /* Use this input to stir our PRNG */
+    RAND_seed(DataPtr(din), DataLength(din));
+
+    /* Find the key argument */
+    for (i=0; i<nargs; i++) {
+	if (ARG_ID(args[i]) == CRYPT_KEY) {
+	    argkey = (unsigned char *)ARG_STRING(args[i]);
+	}
+    }
+
+    if (!argkey) {
+	/* Just pass through */
+	SetData(dout, DataPtr(din));
+	SetDataLength(dout, DataLength(din));
+	DataNeedsFree(dout, gm_False);
+	return distOk;
+    }
+
+    /* What crypto algorithm is it? */
+    switch(argkey[0]) {
+    case 'X':
+	/* This is DESX.  The following 32 chars of key are uudecoded into
+	   24 bytes.  The first 8 are assumed to be odd-parity, and used
+	   as the DES key.  The next 8 are the in-whitener; the final
+	   8 are the out-whitener.  CBC mode is used; the first 8 bytes
+	   of the input are the IV.
+	   
+	   After the decryption, the first 4 bytes are the length of the
+	   unpadded plaintext, not including the MIME type.  Following that
+	   is the MIME type, which is a null-terminated ASCII string padded
+	   to a multiple of 4 bytes.  The MIME type can be 4 NULs, in which
+	   case it defaults to "application/octet-stream".  After that
+	   is the decrypted data (of length specified earlier), then random
+	   padding.
+	   
+	   If no MIME type was specified, we should append random padding
+	   the the decrypted output, so that the outgoing length equals the
+	   incoming length. */
+
+	if (strlen((char *)argkey) != 33) return distBadInput;
+	if (DataLength(din) < 8) return distBadInput;
+
+	unarmor(argkey+1, desxkey, 32);
+	des_set_key((des_cblock*)desxkey, desks);
+	des_xcbc_encrypt((des_cblock*)(((char *)DataPtr(din))+8),
+	    (des_cblock*)(((char *)DataPtr(din))+8), (DataLength(din)-8)&(~7),
+	    desks, (des_cblock*)DataPtr(din), (des_cblock*)(desxkey+8),
+	    (des_cblock*)(desxkey+16), DES_DECRYPT);
+	
+	dataend = ((unsigned char *)DataPtr(din))+((DataLength(din))&(~7));
+
+	/* Extract the length of the useful data */
+	p = ((unsigned char*)DataPtr(din)) + 8;
+	plen = 0;   plen += *p; ++p;
+	plen <<= 8; plen += *p; ++p;
+	plen <<= 8; plen += *p; ++p;
+	plen <<= 8; plen += *p; ++p;
+
+	/* Extract the MIME type */
+	strncpy(dout->mimeType, (char *)p, MAX_MIMETYPE-1);
+	dout->mimeType[MAX_MIMETYPE-1] = '\0';
+	if (dout->mimeType[0] < '!' || dout->mimeType[0] > '~') {
+	    /* This was probably a failed decryption, or was blank */
+	    strcpy(dout->mimeType, "application/octet-stream");
+	    padout = 1;
+	}
+	mimelen = strlen(dout->mimeType);
+	mimelen += 4 - (mimelen%4);
+
+	datastart = ((unsigned char *)DataPtr(din)) + (12 + mimelen);
+	if (plen > dataend - datastart) plen = dataend - datastart;
+	if (padout) padlen = DataLength(din) - plen;
+
+	SetData(dout, DistillerMalloc(plen+padlen));
+	memmove(DataPtr(dout), datastart, plen);
+	if (padlen) RAND_bytes(((unsigned char *)DataPtr(dout))+plen, padlen);
+	SetDataLength(dout, plen+padlen);
+	DataNeedsFree(dout, gm_True);
+
+    	break;
+
+    default:
+	return distBadInput;
+    }
+
+    return distOk;
+}
+@
+
+
+1.1.2.2
+log
+@working copy (?)
+@
+text
+@d4 1
+a4 1
+ *  $Id: crypt_munge.c,v 1.1.2.1 1997/05/08 23:29:05 iang Exp $
+d164 2
+a165 1
+	if (dout->mimeType[0] == '\0') {
+a167 15
+	} else {
+	    for(i=0;i<strlen(dout->mimeType);++i) {
+		if (dout->mimeType[i] < ' ' || dout->mimeType[i] > '~') {
+		    /* This was probably a failed decryption, or was blank */
+		    strcpy(dout->mimeType, "application/octet-stream");
+		    padout = 1;
+		    break;
+		}
+	    }
+	}
+	if (padout) {
+	    mimelen = 4;
+	} else {
+	    mimelen = strlen(dout->mimeType);
+	    mimelen += 4 - (mimelen%4);
+d169 2
+@

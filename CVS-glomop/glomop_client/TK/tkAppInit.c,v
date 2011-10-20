@@ -1,0 +1,302 @@
+head	1.6;
+access;
+symbols
+	stable:1.3
+	current:1.3
+	release:1.3;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	96.08.23.19.57.48;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.07.25.22.12.28;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.07.01.23.34.54;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.07.00.28.33;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.31.17.23.23;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.24.21.30.54;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/* 
+ * tkAppInit.c --
+ *
+ *	Provides a default version of the Tcl_AppInit procedure for
+ *	use in wish and similar Tk-based applications.
+ *
+ */
+
+static char gm_rcsid[] = "$Id: tkAppInit.c,v 1.1 96/08/19 14:40:03 glomop Exp $";
+
+#include "tk.h"
+#include "glomopTk.h"
+#include "glomopTclTk.h"
+
+/*
+ * The following variable is a special hack that is needed in order for
+ * Sun shared libraries to be used for Tcl.
+ */
+
+extern int matherr();
+int *tclDummyMathPtr = (int *) matherr;
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * glomop_main --
+ *
+ *	This is the main initialization routine for the core glomop layer.
+ *
+ * Results:
+ *	None: Tk_Main never returns here, so this procedure never
+ *	returns either.
+ *
+ * Side effects:
+ *	Tk_Main will call Tcl_AppInit, which will in turn call the
+ *      init_callback argument so that applications can do their own
+ *      app-specific initialization.
+ *
+ *----------------------------------------------------------------------
+ */
+
+static void (*the_init_callback)(void) = NULL;
+
+int glomop_main(argc, argv, init_callback)
+    int argc;			/* Number of command-line arguments. */
+    char **argv;		/* Values of command-line arguments. */
+    void (*init_callback)(void);  /* will be called so that init can happen */
+{
+    the_init_callback = init_callback;
+    Tk_Main(argc, argv, Tcl_AppInit);
+    return 0;			/* Needed only to prevent compiler warning. */
+}
+
+/*
+ * Routines that allow applications to inject fd activity callback
+ * routines.  theHandler() will be called whenever fd is readable or
+ * whenever an exception occurs on fd.
+ */
+
+void glomop_add_fd_handler(int fd, 
+			   void (*theHandler)(void *, int),
+			   void *client_data)
+{
+  Tk_CreateFileHandler(fd, TK_READABLE | TK_EXCEPTION,
+		       theHandler, (ClientData) client_data);
+}
+
+void glomop_remove_fd_handler(int fd)
+{
+  Tk_DeleteFileHandler(fd);
+}
+
+/*
+ *----------------------------------------------------------------------
+ *
+ * Tcl_AppInit --
+ *
+ *	This procedure performs application-specific initialization.
+ *	Most applications, especially those that incorporate additional
+ *	packages, will have their own version of this procedure.
+ *
+ * Results:
+ *	Returns a standard Tcl completion code, and leaves an error
+ *	message in interp->result if an error occurs.
+ *
+ * Side effects:
+ *	Depends on the startup script.
+ *
+ *----------------------------------------------------------------------
+ */
+
+int
+Tcl_AppInit(interp)
+    Tcl_Interp *interp;		/* Interpreter for application. */
+{
+  /* Tk_Window mainWindow; */
+
+    if (Tcl_Init(interp) == TCL_ERROR) {
+	return TCL_ERROR;
+    }
+    if (Tk_Init(interp) == TCL_ERROR) {
+	return TCL_ERROR;
+    }
+
+    /*
+     * Call the init procedures for included packages.  Each call should
+     * look like this:
+     *
+     * if (Mod_Init(interp) == TCL_ERROR) {
+     *     return TCL_ERROR;
+     * }
+     *
+     * where "Mod" is the name of the module.
+     */
+    if (glomopTclTk_Init(interp) == TCL_ERROR) {
+      return TCL_ERROR;
+    }
+
+    /** call the app-specific initialization callback **/
+    if (the_init_callback != NULL)
+      the_init_callback();
+
+    /*
+     * Call Tcl_CreateCommand for application-specific commands, if
+     * they weren't already created by the init procedures called above.
+     */
+
+    /*
+     * Specify a user-specific startup file to invoke if the application
+     * is run interactively.  Typically the startup file is "~/.apprc"
+     * where "app" is the name of the application.  If this line is deleted
+     * then no user-specific startup file will be run under any conditions.
+     */
+
+#if ((TCL_MAJOR_VERSION == 7) && (TCL_MINOR_VERSION < 5))
+    tcl_RcFileName = "~/.gmwishrc";
+#endif
+    return TCL_OK;
+}
+
+int glomop_main_synch(void)
+{
+  if (glomopTk_init() != 0) {
+    return 1;
+  }
+  return 0;
+}
+@
+
+
+1.5
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d1 8
+a14 5
+ * Copyright (c) 1993 The Regents of the University of California.
+ * Copyright (c) 1994 Sun Microsystems, Inc.
+ *
+ * See the file "license.terms" for information on usage and redistribution
+ * of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+d17 1
+a17 3
+#ifndef lint
+static char gm_rcsid[] = "$Id";
+#endif /* not lint */
+d143 1
+d145 1
+d152 1
+a152 1
+    return TCL_ERROR;
+d154 1
+a154 1
+  return TCL_OK;
+@
+
+
+1.4
+log
+@Tweaked so that apps could register their own fd callbacks.
+@
+text
+@d19 1
+d146 7
+@
+
+
+1.3
+log
+@Changed so it would load the ~/.gmwishrc file instead of ~/.wishrc
+@
+text
+@d28 1
+a28 1
+
+d32 1
+a32 1
+ * main --
+d34 1
+a34 1
+ *	This is the main program for the application.
+d41 3
+a43 1
+ *	Whatever the application does.
+d48 3
+a50 2
+int
+main(argc, argv)
+d53 1
+d55 1
+d59 20
+a78 1
+
+d124 4
+@
+
+
+1.2
+log
+@Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+@
+text
+@d113 1
+a113 1
+    tcl_RcFileName = "~/.wishrc";
+@
+
+
+1.1
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d78 1
+a78 1
+    Tk_Window main;
+d116 1
+@

@@ -1,0 +1,162 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.09.17.19.30.22;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Virtual network protocols for myrinet summary added.
+@
+text
+@<html>
+<title>
+Virtual Network Transport Protocols for Myrinet
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Virtual Network Transport Protocols for Myrinet
+</h1>
+<strong>
+Brent N. Chun, Alan M. Mainwaring, and David E. Culler
+</strong>
+
+<p><b>One-line summary:</b>
+AM-II is presented: it provides virtual networks, protected direct network
+access, reliable message delivery (timeouts and retransmissions), and
+automagic network mapping and route discovery/installation.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> <b>Assumptions</b>:
+	  <ul>
+	       <li> fast, low-latency interconnect (&gt; 1Gb/s, &lt;1 usec
+		    link bandwidth/latency)
+	       <li> homogeneous network interfaces
+	       <li> single cluster network (order hundreds or
+		    small number of thousands of machines
+	       <li> <i>steve says: these assumptions eliminate all of the
+		    complexities of transport protocols - which is good,
+		    but it does limit the scope of applicability)</i>
+	  </ul>
+     <li> <b>Architecture</b>:
+	  <ul>
+	       <li> AM-II API
+		    <ul>
+			 <li> short message (4-8 word payload), medium
+			      messages (~256 bytes), and bulk messages
+			      with DMA memory-to-memory transfers are
+			      supported.
+			 <li> endpoints are network delivery abstractions
+			      (like sockets).  Message tags allow
+			      multiplexing of application traffic over a
+			      single endpoint.
+			 <li> return-to-sender error model
+		    </ul>
+	       <li> virtual networks
+		    <ul>
+			 <li> network access via endpoints - collection of
+			      endpoints is virtual interconnect.
+			 <li> endpoints correspond to allocated
+			      buffers/queues in the NIC itself.  Since more
+			      endpoints can be created than the NIC can
+			      handle, NIC memory is used as a cache of
+			      endpoint state, and faulting is done when
+			      necessary.  (Assumption: bursty traffic.)
+		    </ul>
+	       <li> NIC firmware
+		    <ul>
+			 <li> firmware implements reliability -
+			      retransmission, duplicate elimination.
+			      Reordering not necessary because of
+			      link-level properties (such as
+			      backpressure).  (Is this true?)
+			 <li> Programmed I/O for small transfers, and
+			      medium/large AM transfer.  DMA for
+			      medium/large data transfer.
+		    </ul>
+	       <li> Hardware
+		    <ul>
+			 <li> 100+ 167-MHz Sun UltraSPARCs connected with
+			      160 MB/s full-duplex link Myrinet using 40
+			      8-port crossbar switches in a fat-tree like
+			      topology.  (Although top-level links are not
+			      fatter, limiting bisection bandwidth.)
+			 <li> NIC is LANai 4.1 card on SBUS, with 37.5 MHz
+			      embedded processor, 256 KB of SRAM, and
+			      single host SBUS DMA engine.
+		    </ul>
+	  </ul>
+     <li> NIC protocols
+	  <ul>
+	       <li> endpoint scheduling: how long to service endpoint
+		    before go to next.  Weighted round-robin is used: empty
+		    endpoints are skipped, for endpoint with pending
+		    messages, NIC makes 2^k attempts to send and loiters
+		    once endpoint is empty in case host sends more
+		    stuff. (Again, bursty assumption.).  They used k=8!!!!!
+	       <li> flow control: bandwidth-delay product is on the order
+		    of 2 messages.  3 levels of flow control:  active
+		    message credits (which assume request-reply protocol to
+		    replenish credits), NIC stop-and-wait flow control over
+		    logical channels (4 outstanding messages per channel
+		    allowed), and network link-level backpressure.  Note
+		    that they rate-limit senders, so any given receiver
+		    can still be hammered by multiple senders, but
+		    backpressure helps here.
+	       <li> simple look-up-tables in NIC for channel management,
+		    routing, and message information.  Order #channels x
+		    #NICs table space needed, and linear search for
+		    retransmission timeouts is performed.  This ultimately
+		    limits scalability of cluster (NIC RAM is the largest
+		    issue, not cost of the search.)
+	       <li> Error handling:  system attempts 255 retransmission
+		    (<i>why? why? myrinet is ultra-reliable, so a dropped
+		    packet almost certainly means congestion.  255
+		    retransmissions is a bad idea.  Plus, paper doesn't
+		    mention if they do exponential backoff or not.</i>)
+	  </ul>
+     <li> Performance
+	  <ul>
+	       <li> It's fast, but twice as slow as GAM (from a RTT
+		    perspective), mostly because of
+		    the virtual network overhead (message descriptor
+		    munging in endpoints).
+	       <li> Throughput approaches 31 MB/s (<i>links support 160
+		    MB/s - where's the rest gone?</i>) under optimal
+		    conditions, i.e. streaming DMA transfer between two
+		    peers when there's no network contention/congestion.
+	       <li> Get expected 1/x degradation as multiple people contend
+		    for one destination.
+	  </ul>
+</ul>
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> see italics above - there are some pretty remarkable and
+	  unjustified constants hard-coded in their protocols, and on
+	  inspection there is a lot of unrealized bandwidth that hasn't
+	  been explained.
+     <li> How about some macro-benchmarks?  Have any good demonstrable
+	  applications been written on top of AM-II?
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

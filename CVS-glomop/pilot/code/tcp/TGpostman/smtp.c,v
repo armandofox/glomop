@@ -1,0 +1,1742 @@
+head	1.18;
+access;
+symbols
+	v1_2:1.16
+	v1_1:1.15
+	v1_0:1.12;
+locks; strict;
+comment	@ * @;
+
+
+1.18
+date	98.07.24.02.55.44;	author gribble;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.07.14.21.11.52;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.07.04.00.54.09;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.07.02.09.27.59;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.07.02.07.20.32;	author iang;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.07.02.04.46.18;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.07.01.07.48.43;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.06.30.02.27.43;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.05.21.21.50.27;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.05.21.19.53.38;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.05.21.16.16.06;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.05.21.03.20.33;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.05.20.07.00.30;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.20.00.51.07;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.05.19.01.56.11;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.19.00.44.53;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.18.17.46.18;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.18.00.24.23;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@took out duplicate #include <sys/types.h> so it wouldnt break with new gcc
+@
+text
+@#include <Pilot.h>
+// #include <sys/types.h>
+#include <sys/socket.h>
+#include "TGpostman.h"
+
+enum smtpstate { SMTP_WAIT4_BANNER, SMTP_DO_MAIL, SMTP_DO_RCPT, SMTP_DO_BODY,
+		    SMTP_WAIT4_QUITr };
+
+#define hdrOverrideTo 1
+#define hdrOverrideCc 2
+#define hdrOverrideBcc 4
+#define hdrOverrideFrom 8
+#define hdrOverrideSubject 16
+#define hdrOverrideReplyTo 32
+#define hdrOverrideSentTo 64
+#define hdrOverrideReceiptTo 128
+#define hdrOverridePriority 256
+
+#define RcptWhichTo 1
+#define RcptWhichCc 2
+#define RcptWhichBcc 3
+#define RcptWhichDone 4
+
+#define MAXLINESIZE 256
+
+typedef struct Mail {
+    int read;
+    int sig;
+    int confRead;
+    int confDeliv;    /* Becomes Return-Receipt-To: */
+    int prio;         /* Becomes Priority: */
+    int addressing;
+
+    /* Headers from the mail message */
+    CharPtr subject;
+    CharPtr from;
+    CharPtr to;
+    CharPtr cc;
+    CharPtr bcc;
+    CharPtr replyTo;
+    CharPtr sentTo;
+
+    /* Headers from the mail body */
+    CharPtr headers;
+    /* Which of the message headers were overridden in the body headers */
+    UInt hdroverride;
+
+    /* The rest of the body */
+    CharPtr body;
+
+} MailMsg;
+
+struct smtpdata {
+    NetSocketRef s;
+    enum smtpstate state;
+    DmOpenRef maildb;
+    int msgnum;
+    int seqno;
+    int nummsgs;
+    VoidHand HELOnameH;
+    VoidHand mailfromH;
+    VoidHand realnameH;
+    VoidHand signatureH;
+    void (*disphand)(CharPtr, ULong, ULong, VoidHand);
+    VoidHand diH;
+    VoidHand msghand;
+    MailMsg msg;
+    UInt RcptWhich;
+    CharPtr RcptPtr;
+    Char outmsg[MAXLINESIZE+1];
+};
+
+/* Read the signature from the App Preferences database and return a
+   new handle to a copy of it. */
+static VoidHand get_signatureH(void)
+{
+    DmOpenRef prefdb;
+    VoidHand sighand;
+    VoidPtr sigptr;
+    ULong ressize;
+    VoidHand retH;
+    CharPtr retptr;
+
+    prefdb = DmOpenDatabaseByTypeCreator('sprf', 'psys', dmModeReadOnly);
+    if (!prefdb) return 0;
+
+    sighand = DmGetResource('mail', 3);
+    if (!sighand) {
+	DmCloseDatabase(prefdb);
+	return 0;
+    }
+
+    sigptr = MemHandleLock(sighand);
+    if (!sigptr) {
+	DmReleaseResource(sighand);
+	DmCloseDatabase(prefdb);
+	return 0;
+    }
+
+    ressize = MemHandleSize(sighand);
+    if (ressize <= 2) {
+	MemHandleUnlock(sighand);
+	DmReleaseResource(sighand);
+	DmCloseDatabase(prefdb);
+	return 0;
+    }
+
+    ressize -= 2;
+    retH = MemHandleNew(ressize);
+    if (retH) {
+	retptr = MemHandleLock(retH);
+	if (retptr) {
+	    MemMove(retptr, sigptr+2, ressize);
+	    MemHandleUnlock(retH);
+	}
+    }
+
+    MemHandleUnlock(sighand);
+    DmReleaseResource(sighand);
+    DmCloseDatabase(prefdb);
+
+    return retH;
+}
+
+/* Load information about the next message into sdata */
+static int prepare_msg(struct smtpdata *sdata)
+{
+    UCharPtr recptr;
+    UChar flags;
+
+    /* Get a handle to the message and lock it down */
+    sdata->msghand = DmQueryRecord(sdata->maildb, sdata->msgnum);
+    if (!sdata->msghand) {
+	return -1;
+    }
+    recptr = (UCharPtr)MemHandleLock(sdata->msghand);
+    if (!recptr) {
+	return -1;
+    }
+
+    /* Now read info out of it */
+
+    /* Ignore the timestamp on the msg */
+
+    /* Get the flags */
+    flags = recptr[4];
+    sdata->msg.read = (flags & (1 << 7)) >> 7;
+    sdata->msg.sig = (flags & (1 << 6)) >> 6;
+    sdata->msg.confRead = (flags & (1 << 5)) >> 5;
+    sdata->msg.confDeliv = (flags & (1 << 4)) >> 4;
+    sdata->msg.prio = (flags & (3 << 2)) >> 2;
+    sdata->msg.addressing = (flags & (3));
+
+    recptr += 6;
+    sdata->msg.subject = recptr; while (*(recptr++)) ;
+    sdata->msg.from = recptr; while(*(recptr++)) ;
+    sdata->msg.to = recptr; while(*(recptr++)) ;
+    sdata->msg.cc = recptr; while(*(recptr++)) ;
+    sdata->msg.bcc = recptr; while(*(recptr++)) ;
+    sdata->msg.replyTo = recptr; while(*(recptr++)) ;
+    sdata->msg.sentTo = recptr; while(*(recptr++)) ;
+    sdata->msg.body = recptr; while(*(recptr++)) ;
+    sdata->msg.headers = NULL;
+    sdata->msg.hdroverride = 0;
+
+    /* Now adjust things to deal with pasted headers, etc. */
+    if (sdata->msg.body[0] == '#' && sdata->msg.body[1] == '#' &&
+	sdata->msg.body[2] == '\n') {
+	sdata->msg.headers = sdata->msg.body + 3;
+	sdata->msg.body = sdata->msg.headers;
+	/* Read through the pasted headers */
+	while(sdata->msg.body[0] && sdata->msg.body[0] != '\n') {
+	    if (sdata->msg.body[0] == ' ' || sdata->msg.body[0] == '\t') {
+		/* Do nothing; just go to the next line */
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "to:", 3)) {
+		sdata->msg.hdroverride |= hdrOverrideTo;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "cc:", 3)) {
+		sdata->msg.hdroverride |= hdrOverrideCc;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "bcc:", 4)) {
+		sdata->msg.hdroverride |= hdrOverrideBcc;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "from:", 5)) {
+		sdata->msg.hdroverride |= hdrOverrideFrom;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "subject:", 8)) {
+		sdata->msg.hdroverride |= hdrOverrideSubject;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "reply-to:", 9)) {
+		sdata->msg.hdroverride |= hdrOverrideReplyTo;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "sent-to:", 8)) {
+		sdata->msg.hdroverride |= hdrOverrideSentTo;
+	    } else if (!StrNCaselessCompare(sdata->msg.body,
+		"return-receipt-to:", 18)) {
+		sdata->msg.hdroverride |= hdrOverrideReceiptTo;
+	    } else if (!StrNCaselessCompare(sdata->msg.body, "priority:", 9)) {
+		sdata->msg.hdroverride |= hdrOverridePriority;
+	    }
+	    while(sdata->msg.body[0] && sdata->msg.body[0] != '\n')
+		++(sdata->msg.body);
+	    if (sdata->msg.body[0]) ++(sdata->msg.body);
+	}
+	if (sdata->msg.body[0] == '\n') ++(sdata->msg.body);
+    }
+    
+    return 0;
+}
+
+/* Clean up a message after it's been successfully sent */
+static void clean_msg(struct smtpdata *sdata)
+{
+    UInt attr;
+
+    /* Unlock the saved msg */
+    MemHandleUnlock(sdata->msghand);
+    sdata->msghand = 0;
+
+    /* Save the msg in Filed */
+    if (!DmRecordInfo(sdata->maildb, sdata->msgnum, &attr, NULL, NULL)) {
+	if ((attr & dmRecAttrCategoryMask) == 1) {
+	    attr &= ~dmRecAttrCategoryMask;
+	    attr |= 3;  /* Filed */
+	    DmSetRecordInfo(sdata->maildb, sdata->msgnum, &attr, NULL);
+	}
+    }
+}
+
+/* Arrange for data to be written, and go to wstate when it is */
+static int smtp_writen(CharPtr data, UInt len, VoidHand cbH,
+    enum smtpstate wstate)
+{
+    struct smtpdata *sdata;
+    int amt;
+
+    sdata = MemHandleLock(cbH);
+    if (!sdata) {
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    while(len) {
+	amt = send(sdata->s, data, len, 0);
+	if (amt <= 0) return -1;
+	data += amt;
+	len -= amt;
+    }
+    sdata->state = wstate;
+
+    MemHandleUnlock(cbH);
+
+    return 0;
+}
+
+static int smtp_write(CharPtr data, VoidHand cbH, enum smtpstate wstate)
+{
+    return smtp_writen(data, StrLen(data), cbH, wstate);
+}
+
+/* Write headers.  If munge == 1, turn "\n" into "\r\n\t".  If munge == 2,
+   turn "\n" into "\r\n" */
+static int smtp_write_headers(CharPtr hdr, int size, VoidHand cbH,
+    enum smtpstate wstate, int munge)
+{
+    CharPtr end;
+    CharPtr nl;
+    int ret;
+
+    /* Find the end of the header to write */
+    if (size < 0) size = StrLen(hdr);
+
+    if (!munge) {
+	return smtp_writen(hdr, size, cbH, wstate);
+    }
+
+    end = hdr + size;
+
+    while (hdr < end) {
+	nl = hdr;
+	if (*nl == '\n') {
+	    if (munge == 1) ret = smtp_writen("\r\n\t", 3, cbH, wstate);
+	    else ret = smtp_writen("\r\n", 2, cbH, wstate);
+	    if (ret) return ret;
+	    ++hdr;
+	} else {
+	    while (nl < end && *nl != '\n') ++nl;
+	    ret = smtp_writen(hdr, nl-hdr, cbH, wstate);
+	    if (ret) return ret;
+	    hdr = nl;
+	}
+    }
+
+    return 0;
+}
+
+/* Write body.  Turn "\n" into "\r\n" and "." to ".." at start of line. */
+static int smtp_write_body(CharPtr body, VoidHand cbH, enum smtpstate wstate,
+    void (*disp)(CharPtr, ULong, ULong, VoidHand), CharPtr msg, VoidHand diH)
+{
+    CharPtr nl;
+    UInt done = 0;
+    UInt size;
+    int ret;
+
+    /* Find the end of the header to write */
+    size = StrLen(body);
+
+    while (*body) {
+	nl = body;
+	if (*nl == '\n') {
+	    if (nl[1] == '.') {
+		ret = smtp_writen("\r\n..", 4, cbH, wstate);
+		if (ret) return ret;
+		body += 2;
+		done += 2;
+	    } else {
+		ret = smtp_writen("\r\n", 2, cbH, wstate);
+		if (ret) return ret;
+		body++;
+		done++;
+	    }
+	} else {
+	    while (*nl && *nl != '\n') ++nl;
+	    ret = smtp_writen(body, nl-body, cbH, wstate);
+	    if (ret) return ret;
+	    done += nl-body;
+	    body = nl;
+	}
+	if (disp) {
+	    disp(msg, done, size, diH);
+	}
+    }
+
+    return 0;
+}
+
+/* Handle an incoming line */
+static int smtp_line_handler(CharPtr data, VoidHand cbH)
+{
+    struct smtpdata *sdata;
+    int ret = 0;
+    CharPtr tmpstr;
+    int sentsomething;
+
+    sdata = MemHandleLock(cbH);
+    if (!sdata) {
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    switch(sdata->state) {
+    case SMTP_WAIT4_BANNER:
+	/* Waiting for the end of the initial banner */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+	
+	/* Was the greeting successful? */
+	if (data[0] != '2') {
+	    /* No */
+	    show_error("SMTP server refuses to accept mail", "", "");
+	    ret = 1;
+	    break;
+	}
+
+	sdata->disphand("Negotiating with SMTP server", 0, 0, sdata->diH);
+
+	/* OK, send HELO and wait for a reply */
+	StrCopy(sdata->outmsg, "HELO ");
+	tmpstr = MemHandleLock(sdata->HELOnameH);
+	if (tmpstr && *tmpstr) {
+	    StrCat(sdata->outmsg, tmpstr);
+	} else {
+	    StrCat(sdata->outmsg, "localhost");
+	}
+	if (tmpstr) {
+	    MemHandleUnlock(sdata->HELOnameH);
+	}
+	StrCat(sdata->outmsg, "\r\n");
+	ret = smtp_write(sdata->outmsg, cbH, SMTP_DO_MAIL);
+	break;
+
+    case SMTP_DO_MAIL:
+	/* Waiting for the response to previous DATA (or HELO) */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+
+	if (data[0] != '2') {
+	    show_error("SMTP server refuses HELO", "", "");
+	    ret = 1;
+	    break;
+	}
+
+	/* If this was an OK response from DATA, clean the previous msg */
+	if (sdata->msgnum >= 0) {
+	    clean_msg(sdata);
+	}
+
+	/* Get ready for the next message */
+	++(sdata->msgnum);
+	/* Skip unwanted msgs */
+	for(;sdata->msgnum < sdata->nummsgs;++(sdata->msgnum)) {
+	    UInt attr;
+
+	    if (DmRecordInfo(sdata->maildb, sdata->msgnum, &attr, NULL,
+				NULL)) {
+		continue;
+	    }
+	    if ((attr & dmRecAttrCategoryMask) != 1) {
+		/* Not in the outbox */
+		continue;
+	    }
+	    if (attr & dmRecAttrDelete) {
+		/* Delete record */
+		continue;
+	    }
+	    /* Load sdata with information about the next message */
+	    if (prepare_msg(sdata)) {
+		/* Could not open msg */
+		continue;
+	    }
+	    break;
+	}
+	if (sdata->msgnum == sdata->nummsgs) {
+	    /* No more! */
+	    sdata->disphand("Disconnecting from SMTP server", 0, 0,
+		sdata->diH);
+
+	    /* OK, send QUIT */
+	    ret = smtp_write("QUIT\r\n", cbH, SMTP_WAIT4_QUITr);
+	    break;
+	}
+	
+	/* Update the progress meter */
+	++(sdata->seqno);
+	StrPrintF(sdata->outmsg, "Sending message #%d: headers", sdata->seqno);
+	sdata->disphand(sdata->outmsg, 0, 1, sdata->diH);
+
+	/* Send the MAIL FROM: line for this message */
+	tmpstr = sdata->mailfromH ? MemHandleLock(sdata->mailfromH) : NULL;
+	if (tmpstr && *tmpstr) {
+	    ret = smtp_write(tmpstr[0] == '<' ? "MAIL FROM: " : "MAIL FROM: <",
+				cbH, SMTP_DO_RCPT);
+	    if (!ret) ret = smtp_write(tmpstr, cbH, SMTP_DO_RCPT);
+	    if (!ret) ret = smtp_write(tmpstr[0] == '<' ? "\r\n" : ">\r\n",
+				cbH, SMTP_DO_RCPT);
+	} else {
+	    ret = smtp_write("MAIL FROM: <pilot@@localhost>\r\n", cbH,
+				SMTP_DO_RCPT);
+	}
+	if (tmpstr) MemHandleUnlock(sdata->mailfromH);
+	sdata->RcptWhich = RcptWhichTo;
+	sdata->RcptPtr = sdata->msg.to;
+	break;
+
+    case SMTP_DO_RCPT:
+	/* Waiting for the response from MAIL FROM: */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+
+	if (data[0] != '2') {
+	    if (sdata->RcptPtr == sdata->msg.to) {
+		show_error("SMTP server refuses MAIL", "", "");
+	    } else {
+		show_error("Invalid destination address.", "", "");
+	    }
+	    ret = 1;
+	    break;
+	}
+
+	sentsomething = 0;
+	while (!sentsomething) {
+	    /* Extract the next destination from the header */
+	    /* Skip leading whitespace */
+	    while (sdata->RcptPtr[0] && (sdata->RcptPtr[0] == ' ' ||
+		sdata->RcptPtr[0] == '\t' || sdata->RcptPtr[0] == '\n' ||
+		sdata->RcptPtr[0] == '\r')) {
+		sdata->RcptPtr++;
+	    }
+
+	    /* Find the end of this destination */
+	    tmpstr = sdata->RcptPtr;
+	    while(sdata->RcptPtr[0] && sdata->RcptPtr[0] != ',')
+		++(sdata->RcptPtr);
+
+	    if (sdata->RcptPtr != tmpstr) {
+		CharPtr rcptstr;
+		UInt rcptlen = sdata->RcptPtr - tmpstr;
+		CharPtr leftang, rightang;
+		CharPtr foundaddr;
+
+		/* Copy this destination and strip trailing whitespace */
+		rcptstr = MemPtrNew(rcptlen+1);
+		if (!rcptstr) {
+		    show_error("Out of memory", "", "");
+		    ret = -1;
+		    break;
+		}
+
+		MemMove(rcptstr, tmpstr, rcptlen);
+		rcptstr[rcptlen] = '\0';
+		while (rcptlen && (rcptstr[rcptlen-1] == ' ' ||
+		    rcptstr[rcptlen-1] == '\t' || rcptstr[rcptlen-1] == '\n' ||
+		    rcptstr[rcptlen-1] == '\r')) {
+		    rcptstr[rcptlen-1] = '\0';
+		    --rcptlen;
+		}
+		
+		/* Now see if we can find an address in there somewhere */
+		leftang = StrChr(rcptstr, '<');
+		if (leftang) {
+		    /* We'll assume anything starting with < is an address */
+		    rightang = StrChr(leftang, '>');
+		    if (rightang) *rightang = '\0';
+		    foundaddr = leftang+1;
+		} else {
+		    /* No <.  Strip out comments and whitespace; everything
+		       else will be the address. */
+		    CharPtr inptr, outptr;
+		    int incomment = 0;
+
+		    outptr = rcptstr;
+		    for(inptr = rcptstr; *inptr; ++inptr) {
+			if (*inptr == '(') {
+			    ++incomment;
+			    continue;
+			}
+			if (incomment && *inptr == ')') {
+			    --incomment;
+			    continue;
+			}
+			if (incomment || *inptr == ' ' || *inptr == '\t' ||
+			    *inptr == '\n' || *inptr == '\r') {
+			    continue;
+			}
+			*(outptr++) = *inptr;
+		    }
+		    *outptr = '\0';
+		    foundaddr = rcptstr;
+		}
+
+		ret = smtp_write("RCPT TO: <", cbH, SMTP_DO_RCPT);
+		if (!ret) ret = smtp_write(foundaddr, cbH, SMTP_DO_RCPT);
+		if (!ret) ret = smtp_write(">\r\n", cbH, SMTP_DO_RCPT);
+		sentsomething = 1;
+
+		MemPtrFree(rcptstr);
+	    }
+
+	    /* Advance the pointers to the next address */
+	    if (sdata->RcptPtr[0]) ++(sdata->RcptPtr);
+	    if (!sdata->RcptPtr[0]) {
+		switch(sdata->RcptWhich) {
+		case RcptWhichTo:
+		    sdata->RcptWhich = RcptWhichCc;
+		    sdata->RcptPtr = sdata->msg.cc;
+		    break;
+		case RcptWhichCc:
+		    sdata->RcptWhich = RcptWhichBcc;
+		    sdata->RcptPtr = sdata->msg.bcc;
+		    break;
+		case RcptWhichBcc:
+		    sdata->RcptWhich = RcptWhichDone;
+		    break;
+		default:
+		    sdata->RcptPtr = sdata->msg.replyTo;
+		    ret = smtp_write("DATA\r\n", cbH, SMTP_DO_BODY);
+		    sentsomething = 1;
+		    break;
+		}
+	    }
+	}
+	sdata->disphand(sdata->outmsg, sdata->RcptPtr - sdata->msg.to,
+	    sdata->msg.replyTo - sdata->msg.to, sdata->diH);
+	break;
+
+    case SMTP_DO_BODY:
+	/* Waiting for the response from DATA */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+
+	if (data[0] != '3') {
+	    show_error("SMTP server refuses DATA", "", "");
+	    ret = 1;
+	    break;
+	}
+
+#define HDR_WRITE(string, munge) \
+    { ret = smtp_write_headers(string, -1, cbH, SMTP_DO_MAIL, munge); \
+    if (ret) break; }
+
+#define HDR_WRITEN(string, size, munge) \
+    { ret = smtp_write_headers(string, size, cbH, SMTP_DO_MAIL, munge); \
+    if (ret) break; }
+
+#define BODY_WRITE(string) \
+    { ret = smtp_write_body(string, cbH, SMTP_DO_MAIL, NULL, NULL, 0); \
+    if (ret) break; }
+
+#define BODY_WRITE_PROG(string) \
+    { ret = smtp_write_body(string, cbH, SMTP_DO_MAIL, sdata->disphand, \
+	sdata->outmsg, sdata->diH); if (ret) break; }
+
+	StrPrintF(sdata->outmsg, "Sending message #%d: body", sdata->seqno);
+	sdata->disphand(sdata->outmsg, 0, 0, sdata->diH);
+
+	/* We start with the built-in headers */
+	if (!(sdata->msg.hdroverride & hdrOverrideFrom)) {
+	    /* See if we were given a From; if not, construct one */
+
+	    HDR_WRITE("From: ", 0);
+	    if (sdata->msg.from && sdata->msg.from[0]) {
+		HDR_WRITE(sdata->msg.from, 1);
+	    } else {
+		CharPtr realname, mailfrom;
+		realname = sdata->realnameH ? MemHandleLock(sdata->realnameH)
+					    : NULL;
+		if (realname && *realname) {
+		    HDR_WRITE(realname, 1);
+		    HDR_WRITE(" ", 0);
+		}
+		if (realname) MemHandleUnlock(sdata->realnameH);
+
+		mailfrom = sdata->mailfromH ? MemHandleLock(sdata->mailfromH)
+					    : NULL;
+		if (mailfrom && *mailfrom) {
+		    if (*mailfrom == '<') {
+			HDR_WRITE(mailfrom, 1);
+		    } else {
+			HDR_WRITE("<", 0);
+			HDR_WRITE(mailfrom, 1);
+			HDR_WRITE(">", 0);
+		    }
+		}
+		if (mailfrom) MemHandleUnlock(sdata->mailfromH);
+	    }
+	    HDR_WRITE("\r\n", 0);
+	}
+
+	if (sdata->msg.to && sdata->msg.to[0] &&
+	    !(sdata->msg.hdroverride & hdrOverrideTo)) {
+	    HDR_WRITE("To: ", 0);
+	    HDR_WRITE(sdata->msg.to, 1);
+	    HDR_WRITE("\r\n", 0);
+	}
+
+	if (sdata->msg.cc && sdata->msg.cc[0] &&
+	    !(sdata->msg.hdroverride & hdrOverrideCc)) {
+	    HDR_WRITE("Cc: ", 0);
+	    HDR_WRITE(sdata->msg.cc, 1);
+	    HDR_WRITE("\r\n", 0);
+	}
+
+	if (sdata->msg.replyTo && sdata->msg.replyTo[0] &&
+	    !(sdata->msg.hdroverride & hdrOverrideReplyTo)) {
+	    HDR_WRITE("Reply-To: ", 0);
+	    HDR_WRITE(sdata->msg.replyTo, 1);
+	    HDR_WRITE("\r\n", 0);
+	}
+
+	if (sdata->msg.confDeliv &&
+		!(sdata->msg.hdroverride & hdrOverrideReceiptTo)) {
+	    CharPtr mailfrom = sdata->mailfromH ?
+				MemHandleLock(sdata->mailfromH) : NULL;
+	    HDR_WRITE("Return-Receipt-To: ", 0);
+	    HDR_WRITE(mailfrom, 1);
+	    HDR_WRITE("\r\n", 0);
+	    if (mailfrom) MemHandleUnlock(sdata->mailfromH);
+	}
+
+	if (sdata->msg.subject && sdata->msg.subject[0] &&
+	    !(sdata->msg.hdroverride & hdrOverrideSubject)) {
+	    HDR_WRITE("Subject: ", 0);
+	    HDR_WRITE(sdata->msg.subject, 1);
+	    HDR_WRITE("\r\n", 0);
+	}
+
+	if (sdata->msg.prio == 2 &&
+		!(sdata->msg.hdroverride & hdrOverridePriority)) {
+	    HDR_WRITE("Priority: High\r\n", 0);
+	}
+
+	/* Add some shameless plug headers */
+	HDR_WRITE("X-Mailer: Top Gun Postman version " TGPOSTMAN_VERSION
+		  " for USR PalmPilot\r\n          URL: "
+		  "http://www.isaac.cs.berkeley.edu/pilot/TGpostman/\r\n", 0);
+
+	/* Now send the pasted headers */
+	if (sdata->msg.headers && sdata->msg.headers[0]) {
+	    CharPtr thishdr, nexthdr, colon;
+	    thishdr = sdata->msg.headers;
+
+	    while(*thishdr && *thishdr != '\n') {
+		nexthdr = thishdr;
+		while(*nexthdr && *nexthdr != '\n') ++nexthdr;
+		if (*nexthdr) ++nexthdr;
+		while(*nexthdr == ' ' || *nexthdr == '\t') {
+		    while(*nexthdr && *nexthdr != '\n') ++nexthdr;
+		    if (*nexthdr) ++nexthdr;
+		}
+		colon = thishdr;
+		while(*colon && *colon != ':' && colon < nexthdr) ++colon;
+		if (*colon == ':' && colon != nexthdr && colon[1] != '\n') {
+		    /* Send this header */
+		    HDR_WRITEN(thishdr, nexthdr - thishdr, 2);
+		}
+		thishdr = nexthdr;
+	    }
+	}
+
+	/* Send the separator, and the body */
+	BODY_WRITE("\n");
+	if (sdata->msg.body && sdata->msg.body[0]) {
+	    BODY_WRITE_PROG(sdata->msg.body);
+	}
+
+	/* Send the signature, if required */
+	if (sdata->msg.sig) {
+	    CharPtr signature;
+	    signature = sdata->signatureH ? MemHandleLock(sdata->signatureH)
+					    : NULL;
+	    if (signature && signature[0]) {
+		BODY_WRITE("\n-- \n");
+		BODY_WRITE(signature);
+	    }
+	    if (signature) MemHandleUnlock(sdata->signatureH);
+	}
+
+	/* All done */
+	ret = smtp_write("\r\n.\r\n", cbH, SMTP_DO_MAIL);
+	break;
+
+    case SMTP_WAIT4_QUITr:
+	/* Waiting for the response to QUIT */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+
+	if (data[0] != '2') {
+	    show_error("SMTP server refuses QUIT", "", "");
+	    ret = 1;
+	    break;
+	}
+
+	/* OK, close connection */
+	ret = 2;
+
+	break;
+
+    default:
+	break;
+    }
+
+    MemHandleUnlock(cbH);
+
+    return ret;
+}
+
+/* Handle incoming data */
+static int smtp_handler(CharPtr data, UInt len, VoidHand cbH)
+{
+    static Char linebuf[MAXLINESIZE+1] = { "" };
+    static UInt linebuflen = 0;
+    int ret;
+
+    /* Accumulate buffers full of lines */
+    while(len) {
+	/* Find the length of the next segment */
+	int sawnl = 0;
+	UInt seglen;
+
+	for(seglen = 0; seglen < len; ++seglen) {
+	    if (data[seglen] == '\n') {
+		sawnl = 1;
+		++seglen;
+		break;
+	    }
+	}
+	if (seglen > MAXLINESIZE - linebuflen) {
+	    seglen = MAXLINESIZE - linebuflen;
+	}
+	MemMove(linebuf+linebuflen, data, seglen);
+	data += seglen;
+	len -= seglen;
+	linebuflen += seglen;
+	linebuf[linebuflen] = '\0';
+
+	if (sawnl || linebuflen == MAXLINESIZE) {
+	    /* Handle a line of data */
+	    ret = smtp_line_handler(linebuf, cbH);
+	    linebuflen = 0;
+	    if (ret) return ret;
+	}
+    }
+
+    return 0;
+}
+
+/* Close an SMTP connection */
+static void smtp_finish(struct sockhandler *sh)
+{
+    struct smtpdata *sdata;
+
+    close(sh->s);
+    sh->s = -1;
+    sh->handler = NULL;
+    sh->finish = NULL;
+    sdata = MemHandleLock(sh->cbH);
+    if (sdata) {
+	sdata->disphand("Done", 0, 0, sdata->diH);
+	if (sdata->HELOnameH) MemHandleFree(sdata->HELOnameH);
+	if (sdata->mailfromH) MemHandleFree(sdata->mailfromH);
+	if (sdata->realnameH) MemHandleFree(sdata->realnameH);
+	if (sdata->signatureH) MemHandleFree(sdata->signatureH);
+	if (sdata->msghand) MemHandleUnlock(sdata->msghand);
+	DmCloseDatabase(sdata->maildb);
+    }
+    MemHandleUnlock(sh->cbH);
+    MemHandleFree(sh->cbH);
+    sh->cbH = NULL;
+}
+
+/* Start up an SMTP connection. */
+int smtp_start(struct sockhandler *sh,
+    void (*disphand)(CharPtr, ULong, ULong, VoidHand), VoidHand diH,
+    CharPtr smtpserver, CharPtr myemail, CharPtr myname)
+{
+    Err err;
+    struct hostent *hres;
+    ULong **addrp;
+    UInt smtpport = 25;
+    struct sockaddr_in sockaddr;
+    SWord socklen;
+    LocalID maildbID;
+    DmOpenRef maildb;
+    NetSocketRef s;
+    VoidHand sdataH;
+    struct smtpdata *sdata;
+    VoidHand theHELOnameH, theemailH, thenameH;
+    CharPtr theHELOname, theemail, thename;
+
+    /* Store the MAIL FROM: name */
+    theemailH = MemHandleNew(myemail ? StrLen(myemail)+1 : 16);
+    theemail = MemHandleLock(theemailH);
+    StrCopy(theemail, myemail ? myemail : "pilot@@localhost");
+    MemHandleUnlock(theemailH);
+
+    /* and also the real name */
+    thenameH = MemHandleNew(myname ? StrLen(myname)+1 : 16);
+    thename = MemHandleLock(thenameH);
+    StrCopy(thename, myname ? myname : "Top Gun Postman");
+    MemHandleUnlock(thenameH);
+
+    /* Get some info from the database */
+    maildbID = DmFindDatabase ( 0, "MailDB" );
+    if (!maildbID) {
+	return -1;
+    }
+
+    maildb = DmOpenDatabase(0, maildbID, dmModeReadWrite);
+    if (!maildb) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	return -1;
+    }
+
+    /* Look up the IP address of the SMTP server */
+    hres = gethostbyname(smtpserver ? smtpserver : "smtpserver");
+    if (!hres) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	DmCloseDatabase(maildb);
+	show_error("Unable to resolve SMTP server hostname \"",
+	    smtpserver ? smtpserver : "smtpserver", "\"");
+	return -1;
+    }
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_port = htons(smtpport);
+    sockaddr.sin_addr.s_addr = INADDR_ANY;
+    for(addrp=(ULong **)hres->h_addr_list;*addrp;++addrp) {
+	ULong a = htonl(**addrp);
+	if (a != INADDR_ANY) {
+	    sockaddr.sin_addr.s_addr = a;
+	    break;
+	}
+    }
+
+    s = socket(PF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	DmCloseDatabase(maildb);
+	show_error("Cannot create socket", "", "");
+	return -1;
+    }
+
+    err = connect(s, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
+    if (err) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	DmCloseDatabase(maildb);
+	close(s);
+	show_error("Could not connect to SMTP server", "", "");
+	return -1;
+    }
+    
+    /* Now try to figure out our IP address, and construct the HELOnameH */
+    socklen = sizeof(sockaddr);
+    getsockname(s, &sockaddr, &socklen);
+    theHELOnameH = MemHandleNew(16);
+    theHELOname = MemHandleLock(theHELOnameH);
+    StrPrintF(theHELOname, "%d.%d.%d.%d", sockaddr.sin_addr.S_un.S_un_b.s_b1,
+	sockaddr.sin_addr.S_un.S_un_b.s_b2, sockaddr.sin_addr.S_un.S_un_b.s_b3,
+	sockaddr.sin_addr.S_un.S_un_b.s_b4);
+    MemHandleUnlock(theHELOnameH);
+
+    /* We are connected.  Set up the callbacks. */
+    sdataH = MemHandleNew(sizeof(struct smtpdata));
+    if (!sdataH) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	MemHandleFree(theHELOnameH);
+	DmCloseDatabase(maildb);
+	close(s);
+	show_error("Out of memory", "", "");
+	return -1;
+    }
+    sdata = (struct smtpdata *)MemHandleLock(sdataH);
+    if (!sdata) {
+	MemHandleFree(theemailH);
+	MemHandleFree(thenameH);
+	MemHandleFree(theHELOnameH);
+	MemHandleFree(sdataH);
+	DmCloseDatabase(maildb);
+	close(s);
+	show_error("Cannot lock handle", "", "");
+	return -1;
+    }
+
+    /* Initialize the smtp data state */
+    sdata->s = s;
+    sdata->state = SMTP_WAIT4_BANNER;
+    sdata->HELOnameH = theHELOnameH;
+    sdata->mailfromH = theemailH;
+    sdata->realnameH = thenameH;
+    sdata->signatureH = get_signatureH();
+    sdata->maildb = maildb;
+    sdata->seqno = 0;
+    sdata->msgnum = -1;
+    sdata->nummsgs = DmNumRecords(maildb);
+    sdata->disphand = disphand;
+    sdata->diH = diH;
+    sdata->disphand("Connected to SMTP server", 0, 0, sdata->diH);
+    sdata->msghand = 0;
+
+    MemHandleUnlock(sdataH);
+    sh->s = s;
+    sh->handler = smtp_handler;
+    sh->finish = smtp_finish;
+    sh->cbH = sdataH;
+
+    return 0;
+}
+@
+
+
+1.17
+log
+@o Changed version to 1.3 beta
+o Fixed bug with sending mail with Bcc:
+o Folded X-URL header into X-Mailer
+@
+text
+@d2 1
+a2 1
+#include <sys/types.h>
+@
+
+
+1.16
+log
+@o Fixed PPP up/down confusion problem
+o Removed call to FrmCustomAlert(), as it tends to crash the Pilot
+o Fixed memory leak if connect() fails
+o Fixed bug wherein "Send mail" sometimes acts like "Both"
+@
+text
+@d22 1
+d553 3
+d675 2
+a676 3
+		  " for USR PalmPilot\r\n", 0);
+	HDR_WRITE(
+	    "X-URL: http://www.isaac.cs.berkeley.edu/pilot/TGpostman/\r\n", 0);
+@
+
+
+1.15
+log
+@Added "Both" button
+@
+text
+@d847 2
+d853 1
+a853 1
+    hres = gethostbyname(smtpserver ? smtpserver : "10.0.0.1");
+d855 3
+d859 1
+a859 1
+	    smtpserver ? smtpserver : "10.0.0.1", "\"");
+d875 3
+d884 4
+d905 5
+d915 6
+@
+
+
+1.14
+log
+@Added shameless plug headers to outgoing mail :-)
+@
+text
+@d731 1
+a731 1
+	ret = 1;
+@
+
+
+1.13
+log
+@Added "X-Mailer: Top Gun Postman version <> for USR PalmPilot\r\n" header
+on outgoing SMTP mail.
+@
+text
+@d669 1
+d671 3
+a673 1
+		  "for USR PalmPilot\r\n", 0);
+@
+
+
+1.12
+log
+@Whoa momma
+@
+text
+@d669 3
+@
+
+
+1.11
+log
+@Wohoo! Date works, mail works on pilot, I rule.
+@
+text
+@d63 1
+a63 1
+    void (*disphand)(CharPtr, UInt, UInt, VoidHand);
+d292 1
+a292 1
+    void (*disp)(CharPtr, UInt, UInt, VoidHand), CharPtr msg, VoidHand diH)
+d804 1
+a804 1
+    void (*disphand)(CharPtr, UInt, UInt, VoidHand), VoidHand diH,
+@
+
+
+1.10
+log
+@Worked around "uninitialized globals not being relocated" bug.
+@
+text
+@a0 2
+#pragma pack(2)
+
+@
+
+
+1.9
+log
+@Added space after "--" to delimit signatures
+@
+text
+@a809 1
+    VoidPtr hbuf;
+d847 1
+a847 5
+    hbuf = MemPtrNew(2048);
+    hres = NULL;
+    if (hbuf) hres = (struct hostent *)NetLibGetHostByName(AppNetRefnum,
+			smtpserver ? smtpserver : "10.0.0.1",
+			(NetHostInfoBufPtr)hbuf, AppNetTimeout, &h_errno);
+a862 1
+    MemPtrFree(hbuf);
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d706 1
+a706 1
+		BODY_WRITE("\n--\n");
+@
+
+
+1.7
+log
+@SMTP client seems to be working
+@
+text
+@d854 2
+a855 2
+	show_error("Unable to resolve SMTP server hostname \"", smtpserver,
+	"\"");
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d8 45
+a52 1
+enum smtpstate { SMTP_WAIT4_BANNER, SMTP_DO_MAIL, SMTP_DO_RCPT, SMTP_DO_DATA, SMTP_DO_BODY, SMTP_WAIT4_QUITr };
+d59 1
+d61 1
+a61 1
+    VoidHand mynameH;
+d64 1
+d67 5
+d74 3
+a76 7
+#define MAXLINESIZE 256
+
+/* Read the signature from the App Preferences database.  If we had new
+   header files, this would be as easy as
+       PrefGetAppPreferences('mail', 3, 0, sig, siglen)
+   We simulate it here.  Return >0 on success, 0 on no sig, <0 on fatal. */
+static int get_signature(CharPtr sig, ULong siglen)
+d82 2
+a83 2
+
+    sig[0] = '\0';
+d98 1
+a98 1
+	return -1;
+d110 8
+a117 3
+    if (ressize > siglen) ressize = siglen;
+
+    MemMove(sig, sigptr+2, ressize);
+d123 1
+a123 1
+    return ressize;
+d126 5
+a130 10
+/* Read the MailDB to find waiting messages in the Outbox folder (#1).
+   Parse them into a MailMsg structure. */
+int postman_smtp_readDB(void)
+{
+    DmOpenRef maildb = 0;
+    LocalID maildbID = 0;
+    int ret = -1;
+    UInt recno = 0;
+    UInt numrecs = 0;
+    Char signature[325];
+d132 73
+a204 2
+    maildbID = DmFindDatabase ( 0, "MailDB" );
+    if (!maildbID) goto readDB_err;
+d206 4
+a209 2
+    maildb = DmOpenDatabase(0, maildbID, dmModeReadWrite);
+    if (!maildb) goto readDB_err;
+d211 11
+a221 75
+    /* Get the signature */
+    if (get_signature(signature, sizeof(signature)) < 0) goto readDB_err;
+
+    /* Find Outbox records in the database */
+    numrecs = DmNumRecords(maildb);
+    for(recno = 0; recno < numrecs; ++recno) {
+	UInt attr;
+	VoidHand rechand;
+	UCharPtr recptr;
+	MailMsg msg;
+	UInt day;
+	UChar flags;
+
+	if (DmRecordInfo(maildb, recno, &attr, NULL, NULL)) {
+	    goto readDB_err;
+	}
+
+	/* Skip non-Outbox records */
+	if ((attr & dmRecAttrCategoryMask) != 1) {
+	    continue;
+	}
+
+	/* Skip deleted records */
+	if (attr & dmRecAttrDelete) {
+	    continue;
+	}
+
+	/* We've got one.  Lock it down. */
+	rechand = DmQueryRecord(maildb, recno);
+	if (!rechand) {
+	    continue;
+	}
+	recptr = (UCharPtr)MemHandleLock(rechand);
+	if (!recptr) {
+	    continue;
+	}
+
+	/* Now read info out of it */
+	day = *(UInt *)recptr;
+	msg.year = (day >> 9) + 4;
+	msg.mon = ((day >> 5) & 0x0f) - 1;
+	msg.mday = (day & 0x1f);
+	msg.hour = recptr[2];
+	msg.min = recptr[3];
+	msg.sec = 0;
+
+	flags = recptr[4];
+	msg.read = (flags & (1 << 7)) >> 7;
+	msg.sig = (flags & (1 << 6)) >> 6;
+	msg.confRead = (flags & (1 << 5)) >> 5;
+	msg.confDeliv = (flags & (1 << 4)) >> 4;
+	msg.prio = (flags & (3 << 2)) >> 2;
+	msg.addressing = (flags & (3));
+
+	recptr += 6;
+	msg.subject = recptr; while (*(recptr++)) ;
+	msg.from = recptr; while(*(recptr++)) ;
+	msg.to = recptr; while(*(recptr++)) ;
+	msg.cc = recptr; while(*(recptr++)) ;
+	msg.bcc = recptr; while(*(recptr++)) ;
+	msg.replyTo = recptr; while(*(recptr++)) ;
+	msg.sentTo = recptr; while(*(recptr++)) ;
+	msg.body = recptr; while(*(recptr++)) ;
+
+	/* We can do stuff with msg here */
+
+	MemHandleUnlock(rechand);
+    }
+
+    ret = 0;
+    
+readDB_err:
+    if (maildb) {
+	DmCloseDatabase(maildb);
+	maildb = 0;
+a222 1
+    return ret;
+d226 2
+a227 1
+static int smtp_write(CharPtr data, VoidHand cbH, enum smtpstate wstate)
+a230 1
+    UInt len = StrLen(data);
+d234 1
+a234 1
+	FrmCustomAlert(alertErrorDismiss, "Cannot lock handle", "", "");
+d251 82
+a337 1
+    Char outmsg[MAXLINESIZE+1];
+d339 1
+d343 1
+a343 1
+	FrmCustomAlert(alertErrorDismiss, "Cannot lock handle", "", "");
+d355 1
+a355 2
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses to accept mail", "", "");
+d363 2
+a364 2
+	StrCopy(outmsg, "HELO ");
+	tmpstr = MemHandleLock(sdata->mynameH);
+d366 1
+a366 1
+	    StrCat(outmsg, tmpstr);
+d368 1
+a368 1
+	    StrCat(outmsg, "localhost");
+d371 1
+a371 1
+	    MemHandleUnlock(sdata->mynameH);
+d373 2
+a374 2
+	StrCat(outmsg, "\r\n");
+	ret = smtp_write(outmsg, cbH, SMTP_DO_MAIL);
+d382 1
+a382 2
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses HELO", "", "");
+d387 1
+a387 1
+	/* If this was an OK response from DATA, save the sent msg in Filed */
+d389 1
+a389 9
+	    UInt attr;
+	    if (!DmRecordInfo(sdata->maildb, sdata->msgnum, &attr, NULL,
+				NULL)) {
+		if ((attr & dmRecAttrCategoryMask) == 1) {
+		    attr &= ~dmRecAttrCategoryMask;
+		    attr |= 3;  /* Filed */
+		    DmSetRecordInfo(sdata->maildb, sdata->msgnum, &attr, NULL);
+		}
+	    }
+d410 5
+d427 5
+d433 1
+a433 1
+	tmpstr = MemHandleLock(sdata->mailfromH);
+d437 3
+a439 3
+	    ret = smtp_write(tmpstr, cbH, SMTP_DO_RCPT);
+	    ret = smtp_write(tmpstr[0] == '<' ? "\r\n" : ">\r\n", cbH,
+				SMTP_DO_RCPT);
+d445 2
+d454 5
+a458 2
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses MAIL", "", "");
+a461 2
+	ret = smtp_write("RCPT TO: <ian@@cypherpunks.ca>\r\n", cbH, SMTP_DO_DATA);
+	break;
+d463 78
+a540 3
+    case SMTP_DO_DATA:
+	/* Waiting for the response from RCPT TO: */
+	if (data[0] < '1' || data[0] > '5' || data[3] != ' ') break;
+d542 19
+a560 5
+	if (data[0] != '2') {
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses RCPT", "", "");
+	    ret = 1;
+	    break;
+d562 2
+a563 1
+	ret = smtp_write("DATA\r\n", cbH, SMTP_DO_BODY);
+d571 1
+a571 2
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses DATA", "", "");
+d575 139
+a713 1
+	ret = smtp_write("From: ian@@cypherpunks.ca\r\nSubject: test\r\nTo: ian@@cypherpunks.ca\r\n\r\nThis is a test\r\n.\r\n", cbH, SMTP_DO_MAIL);
+d721 1
+a721 2
+	    FrmCustomAlert(alertErrorDismiss,
+		"SMTP server refuses QUIT", "", "");
+a746 1
+/* FrmCustomAlert(alertErrorDismiss, "In smtp_handler", "", ""); */
+d792 5
+a797 2
+	MemHandleFree(sdata->mynameH);
+	MemHandleFree(sdata->mailfromH);
+d806 2
+a807 1
+    void (*disphand)(CharPtr, UInt, UInt, VoidHand), VoidHand diH)
+d810 1
+d812 2
+d815 1
+a815 1
+    ULong **addrp;
+d821 2
+a822 6
+    VoidHand mynameH, mailfromH, realnameH;
+    CharPtr myname, mailfrom, realname;
+
+    /* We'll hardcode the server in for now. */
+    CharPtr smtpserver = "10.0.0.1";
+    UInt smtpport = 25;
+d824 5
+a828 11
+    /* and also the HELO name */
+    mynameH = MemHandleNew(10);
+    myname = MemHandleLock(mynameH);
+    StrCopy(myname, "TGpostman");
+    MemHandleUnlock(mynameH);
+
+    /* and also the MAIL FROM: name */
+    mailfromH = MemHandleNew(19);
+    mailfrom = MemHandleLock(mailfromH);
+    StrCopy(mailfrom, "ian@@cypherpunks.ca");
+    MemHandleUnlock(mailfromH);
+d831 4
+a834 4
+    realnameH = MemHandleNew(13);
+    realname = MemHandleLock(realnameH);
+    StrCopy(realname, "Ian Goldberg");
+    MemHandleUnlock(realnameH);
+a846 1
+#if 0
+d848 5
+a852 1
+    hres = gethostbyname(smtpserver);
+d854 2
+a855 2
+	FrmCustomAlert(alertErrorDismiss,
+	    "Unable to resolve SMTP server hostname \"", smtpserver, "\"");
+d868 1
+d872 1
+a872 2
+	FrmCustomAlert(alertErrorDismiss,
+	    "Cannot create socket", "", "");
+d878 1
+a878 2
+	FrmCustomAlert(alertErrorDismiss, "SMTP server refused connection",
+	    "", "");
+d881 10
+a890 11
+#else
+    s = NetUTCPOpen(smtpserver, NULL, 25);
+    if (s < 0) {
+	disphand("Could not connect to SMTP server", 0, 0, diH);
+	/*
+	FrmCustomAlert(alertErrorDismiss, "Could not connect to SMTP server",
+	    "", "");
+	*/
+	return -1;
+    }
+#endif
+d895 1
+a895 1
+	FrmCustomAlert(alertErrorDismiss, "Out of memory", "", "");
+d900 1
+a900 1
+	FrmCustomAlert(alertErrorDismiss, "Cannot lock handle", "", "");
+d907 4
+a910 3
+    sdata->mynameH = mynameH;
+    sdata->mailfromH = mailfromH;
+    sdata->realnameH = realnameH;
+d912 1
+d918 1
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d8 1
+a8 1
+enum smtpstate { SMTP_WAIT4_BANNER, SMTP_WAIT4_HELOr, SMTP_WAIT4_QUITr };
+d11 1
+a11 1
+    int s;
+d13 3
+d17 2
+d238 1
+a238 1
+	ret = smtp_write(outmsg, cbH, SMTP_WAIT4_HELOr);
+d241 2
+a242 2
+    case SMTP_WAIT4_HELOr:
+	/* Waiting for the response to HELO */
+d252 74
+a325 1
+	sdata->disphand("Disconnecting from SMTP server", 0, 0, sdata->diH);
+d327 20
+a346 2
+	/* OK, send QUIT (for now) */
+	ret = smtp_write("QUIT\r\n", cbH, SMTP_WAIT4_QUITr);
+a424 1
+    sdata->disphand("Done", 0, 0, sdata->diH);
+d426 2
+d429 1
+d444 3
+a446 1
+    int s;
+d449 2
+a450 2
+    VoidHand mynameH;
+    CharPtr myname;
+d453 1
+a453 1
+    CharPtr smtpserver = "abraham.cs.berkeley.edu";
+d462 24
+d517 11
+d545 5
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d14 1
+a14 1
+    void (*disphand)(CharPtr, VoidHand);
+d219 1
+a219 1
+	sdata->disphand("Negotiating with SMTP server", sdata->diH);
+d247 1
+a247 1
+	sdata->disphand("Disconnecting from SMTP server", sdata->diH);
+d329 1
+a329 1
+    sdata->disphand("Done", sdata->diH);
+d339 2
+a340 2
+int smtp_start(struct sockhandler *sh, void (*disphand)(CharPtr, VoidHand),
+    VoidHand diH)
+d412 1
+a412 1
+    sdata->disphand("Connected to SMTP server", sdata->diH);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@a198 1
+sdata->disphand("In line_handler", sdata->diH);
+d219 2
+a220 1
+sdata->disphand("Got banner", sdata->diH);
+d247 2
+a248 1
+sdata->disphand("Got HELOr", sdata->diH);
+a263 1
+sdata->disphand("Got QUITr", sdata->diH);
+d285 1
+d329 1
+d412 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d4 2
+a5 1
+#include "netlib.h"
+a7 3
+/* Net Lib reference number */
+extern UInt nlref;
+
+a168 1
+    ULong nlerrno;
+d179 1
+a179 2
+	amt = NetLibSend(nlref, sdata->s, data, len, 0, NULL, 0, 1000,
+	    &nlerrno);
+d199 1
+a321 1
+    ULong nlerrno;
+d323 1
+a323 1
+    NetLibSocketClose(nlref, sh->s, 1000, &nlerrno);
+a340 2
+    ULong nlerrno;
+    struct hostent *h;
+d361 1
+a361 2
+    h = (struct hostent *)MemPtrNew(sizeof(struct hostent));
+    hres = NetLibGetHostByName(nlref, smtpserver, h, 1000, &nlerrno);
+a362 1
+	MemPtrFree(h);
+d370 1
+a370 1
+    for(addrp=(ULong **)h->h_addr_list;*addrp;++addrp) {
+a376 1
+    MemPtrFree(h);
+d378 1
+a378 1
+    s = NetLibSocketOpen(nlref, PF_INET, SOCK_STREAM, 0, 1000, &nlerrno);
+d385 1
+a385 2
+    err = NetLibSocketConnect(nlref, s, (struct sockaddr *)&sockaddr,
+	sizeof(sockaddr), 1000, &nlerrno);
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@a3 1
+#include <System/FeatureMgr.h>
+d10 1
+a10 1
+enum smtpstate { SMTP_WAIT4_BANNER };
+d13 1
+d15 3
+a21 28
+static void StartDebug(void)
+{
+ extern long data_start, bss_start;
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+	lea data_start(%%a4),%%a1
+	move.l %%a1,%%d2
+	lea bss_start(%%a4),%%a1
+	move.l %%a1,%%d1
+	lea start(%%pc),%%a0
+	move.l %%a0,%%d0
+	sub.l #start, %%d0
+	move.l #0x12BEEF34, %%d3
+	trap #8
+	move.l #0, %%d3
+	move.l #0, %%d0
+	move.l #0, %%d1
+	move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+
+}
+
+d167 28
+d200 2
+d211 59
+d324 1
+d331 5
+d341 2
+a342 1
+int smtp_start(struct sockhandler *sh)
+d344 1
+d353 2
+d360 6
+d390 9
+a398 1
+	    "Cannot connect to SMTP server", "", "");
+d415 1
+d417 3
+@

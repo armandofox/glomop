@@ -1,0 +1,345 @@
+head	1.3;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	97.06.17.18.06.46;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.17.18.04.59;	author gribble;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.05;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.05;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@Brought up to date with Michael's stuff.
+@
+text
+@#include <stdio.h>
+#include <string.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+#define TITLESIZE 30
+
+char *title;
+int istelnet=0;
+
+static void eofputchar(int c)
+{
+    int res = putchar(c);
+    if (res == EOF)
+    {
+	exit(0);
+    }
+}
+
+static void checkputchar(int c)
+{
+    static int cleanstate = 0;
+    static int stuck = 0;
+
+    switch(cleanstate)
+    {
+    case 0:
+	switch(c)
+	{
+	case 255: cleanstate=1; break;
+	default: eofputchar(c); break;
+	}
+	break;
+    case 1:
+	switch(c)
+	{
+	case 255:
+	    if (istelnet) { cleanstate=0; eofputchar(c); }
+	    else { cleanstate=5; }
+	    break;
+	case 241: case 242: case 243: case 244: case 245:
+	case 246: case 247: case 248: case 249:
+	    cleanstate=0; break;
+	case 251: case 252: case 253: case 254:
+	    cleanstate=2; break;
+	case 250:
+	    cleanstate=3; break;
+	default:
+	    eofputchar(255);
+	    eofputchar(c);
+	    cleanstate=0;
+	    break;
+	}
+	break;
+    case 2:
+	cleanstate=0; break;
+    case 3:
+	switch(c)
+	{
+	case 255:
+	    cleanstate=4; ++stuck; break;
+	default:
+	    ++stuck; break;
+	}
+	if (stuck > 80) { cleanstate=0; stuck=0; }
+	break;
+    case 4:
+	switch(c)
+	{
+	case 240:
+	    cleanstate=0; stuck=0; break;
+	default:
+	    ++stuck; cleanstate=3; break;
+	}
+	break;
+    case 5:
+	switch(c)
+	{
+	case 's':
+	    cleanstate=6; break;
+	default:
+	    eofputchar(255);
+	    eofputchar(255);
+	    eofputchar(c);
+	    cleanstate=0;
+	    break;
+	}
+	break;
+    case 6:
+	switch(c)
+	{
+	case 's':
+	    cleanstate=7; break;
+	default:
+	    eofputchar(255);
+	    eofputchar(255);
+	    eofputchar('s');
+	    eofputchar(c);
+	    cleanstate=0;
+	    break;
+	}
+	break;
+    case 7:
+	++stuck;
+	if (stuck == 8) { stuck=0; cleanstate=0; }
+	break;
+    }
+}
+
+static void puttitle(int c)
+{
+    static unsigned char titlebuf[TITLESIZE];
+    static int titlestart = 0;
+    static int titlelen = 0;
+    int i;
+    if (titlelen < TITLESIZE) {
+	titlebuf[titlelen++] = c;
+	printf("\e]2;");
+	printf("(%s) ", title);
+	for(i=0; i< titlelen; ++i) checkputchar(titlebuf[i]);
+	checkputchar('\a');
+    } else {
+	titlebuf[titlestart++] = c;
+	if (titlestart == TITLESIZE) titlestart=0;
+	printf("\e]2;");
+	printf("(%s) ", title);
+	for(i=titlestart; i< TITLESIZE; ++i) checkputchar(titlebuf[i]);
+	for(i=0;i<titlestart;++i) checkputchar(titlebuf[i]);
+	checkputchar('\a');
+    }
+}
+
+int main(int argc, char **argv)
+{
+    int ptyfd = -1;
+    char ptyname[] = { "/dev/ptyp0" };
+    char ptyopt[20];
+    pid_t child;
+    int c, cli, srv;
+    int dirnow;
+    struct termios tio;
+    fd_set fdset;
+
+    if (argc != 2)
+    {
+	fprintf(stderr, "Usage: %s host:port-host:port-proto\n", argv[0]);
+	exit(1);
+    }
+
+    title = argv[1];
+
+    while(1)
+    {
+	ptyfd = open(ptyname, O_RDWR);
+	if (ptyfd >= 0) break;
+	++ptyname[9];
+	if (ptyname[9] == '9'+1) {
+	    ptyname[9] = 'a';
+	} else if (ptyname[9] == 'f'+1) {
+	    ptyname[9] = '0';
+	    ++ptyname[8];
+	    if (ptyname[8] == 's'+1) {
+		fprintf(stderr, "No ptys!\n");
+		exit(1);
+	    }
+	}
+    }
+    sprintf(ptyopt, "-S%s%d", ptyname+8, ptyfd);
+    child = fork();
+    if (child == -1) {
+	fprintf(stderr, "No processes!\n");
+	exit(1);
+    } else if (child == 0) {
+	execlp("xterm", "xterm", "-name", "xpacketwatch", ptyopt, NULL);
+	perror("execlp");
+	exit(1);
+    }
+    close(ptyfd);
+    ptyname[5] = 't';
+    ptyfd = open(ptyname, O_RDWR);
+    if (ptyfd < 0) { perror("open"); exit(1); }
+    dup2(ptyfd, 1);
+    close(ptyfd);
+
+    if (!strcmp(argv[1] + strlen(argv[1]) - 5, ":23-6")
+	|| !strcmp(argv[1] + strlen(argv[1]) - 6, ":513-6")
+	|| !strcmp(argv[1] + strlen(argv[1]) - 7, ":2105-6")
+	|| !strcmp(argv[1] + strlen(argv[1]) - 6, ":543-6")
+	)
+    {
+	cli = '\x01';
+	srv = '\x02';
+	dirnow = 0;
+    }
+    else
+    {
+	cli = '\x02';
+	srv = '\x01';
+	dirnow = 1;
+    }
+    istelnet = (strstr(argv[1], ":23-") != NULL);
+    setbuf(stdout, NULL);
+    if (tcgetattr(1, &tio)) perror("tcgetattr");
+    tio.c_lflag &= ~(ECHO);
+    if (tcsetattr(1, TCSANOW, &tio)) perror("tcsetattr");
+
+    while(1)
+    {
+	unsigned char buf[2];
+	int res;
+
+	FD_ZERO(&fdset);
+	FD_SET(0,&fdset);
+	FD_SET(1,&fdset);
+	select(2, &fdset, NULL, NULL, NULL);
+	if (FD_ISSET(1,&fdset)) {
+	    char buf[10];
+	    res = read(1,buf,1);
+	    if (res < 1) break;
+	    buf[1] = 0;
+	    /* write(2,buf,1); */
+	    continue;
+	}
+	res = read(0,buf,1);
+	if (res < 1) break;
+	c = buf[0];
+	if (c == cli) {
+	    /* One direction */
+	    dirnow = 0;
+	} else if (c == srv) {
+	    /* Other direction */
+	    dirnow = 1;
+	} else if (c == '\x03') {
+	    int c1, c2;
+	    res = read(0,buf,1);
+	    c1 = buf[0];
+	    res = read(0,buf,1);
+	    c2 = buf[0];
+	    if (dirnow == 1) {
+		if (c1 == '^') {
+		    if (c2 >= '@@' && c2 <= '_') checkputchar(c2 - '@@');
+		    else if (c2 == '?') checkputchar(127);
+		} else if (c1 >= '0' && c1 <= '9') {
+		    c1 = (c1 - '0')<<4;
+		    if (c2 >= '0' && c2 <= '9') {
+			checkputchar(c1 | (c2 - '0'));
+		    } else if (c2 >= 'a' && c2 <= 'f') {
+			checkputchar(c1 | (c2 - ('a' - 10)));
+		    }
+		} else if (c1 >= 'a' && c1 <= 'f') {
+		    c1 = (c1 - ('a' - 10))<<4;
+		    if (c2 >= '0' && c2 <= '9') {
+			checkputchar(c1 | (c2 - '0'));
+		    } else if (c2 >= 'a' && c2 <= 'f') {
+			checkputchar(c1 | (c2 - ('a' - 10)));
+		    }
+		} else if (c1 == '\\') {
+		    if (c2 == 'a') checkputchar('\a');
+		    else if (c2 == 'b') checkputchar('\b');
+		    else if (c2 == 'e') checkputchar('\e');
+		    else if (c2 == 'f') checkputchar('\f');
+		    else if (c2 == 'n') checkputchar('\n');
+		    else if (c2 == 'r') checkputchar('\r');
+		    else if (c2 == 't') checkputchar('\t');
+		}
+	    } else {
+		puttitle(c1);
+		puttitle(c2);
+	    }
+	} else if (c == '\n' || (c >= ' ' && c <= '}')) {
+	    if (dirnow == 1) checkputchar(c);
+	    else if (c == '\n') { puttitle('\\'); puttitle('\n'); }
+	    else puttitle(c);
+	}
+    }
+    return 0;
+}
+@
+
+
+1.2
+log
+@Hmm.
+@
+text
+@@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

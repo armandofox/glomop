@@ -1,0 +1,127 @@
+head	1.1;
+access;
+symbols
+	current:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.08.23.19.37.24;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  Image document type
+#  $Id: IcapImage4colour.pl,v 1.2 96/08/22 14:03:19 glomop Exp $
+#
+#  BUGS:
+#  If we unlink tmp files on exiting segment(), segment manager complains of
+#  'read from closed filehandle' at line 84.
+
+
+package doc::IcapImage4colour;
+
+# Prefs recognized by this module:
+#   mtu: maximum size (bytes) of a chunk
+#   bpp: bits/pixel, 1-24
+#   scale: 1/reduction, 1-100 (1=orig size, 30=70% of size, etc)
+#   maxx,maxy: maximum x,y
+#   bw: nonzero means monochrome/gray display
+#   lat: latency of delivery
+
+
+# The segmentation function for a generic image converts it to PPM.  No
+# grid segmentation is done.  User prefs determine how to do the distillation.
+# BUG::real args should be document filename, user prefs handle
+
+sub segment {
+    my ($doc,$client,$prefs) = @@_;
+    my $doc_id = $doc->id;
+    my $filename = $doc->filename;
+    # filename to use if refinement of this doc is requested
+    my $refine_filename = $filename;
+
+    &util::debug("icapimage", "Client device is: " . $client->{'name'});
+
+    # For Image module, if $prefs is defined, it's a comma-separated list of
+    # (left,top,foo,bar) indicating desired subregion of an image.
+    
+    my @@chunks;
+    my ($width,$height);
+
+    # The document's htype should be in $doc->htype.  Use it to decide whether
+    # to do GIFTOPNM or JPEGTOPNM.
+
+    if ($doc->mimetype eq "image/gif") {
+	open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+	    or die "giftopnm: $!";
+	local($/) = undef;
+	$ppmdata =  <GIFTOPNM>;
+	close GIFTOPNM;
+    } elsif ($doc->mimetype eq "image/jpeg") {
+	open(JPEGTOPNM, "$FromJpeg $filename 2>/dev/null |")
+	    or die "djpeg: $!";
+	local($/) = undef;
+	$ppmdata = <JPEGTOPNM>;
+	close JPEGTOPNM;
+    } else {
+	die "Couldn't decipher mimetype $doc->mimetype in IcapImage4colour.pl";
+    }
+
+    &Mon::doc_status($doc_id, "Calling ppmtoicap on new chunk");
+    # make chunk out of ppm data
+    my $newch =   new chunk ("image/ppm",
+			     undef,
+			     $doc_id,
+			     1,
+			     $ppmdata,
+			     undef,
+			     undef,
+			     undef,
+			     "PPM scaled file");
+
+    $newch = &doc::ppmtoicap::convert($newch, $client, $prefs);
+	
+    # ppmtoicap::convert puts binary data into the chunk.  Tyrone's
+    # image browser expects a file name.  We'll give it to him.
+
+    my $icapfilename = &util::mktemp;
+    open(IFNAME, ">$icapfilename");
+    print IFNAME "$newch->data";
+    close(IFNAME);
+    $newch->data($icapfilename . "\0");
+
+    push(@@chunks, $newch);
+
+    # now make the table of contents
+    unshift(@@chunks, (toc chunk $doc_id, "1 1", @@chunks));
+    # and we are done
+    return @@chunks;
+}
+
+# Initialization
+# BUG::should really be an init functioncalled explicitly from doc.pl
+
+$Cutprog = "/staff/glomop/bin/pnmcut";
+$Scalecmd = "/staff/glomop/bin/pnmscale";
+$FromGif = "/staff/glomop/bin/giftopnm";
+$FromJpeg = "/staff/glomop/bin/djpeg";
+$ToGif = "/staff/glomop/bin/ppmtogif";
+$Gifmunch = "/staff/glomop/bin/gifmunch_s";
+1;
+@

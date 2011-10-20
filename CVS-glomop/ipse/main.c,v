@@ -1,0 +1,345 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <dlfcn.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include <pcap.h>
+
+char *progname;
+static pcap_t *pd;
+static int wd;
+
+struct s_handnode {
+    module_ops op;
+    void *state;
+} *handlist = NULL;
+int nhands = 0;
+
+void ether_if_callback(u_char *user_data, 
+		       const struct pcap_pkthdr *h, 
+		       const u_char *p)
+{
+    interface_t interface;
+    int i;
+
+    interface.frame_type = DLT_EN10MB;
+    interface.packet = (ip_packet_t *)(p+ETH_HDRLEN);
+    interface.frame_head = (frame_t *)p;
+    interface.wd = *(int *)user_data;
+
+    /* Check layout's OK */
+    if (interface.packet->iphead.ip_hl != 5) return;
+    
+    /* Dump fragments */
+    if ((htons(interface.packet->iphead.ip_off) & IP_OFFSET) > 0) 
+	return;
+
+    /* Dispatch it to each module */
+    for(i=0; i<nhands; ++i) {
+	if (handlist[i].op.handle) {
+	    (handlist[i].op.handle)(&interface, handlist[i].state);
+	}
+    }
+}
+
+void ppp_if_callback(u_char *user_data, 
+		       const struct pcap_pkthdr *h, 
+		       const u_char *p)
+{
+    interface_t interface;
+    int i;
+
+    interface.frame_type = DLT_PPP;
+    interface.packet = (ip_packet_t *)(p+PPP_HDRLEN);
+    interface.frame_head = (frame_t *)p;
+    interface.wd = *(int *)user_data;
+
+    /* Check layout's OK */
+    if (interface.packet->iphead.ip_hl != 5) return;
+    
+    /* Dump fragments */
+    if ((htons(interface.packet->iphead.ip_off) & IP_OFFSET) > 0) 
+	return;
+
+    /* Dispatch it to each module */
+    for(i=0; i<nhands; ++i) {
+	if (handlist[i].op.handle) {
+	    (handlist[i].op.handle)(&interface, handlist[i].state);
+	}
+    }
+}
+
+struct callback {
+    pcap_handler f;
+    int type;
+};
+
+static struct callback callbacks[] = {
+    { ether_if_callback,	DLT_EN10MB },
+    { ppp_if_callback,		DLT_RAW },
+    /*	{ sl_if_callback,		DLT_SLIP },
+	{ fddi_if_callback,	DLT_FDDI },
+	{ null_if_callback,	DLT_NULL },
+    */
+    { NULL,			0 },
+};
+
+pcap_handler lookup_callback(int type)
+{
+    struct callback *p;
+    
+    for (p = callbacks; p->f; ++p)
+	if (type == p->type)
+	    return p->f;
+    
+    fprintf(stderr, "unknown data link type 0x%x\n", type);
+    exit(1);
+    /* NOTREACHED */
+}
+
+static void cleanup(int ignored)
+{
+    struct pcap_stat stat;
+    int i;
+
+    /* Clean up module */
+    stream_clean();
+    for(i=0;i<nhands;++i) 
+	if (handlist[i].op.clean) {
+	    (handlist[i].op.clean)(handlist[i].state);
+	}
+
+    /* Clean up interface */
+    (void)fflush(stdout);
+    putc('\n', stderr);
+    if (pcap_stats(pd, &stat) < 0)
+	(void)fprintf(stderr, "pcap_stats: %s\n",
+		      pcap_geterr(pd));
+    else {
+	(void)fprintf(stderr, "%d packets received by filter\n",
+		      stat.ps_recv);
+	(void)fprintf(stderr, "%d packets dropped by kernel\n",
+		      stat.ps_drop);
+    }
+
+    pcap_close(pd);
+    pcap_close_write(wd);
+
+    exit(0);
+}
+
+static int module_add(char *name, char *initarg)
+{
+    void *handle;
+    module_ops *oplist;
+    int *nops;
+    char *realname;
+    int i;
+
+    realname = malloc(strlen(name)+5);
+    if (!realname) {
+	fprintf(stderr, "%s: Out of memory loading %s\n", progname, name);
+	exit(1);
+    }
+    sprintf(realname, "%s.so", name);
+
+    handle = dlopen(realname, RTLD_NOW);
+    if (handle == NULL) {
+	fprintf(stderr, "%s: Cannot open %s: %s\n", progname, name, dlerror());
+	return 1;
+    }
+
+    nops = (int *)dlsym(handle, "nops");
+    if (nops == NULL || *nops == 0) {
+	dlclose(handle);
+	return 0;
+    }
+
+    oplist = (module_ops *)dlsym(handle, "oplist");
+    if (oplist == NULL) {
+	dlclose(handle);
+	return 0;
+    }
+
+    handlist = realloc(handlist, (nhands+(*nops))*sizeof(struct s_handnode));
+    if (handlist == NULL) {
+	fprintf(stderr, "%s: Out of memory loading %s\n", progname, name);
+	dlclose(handle);
+	exit(1);
+    }
+
+    for(i=0;i<(*nops);++i) {
+	handlist[nhands].op = oplist[i];
+
+	/* Initialize modules */
+	if (handlist[nhands].op.init) {
+	    if ((handlist[nhands].state =
+		(handlist[nhands].op.init)(nhands,initarg)) == INIT_FAIL) {
+		fprintf(stderr, "%s: Initialization of %s failed\n",
+		    progname, name);
+		return 1;
+	    }
+	} else {
+	    handlist[nhands].state = NULL;
+	}
+
+	++nhands;
+    }
+
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    int res;
+    char *initarg;
+
+    char errbuf[PCAP_ERRBUF_SIZE];
+    char *device;
+    struct pcap_stat stat;
+    u_char *pcap_userdata;
+    pcap_handler callback;
+    bpf_u_int32 localnet = 0;
+    bpf_u_int32 netmask = 0;
+    char *filterbuf;
+    struct bpf_program fcode;
+    
+    progname = argv[0];
+    /* Parse options */
+    --argc;
+    ++argv;
+    while ((argc > 0) && (strcmp(argv[0], "--")))
+    {
+	initarg = strchr(argv[0], '=');
+	if (initarg) {
+	    *initarg = '\0';
+	    ++initarg;
+	}
+	if ((res=module_add(argv[0], initarg)) != 0) exit(res);
+	--argc;
+	++argv;
+    }
+
+    if (argc > 0)
+	filterbuf = argv[1];
+    else
+	filterbuf = NULL;
+
+    stream_init(1000);   /* hopefully one per home-ip address active */
+    signal(SIGHUP, cleanup);
+    signal(SIGINT, cleanup);
+    signal(SIGQUIT, cleanup);
+    signal(SIGTERM, cleanup);
+    signal(SIGPIPE, SIG_IGN);
+
+    /* Lookup the default interface (in the future we could add a
+       command-line argument to specify a particular one) */
+    device = pcap_lookupdev(errbuf);
+    if (device == NULL) {
+	fprintf(stderr, "%s: %s\n", progname, errbuf);
+	exit(1);
+    }
+
+    /*device = "ppp0";*/
+    printf("Interface: %s\n", device);
+
+    /* Open socket for reading */
+    pd = pcap_open_live(device, DEFAULT_SNAPLEN, 1, DEFAULT_TIMEOUT, errbuf);
+
+    if (pd == NULL) {
+	fprintf(stderr, "%s: %s\n", progname, errbuf);
+	exit(1);
+    }
+
+    /* Open socket for writing */
+    wd = pcap_open_write(device, errbuf);
+
+    if (wd == 0) {
+	fprintf(stderr, "%s: %s\n", progname, errbuf);
+	exit(1);
+    }
+
+    /* Setup the BPF stuff */
+
+    if (pcap_lookupnet(device, &localnet, &netmask, errbuf) < 0) {
+	fprintf(stderr, "%s: %s\n", progname, errbuf);
+	exit(1);
+    }
+
+    if (pcap_compile(pd, &fcode, filterbuf, 0, netmask) < 0) {
+	fprintf(stderr, "%s: %s\n", progname, pcap_geterr(pd));
+	exit(1);
+    }
+
+    if (pcap_setfilter(pd, &fcode) < 0) {
+	fprintf(stderr, "%s: %s\n", progname, pcap_geterr(pd));
+	exit(1);
+    }
+
+    /* We can have different callbacks depending on the interface
+       (i.e., one for ethernet, one for PPP, one for FDDI, etc.) */
+    callback = lookup_callback(pcap_datalink(pd));
+    pcap_userdata = (u_char *) &wd;
+
+    if (pcap_loop(pd, -1, callback, pcap_userdata) < 0) {
+	fprintf(stderr, "%s: %s\n", progname, pcap_geterr(pd));
+	exit(1);
+    }
+
+    if (pcap_stats(pd, &stat) < 0)
+	(void)fprintf(stderr, "pcap_stats: %s\n",
+		      pcap_geterr(pd));
+    else {
+	(void)fprintf(stderr, "%d packets received by filter\n",
+		      stat.ps_recv);
+	(void)fprintf(stderr, "%d packets dropped by kernel\n",
+		      stat.ps_drop);
+    }
+    
+    pcap_close(pd);
+    pcap_close_write(wd);
+    exit(0);
+}
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

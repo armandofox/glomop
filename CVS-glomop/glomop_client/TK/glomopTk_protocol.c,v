@@ -1,0 +1,951 @@
+head	1.6;
+access;
+symbols
+	stable:1.5
+	current:1.5
+	release:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	96.08.23.19.57.41;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.11.02.18.46;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.05.20.38.40;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.05.31.22.16.45;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.31.17.23.19;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.05.24.21.30.50;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTk_protocol.c --
+ *
+ * This file provides an implementation of the glomop protocol parsing
+ * functions.  It is able to pull out messages from a file descriptor,
+ * and is able to parse out components from a message.
+ *  
+ * $Id: glomopTk_protocol.c,v 1.1 96/08/19 14:39:28 glomop Exp $
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <errno.h>
+
+#include "glomopTk_protocol.h"
+#include "des.h"
+
+extern int errno;
+ 
+static char gm_rcsid[] = "$Id: glomopTk_protocol.c,v 1.1 96/08/19 14:39:28 glomop Exp $";
+
+/**** GMStr1 manipulation functions ****/
+
+GMStr1 GMStr1_defFromBytes(unsigned char *bytes, byte len)
+{
+  GMStr1 retStr;
+
+  /* zero out the structure */
+  memset((void *) &retStr, '\0', sizeof(GMStr1));
+
+  /* copy in the data */
+  if (len != (byte) 0) {
+    retStr.length = len;
+    retStr.data = (unsigned char *) malloc(len*sizeof(unsigned char));
+    if (retStr.data == NULL) {
+      fprintf(stderr, "Out of memory in GMStr1_defFromBytes.\n");
+      exit(-1);
+    }
+
+    memcpy((void *) retStr.data, (void *) bytes, (size_t) len);
+  }
+
+  /* return structure to caller */
+  return retStr;
+}
+
+void   GMStr1_destroy(GMStr1 destroyMe)
+{
+  /* Free up any space taken by the characters */
+  if (destroyMe.data != NULL) {
+    free(destroyMe.data);
+    destroyMe.data = NULL;
+  }
+}
+
+void   GMStr1_dump(GMStr1 dumpMe, FILE *dumpToMe)
+{
+  unsigned char i;
+
+  if (dumpToMe == NULL) {
+    fprintf(stderr, "Null dump file in GMStr1_dump\n");
+    exit(-1);
+  }
+
+  fprintf(dumpToMe, "Length of GMStr1: 0x%.2x\n", dumpMe.length);
+
+  for (i=(byte) 0; i<dumpMe.length; i++) {
+    if (i % 20 == 0)
+      fprintf(dumpToMe, "\n ");
+    fprintf(dumpToMe, " %.2x", *(dumpMe.data + (unsigned long) i));
+  }
+  fprintf(dumpToMe, "\n");
+}
+
+
+/**** GMStr2 manipulation functions ****/
+
+GMStr2 GMStr2_defFromBytes(unsigned char *bytes, i16 len)
+{
+  GMStr2 retStr;
+
+  /* zero out the structure */
+  memset((void *) &retStr, '\0', sizeof(GMStr2));
+
+  /* copy in the data */
+  if (len != (i16) 0) {
+    retStr.length = len;
+    retStr.data = (unsigned char *) malloc(len*sizeof(unsigned char));
+    if (retStr.data == NULL) {
+      fprintf(stderr, "Out of memory in GMStr2_defFromBytes.\n");
+      exit(-1);
+    }
+
+    memcpy((void *) retStr.data, (void *) bytes, (size_t) len);
+  }
+
+  /* return structure to caller */
+  return retStr;
+}
+
+void   GMStr2_destroy(GMStr2 destroyMe)
+{
+  /* Free up any space taken by characters */
+  if (destroyMe.data != NULL) {
+    free(destroyMe.data);
+    destroyMe.data = NULL;
+  }
+}
+
+void   GMStr2_dump(GMStr2 dumpMe, FILE *dumpToMe)
+{
+  unsigned int i;
+
+  if (dumpToMe == NULL) {
+    fprintf(stderr, "Null dump file in GMStr2_dump\n");
+    exit(-1);
+  }
+
+  fprintf(dumpToMe, "Length of GMStr2: 0x%.4x\n", dumpMe.length);
+
+  for (i=(i16) 0; i<dumpMe.length; i++) {
+    if (i % 20 == 0)
+      fprintf(dumpToMe, "\n ");
+    fprintf(dumpToMe, " %.2x", *(dumpMe.data + (unsigned long) i));
+  }
+  fprintf(dumpToMe, "\n");
+}
+
+
+/**** GMMessage manipulation functions ****/
+
+GMMessage    GMMessage_newMessage(void)
+{
+  GMMessage retMsg;
+
+  /* zero out the structure */
+  memset((void *) &retMsg, '\0', sizeof(GMMessage));
+  return retMsg;
+}
+
+void         GMMessage_destroy(GMMessage destroyMe)
+{
+  if (destroyMe.data != NULL) {
+    free(destroyMe.data);
+    destroyMe.data = NULL;
+  }
+}
+
+GMBoolean    GMMessage_clearMessage(GMMessage *clearMe)
+{
+  if (clearMe == NULL)
+    return 0;
+
+  GMMessage_destroy(*clearMe);
+  memset((void *) clearMe, '\0', sizeof(GMMessage));  
+  return 1;
+}
+
+GMBoolean    GMMessage_addStr1(GMMessage *addToMe, GMStr1 addMe)
+{
+  unsigned char *destPtr;
+
+  if (addMe.length == 0)
+    return 1;
+
+  /* Make sure message can handle new element */
+  if ((unsigned long) addToMe->length + (unsigned long) addMe.length + 1U >
+      (unsigned long) MAX_GMMESSAGE) {
+    fprintf(stderr, "Resulting message to long in addStr1.\n");
+    return 0;
+  }
+
+  /* Allocate more space for new data */
+  addToMe->data = realloc(addToMe->data, 
+			  (unsigned long) addToMe->length + 
+			  (unsigned long) addMe.length + 1U);
+
+  if (addToMe->data == NULL) {
+    fprintf(stderr, "realloc failed in addStr1.\n");
+    return 0;
+  }
+
+  /* Add in new data */
+  destPtr = addToMe->data + (unsigned long) addToMe->length;
+  *destPtr = (unsigned char) addMe.length;  /* addMe.length is a byte */
+  destPtr += 1L;
+  memcpy(destPtr, addMe.data, (size_t) addMe.length);
+
+  /* Compute new length */
+  addToMe->length += (i16)((unsigned int) addMe.length + (unsigned int) 1);
+  return 1;
+}
+
+GMBoolean    GMMessage_addStr2(GMMessage *addToMe, GMStr2 addMe)
+{
+  unsigned char *destPtr;
+
+  if (addMe.length == 0)
+    return 1;
+
+  /* Make sure message can handle new element */
+  if ((unsigned long) addToMe->length + (unsigned long) addMe.length + 2U >
+      (unsigned long) MAX_GMMESSAGE) {
+    fprintf(stderr, "Resulting message to long in addStr2.\n");
+    return 0;
+  }
+
+  /* Allocate more space for new data */
+  addToMe->data = realloc(addToMe->data, 
+			  (unsigned long) addToMe->length + 
+			  (unsigned long) addMe.length + 2U);
+
+  if (addToMe->data == NULL) {
+    fprintf(stderr, "realloc failed in addStr2.\n");
+    return 0;
+  }
+
+  /* Add in new data */
+  destPtr = addToMe->data + (unsigned long) addToMe->length;
+  /* convert 16 bit length into network order */
+  addMe.length = htons(addMe.length);
+  memcpy(destPtr, (void *) &(addMe.length), (size_t) 2);
+  addMe.length = ntohs(addMe.length);
+  destPtr += 2L;
+  memcpy(destPtr, addMe.data, (size_t) addMe.length);
+
+  /* Compute new length */
+  addToMe->length += (i16) ((unsigned int) addMe.length + (unsigned int) 2);
+  return 1;
+}
+
+GMBoolean    GMMessage_addi16(GMMessage *addToMe, i16 addMe)
+{
+  unsigned char *destPtr;
+
+  /* Make sure message can handle new element */
+  if ((unsigned long) addToMe->length + 2U >
+      (unsigned long) MAX_GMMESSAGE) {
+    fprintf(stderr, "Resulting message to long in addi16.\n");
+    return 0;
+  }
+
+  /* Allocate more space for new data */
+  addToMe->data = realloc(addToMe->data, (unsigned long) addToMe->length + 2U);
+
+  if (addToMe->data == NULL) {
+    fprintf(stderr, "realloc failed in addi16.\n");
+    return 0;
+  }
+
+  /* Add in new data */
+  destPtr = addToMe->data + (unsigned long) addToMe->length;
+  /* make network order */
+  addMe = htons(addMe);
+  memcpy(destPtr, (void *) &addMe, (size_t) 2);
+  addMe = ntohs(addMe);
+
+  /* Compute new length */
+  addToMe->length += (i16) 2;
+  return 1;
+}
+
+GMBoolean    GMMessage_addi32(GMMessage *addToMe, unsigned long int addMe)
+{
+  unsigned char *destPtr;
+
+  /* Make sure message can handle new element */
+  if ((unsigned long) addToMe->length + 4U >
+      (unsigned long) MAX_GMMESSAGE) {
+    fprintf(stderr, "Resulting message to long in addi32.\n");
+    return 0;
+  }
+
+  /* Allocate more space for new data */
+  addToMe->data = realloc(addToMe->data, (unsigned long) addToMe->length + 4U);
+
+  if (addToMe->data == NULL) {
+    fprintf(stderr, "realloc failed in addi32.\n");
+    return 0;
+  }
+
+  /* Add in new data */
+  destPtr = addToMe->data + (unsigned long) addToMe->length;
+  /* make network order */
+  addMe = htonl(addMe);
+  memcpy(destPtr, (void *) &addMe, (size_t) 4);
+  addMe = ntohl(addMe);
+
+  /* Compute new length */
+  addToMe->length += (i16) 4;
+  return 1;
+}
+
+GMBoolean    GMMessage_beginExtract(GMMessage *fromMe)
+{
+  /* Set cur_offset to 0 */
+  fromMe->cur_offset = (i16) 0;
+  return 1;
+}
+
+GMStr1       GMMessage_getNextStr1(GMMessage *fromMe)
+{
+  unsigned char *extract;
+  GMStr1         theStr1;
+
+  memset((void *) &theStr1, '\0', sizeof(GMStr1));
+
+  /* quick bounds check, then extract length */
+  if ((fromMe->cur_offset + (i16) 1) > fromMe->length) {
+    fprintf(stderr, "Off end of message in getNextStr1!\n");
+    return theStr1;
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  theStr1.length = (byte) *extract;
+  fromMe->cur_offset += (i16) 1;
+
+  /* another bounds check, then extract data */
+  if ( (fromMe->cur_offset + theStr1.length) > fromMe->length) {
+    fprintf(stderr, "Off end of message (2) in getNextStr1!\n");
+    theStr1.length = (byte) 0;
+    return theStr1;
+  }
+  theStr1.data = (unsigned char *) malloc(sizeof(unsigned char) *
+					  ((int) theStr1.length));
+  if (theStr1.data == NULL) {
+    fprintf(stderr, "Out of memory in getNextStr1.\n");
+    exit(-1);
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  memcpy(theStr1.data, extract, (size_t) theStr1.length);
+  fromMe->cur_offset += (i16) theStr1.length;
+
+  return theStr1;
+}
+
+GMStr2       GMMessage_getNextStr2(GMMessage *fromMe)
+{
+  unsigned char *extract;
+  GMStr2         theStr2;
+
+  memset((void *) &theStr2, '\0', sizeof(GMStr2));
+
+  /* quick bounds check, then extract length */
+  if ((fromMe->cur_offset + (i16) 2) > fromMe->length) {
+    fprintf(stderr, "Off end of message in getNextStr2!\n");
+    return theStr2;
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  memcpy((void *) &(theStr2.length), extract, (size_t) 2);
+  theStr2.length = ntohs(theStr2.length);  /* convert to host order */
+  fromMe->cur_offset += (i16) 2;
+
+  /* another bounds check, then extract data */
+  if ( (fromMe->cur_offset + theStr2.length) > fromMe->length) {
+    fprintf(stderr, "Off end of message (2) in getNextStr2!\n");
+    theStr2.length = (i16) 0;
+    return theStr2;
+  }
+  theStr2.data = (unsigned char *) malloc(sizeof(unsigned char) *
+					  ((int) theStr2.length));
+  if (theStr2.data == NULL) {
+    fprintf(stderr, "Out of memory in getNextStr2.\n");
+    exit(-1);
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  memcpy(theStr2.data, extract, (size_t) theStr2.length);
+  fromMe->cur_offset += (i16) theStr2.length;
+
+  return theStr2;
+}
+
+i16          GMMessage_getNexti16(GMMessage *fromMe)
+{
+  unsigned char *extract;
+  i16            the_i16 = (i16) 0;
+
+  /* quick bounds check, then extract i16 */
+  if ((fromMe->cur_offset + (i16) 2) > fromMe->length) {
+    fprintf(stderr, "Off end of message in getNexti16!\n");
+    return the_i16;
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  memcpy((void *) &(the_i16), extract, (size_t) 2);
+  the_i16 = ntohs(the_i16);  /* convert to host order */
+  fromMe->cur_offset += (i16) 2;
+
+  return the_i16;
+}
+
+i32          GMMessage_getNexti32(GMMessage *fromMe)
+{
+  unsigned char *extract;
+  i32            the_i32 = (i32) 0L;
+
+  /* quick bounds check, then extract i32 */
+  if ((fromMe->cur_offset + (i16) 4) > fromMe->length) {
+    fprintf(stderr, "Off end of message in getNexti32!\n");
+    return the_i32;
+  }
+  extract = fromMe->data + (long int) fromMe->cur_offset;
+  memcpy((void *) &(the_i32), extract, (size_t) 4);
+  the_i32 = ntohl(the_i32);  /* convert to host order */
+  fromMe->cur_offset += (i16) 4;
+
+  return the_i32;
+}
+
+/** This (private) function will read the correct number of bytes from
+    a socket, or bork. **/
+int correct_read(int socket_talk, unsigned char *readbuf, int length)
+{
+  int read_so_far, next_read;
+
+  read_so_far = 0;
+  while (read_so_far < length) {
+    next_read = read(socket_talk, (readbuf + (long int) read_so_far),
+                     length - read_so_far);
+
+    if (next_read <= 0) {
+      if (next_read == 0) {
+	fprintf(stderr, "End-of-file in correct_read - socket closed.\n");
+	close(socket_talk);
+	return 0;
+      } else if (next_read < -1) {
+	fprintf(stderr, "read returned < -1 in correct_read - error!\n");
+	return -1;
+      } else {   /* next_read is -1 */
+	if ((errno == EAGAIN) || (errno == EINTR)) {
+	  fprintf(stderr, "read return -1, recoverable.\n");
+	  sleep(1);
+	  continue;   /* next iteration of while */
+	} else {
+	  fprintf(stderr, "Unrecoverable -1 return.\n");
+	  close(socket_talk);
+	  return -1;
+	}
+      }
+    }
+
+    /* next_read > 0, so we read some data */
+    read_so_far += next_read;
+    if (length == read_so_far)
+      break;   /* this is redundant */
+    if (length < read_so_far) {
+       fprintf(stderr, "Bigtime bug in code - alert steve.\n");
+       exit(-1);
+    }
+  }
+  return read_so_far;
+}
+
+
+GMBoolean    GMMessage_readFromStream(GMMessage *intoMe, int fd)
+{
+  /* Prepare the message for accepting data */
+  if (!GMMessage_clearMessage(intoMe))
+    return 0;
+
+#ifdef DEBUG
+  printf("in GMMessage_readFromStream.\n");
+#endif DEBUG
+
+  /* Read in length of message */
+  if (correct_read(fd, (unsigned char *) &(intoMe->length), (int) 2) <= 0) {
+    fprintf(stderr, "correct_read failed in readFromStream\n");
+    close(fd);
+    GMMessage_clearMessage(intoMe);
+    return 0;
+  }
+  /* convert length to host order */
+  intoMe->length = ntohs(intoMe->length);
+
+#ifdef DEBUG
+  printf("(GMMessage_readFromStream): message length %d\n",
+	 intoMe->length);
+#endif
+
+  /* read in flag byte */
+  if (correct_read(fd, (unsigned char *) &(intoMe->flags), (int) 1) <= 0) {
+    fprintf(stderr, "correct_read failed in readFromStream (2)\n");
+    close(fd);
+    GMMessage_clearMessage(intoMe);
+    return 0;
+  }
+  intoMe->length -= (i16) 1;  /* flag byte */
+
+#ifdef DEBUG
+  printf("(GMMessage_readFromStream): flags byte %.2x\n",
+	 intoMe->flags);
+#endif
+
+  /* Allocate space for message */
+  intoMe->data = (unsigned char *) malloc(sizeof(unsigned char) *
+					  (int) intoMe->length);
+  if (intoMe->data == NULL) {
+    fprintf(stderr, "Out of memory in readFromStream.\n");
+    exit(-1);
+  }
+
+#ifdef DEBUG
+  printf("(GMMessage_readFromStream): about to do (blocking) read\n");
+#endif
+
+  if (correct_read(fd, intoMe->data, (int) intoMe->length) <= 0) {
+    fprintf(stderr, "correct_read failed in readFromStream (3)\n");
+    close(fd);
+    GMMessage_clearMessage(intoMe);
+    return 0;
+  }
+
+  return 1;
+}
+
+GMBoolean    GMMessage_writeToStream(GMMessage fromMe, int fd)
+{
+  i16     outLen;
+  ssize_t written;
+
+  /* write length, in network order */
+  outLen = htons(fromMe.length + 1);  /* +1 for flag byte */
+  written = write(fd, (void *) &outLen, (size_t) 2);
+  if (written != (ssize_t) 2) {
+    fprintf(stderr, "Write failed on length in writeToStream.\n");
+    close(fd);
+    return 0;
+  }
+  
+  /* write flag byte */
+  written = write(fd, (void *) &(fromMe.flags), (size_t) 1);
+  if (written != (ssize_t) 1) {
+    fprintf(stderr, "Write failed on flags in writeToStream.\n");
+    close(fd);
+    return 0;
+  }
+
+  /* write data */
+  written = write(fd, (void *) fromMe.data, (size_t) fromMe.length);
+  if (written != (ssize_t) fromMe.length) {
+    fprintf(stderr, "Write failed on data in writeToStream.\n");
+    close(fd);
+    return 0;
+  }
+
+  return 1;
+}
+
+void         GMMessage_dump(GMMessage dumpMe, FILE *dumpToMe)
+{
+  i16 i;
+
+  if (dumpToMe == NULL) {
+    fprintf(stderr, "Null dump file in GMMessage_dump\n");
+    exit(-1);
+  }
+
+  fprintf(dumpToMe, "Length of GMMessage: 0x%.4x\n", dumpMe.length);
+  fprintf(dumpToMe, "         flags byte: 0x%.2x\n", dumpMe.flags);
+  fprintf(dumpToMe, "         cur_offset: 0x%.2x\n", dumpMe.cur_offset);
+
+  for (i=(i16) 0; i<dumpMe.length; i++) {
+    if (i % 20 == 0)
+      fprintf(dumpToMe, "\n ");
+    fprintf(dumpToMe, " %.2x", *(dumpMe.data + (unsigned long) i));
+  }
+  fprintf(dumpToMe, "\n");  
+}
+
+GMMessage    GMMessage_decodeMessage(GMMessage *decodeMe, unsigned char *key)
+{
+  GMMessage         decodedMessage = GMMessage_newMessage();
+  des_key_schedule  the_key_sched;
+  unsigned char    *decodeBuf, *ptr;
+
+  /** decodeMessage will create a new message that has been decoded
+    from "decodeMe".  The encoded message will remain untouched, so
+    memory will be allocated for the returned message.  If an error
+    occurs, an empty message will be returned. **/
+
+  /* Make sure this is a bona-fide encrypted message */
+  if (!(decodeMe->flags & GM_MSG_ENCRYPT)) {
+    fprintf(stderr, "decodeMessage called on non-encrypted message.\n");
+    return decodedMessage;
+  }
+  if (!((decodeMe->length % 8) == 0)) {
+    fprintf(stderr, "Bogus encrypted length - not 0 mod 8\n");
+    return decodedMessage;
+  }
+  
+  /* Looks good, so decrypt into a temporary buffer */
+  decodeBuf = (unsigned char *) calloc(decodeMe->length,
+				       sizeof(unsigned char));
+  if (decodeBuf == NULL) {
+    fprintf(stderr, "Out of memory in GMMessage_decodeMessage.\n");
+    exit(-1);
+  }
+  des_key_sched(key, the_key_sched);
+
+  des_pcbc_encrypt((C_Block *) &((decodeMe->data)[0]),
+		   (C_Block *) &(decodeBuf[0]),
+		   (S_BIT32) (decodeMe->length),
+		   the_key_sched, (C_Block *) key, 0);
+
+  /* Ok - we should now have an embedded message in the decodebuf */
+  ptr = decodeBuf;
+  memcpy(&(decodedMessage.length), ptr, (size_t) 2);  /* the size */
+  decodedMessage.length = ntohs(decodedMessage.length);  /* from net order */
+  ptr += (long int) 2;
+  
+#ifdef DEBUG
+  printf("decodedMessage.length is %d (0x%.2x)\n", decodedMessage.length,
+	 decodedMessage.length);
+#endif DEBUG
+
+  /* Do a little sanity checking on decrypted message length */
+  if ((decodedMessage.length > decodeMe->length) ||
+      (decodedMessage.length == (i16) 0)) {
+    fprintf(stderr, "Bogus message after decryption.\n");
+    GMMessage_clearMessage(&decodedMessage);
+    free(decodeBuf);
+    return decodedMessage;
+  }
+
+  memcpy(&(decodedMessage.flags), ptr, (size_t) 1);  /* flags byte */
+  ptr += (long int) 1;
+  decodedMessage.length -= (i16) 1;  /* flag byte taken off */
+  
+  /* Some more sanity checking on flags byte */
+  if (decodedMessage.flags & GM_MSG_ENCRYPT) {
+    fprintf(stderr, "Encrypted message inside encrypted message!?\n");
+    GMMessage_clearMessage(&decodedMessage);
+    free(decodeBuf);
+    return decodedMessage;
+  }
+
+  decodedMessage.data = (unsigned char *) malloc(sizeof(unsigned char) *
+						decodedMessage.length);
+  if (decodedMessage.data == NULL) {
+    fprintf(stderr, "Out of memory in decodeMessage (2).\n");
+    exit(-1);
+  }
+  memcpy(decodedMessage.data, ptr, (size_t) decodedMessage.length);
+
+  /* all done - return after cleaning up */
+  free(decodeBuf);
+  return decodedMessage;
+}
+
+GMMessage    GMMessage_encodeMessage(GMMessage *encodeMe, unsigned char *key)
+{
+  GMMessage         encodedMessage = GMMessage_newMessage();
+  des_key_schedule  the_key_sched;
+  unsigned char    *ptr;
+  int               modlen, totlen;
+
+  /** encodeMessage will create a new message that has been encoded
+    from "encodeMe".  The original message will remain untouched, so
+    memory will be allocated for the returned message.  If an error
+    occurs, an empty message will be returned. **/
+
+  des_key_sched(key, the_key_sched);
+
+  /* figure out how long we'll need, rounding up to 8 bytes for des */
+  modlen = (encodeMe->length + 3) % 8;  /* + 3 for flags plus length */
+  if (modlen != 0) {
+    modlen = 8 - modlen;
+  }
+#ifdef DEBUG
+  printf("(glomopTk_protocol.c): len %d modlen %d totlen %d\n",
+	 encodeMe->length + 3, modlen, encodeMe->length + 3 + modlen);
+#endif
+  encodedMessage.length = totlen = (encodeMe->length + 3) + modlen;
+
+  encodedMessage.data = (unsigned char *) calloc(totlen,
+						 sizeof(unsigned char));
+
+  if (encodedMessage.data == NULL) {
+    fprintf(stderr, "Out of memory in encodeMessage.\n");
+    exit(-1);
+  }
+  
+  ptr = encodedMessage.data;
+  encodeMe->length = htons(encodeMe->length + 1);  /* +1 for flag byte */
+  memcpy(ptr, &(encodeMe->length), (size_t) 2);   /* length in net order */
+  encodeMe->length = ntohs(encodeMe->length) - 1;
+  ptr += (long int) 2;
+
+  memcpy(ptr, &(encodeMe->flags), (size_t) 1);    /* flags byte */
+  ptr += (long int) 1;
+
+  memcpy(ptr, encodeMe->data, (size_t) encodeMe->length);  /* copy in data */
+
+  /* Now encrypt message */
+  des_pcbc_encrypt((C_Block *) encodedMessage.data,
+		   (C_Block *) encodedMessage.data,   /* encrypt in place */
+		   (S_BIT32) encodedMessage.length,
+		   the_key_sched, (C_Block *) key, 1);
+  encodedMessage.flags |= GM_MSG_ENCRYPT;  /* set encrypted bit */
+  return encodedMessage;
+}
+
+GMBoolean    GMMessage_isError(GMMessage testMsg)
+{
+  if (testMsg.flags & GM_MSG_ERR) 
+    return 1;
+  else
+    return 0;
+}
+
+void         GMMessage_dumpError(GMMessage dumpMe, FILE *dumpToMe)
+{
+  GMStr1 er, msg;
+  int i;
+
+  if (!GMMessage_isError(dumpMe))
+    return;
+  GMMessage_beginExtract(&dumpMe);
+  er = GMMessage_getNextStr1(&dumpMe);
+  msg = GMMessage_getNextStr1(&dumpMe);
+  fprintf(dumpToMe, "Message error: \n  ");
+  for (i=0; i<msg.length; i++)
+    fprintf(dumpToMe, "%c", *(msg.data + (long int) i));
+  fprintf(dumpToMe, "\n");
+  return;
+}
+@
+
+
+1.5
+log
+@Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+and bugfixes to get it working correctly.
+@
+text
+@d2 8
+d16 1
+a16 18
+ * $Id: glomopTk_protocol.c,v 1.4 1996/06/05 20:38:40 gribble Exp $
+ * $Log: glomopTk_protocol.c,v $
+ * Revision 1.4  1996/06/05 20:38:40  gribble
+ * Added functions to handle the encryption/decryption of messages.
+ *
+ * Revision 1.3  1996/05/31 22:16:45  gribble
+ * Rewrote the half of the protocol code that got trounced by the #$@@#$@@#$
+ * barad-dur disk crash over the weekend.
+ *
+ * Revision 1.2  1996/05/31 17:23:19  gribble
+ * Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+ *
+ * Revision 1.1  1996/05/24 21:30:50  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+d33 1
+a33 1
+static char gm_rcsid[] = "$Id: glomopTk_protocol.c,v 1.4 1996/06/05 20:38:40 gribble Exp $";
+@
+
+
+1.4
+log
+@Added functions to handle the encryption/decryption of messages.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_protocol.c,v 1.3 1996/05/31 22:16:45 gribble Exp $
+d10 3
+d42 1
+a42 1
+static char gm_rcsid[] = "$Id: glomopTk_protocol.c,v 1.3 1996/05/31 22:16:45 gribble Exp $";
+d481 4
+d495 5
+d509 5
+d521 5
+@
+
+
+1.3
+log
+@Rewrote the half of the protocol code that got trounced by the #$@@#$@@#$
+barad-dur disk crash over the weekend.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_protocol.c,v 1.2 1996/05/31 17:23:19 gribble Exp $
+d10 4
+d35 1
+d39 1
+a39 1
+static char gm_rcsid[] = "$Id: glomopTk_protocol.c,v 1.2 1996/05/31 17:23:19 gribble Exp $";
+d566 133
+@
+
+
+1.2
+log
+@Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_protocol.c,v 1.1 1996/05/24 21:30:50 gribble Exp $
+d10 3
+d26 7
+a32 1
+#include "glomopTk.h"
+d34 1
+a34 1
+static char gm_rcsid[] = "$Id: glomopTk_protocol.c,v 1.1 1996/05/24 21:30:50 gribble Exp $";
+d79 1
+a79 1
+  fprintf(dumpToMe, "Length of GMStr1: %.2x\n", dumpMe.length);
+d133 1
+a133 1
+  fprintf(dumpToMe, "Length of GMStr2: %.2x\n", dumpMe.length);
+a151 1
+
+d181 1
+a181 1
+  if ((unsigned long) addToMe->length + (unsigned long) addMe.length + 1U>
+d234 2
+d237 1
+d246 1
+a246 1
+GMBoolean    GMMessage_addi16(GMMessage *addToMe, unsigned int addMe)
+d267 2
+d270 1
+d298 2
+d301 1
+d310 3
+a312 1
+
+d317 2
+d320 28
+d352 101
+d454 10
+d466 2
+a467 1
+unsigned int GMMessage_getNexti16(GMMessage *fromMe)
+d469 36
+d506 1
+d509 1
+a509 1
+unsigned long int GMMessage_getNexti32(GMMessage *fromMe)
+d511 19
+d531 9
+d542 1
+a542 1
+GMBoolean    GMMessage_readFromStream(GMMessage *intoMe, int fd)
+d544 10
+d555 6
+d563 1
+a563 1
+GMBoolean    GMMessage_writeToStream(GMMessage fromMe, int fd)
+d565 4
+a568 1
+
+d571 1
+a571 1
+void         GMMessage_dump(GMMessage dumpMe, FILE *dumpToMe)
+d573 2
+d576 10
+@
+
+
+1.1
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d8 8
+a15 2
+ * $Id$
+ * $Log$
+d19 4
+d25 298
+a322 1
+static char gm_rcsid[] = "$Id$;
+d324 1
+d326 2
+d329 1
+@

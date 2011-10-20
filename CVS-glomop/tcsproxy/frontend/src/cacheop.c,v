@@ -1,0 +1,461 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.2
+	pre-yatin-merge:1.6
+	fox-dev:1.1.2.4;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	97.10.26.01.18.07;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.10.26.01.09.54;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.10.26.00.29.30;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.10.06.08.38;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.30.21.34.10;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.11.04.13.23;	author fox;	state dead;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.08.11.04.13.24;	author fox;	state Exp;
+branches;
+next	1.1.2.2;
+
+1.1.2.2
+date	97.08.15.03.42.59;	author fox;	state Exp;
+branches;
+next	1.1.2.3;
+
+1.1.2.3
+date	97.08.15.07.02.53;	author fox;	state Exp;
+branches;
+next	1.1.2.4;
+
+1.1.2.4
+date	97.08.16.07.04.16;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Backed out change.
+@
+text
+@#include "config_tr.h"
+#include "clib.h"
+#include "frontend.h"
+#include "comm_http.h"
+#include "ARGS.h"
+#include <string.h>
+#include <stdlib.h>
+
+HTTP_Status
+do_get(Request *hp, ArgumentList *al)
+{
+  clib_response cl;
+  clib_data dat;            /* data from cache or previous pipe stage */
+  HTTP_Status retcode;
+  Argument *arg;
+  
+  dat.mime_headers = dat.data = NULL;
+  if ((arg =getArgumentFromIdInList(al, FRONT_ANONYMIZE))
+      && (ARG_INT(*arg) > 0)) {
+    cl = Clib_Fetch((char *)(hp->url), "", &dat);
+  } else {
+    cl = Clib_Fetch((char *)(hp->url), DistillerBufferData(&hp->cli_hdrs), &dat);
+  }
+  if (cl == CLIB_OK) {
+    DistillerBufferSetString(&hp->svr_hdrs, (char*)dat.mime_headers,
+                             dat.mime_size);
+    DistillerBufferFreeMe(&hp->svr_hdrs, gm_True);
+    DistillerBufferSetStatic(&hp->svr_data, dat.data, dat.data_size);
+    DistillerBufferFreeMe(&hp->svr_data, gm_True);
+    hp->cache_fd = dat.fd;
+    retcode = HTTP_NO_ERR;
+  } else {
+    /* cache error */
+    snprintf(hp->errmsg, HTTP_ERRMSG_MAX, "Client library error %d: %s",
+             (int)cl, clib_strerror(cl));
+    retcode = HTTP_ERR_CACHE;
+  }
+  return retcode;
+}
+  
+/*
+ *  do_post: handle a POST request from client.
+ *
+ *  ARGS:
+ *    i: HTTP headers of request
+ *  RETURNS:
+ *    HTTP_Status code of POST operation.  If success, caller should read and
+ *  forward the server response; otherwise,caller should report the error
+ *  (probably via http_error_return).  POST can fail if content-length cannot
+ *  be parsed, or if number of data bytes successfully read does not match
+ *  content-length.  (BUG::should the latter case just be a warning?)
+ *  
+ *  SIDE EFFECTS:
+ *    Causes POST request to go (through cache) to server.
+ */
+HTTP_Status
+do_post(Request *hp, ArgumentList *al)
+{
+  INT32 len, buffersize;
+  int len_read, to_read;
+  const char *val;
+  int val_len;
+  char *buffer;
+  clib_response cl;
+  clib_data returned;
+  HTTP_Status result;
+  char *already_read;
+  size_t chars_already_read;
+  char *hdrs = DistillerBufferData(&hp->cli_hdrs);
+
+  if ((val = get_header_value(&hp->cli_hdrs, "content-length", &val_len,
+                              NULL, NULL))
+      == NULL) {
+    /* no content-length header: barfulation */
+    result = HTTP_ERR_POST_NO_CONTENTLENGTH;
+    goto POST_RETURN;
+  }
+
+  len = strtoul(val, NULL, 0);
+  if (len < 0) {
+    result = HTTP_ERR_POST_NO_CONTENTLENGTH;
+    goto POST_RETURN;
+  }
+
+  /*
+   *  Now determine how many bytes to read.  Since the initial read of the
+   *  headers may have gotten some of the data bytes too, we have to subtract
+   *  out those bytes that have already been read.  Do this by taking the
+   *  length of the headers and subtracting the number of character *following*
+   *  "\r\n\r\n" (end of headers).
+   */
+
+  already_read = strstr(hdrs, "\r\n\r\n"); /* look for EOH */
+  if (already_read == NULL) {   /* can't find EOH -- badness 10000 */
+    result = HTTP_ERR_MALFORMED_REQUEST;
+    goto POST_RETURN;
+  }
+  already_read += 4;            /* skip \r\n\r\n at end of hdrs */
+  chars_already_read = (hdrs + (strlen(hdrs))) - already_read;
+  to_read = len - chars_already_read; /* how much data still to be read */
+  buffersize = len + 100;       /* a few bytes of insurance */
+  buffer = (char *)ALLOCA(buffersize); 
+  strncpy(buffer, already_read, chars_already_read);
+  *already_read = '\0';     /* NOTE! this modifies hp->header_data so it
+                               contains NULL-terminated headers only */
+  if (to_read > 0) {
+    len_read = readline_or_timeout(hp, to_read, buffer);
+#if 0  /* for now, data count mismatch will be ignored.  */
+    if (len_read != to_read) {
+      /* data length != content-length */
+      result = HTTP_ERR_POST_READ_FAILED;
+      goto POST_RETURN;
+    }
+#endif
+  } 
+  /* forward POST to server */
+  
+  cl = Clib_Post(hp->url, DistillerBufferData(&hp->cli_hdrs),
+                 buffer, len, &returned);
+  if (cl != CLIB_OK) {
+    result = HTTP_ERR_POST_FAILED;
+  } else {
+    result = HTTP_NO_ERR;
+    DistillerBufferSetStatic(&hp->svr_hdrs, returned.mime_headers,
+                             returned.mime_size + 1 ); /* +1 for NULL term */
+    DistillerBufferFreeMe(&hp->svr_hdrs, gm_True);
+    DistillerBufferSetStatic(&hp->svr_data, returned.data,
+                             returned.data_size);
+    DistillerBufferFreeMe(&hp->svr_data, gm_True);
+  }
+POST_RETURN:
+  return result;
+}
+
+@
+
+
+1.5
+log
+@Fixed up logging, and spurious call to DistillerBufferSetString.
+@
+text
+@d25 1
+a25 1
+    DistillerBufferSetStatic(&hp->svr_hdrs, (char*)dat.mime_headers,
+@
+
+
+1.4
+log
+@changes to headers functions, ptm, and server_dispatch to maintain 2
+invariants: (1) DistillerBuffer length field does NOT include
+terminating null; (2) terminating null is always present for headers,
+and is accoutned for by the maxLength field, so that maxLength >=
+length+1.  Changed dispatch logic to allow for "X-static-route"
+dispatcher worker.  Somewhat convoluted interaction with existing
+X-Route mechanism, which i would remove entirely but for the fact that
+it enables dynamic dispatch decisions after each pipestage.  New "guru"
+argument i15 allows user to see all pipeline diagnostics that would
+normally result in a bypass.
+@
+text
+@d25 1
+a25 1
+    DistillerBufferSetString(&hp->svr_hdrs, (char*)dat.mime_headers,
+@
+
+
+1.3
+log
+@fixed much badness reported by purify
+@
+text
+@d25 2
+a26 1
+    DistillerBufferSetStatic(&hp->svr_hdrs, dat.mime_headers, dat.mime_size+1);  /* +1 is to get the NULL term on the mime headers */
+d71 2
+a72 1
+  if ((val = get_header_value(hdrs, "content-length", &val_len, NULL, NULL))
+@
+
+
+1.2
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@d25 1
+a25 1
+    DistillerBufferSetStatic(&hp->svr_hdrs, dat.mime_headers, dat.mime_size);
+d123 1
+a123 1
+                             returned.mime_size);
+@
+
+
+1.1
+log
+@file cacheop.c was initially added on branch fox-dev.
+@
+text
+@d1 132
+@
+
+
+1.1.2.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@a0 133
+#include "config_tr.h"
+#include "clib.h"
+#include "thr_cntl.h"
+#include "proxyinterface.h"
+#include "frontend.h"
+#include "ARGS.h"
+#include <string.h>
+#include <stdlib.h>
+
+HTTP_Status
+do_get(Request *hp, ArgumentList *al)
+{
+  clib_response cl;
+  clib_data dat;            /* data from cache or previous pipe stage */
+  HTTP_Status retcode;
+  Argument *arg;
+  
+  dat.mime_headers = dat.data = NULL;
+  if ((arg =getArgumentFromIdInList(al, FRONT_ANONYMIZE))
+      && (ARG_INT(*arg) > 0)) {
+    cl = Clib_Fetch((char *)(hp->url), "", &dat);
+  } else {
+    cl = Clib_Fetch((char *)(hp->url), DistillerBufferData(&hp->cli_hdrs), &dat);
+  }
+  if (cl == CLIB_OK) {
+    /* copy the buffers and dispose of them */
+    DistillerBufferSetStatic(&hp->svr_hdrs, dat.mime_headers, dat.mime_size);
+    DistillerBufferFreeMe(&hp->svr_hdrs, gm_True);
+    DistillerBufferSetStatic(&hp->svr_data, dat.data, dat.data_size);
+    DistillerBufferFreeMe(&hp->svr_data, gm_True);
+    hp->cli_fd = dat.fd;
+  } else {
+    /* cache error */
+    snprintf(hp->errmsg, HTTP_ERRMSG_MAX, "Client library error %d: %s",
+             (int)cl, clib_strerror(cl));
+    retcode = HTTP_ERR_CACHE;
+  }
+  return retcode;
+}
+  
+/*
+ *  do_post: handle a POST request from client.
+ *
+ *  ARGS:
+ *    i: HTTP headers of request
+ *  RETURNS:
+ *    HTTP_Status code of POST operation.  If success, caller should read and
+ *  forward the server response; otherwise,caller should report the error
+ *  (probably via http_error_return).  POST can fail if content-length cannot
+ *  be parsed, or if number of data bytes successfully read does not match
+ *  content-length.  (BUG::should the latter case just be a warning?)
+ *  
+ *  SIDE EFFECTS:
+ *    Causes POST request to go (through cache) to server.
+ */
+HTTP_Status
+do_post(Request *hp, ArgumentList *al)
+{
+  INT32 len, buffersize;
+  int len_read, to_read;
+  const char *val;
+  int val_len;
+  char *buffer;
+  clib_response cl;
+  clib_data returned;
+  HTTP_Status result;
+  char *already_read;
+  size_t chars_already_read;
+  char *hdrs = DistillerBufferData(&hp->cli_hdrs);
+
+  if ((val = get_header_value(hdrs, "content-length", &val_len, NULL, NULL))
+      == NULL) {
+    /* no content-length header: barfulation */
+    result = HTTP_ERR_POST_NO_CONTENTLENGTH;
+    goto POST_RETURN;
+  }
+
+  len = strtoul(val, NULL, 0);
+  if (len < 0) {
+    result = HTTP_ERR_POST_NO_CONTENTLENGTH;
+    goto POST_RETURN;
+  }
+
+  /*
+   *  Now determine how many bytes to read.  Since the initial read of the
+   *  headers may have gotten some of the data bytes too, we have to subtract
+   *  out those bytes that have already been read.  Do this by taking the
+   *  length of the headers and subtracting the number of character *following*
+   *  "\r\n\r\n" (end of headers).
+   */
+
+  already_read = strstr(hdrs, "\r\n\r\n"); /* look for EOH */
+  if (already_read == NULL) {   /* can't find EOH -- badness 10000 */
+    result = HTTP_ERR_MALFORMED_REQUEST;
+    goto POST_RETURN;
+  }
+  already_read += 4;            /* skip \r\n\r\n at end of hdrs */
+  chars_already_read = (hdrs + (strlen(hdrs))) - already_read;
+  to_read = len - chars_already_read; /* how much data still to be read */
+  buffersize = len + 100;       /* a few bytes of insurance */
+  buffer = (char *)ALLOCA(buffersize); 
+  strncpy(buffer, already_read, chars_already_read);
+  *already_read = '\0';     /* NOTE! this modifies hp->header_data so it
+                               contains NULL-terminated headers only */
+  if (to_read > 0) {
+    len_read = readline_or_timeout(hp, to_read, buffer);
+#if 0  /* for now, data count mismatch will be ignored.  */
+    if (len_read != to_read) {
+      /* data length != content-length */
+      result = HTTP_ERR_POST_READ_FAILED;
+      goto POST_RETURN;
+    }
+#endif
+  } 
+  /* forward POST to server */
+  
+  cl = Clib_Post(hp->url, DistillerBufferData(&hp->cli_hdrs),
+                 buffer, len, &returned);
+  if (cl != CLIB_OK) {
+    result = HTTP_ERR_POST_FAILED;
+  } else {
+    result = HTTP_NO_ERR;
+    DistillerBufferSetStatic(&hp->svr_hdrs, returned.mime_headers,
+                             returned.mime_size);
+    DistillerBufferFreeMe(&hp->svr_hdrs, gm_True);
+    DistillerBufferSetStatic(&hp->svr_data, returned.data,
+                             returned.data_size);
+    DistillerBufferFreeMe(&hp->svr_data, gm_True);
+  }
+POST_RETURN:
+  return result;
+}
+
+@
+
+
+1.1.2.2
+log
+@*** empty log message ***
+@
+text
+@d3 2
+a5 1
+#include "comm_http.h"
+@
+
+
+1.1.2.3
+log
+@*** empty log message ***
+@
+text
+@d30 1
+a30 2
+    hp->cache_fd = dat.fd;
+    retcode = HTTP_NO_ERR;
+@
+
+
+1.1.2.4
+log
+@a huge amount of frontend reengineering, plus added a Clone() method to
+the DistillerBuffer.  basic operation of frontend seems stable.
+things that haven't been tested yet:
+- POST
+- cache cut through behavior
+- client timeout doesn't seem to work (never times out??)
+- redispatch and similar support for aggregators
+and some things still to be implemented:
+- support for listening/dispatching on multiple ports
+- documentation of what all the files do (and rename the http-specific
+sourcefiles)
+- eliminate redundant .h inclusions from various sourcefiles
+- 'makedepend' for the Makefile.in
+@
+text
+@d25 1
+@

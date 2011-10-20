@@ -1,0 +1,261 @@
+head	1.1;
+access;
+symbols
+	iang:1.1.0.2;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.05.06.23.49.31;	author iang;	state dead;
+branches
+	1.1.2.1;
+next	;
+
+1.1.2.1
+date	97.05.06.23.49.32;	author iang;	state Exp;
+branches;
+next	1.1.2.2;
+
+1.1.2.2
+date	97.05.08.23.29.07;	author iang;	state Exp;
+branches;
+next	1.1.2.3;
+
+1.1.2.3
+date	97.05.13.09.13.00;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@file crypt.c was initially added on branch iang.
+@
+text
+@@
+
+
+1.1.2.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@a0 160
+/*
+ *  crypt.c
+ *  Code to deal with crypto goes here
+ */
+
+#include "proxy.h"
+#include "thr_cntl.h"
+#include "debug.h"
+#include "httpreq.h"
+#include "proxyinterface.h"
+#include "clib.h"
+#include "changepref.h"
+#include "url_magic.h"
+#include "ARGS.h"
+#include <unistd.h>
+#include <stdio.h>
+#include <string.h>
+#include "utils.h"
+#include "rsa.h"
+
+static unsigned char uudecode[256];
+RSA *rsaKey;
+int Nsize;
+
+static RSA *read_rsa_keyfile(FILE *kfp);
+
+gm_Bool init_crypt(char *keyfile)
+{
+    int i;
+    FILE *kfp;
+
+    /* Set up the uudecode table */
+    for(i=0;i<256;++i) uudecode[i] = 0;
+    for(i=0;i<26;++i) uudecode['A'+i] = i;
+    for(i=0;i<26;++i) uudecode['a'+i] = 26+i;
+    for(i=0;i<10;++i) uudecode['0'+i] = 52+i;
+    uudecode['+'] = uudecode['-'] = 62;
+    uudecode['/'] = uudecode['_'] = 63;
+
+    /* Read the RSA key from the named file */
+    if (!keyfile) {
+	Nsize = 0;
+    } else {
+	kfp = fopen(keyfile, "r");
+	if (!kfp) return gm_False;
+	rsaKey = read_rsa_keyfile(kfp);
+	fclose(kfp);
+	if (!rsaKey) return gm_False;
+	Nsize = RSA_size(rsaKey);
+    }
+    return gm_True;
+}
+
+UINT32 unarmor(unsigned char *inbuf, unsigned char *outbuf, UINT32 inlen)
+{
+    UINT32 i;
+    unsigned char *in = inbuf;
+    unsigned char *out = outbuf;
+    int fudge = 0;
+
+    for(i=0;i<inlen;i+=4) {
+	*out = uudecode[*in] << 2;
+	++in;
+	*out |= uudecode[*in] >> 4;
+	++out;
+	*out = uudecode[*in] << 4;
+	++in;
+	*out |= uudecode[*in] >> 2;
+	++out;
+	*out = uudecode[*in] << 6;
+	++in;
+	*out |= uudecode[*in];
+	++out;
+	++in;
+    }
+
+    if (in - inbuf > 3) {
+	if (*(in-1) == '=') ++fudge;
+	if (*(in-2) == '=') ++fudge;
+    }
+    return out - outbuf - fudge;
+}
+
+int url_decrypt(unsigned char *inbuf, unsigned char *outbuf, UINT32 inlen)
+{
+    /* The first byte of each block specifies the encryption mode:
+
+       'R' : straight RSA
+          inbuf is a block of the same size as the modulus (after udecode).
+	  When decrypted, the block starts with 00 02, some non-zero padding,
+	  00, then useful data
+       '/' : no crypto
+          copy the remaining data as-is
+    */
+    unsigned char *end = inbuf + inlen;
+    while(inbuf < end) {
+	unsigned char crypttype = inbuf[0];
+	++inbuf;
+	if (crypttype == 'R') {
+	    int numbytes;
+	    unsigned char uud[Nsize+3];
+	    if (Nsize < 64) return -1;
+	    unarmor(inbuf, uud, (Nsize+2)/3 * 4);
+	    inbuf += (Nsize+2)/3 * 4;
+	    numbytes = RSA_private_decrypt(Nsize, uud, outbuf, rsaKey);
+	    if (numbytes < 0) return -1;
+	    outbuf += numbytes;
+	    *outbuf = '\0';
+	} else if (crypttype == '/') {
+	    *outbuf = '/';
+	    ++outbuf;
+	    memmove(outbuf, inbuf, end-inbuf);
+	    outbuf += end-inbuf;
+	    inbuf += end-inbuf;
+	    *outbuf = '\0';
+	} else {
+	    return -1;
+	}
+    }
+
+    return 0;
+}
+
+static BIGNUM *read_bignum(FILE *kfp)
+{
+    /* Each BIGNUM is stored as a two-byte length, followed by
+       that many bytes */
+    unsigned char clen[2];
+    UINT32 len;
+    unsigned char *databuf;
+    BIGNUM *bn;
+
+    if (fread(clen, 2, 1, kfp) < 1) return NULL;
+    len = (clen[0] << 8) + clen[1];
+    if (len < 1) return NULL;
+    databuf = ALLOCA(len);
+    if (!databuf) return NULL;
+    if (fread(databuf, len, 1, kfp) < 1) return NULL;
+    bn = BN_bin2bn(databuf, len, NULL);
+    return bn;
+}
+
+static RSA *read_rsa_keyfile(FILE *kfp)
+{
+    RSA *rsa;
+
+    rsa = RSA_new();
+    if (!rsa) return NULL;
+
+    if (!(rsa->n = read_bignum(kfp))) return NULL;
+    if (!(rsa->e = read_bignum(kfp))) return NULL;
+    if (!(rsa->d = read_bignum(kfp))) return NULL;
+    if (!(rsa->p = read_bignum(kfp))) return NULL;
+    if (!(rsa->q = read_bignum(kfp))) return NULL;
+    if (!(rsa->dmp1 = read_bignum(kfp))) return NULL;
+    if (!(rsa->dmq1 = read_bignum(kfp))) return NULL;
+    if (!(rsa->iqmp = read_bignum(kfp))) return NULL;
+
+    return rsa;
+}
+@
+
+
+1.1.2.2
+log
+@Type 1-style rewebber
+@
+text
+@d54 1
+a54 2
+static UINT32 unarmor(unsigned char *inbuf, unsigned char *outbuf,
+    UINT32 inlen)
+@
+
+
+1.1.2.3
+log
+@working copy (?)
+@
+text
+@d94 1
+a94 2
+          copy the remaining data as-is, but insert it _before_ any prefs
+	  that may have been at the end of the previous encrypted block
+a96 2
+    unsigned char *outorig = outbuf;
+    *outbuf = '\0';
+a102 1
+	    int encNsize = (Nsize+2)/3 * 4;
+d104 2
+a105 3
+	    if (inbuf + encNsize > end) return -1;
+	    unarmor(inbuf, uud, encNsize);
+	    inbuf += encNsize;
+a110 12
+	    /* See if there are prefs recorded so far */
+	    unsigned char *prefs =
+		(unsigned char *)strstr((char *)outorig, "*^");
+	    int prefslen = 0;
+	    if (prefs && *(outbuf-1) == '^') {
+		/* Save a copy of the prefs */
+		unsigned char *foundprefs = prefs;
+		prefslen = outbuf - prefs;
+		prefs = ALLOCA(prefslen);
+		memmove(prefs, foundprefs, prefslen);
+		outbuf = foundprefs;
+	    }
+a115 4
+	    if (prefs) {
+		memmove(outbuf, prefs, prefslen);
+		outbuf += prefslen;
+	    }
+@

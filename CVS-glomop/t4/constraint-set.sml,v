@@ -1,0 +1,370 @@
+head	1.5;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.5
+date	99.02.16.23.03.30;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	99.02.16.06.04.39;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	99.01.28.02.52.10;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	99.01.23.02.16.43;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	99.01.23.01.36.09;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@Many small bugfixes.
+@
+text
+@(* There's a serious architectural flaw with the way we convert
+   set constraints into range constraints, or generate set constraints,
+   or something.  For instance, consider the set constraint
+   S - S >= 0, where S is a set of integers.  This gets converted
+   into the the range l..h, and then S - S is represented as the
+   range l-h..h-l, which already represents a loss of accuracy.
+   Then if we consider the linear model for S - S >= 0, we see
+   that it is l-h >= 0, i.e. l >= h, which is clearly inaccurate
+   except when l=h (in which case the idea of value-range arithmetic
+   collapses into constant propagation).  I'm not sure how to fix this.
+   I think maybe one fix is to consider subsets of Z x Z, not just
+   subsets of Z; a Int() term is the latter, whereas a Str() term is
+   the former. *)
+      
+
+structure Constraint : CONSTRAINT =
+  struct
+    exception Err
+
+    type label = int
+    val curLabel = ref 0
+    fun getFreshLabel () = let val l = !curLabel in curLabel := l + 1; l end
+    val curConstraints = ref ""
+
+    datatype var = Var of int (* int = unique label *)
+
+    (* T([{mul=5,var=LoVar(0)},{mul=1,var=HiVar(3)}],-1)
+       means 5*L0 + H3 - 1. *)
+    datatype term = T of {coeff:int, var:var} list * int
+    datatype endpoint = Int of int | Infinity | NegativeInfinity
+    type range = endpoint * endpoint
+    type query = term * term * (range * range -> unit)
+    val curQueries = ref [] : query list ref
+
+    fun myIntStr i = if i<0 then "-"^(myIntStr (~i)) else Int.toString i
+
+    fun varToStr (Var(i) )= "S"^(myIntStr i)
+    fun cvlistToStr [] = ""
+      | cvlistToStr ({coeff,var}::xs) = 
+            (if coeff=1 then "" else (myIntStr coeff)^"*")
+            ^ (varToStr var)
+            ^ (if xs=[] then "" else " + "^(cvlistToStr xs))
+    fun endptToStr (Int i) = myIntStr i
+      | endptToStr Infinity = "+Infinity"
+      | endptToStr NegativeInfinity = "-Infinity"
+    fun rangeToStr (x,y) = (endptToStr x)^".."^(endptToStr y)
+    fun toString (T(vlist,const)) = 
+          let val vs = cvlistToStr vlist
+              val cs = myIntStr const
+          in
+              if vs="" then cs
+              else if const=0 then vs
+              else vs ^ " + " ^ cs
+          end
+
+    fun constrain s =
+          (curConstraints := ((!curConstraints)^s^"\n");
+           if String.isPrefix "query " s then () else
+           print ("Debug: new constraint: "^s^"\n"))
+
+    fun constantTerm i = T([],i)
+    fun freshTerm () = T([{coeff=1,var=Var(getFreshLabel())}], 0)
+    fun getFreshInt () = (print "Err: getFreshInt\n"; raise Err)
+    val globaltop = ref NONE : term option ref
+    fun top () =
+          case !globaltop of
+              SOME t => t
+            | NONE =>
+          let val t = freshTerm ()
+          in
+              print ("Debug: new top "^(toString t)^"\n");
+              constrain ("top subset "^(toString t));
+              globaltop := SOME(t);
+              t
+          end
+
+    fun reset () = (curLabel := 0; curConstraints := ""; curQueries := [];
+                    globaltop := NONE)
+
+    fun makeSingleton _ = (print "Err: makeSingleton\n"; raise Err)
+
+    (* Naive O(n^2) algorithm; better is to use sorted lists.
+       Actually, this is unnecessary, since setsolver already does
+       this; but hey, it makes for prettier debugging output. *)
+    fun addLists (xl,[]) = xl
+      | addLists (xl,y::ys) =
+          let fun addVar [] v = [v]
+                | addVar ((z as {coeff=zc,var=zv})::zs)
+                         (v as {coeff=vc,var=vv}) =
+                    if zv = vv then {coeff=zc+vc,var=zv}::zs
+                    else z::(addVar zs v)
+          in  addLists(addVar xl y,ys)
+          end
+    fun addTerms (T(xl,xc),T(yl,yc)) = T(addLists(xl,yl),xc+yc)
+    fun negate (T(l,c)) =
+          let fun negateOne {coeff=cc,var=vv} = {coeff=(~cc),var=vv}
+          in  T(map negateOne l, ~c)
+          end
+    fun subTerms (x,y) = addTerms (x,negate y)
+    fun constMulTerm (c,T(ylist,yconst)) =
+          let fun mulOne {coeff=cc,var=vv} = {coeff=(c*cc),var=vv}
+          in  T(map mulOne ylist, c*yconst)
+          end
+          
+
+    (* Only implemented when one of the terms is a constant range. *)
+    fun mulTerms (T([],c),y) = constMulTerm (c,y)
+      | mulTerms (x,T([],c)) = constMulTerm (c,x)
+      | mulTerms (_,_) = raise Err
+
+    fun op / _ = raise Err
+    fun union _ = raise Err
+    fun intersect _ = raise Err
+    fun eqTerms (x,T([],yc)) =
+         constrain ((toString x)^" = "^(myIntStr yc))
+      | eqTerms (T(xv,xc),T(yv,yc)) =
+          constrain ((toString (T(xv,xc-yc)))^" = "^(toString (T(yv,0))))
+    fun subset (x,y) = constrain ((toString x)^" subset "^(toString y))
+    fun termGe (x,y) = constrain ((toString x)^" >= "^(toString y))
+    fun queryge (x as T(xl,xc), y as T(yl,yc), errorfn) =
+          let fun qu {var,coeff} = constrain ("query "^(varToStr var))
+          in
+              curQueries := (x,y,errorfn)::(!curQueries);
+              map qu xl; map qu yl;
+              ()
+          end
+
+    fun min (T(yl,yh),T(zl,zh)) = (print "Err: min\n"; raise Err)
+
+    fun externalSolver system =
+          let val solver = "./setsolver"
+              val p = Unix.execute(solver, [])
+              val (rd,wr) = Unix.streamsOf p
+          in
+              TextIO.output (wr,system);
+              TextIO.closeOut wr;
+              let val s = (TextIO.inputAll rd)
+              in  Unix.reap p; s
+              end
+          end;
+    (* setsolver's response for infeasible linear programming models *)
+    val infeasible = "This problem is infeasible\n"
+    val feasible = "Feasible.\n"
+
+    (* Interpret setsolver's output, and turn it into an integer
+       if there is a bound on the value of the objective function,
+       or NONE otherwise. *)
+    fun getBounds output =
+          let val (_,suf) = Substring.position feasible (Substring.all output)
+              fun toEndpoint s = if s="+Infinity" then Infinity
+                                 else if s="-Infinity" then NegativeInfinity
+                                 else case (Int.fromString s) of
+                                         SOME i => Int(i)
+                                       | NONE   => (print "Parse\n"; raise Err)
+              fun toRange s =
+                    let val (lhs,x) = Substring.position ".." (Substring.all s)
+                        val rhs = Substring.slice (x, 2, NONE)
+                    in  (toEndpoint (Substring.string lhs),
+                         toEndpoint (Substring.string rhs))
+                    end
+              fun parseIt s =
+                    if (Substring.size s) = 0 then [] else
+                    let val (t,u) = Substring.position "\n" s
+                        val (varName,t') = Substring.position " = " t
+                        val varLbl = Substring.slice (varName, 1, NONE)
+                        val varRange = Substring.slice (t', 3, NONE)
+                    in
+                        ((case (Int.fromString (Substring.string varLbl)) of
+                              SOME lbl => Var(lbl)
+                            | NONE => (print "Err: parseIt\n"; raise Err)),
+                         (toRange (Substring.string varRange))) ::
+                        (parseIt (Substring.slice (u, 1, NONE)))
+                    end
+          in
+              if (Substring.size suf) < (size feasible)
+              then (print "Error: unexpected response:\n";
+                    print output; raise Err)
+              else parseIt (Substring.slice (suf, size(feasible), NONE))
+          end
+
+
+    fun checkQueries vars [] = ()
+      | checkQueries vars ((x,y,errfn)::restoflist) =
+          let fun findVar ((v',r)::xs) v = if v=v' then r else findVar xs v
+                | findVar [] v = (print ("findVar failed for "
+                                         ^(varToStr v)^"\n"); raise Err)
+               (* ^-- Linear search---good lord!  Replace by a map sometime. *)
+              fun endptAdd ((Infinity,NegativeInfinity)
+                           |(NegativeInfinity,Infinity)) =
+                              (print "Over-under flow.\n"; raise Err)
+                | endptAdd ((Infinity,_)|(_,Infinity)) = Infinity
+                | endptAdd ((NegativeInfinity,_)|(_,NegativeInfinity)) =
+                              NegativeInfinity
+                | endptAdd (Int i, Int j) = Int(i+j)
+              fun rangeAdd ((xl,xh):range,(yl,yh):range) =
+                    (endptAdd (xl,yl), endptAdd (xh,yh))
+              fun evalTerm (T(l,c)) =
+                    foldl rangeAdd (Int c,Int c) (map ((findVar vars) o #var) l)
+              val (xr as (xlow,_),yr as (_,yhigh)) = (evalTerm x, evalTerm y)
+              fun endptGe (Infinity,_) = true
+                | endptGe (NegativeInfinity,NegativeInfinity) = true
+                | endptGe (NegativeInfinity,(Infinity|Int(_))) = false
+                | endptGe (Int x,Infinity) = false
+                | endptGe (Int x,NegativeInfinity) = true
+                | endptGe (Int x,Int y) = x >= y
+              val ok = endptGe (xlow,yhigh)
+              val _ = print ("Debug: checking `"^(toString x)^" >= "^
+                             (toString y)^"': "^
+                             (rangeToStr xr)^", "^(rangeToStr yr)^": seems "^
+                             (if ok then "ok" else "not ok")^"\n")
+          in  if ok then () else errfn (xr,yr);
+              checkQueries vars restoflist
+          end
+            
+
+    (* Solve the constraint system, handling "query constraints" too. *)
+    fun solve () =
+          let
+              fun fail msg output =
+                    (print ("Failure: "^msg^"\n");
+                     print ("Input = \n"^(!curConstraints));
+                     print ("Output = \n"^output);
+                     raise Err)
+              (* val _ = print ("Debug: input = \n"^(!curConstraints)) *)
+              val allOut = externalSolver (!curConstraints)
+                           handle _ => fail "Solver failed" ""
+              val _ = print ("Debug: output = \n"^allOut)
+              val isFeas = if allOut=infeasible then false
+                           else if String.isPrefix feasible allOut then true
+                           else fail "Odd response" allOut
+          in
+              if isFeas
+              then checkQueries (getBounds allOut) (!curQueries)
+                   handle _ => fail "checkQueries failed" allOut
+              else fail "Constraint system infeasible!?" allOut
+          end
+
+    val op = = eqTerms
+    val op + = addTerms
+    val op - = subTerms
+    val op * = mulTerms
+    val op >= = termGe
+  end
+@
+
+
+1.4
+log
+@New code now handles `s = t' constraints.
+(Doesn't yet unify cycles.)
+@
+text
+@d58 2
+a59 2
+           print ("Debug: new constraint: "^s^"\n");
+           ())
+d114 4
+a117 1
+    fun eqTerms (x,y) = constrain ((toString x)^" = "^(toString y))
+d175 2
+a176 2
+              if (Substring.size suf) <= (size feasible)
+              then (print "Error: unexpected response from lp_solve:\n";
+d227 1
+a227 1
+              (* val _ = print ("Debug: output = \n"^allOut) *)
+@
+
+
+1.3
+log
+@An attempt to use the new setsolver with the walker.
+@
+text
+@d221 1
+a221 1
+              val _ = print ("Debug: input = \n"^(!curConstraints))
+d224 1
+a224 1
+              val _ = print ("Debug: output = \n"^allOut)
+@
+
+
+1.2
+log
+@Archive only; just some bugfixes.
+@
+text
+@d37 1
+a37 1
+    fun varToStr (Var(i) )= "S"^(Int.toString i)
+d43 1
+a43 1
+    fun endptToStr (Int i) = Int.toString i
+d62 14
+a75 1
+    fun top () = (print "Err: top\n"; raise Err)
+d77 2
+a78 1
+    fun reset () = (curLabel := 0; curConstraints := ""; curQueries := [])
+a124 2
+    fun freshTerm () = T([{coeff=1,var=Var(getFreshLabel())}], 0)
+    fun getFreshInt () = (print "Err: getFreshInt\n"; raise Err)
+@
+
+
+1.1
+log
+@A stub to get to setsolver.c.  Lots of changes.
+Changes to the interface for ranges, etc.
+@
+text
+@d43 4
+d154 2
+a155 1
+                              SOME lbl => Var(lbl)),
+d167 2
+a168 1
+    fun checkQueries vars ((x,y,errfn)::restoflist) =
+d170 2
+d184 1
+a184 1
+              val ranges as ((xlow,_),(_,yhigh)) = (evalTerm x, evalTerm y)
+d190 7
+a196 2
+                | endptGe (Int x,Int y) = x >= 3
+          in  if endptGe (xlow,yhigh) then () else errfn ranges;
+@

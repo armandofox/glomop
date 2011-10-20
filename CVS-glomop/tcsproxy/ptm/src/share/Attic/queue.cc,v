@@ -1,0 +1,84 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@// @;
+
+
+1.2
+date	97.04.30.09.04.23;	author gribble;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	97.04.30.06.23.57;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@finalize queue changes.
+@
+text
+@#include "defines.h"
+#include "log.h"
+#include "queue.h"
+#include "utils.h"
+#include "linkedlist.h"
+#include "threads.h"
+#include <signal.h>
+#include <errno.h>
+#include <string.h>
+
+gm_Bool
+ProducerConsumerQueue::Add(void *work)
+{
+  mutex.Lock();
+
+#ifdef _REPORT_STATS
+  Statistics *stats = Distiller::getInstance()->getStats();
+  if (stats!=NULL) stats->IncrementTotalRequests();
+  //Distiller::getInstance()->getStats()->AdjustAvgQLength(queue.getSize());
+#endif
+
+  if (queue.InsertAtTail(work)==gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+  workInQueue.Signal();
+  mutex.Unlock();
+  return gm_True;
+}
+
+
+void*
+ProducerConsumerQueue::Remove()
+{
+  mutex.Lock();
+
+#ifdef _REPORT_STATS
+  //Distiller::getInstance()->getStats()->AdjustAvgQLength(queue.getSize());
+#endif
+
+  while (queue.IsEmpty()==gm_True) {
+    workInQueue.Wait(&mutex);
+  }
+
+  void *work = queue.RemoveFromHead();
+  mutex.Unlock();
+  return work;
+}
+@
+
+
+1.1
+log
+@foo
+@
+text
+@@

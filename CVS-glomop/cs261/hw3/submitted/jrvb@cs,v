@@ -1,0 +1,558 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.00;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From jrvb@@CS.Berkeley.EDU  Fri Nov 20 14:05:48 1998
+Return-Path: jrvb@@CS.Berkeley.EDU
+Received: from bamako.CS.Berkeley.EDU (bamako.CS.Berkeley.EDU [128.32.34.138]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id OAA17519 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 14:05:48 -0800
+Received: from localhost (jrvb@@localhost) by bamako.CS.Berkeley.EDU (8.8.3/8.6.9) with SMTP id OAA04830 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 14:06:02 -0800 (PST)
+X-Authentication-Warning: bamako.CS.Berkeley.EDU: jrvb owned process doing -bs
+Date: Fri, 20 Nov 1998 14:06:01 -0800 (PST)
+From: James Robert von Behren <jrvb@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: HW 3
+Message-ID: <Pine.GHP.4.02A.9811201405090.4764-100000@@bamako.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+
+
+Rob von Behren
+jrvb@@cs.berkeley.edu
+
+
+QUESTION 1: vulnerabilities in the moderator file editing program.
+
+
+I have listed the security vulnerabilities and/or bugs in each
+function below.  General problems that go beyond particular functions
+are listed in a seperate section.
+
+secure_open_as_user()
+
+* BUG: the return value from getgroups() is never checked for errors.
+  Hence, the corresponding setgroups() call that is supposed to
+  restore the original group permissions may fail as well.
+
+* BUG: According to the HP manpage for setgroup(), it is an error to
+  pass in a first paramater that is either larger than NGROUPS or
+  non-positive.  Since zero is non-positive, the setgroups(0, NULL)
+  call should always cause an error.  Hence, secure_open_as_user()
+  will never reduce the group privilege of the program.
+
+* BUG: The return value of the setgroups(0,NULL) call is not checked
+  for errors.  Hence, if there is an error in the processing of the
+  function, the program's group privileges would not be reduced before
+  opening the file.
+
+* RAMIFICATION: An unprivileged user might be able to write to the
+  debug file.
+
+* SOLUTION: check the return values, and exit if errors are
+  encountered.
+
+* SOLUTION: don't bother to check at all - who cares if someone writes
+  to the debug file?
+
+debug()
+
+* BUG: the sprintf() call could overwrite the fixed buffer, line[],
+  and hence overrun the function call stack.
+
+* RAMIFICATION: A malicious user could invoke the program with
+  debugging on, and with a very long argv[0].  Since main() simply
+  sets progname=argv[0], and since debug() does no checking on the
+  lengths of the things it passes to sprintf(), this would allow the
+  malicious user to write arbitrary non-zero bytes to the function
+  call stack.  (The bytes have to be non-zero, since C-string
+  functions such as sprintf uses zero bytes to represent the end of
+  the string.)
+
+* SOLUTION: Check the lengths of the parts of the debug message ahead
+  of time with strlen().  You could then either malloc() a large
+  enough buffer, or do the sprintf functionality by hand and truncate
+  the input at the end of the pre-allocated line[] buffer.
+
+* SOLUTION: use fprintf() rather than fputs.  (This might still have
+  problems if you can use fprintf() to overrun some of the internal
+  buffers in the stdio libraries.)
+
+sigchld_handler()
+
+* BUG (just bad practice): If debugging is turned on, the signal
+  handler will do complicated function calls (to debug()), which
+  include several system calls, such as fopen(), fputs(), setgroups(),
+  getgroups(), etc.
+
+* RAMIFICATION: If someone overwrites the stack in the debug() function, the
+  signal handler will never return!!  
+
+* RAMIFICATION: I don't recall whether or not signal handlers use the
+  same stack as the rest of the program, but if they don't,
+  overwriting the signal handling stack might have other strange
+  consequences.  (Just wondering)
+
+* SOLUTION: The signal handler should only set done=1.  The debugging
+  message should be printed from the vi() function instead.
+
+* BUG: Since sigchld_handler() doesn't check to see which child
+  exited, it doesn't truly know if vi exited or not.  There are
+  several possible ways the process might get a bogus SIGCHLD message:
+  (1) With some broken operating systems, it is sometimes possible to
+  get spurious SIGCHLD signals.  (I think SunOS 4 did this sometimes)
+  (2) I believe vi can spawn additional processes itself, and my
+  recollection is that the SIGCHLD signal can be sent to ALL parents
+  under some cases.  (3) A root user could use the kill command to
+  intentionally send a spurious SIGCHLD message.
+
+
+* RAMIFICATION: The program could be tricked into moving the new file
+  into place before the user was done editing it.  This would allow
+  the user to easily defeat the file syntax safety checks done in
+  looksok(), and write malicious things to the moderator file.
+
+* SOLUTION: keep a global variable that stores the child pid.  You
+  could then check the pid of the child that exited to make sure it
+  was actually the "vi" process.
+
+* BUG: The SIGCHLD signal is sent when a child exits OR stops.  Since
+  the signal hanlder doesn't check the status of the child, it could
+  confuse the parent process into thinking that the "vi" process was
+  done when it was only stopped.
+
+* RAMIFICATION: (same as previous)
+
+* SOLUTION: Check the status of the child, and only set done=1 if it
+  exited.
+
+
+grablock() & releaselock()
+
+* BUG: Exclusivity is only gauranteed by the O_CREAT|O_EXCL flags to
+  open.  On some OSes, these don't always function as they are supposed to.
+
+* BUG: open() will fail only if the file already exists.  Exclusivity
+  then requires that the lock file only be removed the program
+  invocation that created it.  Since the lock file is in /tmp,
+  however, it is concievable that someone might think it was
+  unimportant, and remove it too soon.
+
+* RAMIFICATION: Each user of the program will have their own working
+  temporary file for edits, so the worst that could happen is that
+  someone's changes would be overwritten by someone elses.
+
+* SOLUTION: use a more stable type of lock, such as a global named
+  semaphore.
+
+
+copyfile()
+
+* BUG: The return values on the fopen() calls are not checked.
+  
+* RAMIFICATION: On some OSes, doing an fclose(NULL) will cause a core
+  dump.  This shouldn't be a security hole, but it is ugly.  In
+  particular, since the locking relies on removing the lock file, a
+  program crash would leave the moderator file locked.
+
+* SOLUTION: check return values.
+
+* NOTE: the fgets call properly uses the line[] buffer, to make sure
+  it will not be overrun.
+
+
+vi()
+
+* BUG: It's bad baD bAD BAD!!!!  The program will run vi as root.
+
+* RAMIFICATION: vi allows you to open new files within one editing
+  session.  Hence, the user could open and modify any file on the
+  system as root.  This includes modifying binary files, directories,
+  password files, etc.
+
+* RAMIFICATION: vi allows shell escapes, so it would probably be
+  simple for a malicious user to run arbitrary commands as root,
+  including interactive shells.
+
+* SOLUTION: run vi as the user instead
+
+* BUG: the function doesn't truly know that the vi invocation has
+  exited - it just trusts the "done" variable.  (See sigchld_handler()
+  for ramifications.)
+
+* SOLUTION: use waitpid() to wait for vi() to finish, rather than
+  kludgey signal handler stuff.
+
+
+looksok()
+
+* BUG: looksok() takes the strategy of default acceptance, and
+  explicitly checks for known bad syntax.  
+
+* RAMIFICATION: Even with a more sophisticated version of looksok(),
+  it is likely that you won't find all possible "bad" things that
+  someone could add to the file.
+
+* SOLUTION: It would be much safer (but much more work) to have it
+  parse the file and verify GOOD syntax.  This might accidentally
+  throw away some valid and safe changes, but it would be much safer
+  on the whole.
+
+main()
+
+* BUG: the return value from tmpnam() is not checked.  This could lead
+  to sending NULL to fopen, which might cause the program to exit and
+  (possibly) dump core.
+
+* RAMIFICATION: The program might not remove the lockfile.
+
+* SOLUTION: check return values.
+
+
+global data buffer overruns
+
+* BUG: The program uses stdio routines, rather than simple file
+  IO.  Hence, if the stdio routines are poorly written, it may be
+  possible to overrun some of the stdio buffers, and thereby overwrite
+  some of the program's global data.
+
+* RAMIFICATION: Overwriting a buffer in the global data might allow a
+  malicious user to overwrite the "done" variable, and hence cause the
+  parent program to exit before the user is done editing the file.  As
+  discussed before, this would circumvent the file sanity checks done
+  in looksok().  
+
+* SOLUTION: use open(), read(), and write() rather than stdio routines.
+
+
+
+
+QUESTION 2: active networks
+
+
+Addition 1: BPF programs in the IP header
+
+  * THREAT: In general, any additional work you give to the router
+    will reduce the number of packets it can handle, and hence
+    increase the likelihood of overloading the router.  Since all of
+    the additions to IP suggested below will increase this load, they
+    would all make router's jobs more difficult.  Furthermore, since
+    the user can control how much work the router will have to do by
+    adding more mobile code, denial of service attacks will be much
+    easier with any of these additions.  Since this is true for all, I
+    will mention it only once here.
+
+  * SOLUTION: Give the router the option of not executing the BPF code
+    by treating it as a hint, rather than a requirement.  This would
+    allow the router to back out to standard routing table decisions
+    if the load grew too high.  The only other option would be for the
+    router to simply drop more packets.
+
+
+  * THREAT: Adaptive routing would have the same problems as source
+    routing in that it could be used to confuse old programs that use
+    the source IP address for authentication.  
+
+  * SOLUTION: Don't use these old programs.  Alternatively, you could
+    use fixed versions of them.
+
+
+  * THREAT: Adaptive routing could be used to ask yes/no questions to
+    a router.  If the answer to the question was "yes", we would have
+    the router send back a packet to somewhere that we could see it.
+    By asking both the question and its negation, we would avoid the
+    problem of a droped packet leading to a false negative.  NOTE1:
+    This technique would only work for routers that were one hop away,
+    however, since without modifying the packet, there would be no way
+    to redirect it back to the sender.  NOTE2: Since the only data
+    that the BPF is allowed to read is the list of router interfaces,
+    there isn't much information that could be leaked this way.  It
+    might be possible to get time of day or other such information,
+    however, to determine load or other characteristics of the network
+    or the hardware.
+
+  * SOLUTION: There probably is no solution to this if you allow
+    adaptive routing.  The only important part is to limit the amount
+    of information that the BPF program could access, and hence reduce
+    the damage that could be done with this mechanism.
+
+
+  * THREAT: Depending on how the router was constructed, it might be
+    possible to leave bogus information in the BPF output register.
+    If the next packet didn't clear this out, it might be misdirected
+    by the router.
+
+  * THREAT: Similar to the above, a new packet could potentially read
+    the destination of the previous packet from the output register.
+
+  * SOLUTION: Don't build such a stupid router.  (This problem is
+    obviously minor.)
+
+
+
+Addition 2: semi-permanently uploading "flow" code to the router 
+
+  * THREAT: Sending a large number of seperate flows could cause the
+    router to run out of storage space for flows, and hence prevent
+    new connections.  Similarly, if flow code has no specified
+    lifetime, it could sit around and waste resources in the router
+    indefinitely.
+
+  * SOLUTION: Set resource usage limitations on flows in the router,
+    and have pre-determined or negotiated timeouts for the uploaded
+    code.  Additionally, you would probably want to devise some way of
+    notifying the sende if you had to dump out it's flow for some
+    reason.  (Or at least if you recieved a packet with a bogus flow.)
+
+
+  * THREAT: A malicious user might be able to discover information
+    about a flow constructed by someone else by sending packets with
+    random flow identifiers.  
+
+  * SOLUTION: Use some form of authentication for the flow ID number,
+    such as a MAC.  
+
+
+Addition 3: allow backward jumps (and hence loops) in mobil code
+
+  * THREAT: In addition to generally bogging down the router, this
+    would potentially infinite computation for just one packet.  This
+    would make denial of service all too easy - with just one packet!
+
+  * SOLUTION: Place a running-time limitation on the uploaded code.
+    If it takes longer than the pre-designated maximum, kill the
+    computation and drop the packet.  As a nice expansion of this, you
+    could have the uploaded code first tell the router how much time
+    it would need.  If the requested time was too long for the current
+    conditions, the router would drop the packet (and perhaps send an
+    ICMP to the sender).  Otherwise, it would use the requested value
+    as the maximum for that packet.
+
+Addition 4: allow modification of packet data 
+
+  * THREAT: Modificaiton of the packet data would allow a packet to
+    remove the hop count information.  This would create packets that
+    live forever.
+
+  * SOLUTION: Prevent modification of certain fields of the IP header.
+
+  * THREAT: Any information that the BPF can access could be easily
+    stored in the packet and forwarded to someone else.
+
+  * SOLUTION: (as before) limit the information that the BPF can
+    access.  The suggested limits are probably sufficient for this.
+
+  * THREAT: self-modifying packets could store state information about
+    the route they had taken up to that point in the data portion of
+    the packet.  This would allow them to effectively go out to any
+    router on the internet, and return to the sending host simply by
+    modifying the destination IP address once they reached the machine
+    they wanted to probe.  Unlike the original case, in which probes
+    were restricted to routers that were one hop away, this would
+    allow probing of any router.
+
+  * SOLUTION: (as before) limit the data a packet can access.
+    Unfortunately, since anyone anywhere could use this to probe any
+    router, the danger of having a broken router that does not
+    properly limit the information that can be accessed is much
+    greater.
+
+  * THREAT: If time of day or similar functions were allowed, a packet
+    could determine quite a bit about the network layout by recording
+    timestamps and dynamically re-routing itself between different
+    routers to determine round-trip times.  
+
+  * SOLUTION: This probably isn't all that bad.  It would be nice to
+    have more accurate network measurements, but I suppose this could
+    possibly be subverted by the forces of evil to give someone
+    information that they shouldn't have.
+
+
+Addition 5: Addition of state data
+
+  * THREAT: the complexity of the router is going to be even larger.
+    Maintaining proper memory protections could prove difficult, and
+    buggy implementations could leak important information.
+
+  * SOLUTION: hire god-like programmers to create the router software.
+    (ie be careful)
+
+
+Addition 6: create new packets
+
+  * THREAT: The hop count problems come back, since the uploaded code
+    will need to create new packets with new headers.
+
+  * SOLUTION: Possibly have the router force some inheritance
+    properties on any newly-created packets, so their hop count is
+    always larger than that of their parent.
+
+  * THREAT: You could cause the router to create huge numbers of new
+    packets, and thereby use it to mount denial of service attacks on
+    other hosts or routers.
+
+  * SOLUTION: limit the size and/or number of packets that could be
+    created by any one incoming packet.  (Even so, the fact that you
+    could increase the number of packets sent out would be bad, since
+    you could then max out the capacity of the router even if your
+    machine's connection to the Internet was slower than the maximum
+    speed of the router.)
+
+
+Addition 7: Use Java and include libraries (rather than BPF)
+
+  * THREAT: BPF is a simpler language, and hence easier to prove
+    things about than is Java.  Moving to Java would make it much more
+    difficult to be certain that the functionality in uploaded code
+    did not do something malicious.
+
+  * SOLUTION: Impose strict external limitations on resource usage,
+    etc. as proposed several times (for different things) above.
+
+  * THREAT: Including libraries and more complicated code on the
+    router leads to the question of which things can be trusted and
+    which cannot.  Following the current line of reasoning, some peole
+    might want to allow a wider range of system access to code that
+    was installed by the system administrator than to uploaded code.
+    Doing so would create the requirement that higher-privilege code
+    be trusted, which means either some hard form of verification or
+    blind trust in the programmer.
+
+  * SOLUTION: Just say no!
+
+
+
+
+QUESTION 3: firewalls and mobile code
+
+blocking all mobile code
+
+  Mobile code can come in many different forms, such as downloaded
+  program files (this is sort of a primative form of mobile code),
+  Java applets, javascript embeded in web pages or (sometimes) email,
+  Active-X in web pages or email messages, binaries attached to mail
+  messages or in macros embeded in document files.  Moreover, there
+  will likely always be new dataformats that include exacutable or
+  scripting capabilities, so no list can be gauranteed to be
+  comprehensive.
+
+  Given this background, it is unlikely that any firewall would be
+  able to block ALL mobile code.  However, there are several tricks
+  you could use to block known types of mobil code.  The following
+  would do a reasonable job of removing the possibility of mobile code
+  from web browsing and mail.  I have listed each action along with
+  problems that would occur in implementing it, as well as problems it
+  could cause for end users.
+
+  * ACTION: strip all applet, javascript, and Active-X tags from
+    incoming HTML pages and email messages
+
+  * IMPLEMENTATION: fairly straight-forward text processing.  This
+    shouldn't be a problem.
+  
+  * IMPACT: There are many web pages that will not function well (or
+    at all) without javascript and/or java enabled.  Hence, this
+    action might prevent users from accessing useful or necessary web
+    sites.  (Mobile code embeded in email is of more questionable
+    value, so the impact of removing this would probably not be as
+    large.)
+  
+  
+  * ACTION: disallow the direct downloading of any executable files
+  
+  * IMPLEMENTATION: This could be done simplistically by previnting
+    users from downloading files with names like *.class, *.jar,
+    *.exe, *.dll, etc.  Since files could exist with different names
+    or in compressed archives, however, the only sure way to solve
+    this problem would be to scan the contents of incoming files to
+    try to determine their type.  If no type could be determined, the
+    file would have to be discarded.
+  
+  * IMPACT: This would prevent people from accessing potentially
+    useful files on remote servers.  If security is the primary
+    concern, however, this is probably not a bad thing.  Scanning all
+    binary downloads (and decompressing compressed files if necessary)
+    would put a tremendous strain on the firewall, however, and hence
+    slow down user's acces to the outside world.
+  
+  
+  * ACTION: discard all mail attachments
+  
+  * IMPLEMENTATION: This is simple as long as the attachments are in
+    an easily recognizable format, such as MIME or uuencoded and
+    inserted into the message.
+  
+  * IMPACT: users could not share data via email with outside users.
+  
+  
+selective blocking
+
+  As suggested above, it is already complicated to even FIND all of
+  the mobile code to block it.  Selective blocking adds additional
+  complexity because it requires the firewall to have intimate
+  knowledge of every possible type of mobile code, so that it can try
+  to decide whether or not it is safe.  Specific problems that result
+  from this are listed below.
+
+  * PROBLEM: With many types of mobile code, there will be no way to
+    determine whether or not the program might do bad things to the
+    end user.  For example, Active-X, binary exacutables, and document
+    macros are not designed to allow easy safety checking or to run in
+    a restricted environment.  Hence, it is quite likely that even
+    with a strict policy your firewall will at some point accidentally
+    allow some dangerous code.
+
+  * SOLUTION: Requiring the use of safety-conscious languages such as
+    Java would make this problem more tractable.  The firewall could
+    then simply discard all mobile code EXCEPT Java, and perform some
+    sanity checks on the Java code.
+
+  * CULPRIT: This problem is caused by (necessarily) imperfect danger
+    heuristics on the firewall.
+
+
+  * PROBLEM: Languages such as Java rely on the fact that they are
+    running in a limited environment for part of their safety.  Hence,
+    the firewall may let code through under the assumption that the
+    host's Java environment will do the right thing with the mobile
+    code, and not give it too much privilege.  If the user's JVM is
+    buggy, however, this could cause problems.
+
+  * SOLUTION: Probably the only real solution to this would be to make
+    sure the JVMs are all configured correctly, and are all using the
+    latest versions from the various vendors.
+
+  * CULPRIT: I view this is a client-side problem.  (You could try to
+    have the firewall deal with it, but this type of solution would be
+    overly restrictive.)
+
+
+  * PROBLEM: By giving the firewall even more to do, it will be even
+    easier to overload the firewall, and degrade performance of the
+    connection to the outside world.
+
+  * SOLUTION: buy a bigger or clustered firewall
+
+  * CULPRIT: the firewall isn't big enough.
+
+  
+
+@

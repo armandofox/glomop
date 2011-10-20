@@ -1,0 +1,167 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.04.29.17.22.31;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added mariposa
+@
+text
+@<html>
+<title>
+Mariposa
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Mariposa: a wide-area distributed DBMS
+</h1>
+<strong>
+M. Stonebraker, P. Aoki, W. Litwin, A. Pfeffer, A. Sah, J. Sidell,
+C. Staelin, A. Yu
+</strong>
+
+<B>Summary by:</B> Armando Fox and Steve Gribble<p>
+
+
+<p><b>One-line summary:</b> Coarsely-coupled,
+fully-autonomous nodes in a WADDBMS each have various fragments of a
+distributed DB, and they bid on performing pieces of distributed queries and on
+acquiring/selling fragments, based on their available resources and
+other local policy.  </p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> problem and goals:
+       <ul>
+         <li> LAN distributed DBMS's assume static allocation, single
+              admin. structure &amp; policy at all nodes, uniform HW/SW.
+         <li> WAN DBMS goals: scalability, data mobility, node autonomy, schema
+              changes don't force 
+              global synchronization, configurable per-site policies.
+         <li> Argument: WADDBMS <i>cannot</i> meet these goals.
+              E.g. cost-based optimizers break if a site can refuse to
+              process subqueries; data movement hard to coordinate if
+              sites autonomous; etc.
+       </ul>
+  <li> Mariposa architecture:
+       <ul>
+         <li> Each query has a <i>budget</i> it can spend.  <I>BId
+              curve</i> B(t) expresses how much user is willing to pay
+              to resolve query in time <i>t</i>.
+         <li> Each site tries to optimize its revenue via local policy.
+         <li> DB Fragments distributed across nodes; some replication,
+              with copy holders maintaining freshness of their copies by
+              contracting with other copy holders to get updates.
+       </ul>
+  <li> Life of a query:
+       <ul>
+         <li> <i>Parser</i> parses SQL3 query and figures out where each
+              necessary table fragment is, etc., by consulting metadata
+              from nameserver (which is itself a biddable item).
+         <li> <i>Fragmenter</i> produces fragmented query plan,
+              decomposed into <i>strides</i> (groups of ops that can
+              proceed in parallel; think <tt>gmake -j</tt>).
+         <li> <i>Broker</i> gets bids on pieces of query plan and
+              notifies bid winners.
+         <li> <i>Coordinator</i> oversees execution of query strides and
+              collates results.
+         <li> Storage managers, brokers, and bidders coded in Rush, a
+              forward-chaining rule language (<b>on</b> condition
+              <b>do</b> action).
+       </ul>
+  <li> Bidding:
+       <ul>
+         <li> (Expensive) bidding process: first phase, broker collects
+              bids; second phase, notifies winners.
+         <li> (Cheap) purchase order protocol: broker sends each
+              subquery to site that would be most likely to win bidding,
+              based on broker's experience.  Entails a risk that site
+              may exceed budget in doing the query.
+         <li> Servers <i>advertise</i> willingness to perform services
+              via nameservers' <i>ad table</i>.  There are yellow pages,
+              sale prices, coupons, and bulk purchase contracts, all
+              analogous to their real-world counterparts.
+       </ul>
+  <li> Offering a bid:
+       <ul>
+         <li> Naive strategy: billing rate is function of CPU and I/O
+              resources.
+         <li> Optimization 1: billing rates maintained per-fragment, to
+              allow sites to acquire fragments it wants and sell off
+              fragments it doesn't want, and declines to bid on queries
+              below a specific threshold for each fragment.
+         <li> Optimization 2: multiply bid by load average; gives
+              supply/demand effect and "crude load balancing".  <i>(Ed.:
+              doesn't this only work if load averages can be correlated
+              across heterogeneous machines?  Can they?)</i>
+         <li> Optimization 3: always bid on a query that references a
+              "hotlist" fragment that you want.
+         <li> Optimization 4: include network resources in bidding.
+              Authors propose to use Tenet protocols and represent a
+              <i>bandwidth profile</i> (bandwidth as function of time),
+              to estimate how expensive it will be to move fragments
+              around.
+         <li> Offer price for buying fragments is offset by the value of
+              those fragments that would be evicted (if any) to make
+              room for new fragments.
+       </ul>
+  <li> Name servers: brokers try local cache, then fall back to name
+       server.  Name servers price their data according to its freshness
+       (quality); stale data may increase delay as client has to go to
+       another nameserver.
+  <li> Experiments:
+       <ul>
+         <li> Experiments performed on lightly-loaded WAN <i>(do these exist
+              anymore?)</i> to avoid interference from heavy daytime traffic.
+              <I>(Seems a serious blow for WADDBMS argument)</i>
+         <li> Brokering process: 14 roundtrips to collet bids, 6 to
+              record them, 2 to notify winners.  Some parallelism due to
+              threading, but still a long time on a congested network!
+              <i>Hopefully connections are long-lived.</i>
+         <li> For uniform-CPU sites, query optimizers tend to
+              differentiate plans based on cost of data movement.
+         <li> A single example, fairly unconvincing, was used to
+              demonstrate that Mariposa finds a better plan than a
+              traditional distributed cost-based optimizer.
+         <li> Claim: "Cost of moving the tables can be amortized over
+              repeated execution of queries that require the same data."
+               Maybe, but they didn't measure this benefit, and we're
+              talking about moving several MBytes each time.  The
+              elapsed times they gave for query execution <i>did not
+              include</i> network time to move data, which was a total
+              of 82sec+820sec.
+       </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Stability of prices in this market?  (No hysteresis or other
+       damping, and everything happens in "real time")
+  <li> Measurements and handwaving for network costs totally
+       unconvincing; if they can't prove this is worthwhile under
+       "realistic" network conditions, it undermines the whole case for WADDBMS
+       (as opposed to replication and consistency control, Bayou-style)
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

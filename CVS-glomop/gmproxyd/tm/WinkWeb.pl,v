@@ -1,0 +1,285 @@
+head	1.1;
+access;
+symbols
+	current:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.08.23.19.37.28;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+#  WinkWeb document type
+#  $Id: WinkWeb.pl,v 1.8 96/08/22 20:28:48 glomop Exp $
+#
+
+package doc::WinkWeb;
+require "htmltowml.pl";
+require "giftoppm.pl";
+require "jpegtoppm.pl";
+require "ppmtoicap.pl";
+require "wmltoicap.pl";
+use ASfile;                     # interface to AS file library
+use IcapUtils;
+
+$WinkWebUIC = 2;                            # unique UIC number for web app
+
+# This module parses HTML, generates WML intermediate form and ICAP image
+# objects, and uses the ASfile interface to create a single ICAP AS document. 
+
+sub segment {
+    my ($doc,$client,$prefs) = @@_;
+    my $doc_id = $doc->id;
+    my $filename = $doc->filename;
+    my %prefs = %{$prefs} if ref($prefs) eq 'HASH';
+    my $textchunk;
+    my $remain;
+
+    my @@newchunks;
+
+    #
+    # Following call takes HTML and returns  a list of chunks; some WML, some
+    # ICAP images.
+    #
+    @@chunks = &doc::htmltowml::convert($doc,$client,$prefs);
+
+    #
+    #  Time to layout the chunks on the form.
+    #
+    my ($ntextchunks, $nimagechunks) = (0,0);
+    my $success;
+    my $last_chunk_was_image = 0;
+    my $leftover;
+
+    # setup layout list
+    my $current_layout = 0;
+    my $formheight = 96;
+    my $ly = new layout (2,2,$client->screenx-2, $formheight,40);
+    my @@layouts = ($ly);
+
+    my $i;
+  CHUNK:
+    for ($i = 0; $i <= $#chunks; $i++) {
+        $ch = $chunks[$i];
+        if ($ch->mime_type =~ m!text/.*! ) {
+            # convert text from WML to ICAP.  Involves tag strippping and some
+            # other things.  If text chunk ends up as null, just skip it.
+            &doc::wmltoicap::convert($ch);
+            #
+            #  strip spaces/newlines since wml doesn't
+            #
+            $_ = $ch->data;
+            s/\n+/\n/gm;
+            $ch->data($_);
+            next CHUNK unless ($ch->data =~ /\S/m);
+            $ntextchunks++;
+
+            # if the first non-space character is a newline, and we just laid
+            # out an image chunk, attempt to
+            # do a layout break.  We do this because in WML, newlines are
+            # supposed to be taken literally.
+            if ($last_chunk_was_image &&  ($ch->data =~ /^\s*\n$/m)) {
+                $ly->clearleft();
+            }
+            
+            $leftover = $ly->pack_dynamic($ch, \&doc::WinkWeb::meas,
+                                          -1, -1, -1, $client->shortname);
+
+            # if there was nothing left over, everything is fine.
+
+            while ($leftover == -1) {
+                # we ran out of room....
+                &util::debug("WebPage", "Starting new layout");
+                $current_layout++;
+                $ly = new layout (2,2,$client->screenx-2, $formheight,40);
+                push(@@layouts,$ly);
+                $leftover = $ly->pack_dynamic($ch, \&doc::WinkWeb::meas,
+                                              -1, -1, -1, $client->shortname);
+            }
+            
+            # here if packing succeeded.
+            $ch->{"layout"} = $current_layout;
+            push(@@newchunks, $ch);
+            $last_chunk_was_image = 0;
+            if (ref($leftover) eq 'chunk') {
+                # this is the next chunk to pack. Splice it into the packing
+                # list.
+                &util::debug('WebPage', "Inserting new text chunk in list");
+                splice(@@chunks,$i+1,1,$leftover);
+            }
+        } elsif ($ch->mime_type =~ m!image/.*!) {
+            my $newchunk = &fetch_and_convert($ch,$client,$prefs);
+            next CHUNK unless  (defined $newchunk);
+            $nimagechunks++;
+
+            # pack the image; will update metadata to "NNxNN+NN+NN".
+            &util::debug('WebPage', "Packing image chunk " .
+                         $newchunk->chunk_idx);
+            my $align = ($ch->{"align"} =~ /right/i ? 1: -1);
+            while (! &layout_img_chunk($ly,$newchunk,$align)) {
+                &util::debug("WebPage","Starting new form for $url");
+                $current_layout++;
+                $ly = new layout (2,2,$client->screenx-2, $formheight,40);
+                push(@@layouts, $ly);
+            }
+            $newchunk->{"layout"} = $current_layout;
+            push(@@newchunks, $newchunk);
+            $last_chunk_was_image = 1;
+        }
+    }
+    &util::debug('WebPage', sprintf("%d text, %d image, %d layouts",
+                                    $ntextchunks, $nimagechunks,
+                                    1+$current_layout));
+
+    # Place the chunks in an AS file.  Note that up till this point we've been
+    # dealing with client (screen) coordinates; for these calls we must convert
+    # them to ICAP coordinates
+
+    my $xres = 256/$client->screenx;
+    my $yres = 256/$client->screeny;
+    my $asfile = &util::mkimmortal;
+    my ($r,$b,$l,$t);
+    &util::debug('WebPage', "Constructing AS file...");
+    &ASfile::ASGen_Construct($asfile, $doc::WinkWeb::WinkWebUIC);
+    for ($current_layout = 0; $current_layout <= $#layouts; $current_layout++) {
+        $ly = $layouts[$current_layout];
+        &ASfile::ASGen_AddNewForm();
+        &util::debug('WebPage', "Layout $current_layout");
+        foreach $ch (@@newchunks) {
+            next unless $ch->{"layout"} == $current_layout;
+            ($r,$b,$l,$t) = split(/[x\+]/, $ch->metadata);
+            $r += $l;
+            $b += $t;
+            # convert to ICAP coords
+            $l = int($l * $xres);
+            $r = &util::ceil($r * $xres);
+            $t = int($t * $yres);
+            $b = &util::ceil($b * $yres); 
+            next if $b > $client->screeny;
+            if ($ch->mime_type =~ /text/i) {
+                &util::debug("WebPage",
+                             join(' ', "Adding text object chunk" , $ch->chunk_idx,
+                                  $l,$r,$t,$b));
+                &ASfile::ASGen_AddText($l,$r,$t,$b,$ch->data,0);
+            } else {
+                &util::debug("WebPage",
+                             join(' ',"Adding bitmap chunk ", $ch->chunk_idx,
+                                  $l,$r,$t,$b));
+                &ASfile::ASGen_AddBitmap($l,$r,$t,$b,&util::dump($ch->data));
+            }
+        }
+    }
+    &util::debug("WebPage", "Generating ICAP file $asfile");
+    # ASfile will generate file.as, file.sm, file.blk.  We just want the
+    # content in file.as, so tell the chunk maker to look for that.
+    $asfile .= ".as";
+    &ASfile::ASGen_Generate();
+    # &util::debug("WebPage", "Generate Success!");
+	warn "done generate";
+    &ASfile::ASGen_Destruct();
+
+    my $aschunk = new chunk ("application/icap",
+                             undef, $doc_id, 1, undef, $asfile, undef,
+                             "ICAP applet " . $doc->loc);
+    return (toc chunk ($doc_id, "", ($aschunk)),
+            $aschunk);
+}
+
+#
+#  fetch_and_convert:  fetch an inline image, convert it to the appropriate
+#  format.
+#
+sub fetch_and_convert {
+    my ($ch,$client,$prefs) = @@_;
+    # HACK::the following should be defined as a clean interface!
+    # fetch image - ignore errors for now
+    my $url = $ch->data->[0];
+    my $attribs = $ch->data->[1];
+    &util::debug('WebPage', "Fetching $url");
+    my $res = new HTTP::Request "GET", $url;
+    my $s = $doc::UA->request($res);
+    # hopefully, $s->is_success is true....
+    # run the GIF to PPMlite converter
+    if (! ($s->is_success)) {
+        &util::debug('WebPage',
+                     join(' ', "Warning: Fetch failed:", $s->code, $s->message));
+        return undef;
+    }
+    # get MIME type from the appropriate HTTP header field, as
+    # supplied by the user-agent.
+    $ch->mime_type($s->content_type);
+    # ...and get the content, also from the user-agent.
+    $ch->data($s->content);
+    # convert to ppm; will leave dimensions as "NNxNN" in metadata.
+    my $newchunk;
+    if ($ch->mime_type eq "image/gif") {
+        $newchunk = &doc::giftoppm::convert($ch,$client,$prefs);
+    } elsif ($ch->mime_type eq "image/jpeg") {
+        $newchunk = &doc::jpegtoppm::convert($ch,$client,$prefs);
+    }
+    unless (defined $newchunk) {
+        &util::log("WebPage", "Image convert failed!");
+        return undef;
+    }
+    # now go from PPM to ICAP bitmap.
+    $newchunk = &doc::ppmtoicap::convert($newchunk, $client, $prefs);
+    $newchunk->{"align"} = $attribs->{"align"};
+
+    return $newchunk;
+}
+#
+# layout_img_chunk: Do layout for an image chunk, which involves  a call to
+# pack_static.  Return 0 if we ran out of space, 1 if all went well.  If all
+# went well, also adds the packed chunk to the current layout's chunk list.
+#
+
+sub layout_img_chunk {
+    my ($ly,$ch,$align) = @@_;
+    my $have_room = 1;
+
+    while ($have_room) {
+        last if ($ly->pack_static($ch,$align) > 0);
+        &util::debug('WebPage', "Clearing to make room for image");
+        $have_room = $ly->clear;
+    }
+    return $have_room;
+}
+
+sub meas {
+    my @@args = @@_;
+    my ($width,$height,$text,$client_shortname) = @@args;
+    my ($leftover,$index);
+    &IcapUtils::FontConstruct($client_shortname);
+    if ((scalar @@args) == 4) {
+        ($index,$leftover,$height)
+            = &IcapUtils::FillBox($client_shortname,
+                                  $height,$width,$text);
+        warn "******* index=$index leftover=$leftover realheight=$height";
+        $height *= 4/3;
+        return ($index,$leftover,$height);
+    } else {
+        die "Bleah!";
+    }
+}
+
+sub chunk::digest { join('', '`', substr(shift->data, 0, 10), "...'") }
+
+1;
+@

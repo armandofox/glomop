@@ -1,0 +1,184 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.02.13.18.27.00;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.13.18.06.42;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Tweaked.
+@
+text
+@<html>
+<title>
+Query Evaluation Techniques (5,8)
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Query Evaluation Techniques for Large Databases (5,8)
+</h1>
+<strong>
+Goetz Graefe
+</strong>
+
+<P>
+<i>Summary by:  Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Discussion of the implementation, performance and optimizations for
+various kinds of join algorithms, and a few words on query scheduling to
+minimize I/O cost.
+
+<h2>Overview/Main Points</h2>
+
+<b>Join algorithms</b>
+<ul>
+  <li> Most systems today use nested-loop join or merge join, since
+       System R found that these always gave the best or close to the
+       best performance.  <i>Hash joins</i> have recently been studied
+       with some interest, though.
+  <li> <B>Nested-loop join:</b> scan "inner" input once for each value
+       of "outer" input, looking for a match.  Some optimizations to
+       alleviate the horrible performance:
+       <ul>
+         <li> For one-to-one match, can terminate inner scan as soon as
+              match found.
+         <li> Scan inner input once for each <i>block</i> (page) of
+              outer input (block nested-loop join).
+         <li> Try to save some pages of inner input in memory.
+         <li> Scan inner input alternately backwards and forwards, to
+              reuse the last page or two of inner input in memory.
+       </ul>
+  <li> <b>Indexed nested loop join</b> exploits a temporary or permanent
+       index on the inner input's join attribute.
+       <ul>
+         <li>  Can be way fast under
+              certain  conditions (index depth * size of smaller input &lt;
+              size of larger input).
+         <li> "Zig-zag join" requires an index on both inputs;
+              alternates scanning for a join value in one and then
+              looking it up in the other.
+       </ul>
+  <li> <B>Merge join</B>: both inputs sorted on join attribute, then
+       scanned by stepping a pair of pointers.  Efficient if the inputs
+       are produced by a previous merge-join step, since that means
+       they're already sorted.
+       <ul>
+         <li> Heap filter merge join: use temporary memory to create
+              sorted runs from outer input using replacement selection;
+              join immediately with sorted inner input; repeat.
+       </ul>
+  <li> <b>Hash join</b>: Build in-memory hash table on one input, probe
+       it with items from the other.
+       <ul>
+         <li> If inputs too large, they're recursively partitioned.
+              Outputs from each partitioning are concatenated.
+         <li> Cost is roughly logarithmic in input size; main difference
+              compared to merge join is that the recursion depth depends
+              only on the build input, not both inputs.
+       </ul>
+  <li> <b>Pointer-based join:</b> Used to gather a set of tuples S  pointed
+       to by pointers from tuples in R.
+       <ul>
+         <li> Nested-loops variant: scans through R and
+              retrieves the appropriate S tuple for each R tuple.  All
+              the same performance problems as regular nested-loops
+              join.
+         <li> Merge-join variant: sort R on pointer values, make a
+              single pass over the disk to read all tuples pointed to.
+         <li> Hybrid hash join variant: collects together R tuples
+              containing pointers to same S page, then scans.
+         <li> Pointer based joins typically outperform value joins if
+              only a small fraction of the outer input actually
+              participates in the join.
+       </ul>
+  <li> High order bit: good cost functions are needed so that the query
+       optimizer can decide what flavor of join to use.
+</ul>
+
+<b>Optimal query scheduling</b>
+<ul>
+  <li> Used to be unimportant, since all execution plans were left-deep
+       trees and sorting to disk was done at each intermediate step.
+  <li> Today's plans include bushy (ie parallelizable) execution trees
+       and extensive pipelining of successive steps, so scheduling
+       matters.
+  <li> <b>Optimal buffer management</b>: map disk pages to buffers so as to
+       avoid the largest number of I/Os in the future.
+       <ul>
+         <li> Cost functions exhibit "steps" when plotted over available
+              buffer space; should allocated buffer at low end of a step.
+         <li> Separate page replacement algorithm for each scan allow
+              finer control of buffer allocation.
+       </ul>
+  <li> <b>Natural stopping points:</b> points at which all data are in
+       temporary/intermediate disk files.  A good time to switch
+       efficiently between independent subplans.
+  <li> Hybrid-hash and similar binary match operations should allow
+       overflow avoidance as a runtime option, to allow the query
+       optimizer to insert a stop point.
+  <li> Binary-operator implementations should have a switch controlling
+       which subplan (left or right) is initiated first.
+  <li> Memory should be proportionally divided among multiple
+       concurrently-active operators.
+  <li> For recursive hybrid hash joins, finish level N-1 before starting
+       level N.  Reason: if level N consumes results immediately as they
+       are generated by N-1, you do get some pipelining but you also get
+       the two levels competing for memory.
+  <li> Allocation of resources other than memory "is an open issue that
+       should be addressed soon".
+  <li> Scheduling bushy trees for concurrent execution is not well
+       understood.  Something like Ingres decomposition is likely to
+       yield better results in practice than trying to produce optimal
+       scheduling.  (Aren't most flavors of optimal scheduling
+       NP-complete anyway?)
+</ul>
+
+<h2>Relevance</h2>
+I/O reduction is the name of the game; nested loop, merge, and hash join
+algorithms are I/O intensive, so optimizations for them (as well as
+optimal query scheduling, which matters now a lot more than it used to)
+are a bunch of hacks to reduce I/O costs.  
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> The author should summarize conclusions somewhere (at the
+       beginning or the end).  The sentence above sums up the whole
+       point of these sections.
+  <li> So boring to read that my teeth were falling asleep, but I guess
+       that's not too surprising for a survey paper.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@added graefe 5-8
+@
+text
+@d8 1
+a8 1
+Query Evaluation Techniques for Large Databases (7)
+@

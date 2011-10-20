@@ -1,0 +1,224 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.11.11.19.48.54;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.11.11.19.48.54;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#ifndef _PLEVT_H_
+#define _PLEVT_H_
+
+#include <PLSys.h>
+#include <PLBase.h>
+
+/*--------------------------------------------------------------------*/
+/* Event loop                                                         */
+/*--------------------------------------------------------------------*/
+typedef void *PWin;
+
+class PFormHandler;
+typedef Boolean (*PEvtSysCallback)(EventPtr e);
+
+class PEvtLoop : private PBaseObj
+{
+  protected:
+    PEvtLoop(const PEvtSysCallback defaultHandler,
+             const SDWord timeout,
+             const Boolean appFirst = false);
+    ~PEvtLoop();
+    static void eventLoop();
+
+  public:
+    static void registerHandler(const PWin hevt,
+                                PFormHandler* cb);
+    static void deregisterHandler(const PWin hevt,
+                                  PFormHandler* cb);
+
+  private:
+    PEvtLoop(const PEvtLoop&);
+    operator =(const PEvtLoop&);
+    static Boolean dispatcher(EventPtr e);
+
+  private:
+    struct HandlerList
+    {
+        PFormHandler* callBack;
+        PHandle hevt;
+        PWin hwnd;
+        HandlerList* next;
+    };
+    static HandlerList* cbList_;
+    static Boolean instantiated_;
+    static PHandle topLevelHandle_;
+    static PEvtSysCallback defaultSystemCallback_;
+    static SDWord timeout_;
+    static Boolean applicationFirst_;
+};
+
+/*--------------------------------------------------------------------*/
+/* general Form event                                                 */
+/*--------------------------------------------------------------------*/
+class PFormEvt : private PBaseObj
+{
+  public:
+    PFormEvt(EventPtr e) : evtPtr_(e) {}
+    PFormEvt(const PFormEvt& e) : evtPtr_(e.evtPtr_) {}
+    ~PFormEvt() {}
+
+  protected:
+    inline EventPtr evtPtr() const { return(evtPtr_); }
+
+  private:
+    EventPtr evtPtr_;
+};
+
+/*--------------------------------------------------------------------*/
+/* Command events                                                     */
+/*--------------------------------------------------------------------*/
+class PCmdEvt : public PFormEvt
+{
+  public:
+    PCmdEvt(const PFormEvt& e);
+    ~PCmdEvt() {}
+
+  public:
+    inline Word id() const { return(id_); }
+    inline Boolean on() const { return(val_); }
+
+  private:
+    Word id_;
+    Word val_;
+};
+
+/*--------------------------------------------------------------------*/
+/* Key events                                                         */
+/*--------------------------------------------------------------------*/
+class PKeyEvt : public PFormEvt
+{
+  public:
+    PKeyEvt(const PFormEvt& e) : PFormEvt(e) {};
+
+    inline Word bits() const
+      { return(evtPtr()->data.keyDown.modifiers); }
+
+    inline Word ascii() const
+      { return(evtPtr()->data.keyDown.chr); }
+    inline Word code() const  /* see <Chars.h> */
+      { return(evtPtr()->data.keyDown.chr); }
+
+    inline operator Word() const { return code(); }
+
+    inline Boolean pgUp() const { return ascii() == pageUpChr; }
+    inline Boolean pgDown() const { return ascii() == pageDownChr; }
+
+    inline Boolean shift() const {return((bits()&shiftKeyMask)!=0);}
+    inline Boolean capsLock() const {return((bits()&capsLockMask)!=0);}
+    inline Boolean numLock() const {return((bits()&numLockMask)!=0);}
+    inline Boolean command() const {return((bits()&commandKeyMask)!=0);}
+    inline Boolean option() const {return((bits()&optionKeyMask)!=0);}
+    inline Boolean control() const {return((bits()&controlKeyMask)!=0);}
+    inline Boolean autoRepeat() const {return((bits()&autoRepeatKeyMask)!=0);}
+    inline Boolean doubleTap() const {return((bits()&doubleTapKeyMask)!=0);}
+    inline Boolean poweredOn() const {return((bits()&poweredOnKeyMask)!=0);}
+};
+
+/*--------------------------------------------------------------------*/
+/* Scrollbar events                                                   */
+/*--------------------------------------------------------------------*/
+class PScrollEvt : public PFormEvt
+{
+  public:
+    enum ScrollType { scroll = sclExitEvent, drag = sclRepeatEvent };
+  public:
+    PScrollEvt(const PFormEvt& e, ScrollType type);
+    ~PScrollEvt() {}
+    inline Word id() const { return(id_); }
+    inline ScrollType type() const { return(type_); }
+    inline Short oldValue() const { return(oldValue_); }
+    inline Short value() const { return(value_); }
+    inline Long  time() const { return(time_); }
+
+  private:
+    ScrollType type_;
+    Word id_;
+    Short oldValue_;
+    Short value_;
+    Long  time_;
+    void* pScrollBar_;
+};
+
+/*--------------------------------------------------------------------*/
+/* Form event handler                                                 */
+/*--------------------------------------------------------------------*/
+class PForm;
+
+class PFormHandler : public PBaseObj
+{
+  friend class PEvtLoop;
+
+  public:
+    PFormHandler();
+    virtual ~PFormHandler();
+
+  public:
+    PFormHandler& handleFor(const PForm* form);
+    PFormHandler& stopHandlingFor(const PForm* form);
+
+  public:
+    /* Form events */
+    virtual Boolean open() { return(false); }
+    virtual Boolean closed() { return(false); }
+    virtual Boolean save() { return(false); }
+    virtual Boolean update(Word /* code */ ) { return(false); }
+    virtual Boolean titleSelect() { return(false); }
+    virtual Boolean nil() { return(false); }
+    virtual Boolean key(PKeyEvt&) { return(false); }
+    /* scrollbar events */
+    virtual Boolean scroll(PScrollEvt&) { return(false); }
+    /* command events */
+    virtual Boolean command(PCmdEvt&) { return(false); }
+    /* all events */
+    virtual Boolean defaultHandler(PFormEvt&) { return(false); }
+
+  protected:
+    virtual Boolean dispatch(EventPtr e, const PWin hwnd);
+
+  private:
+    PHandle hevt_;
+    Word frmId_;
+    typedef Boolean (PFormHandler::*HandlerFunc)
+                            (const PHandle& hevt, EventPtr e);
+};
+
+#endif /* _PLEVT_H_ */
+@
+
+
+1.1.1.1
+log
+@Pilot Class Library
+@
+text
+@@

@@ -1,0 +1,661 @@
+head	1.10;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.10
+date	98.12.11.23.05.07;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.12.11.17.26.13;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.12.04.03.27.25;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.12.04.02.09.38;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.12.02.01.41.04;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.12.02.01.19.28;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.12.02.01.14.54;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.12.02.01.10.30;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.02.01.08.56;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.12.02.01.03.38;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@<html><head><title>Answers to homework #3</title></head>
+<body bgcolor="white">
+<h1 align="center">Answers to homework #3</h1>
+<p>Here are some suggested solutions to the third homework.</p>
+
+<p>Note that the homework you handed in should have been much
+shorter than this page.
+There are two important reasons why this page is so long:
+<nl>
+<li>In many cases, we have listed several possible answers for each
+	question; but you only needed to give one answer.
+<li>For clarity, we have described the answer in greater detail
+	than necessary; you could have just sketched the main idea.
+</nl>
+
+<h2 align="center">Question 1: Buggy code</h2>
+<ul>
+<li>Runs <tt>vi</tt> with root privilege; you can get a root shell
+with <tt>vi</tt>'s ":!" command.
+<li>Buffer overrun in <tt>sprintf()</tt> at <tt>debug:68</tt>
+(<tt>progname</tt> could be arbitrarily long, since it comes from
+<tt>argv[0]</tt>).
+<li>Race condition between <tt>tmpnam()</tt> at <tt>main:162</tt>
+and <tt>copyfile()</tt> at <tt>main:163</tt>.
+(Or you can do the race during the <tt>tmpnam()</tt>, since the
+filename <tt>tmpnam()</tt> picks is predictable.)
+<li><tt>secure_open_as_user()</tt> does the <tt>seteuid()</tt>
+and <tt>setegid()</tt> in the <em>wrong order</em>.
+First, it changes its euid to something non-root;
+then it tries to change groups with <tt>setegid()</tt>;
+but the call to <tt>setegid()</tt> will fail,
+because you need to have euid root
+to be able to change your groups like that.
+So the <tt>fopen()</tt> in line 38 will actually run with egid root, and you
+can use this trick to write to any file which is writeable by group root.
+Clearly not what was intended, and trivially exploitable.
+(For instance, make "<tt>/tmp/debug.vi_moderators</tt>" a symlink pointing
+to some interesting root-writeable program, then call this program
+with debugging enabled.)
+<li>Can tractorbeam it to raise to root privileges where code wasn't
+expecting it.  Imagine the program is running in debug mode.
+Program calls <tt>secure_open_as_user()</tt>; then, after line 36 executes
+but before the <tt>fopen()</tt> in line 38,
+we send the program a <tt>SIGCHLD</tt>.
+(Note that Unix allows us to send a <tt>SIGCHLD</tt>, because the program
+has our euid and uid.)
+Then the signal handler will get invoked; the handler calls <tt>debug()</tt>,
+which calls <tt>secure_open_as_user()</tt> a second time.
+After line 44 of the second invocation of
+<tt>secure_open_as_user()</tt> completes, our euid will be zero (root).
+Finally, the sighandler exits, and the first invocation of
+<tt>secure_open_as_user()</tt> begins executing again at line 38.
+But now the <tt>fopen()</tt> in line 38 proceeds with euid root,
+despite the programmer's clear intent to drop privileges before the fopen.
+It's a little bit tricky, but we can use this to overwrite arbitrary files.
+For instance, if the first invocation of <tt>secure_open_as_user()</tt> was
+called by <tt>debug()</tt>, then it will try to open
+"<tt>/tmp/debug.vi_moderators</tt>" as root
+(and <em>without</em> <tt>O_EXCL</tt>).
+If "<tt>/tmp/debug.vi_moderators</tt>" already exists and is a symlink to
+"<tt>/etc/passwd</tt>", then the password file will be overwritten with data
+of our choice:
+we can choose the file contents by setting <tt>argv[0]</tt> appropriately.
+(Of course, the program <em>should</em> have used <tt>wait()</tt>
+rather than some homebrew solution with <tt>SIGCHLD</tt> and signal
+handlers and calls to <tt>sleep(1)</tt>, but hey, this was a
+contrived example.)
+<li>Running with root privileges almost everywhere; violates least privilege.
+(Slightly better to run with non-root euid and root saved uid.
+Much better is to revoke all root privileges early in the program.)
+<li>Doesn't check syscall return values.
+(See e.g. the tractorbeaming attack where a defensive coding style
+could have helped prevent unexpected attacks.)
+<li>Doesn't always use <tt>O_EXCL</tt> in <tt>fopen()</tt>'s.
+(See e.g. tractorbeaming or other attacks for more examples of where a
+defensive coding style could have helped prevent unanticipated attacks.)
+<li>OS must obey <tt>O_EXCL</tt> in <tt>grablock()</tt>, otherwise
+there are problems.  (Not necessarily a problem in the program.)
+<li>Beware of race condition between <tt>looksok()</tt>
+in <tt>main:168</tt> and <tt>rename()</tt> in <tt>main:169</tt>;
+you have to worry that the user might change
+the file in between.
+(However, a lot of people seemed to think that exploiting this was trivial
+and needed no further explanation.  This is false.
+In practice, <tt>tmpf</tt> is owned by root and thus is not easily changed;
+and <tt>tmpf</tt> lives in "<tt>/tmp/</tt>" which usually has the
+sticky-bit set so you can't "<tt>mv</tt>" it away in the middle.
+So it looks pretty hard to exploit; of course, this is not worth relying on.)
+See above for an easier-to-exploit race condition.
+<li>Uses the user's umask in the <tt>fopen()</tt>'s, so one user might be
+able to prevent other users from writing to the moderators file.
+(denial-of-service)
+<li>In fact, the previous two "almost-holes" interact badly to create
+a fully-exploitable hole.
+Set your umask to 666; then it will create <tt>tmpf</tt>
+as a root-owned world-writeable file; now after the <tt>looksok()</tt>
+but before the <tt>rename()</tt> in <tt>main</tt> you can change the contents
+of the file and sneak nasty bang-escapes into the moderators file.
+<li>There's another incredibly clever way to make the race condition
+between the <tt>looksok()</tt> and the <tt>rename()</tt> work, but it
+is so complicated I won't describe it here. The basic idea
+to cause the <tt>execl()</tt> call to fail; I'll let you work
+out the details for fun.
+<li>Another problem is that if you can open the <tt>tmpf</tt> for
+writing and hold on to the file descriptor after <tt>vi</tt> exits
+(or by sending a false <tt>SIGCHLD</tt> to the program),
+you will still be able to write to the file even after the <tt>rename()</tt>
+completes.  (<tt>vi</tt> doesn't itself hold the file descriptor open,
+but any other program easily could.)
+<li>Calls to <tt>exit()</tt> with first doing a <tt>releaselock()</tt>.
+(denial-of-service)
+<li>Environment variables not sanitized; bad coding style?
+</ul>
+<p>Note that, although we ourselves wrote the program to contain a
+number of security holes we already knew about, some students managed
+to find one or two new security holes which we weren't
+already aware of.  Nice job!  (And there's a lesson in here somewhere...)
+
+<h2 align="center">Question 2: Active networks</h2>
+
+<ol>
+<li>Problem: The list of interfaces is exposed; if they include a private
+   network, adversaries can now route packets over interfaces that weren't
+   previously exposed to the world.  Moreover, if one of them is a VPN,
+   adversaries can now mount chosen-plaintext attacks on the crypto.
+   Fix: obvious.<br>
+   Problem: Mobile code can leak out any sensitive information it collects
+   via a simple covert channel.  Just set the record route protocol,
+   and you can leak a bit or two of information per packet according to
+   which interface is chosen.  (One person found another covert channel,
+   with an awfully clever technique based on using mobile code to make
+   adaptive queries of a target router. Cool!)
+   Fix: almost impossible; basically, the
+   right approach is to make sure mobile code can never get access to
+   sensitive information in the first place.<br>
+   Problem: You might be able to tell where the previous packet went,
+   if the router isn't smart enough to zero out the register after each
+   packet.  Fix: obvious.
+<li>Problem: You can set a handler on some other guy's flow
+   and change the routes his packets take, if you can guess his flow ID.
+   (A slight variant: you might also be able
+   to set a handler on some other guy's flow by setting up a connection
+   of your own with the same flow ID and setting a handle on it; then
+   you terminate the connection without the router realizing it, and
+   somehow prod a security-sensitive target program to re-use the same
+   TCP flow ID numbers.)<br>
+   Impact: You can do a man-in-the-middle attack if you can guess the
+   flow ID.  Re-route the target flow towards a colluder's workstation,
+   where you do nasty stuff (e.g. modify packet data) and then send it
+   on via some other route.
+   Partial solution: unguessable flow IDs.
+   Better solution: strong cryptographic authentication for set-handler
+   requests.<br>
+   Problem: The router is now required to save state about the set of
+   existing connections, which might be sensitive. If it is broken into,
+   much more sensitive information will be exposed.
+<li>Problem: Looping constructs can make it harder to detect the
+   previous man-in-the-middle attack.  Previously, the adversary was
+   required to divert every packet in the flow under attack.
+   Now the adversary may select only the interesting packets for diversion,
+   which potentially makes it harder to detect the attack.
+<li>Problem: Adversaries can disguise other attacks (e.g. port scanning,
+   sendmail attacks, whatever) as seemingly-innocuous
+   traffic (e.g. web traffic) and "tunnel" through a firewall using this
+   disguise.  When the disguised packets emerge in the internal network,
+   adversaries can use a chunk of mobile code which sheds the disguise and
+   transforms the packets into some form of nastiness.  (For instance,
+   adversaries might be able to set false source IP addresses, different
+   TCP port numbers, different application data, and so on.)
+   This allows adversaries to evade packet filters, firewalls, and
+   intrusion detection systems.
+   Solution: Set-handler requests should be transmitted by some protocol
+   which will be blocked at the firewall.<br>
+   Problem: Man-in-the-middle attacks get even easier.  If you want to
+   take over a telnet session (for instance), you can now just
+   modify the telnet packets directly at the router; there is no need
+   to divert the flow.
+   Solution: strong crypto authentication of set-handler requests.<br>
+   Problem: The mobile code can emit new packets which set evil handlers on
+   other routers.  (Of course, they are limited in the number of evil
+   packets they can emit, because of a conservation property: the mobile
+   code can only send out one packet for every packet received.)
+   Solution: Don't allow set-handler requests if the mobile code modified
+   the packet, maybe?<br>
+   Problem: Adversaries can create an "evergreen" packet which never dies
+   by writing to the TTL field.  (For instance, you send the packet in a
+   loop; if one router in the loop will run mobile code, you can set a
+   handler which will set the TTL on the packet to its maximum value every
+   time it traverses that router.  This could be especially nasty for
+   e.g. multicast packets.)  This is only a denial-of-service
+   attack, but it is a clever one.
+   Solution: Don't allow handlers to increase the TTL field.<br>
+   (And, finally, one person found an incredibly clever way for an
+   attacker to keep state in the mobile code
+   by sending self-modifying packets around so that the
+   modifications encapsulate the current state; this allows for an attacker
+   to obtain all the benefits of state even without needing the router
+   modification suggested in the next part of the question.  Wow!)
+<li>Problem: The internal state may make it easier to mount attacks, because
+   it gives the attacker more flexibility.  For instance, if you want your
+   mobile code to act as a packet sniffer and to dump out the data it collects
+   to somewhere useful, the mobile code could just create a new connection
+   out of whole cloth and post all the collected data to usenet.
+   (You can only send one packet on the usenet connection for every
+   packet you receive, and even then only if you drop the original packet,
+   so at first glance it might look difficult to make this attack work in
+   practice because you will be forced to drop a lot of packets from the
+   target flow.  However, if the target flow is a tcp connection, the
+   attack gets a lot easier: the source will conveniently re-transmit
+   dropped packets for you, so you alternate---the first time you see a
+   packet, you mutate it into something to be sent over the usenet connection,
+   and then when you see it retransmitted you let it go through unmodified.
+   The attack will probably go unnoticed (except for a performance loss,
+   but everyone will just blame Sprint).)
+   Solution: Ensure that handlers can't change which flow the modified
+   packet falls into.
+<li>Problem: Packet flooding denial of service attacks can get quite a
+   bit harder to solve.  Malicious mobile code could double the number
+   of packets sent at each hop.  Locally, at each hop this wouldn't look
+   suspicious, because it looks the same as a decompression handler; but
+   globally, this causes an exponential explosion.
+   Solution: Per-user limits on number of packets transmitted; or
+   pay-per-use.<br>
+   Problem: It becomes a little easier to leak out interesting information
+   you've collected by some other means, because now you can create new
+   connections out of whole cloth without disrupting the legitimate flow.<br>
+   Problem: Mobile code can emit multiple packets which set handlers on
+   other routers. Can you say unlimited virus propagation, boys and girls?
+   Fix: Write a "safe" MTU-fragmentation system call; or don't let a handler
+   for flow F write new packets to some other flow.
+<li>Java: Just say no.<br>
+   Now you have threads which can run forever, can kill other threads, can
+   potentially do nasty stuff like write to disk, open net sockets, etc;
+   the number of concerns is far too large to list here, and most people
+   did a fine job of mentioning some of them.
+</ol>
+
+<p>In general, a lot of folks mentioned denial of service attacks,
+but we thought they were less interesting, because most of them
+are straightforward to find and straightforward to fix.
+Most of these fall into the category of resource consumption issues,
+which are in practice not too hard to handle with a little bit of resource
+management code.  You just need to set some timeouts, enforce limits
+on memory consumption, and expire everything after a little while;
+most of the issues are easily dealt with, if you have strong cryptographic
+authentication of the end user.
+
+<p>For part 1, many people mentioned that you do denial of service attacks
+by creating routing loops.  We thought this relatively minor.  Remember,
+each packet will get dropped after at most 256 hops when its TTL expires.
+And sysadmins may even notice that this is going on: it's pretty reasonable
+to log all TTL-expiry events, since this is usually a prime indicator
+of routing loops.  Finally, we note the attack is already possible with
+source routing, so it is hard to place all of the blame on the support
+for mobile code.
+
+
+<h2 align="center">Question 3: Composing security policies</h2>
+<ol>
+<li>The obvious approach is to block the mobile code with a proxy.
+But it might not be so easy as it sounds: to take Java as a representative
+example, how can you reliably recognize Java code at the firewall?
+  <ol>
+  <li>One could rewrite all <tt>&lt;applet&gt;</tt> tags in the HTML.
+  But this can be tricky.  For one, it is unacceptable to do rewriting
+  on non-HTML documents, since you might corrupt e.g. GIFs and so on.
+  Worse, it can be hard to recover the HTML documents
+  since they could be hidden arbitrarily deep inside some MIME multipart
+  encoding and/or compressed using some strange compression algorithm.
+  Far worse, you would have to understand the end browser parser
+  100% accurately.  Even worse still, rewriting mail and news may be
+  very problematic, yet many browsers will parse HTML (and execute Java
+  code!) in mail and news.
+  <li>One could try to recognize (and block) Java class files.
+  It is useful that they all start with <tt>0xCAFEBABE</tt>.
+  While this is a very good start, it
+  is not 100% guaranteed: in some cases, Netscape does not
+  require this magic cookie to be at the beginning of a file.
+  Furthermore, compressed and MIME encoded documents are still a problem.
+  <li>You could block all files ending in <tt>.class</tt>.
+  But this doesn't catch <tt>jar</tt> files (archives which contain
+  multiple Java class files), which end in <tt>.zip</tt>.
+  It probably would be too unpopular to block all files ending
+  in <tt>.zip</tt>, though you might be able to unzip such archives
+  and check whether they contain any class files.
+  </ol>
+The best approach seems to be a combination all these techniques.<br>
+None of these can protect end-to-end encrypted streams (e.g. SSL).
+And this is only detecting Java.
+Detecting Javascript and ActiveX
+might be much much harder;
+for instance, detecting Javascript seems to require understanding how
+to parse HTML exactly the same way the end browser will
+(since the Javascript code is sent in-line in the HTML document)
+and this can be extremely difficult.
+And to block Javascript, you need to know all the possible ways Javascript
+could be invoked (did you know that a <tt>mocha:</tt> URL automatically
+invokes Javascript?), so just searching for <tt>&lt;script&gt;</tt> tags
+is not enough.
+And this doesn't even begin to address attached <tt>.exe</tt> files,
+dangerous Postscript code, embedded Visual Basic, downloaded
+plugins, and so on.
+Even defining what is mobile code is difficult: for instance, if someone
+downloads the latest Netscape executable, does that count as mobile code?
+One reasonable approach is to say that "if it will be executed
+automatically at the end host, then it should be blocked automatically
+at the firewall".<br>
+There is even
+<a href="http://www.cs.nyu.edu/cgi-bin/cgiwrap/~rubin/block.ps">a
+whole paper</a> written on some of these issues.
+<li>Assuming one can identify the dangerous forms of mobile code (see above),
+one reasonable approach might be to block everything that is not Java.
+For Java, a number of reasonable risk-reduction mechanisms are
+available for experimentation:
+  <ol>
+  <li>One might reject all classes which might access the network
+  (calls to <tt>Socket</tt>) or filesystem (e.g. calls to <tt>File</tt>),  
+  use the <tt>ClassLoader</tt>, call <tt>Class.forName()</tt>,
+  or use the reflection interface.
+  <li>Your proxy might run three different static bytecode verifiers,
+  implemented independently by three different vendors, on all Java class
+  files before passing them on to the internal host;
+  this reduces the amount of trust in the end host's bytecode verifier
+  (though it doesn't reduce the amount of trust needed in other core
+  JVM components).
+  <li>If one is suspicious of the
+  verification of subroutines (<tt>jsr</tt>) on browsers' JVMs, one
+  might statically inline all subroutines when it is easy to do so,
+  and block all applets when such static transformation is difficult
+  or introduces too much code bloat.
+  <li>One might even implement different security policies
+  based on the version of the
+  internal browser: if it is a version that is known to contain security
+  holes, block all Java applets and ask the end user to upgrade his
+  browser.
+  Tracking version numbers is not too hard with an application proxy:
+  just keep track of the <tt>User-Agent</tt> field sent by the internal browser.
+  </ol>
+(Code signing was a popular answer, but it doesn't seem to help much:
+it just doesn't scale.  Anyhow, one of the biggest problems is identifying
+mobile code and trying to predict how end hosts might interpret it; code
+signing doesn't help with this issue.)
+<li>
+Blame the buggy end-host implementations of mobile code VMs.
+Trying to work around these bugs at the firewall is a hack.
+More fundamentally, it is impossible to block all such dangerous mobile
+code at the firewall, because of the possibility that it will be sent
+in end-to-end encrypted data streams (e.g. PGP'd email, SSL web browsing,
+etc).  Attackers might even learn to trick the user into setting up
+these encrypted streams (e.g. by sending a HTTP redirect that sends the
+browser to a HTTPS port to receive the nasty mobile code bits).
+More mundanely, even in the absence of end-to-end encryption, unpacking
+all potential forms of MIME, zip archives, self-extracting executables, etc.
+and checking them for mobile code is very difficult.<br>
+(This question was somewhat tricky to answer.  Answers like
+"it's the paradigm's fault, not the end host's fault" were also
+acceptable if they were well-readable.)
+</ol>
+In general, the security models of firewalls and mobile code don't
+mix very well; and it is often very difficult for the firewall to
+predict how the end host will interpret a given piece of application data
+(this is just an example of the synchronization or canonicalization
+problem under a different name).
+
+
+</body></html>
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d303 8
+a310 3
+(See also
+<a href="http://www.cs.nyu.edu/cgi-bin/cgiwrap/~rubin/block.ps">this paper</a>
+for more discussion on these issues.)
+d339 6
+a344 1
+<li>Blame the buggy end-host implementations of mobile code VMs.
+d354 4
+a357 1
+and checking them for mobile code is very difficult.
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d130 4
+a133 1
+   which interface is chosen.  Fix: almost impossible; basically, the
+d135 4
+a138 1
+   sensitive information in the first place.
+d141 6
+d150 2
+a151 1
+   on via some other route.  Partial solution: unguessable flow IDs.
+d189 2
+a190 1
+   time it traverses that router.)  This is only a denial-of-service
+d192 7
+a198 1
+   Solution: Don't allow handlers to increase the TTL field.
+d248 8
+a255 7
+<p>Many people mentioned denial of service by looping packets for
+number one, but we thought this relatively minor.
+Remember, this will get stopped after 256 hops due to the TTL.
+Sysadmins may even notice: it's pretty reasonable to log all
+TTL-expiry events, since this is usually a prime indicator of routing loops.
+Furthermore, the attack is already possible with source routing;
+there's no need to bother with mobile code.
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d66 2
+a67 1
+handlers and calls to <tt>sleep(1)</tt>, but hey, this was a homework.)
+d238 93
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d16 1
+a16 1
+<h2 align="center">Question 1: buggy code</h2>
+d18 1
+a18 1
+<li>Runs <tt>vi</tt> with root privilege; can execute arbitrary commands
+d21 2
+a22 1
+(progname could be arbitrarily long).
+d25 2
+a26 1
+(Or you can do the race during the <tt>tmpnam()</tt>.)
+d66 1
+a66 1
+handlers and calls to <tt>sleep(1)</tt>, but this is not unusual.)
+d68 2
+a69 2
+(Slightly better to run with non-zero euid and zero saved uid;
+much better is to revoke all root privileges early in the program.)
+d82 3
+a84 2
+(However, it just so happens that this does not appear to be exploitable
+in practice: <tt>tmpf</tt> is owned by root and thus is not easily changed;
+d87 1
+a87 1
+But neither of these conditions are worth relying on.)
+d98 11
+d113 4
+d118 1
+d120 96
+a215 1
+<h2 align="center">Question 2: active networks</h2>
+d217 9
+d227 10
+a236 3
+<h2 align="center">Question 3: composing security policies</h2>
+<p>To get a good mark, you describe more than one of the following.
+(This question called for brainstorming...)</p>
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d89 6
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d27 2
+a28 1
+First, it releases root privileges; then it tries to change groups;
+d33 1
+a33 1
+can use this trick to write to any file which is writeable by root.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d56 2
+a57 2
+(and <em>without</em> <tt>O_EXCL</tt>);
+if "<tt>/tmp/debug.vi_moderators</tt>" already exists and is a symlink to
+d59 5
+a63 2
+of our choice
+(we can choose the file contents by setting <tt>argv[0]</tt> appropriately).
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d65 7
+a71 1
+<li>OS must obey <tt>O_EXCL</tt> in <tt>grablock()</tt>.
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d18 3
+a20 3
+<li>Runs vi with root privilege; can execute arbitrary commands
+with vi's ":!" command.
+<li>Buffer overrun in sprintf() at debug:68
+d22 5
+a26 4
+<li>Race condition between tmpnam() at main:162 and copyfile() at main:163.
+(Or you can do the race during the tmpnam().)
+<li>secure_open_as_user() does the seteuid() and setegid() in the
+<em>wrong order</em>.
+d28 2
+a29 1
+but the call to setegid() will fail, because you need to have euid root
+d31 1
+a31 1
+So the fopen() in line 38 will actually run with egid root, and you
+d34 1
+a34 1
+(For instance, make "/tmp/debug.vi_moderators" a symlink pointing
+d39 4
+a42 3
+Program calls secure_open_as_user(); then, after line 36 executes
+but before the fopen() in line 38, we send the program a SIGCHLD.
+(Note that Unix allows us to send a SIGCHLD, because the program
+d44 4
+a47 4
+Then the signal handler will get invoked; the handler calls debug(),
+which calls secure_open_as_user() a second time.
+After line 44 of the second invocation of secure_open_as_user() completes,
+our euid will be zero (root).
+d49 2
+a50 2
+secure_open_as_user() begins executing again at line 38.
+But now the fopen() in line 38 proceeds with euid root,
+d53 8
+a60 6
+For instance, if the first invocation of secure_open_as_user() was
+called by debug(), then it will try to open
+"/tmp/debug.vi_moderators" as root (and <em>without</em> O_EXCL);
+if "/tmp/debug.vi_moderators" already exists and is a symlink to
+"/etc/passwd", then the password file will be overwritten with values
+of our choice (we can choose the values by setting argv[0] appropriately).
+d65 4
+a68 3
+<li>OS must obey O_EXCL in grablock().
+<li>Beware of race condition between looksok() in main:168 and
+rename() in main:169; you have to worry that the user might change
+d71 3
+a73 3
+in practice: tmpf is owned by root and thus is not easily changed;
+and tmpf lives in /tmp/ which usually has the sticky-bit set so you
+can't 'mv' it away in the middle.
+d76 1
+a76 1
+<li>Uses the user's umask in the fopen()'s, so one user might be
+d79 2
+a80 1
+<li>Calls to exit() with first doing a releaselock().  (denial-of-service)
+@

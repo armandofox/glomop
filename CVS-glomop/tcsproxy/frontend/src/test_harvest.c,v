@@ -1,0 +1,565 @@
+head	1.16;
+access;
+symbols
+	Yatin-final:1.16
+	Yatin:1.16.0.2
+	pre-yatin-merge:1.16
+	transend-beta2:1.15
+	fox-dev:1.15.8.1
+	frontend-ng:1.15
+	transend-beta-latest:1.15
+	Aggregators:1.15
+	NoAggregators:1.15
+	iang:1.15.0.4
+	transend-beta:1.15.0.2
+	SOSP:1.14
+	merged_preintegrate:1.11
+	heisenbug:1.11
+	PRE_INTEGRATION:1.11;
+locks; strict;
+comment	@ * @;
+
+
+1.16
+date	97.08.30.21.34.24;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.04.17.21.44.53;	author aspolito;	state Exp;
+branches
+	1.15.8.1;
+next	1.14;
+
+1.14
+date	97.03.03.22.38.50;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.05.01.39.21;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.01.29.05.07.30;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.12.10.23.05.03;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.12.05.01.12.27;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.11.28.14.27.45;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.11.24.15.19.25;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.11.24.13.52.01;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.13.17.08;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.12.56.05;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.09.47.33;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.22.36.10;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.15.04.47.51;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.15.02.38.33;	author gribble;	state Exp;
+branches;
+next	;
+
+1.15.8.1
+date	97.08.11.04.12.55;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.16
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@#include <config_tr.h>
+#include <stdio.h>
+#include <string.h>
+#include <frontend.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <proxyinterface.h>
+
+#include "config_tr.h"
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "thr_cntl.h"
+#include "libmon.h"
+
+extern int errno;
+extern int tasks_done;
+static int gSock2;
+static UINT32 nreqs2;
+static pthread_t thr_http2;
+
+pthread_t  harvest_httpreq_init(int port);
+static void *harvest_http_eventloop_proc(void *arg);
+
+int main(int argc, char **argv)
+{
+  int port;
+  clib_response resp;
+  int  nthr;
+  char filename[64];
+
+  sprintf(filename, "part.config");
+  if (argc == 1) {
+    fprintf(stderr, "Usage: test_harvest num_threads [portnum [cfgfile]]\n");
+    exit(1);
+  }
+  if (argc == 2)
+    port = 5676;
+  else if (argc > 2) {
+    port = atoi(argv[2]);
+    if (argc >= 4) {
+      sprintf(filename, "%s", argv[3]);
+    }
+  }
+  if ((resp = Clib_Initialize(filename, NULL) != CLIB_OK)) {
+    exit(1);
+  }
+  if (sscanf(argv[1], "%d", &nthr) != 1) {
+    proxy_errlog_1("Usage: test_harvest num_threads [portnum [configfile]]");
+    exit(1);
+  }
+  harvest_httpreq_init(port);
+  (void)make_threads(nthr, 1);
+  while(1)
+    sleep(10);
+}
+
+void *harvest_http_go_proc(void *arg)
+{
+  task_t   *t = (task_t *) arg;
+  int       fd = (int)TASK_DATA(t), rv;
+  unsigned  inlen, outlen;
+  char     *inbuf=NULL, *outbuf=NULL;
+
+  if (do_http_client_receive(fd, &inlen, &inbuf) != 0) {
+    close(fd);
+    return (void *) 0;
+  }
+
+  if (inlen <= 0) {
+    close(fd);
+    return (void *) 0;
+  }
+  INST_set_thread_state(t->thrindex, THR_CACHE);
+  if (Clib_Lowlevel_Op(inbuf, inlen, &outbuf, &outlen) != CLIB_OK) {
+    if (inbuf)
+      free(inbuf);
+    if (outbuf)
+      free(outbuf);
+    close(fd);
+    return (void *) 0;
+  }
+  INST_set_thread_state(t->thrindex, THR_WRITEBACK);
+
+  if ((rv = correct_write(fd, outbuf, outlen)) != outlen) {
+    if (inbuf)
+      free(inbuf);
+    if (outbuf)
+      free(outbuf);
+    close(fd);
+    return (void *) 0;
+  }
+
+  if (inbuf)
+    free(inbuf);
+  if (outbuf)
+    free(outbuf);
+  close(fd);
+  return (void *) 0;
+}
+
+static void *harvest_http_eventloop_proc(void *arg)
+{
+  int newconn;
+  task_t *request;    
+
+  proxy_debug_2(DBG_HTTP, "Accepting connections");
+
+  while (1) {
+    newconn = saccept(gSock2);
+    if (newconn == -1) {
+      proxy_errlog_2("Accept connection: %s", strerror(errno));
+      continue;
+    }
+    /* Put the connection on the queue. */
+
+    new_task(&request);
+    SET_TASK_ID(request,nreqs2);
+    SET_TASK_GO_PROC(request, harvest_http_go_proc);
+    SET_TASK_DATA(request, newconn);
+    assert(dispatch(request) == 0);
+    nreqs2++;
+  }
+}
+
+pthread_t  harvest_httpreq_init(int port)
+{
+  char portnum[8];
+  pthread_attr_t attr;
+  struct sched_param param;
+  
+  nreqs2 = 0;
+  sprintf(portnum,"%d",port);
+  gSock2 = slisten(portnum);
+  assert(gSock2 != 0);
+
+#if 0
+  /* BUG:: */
+  proxy_debug_2(DBG_HTTP, "Setting up sock options");
+
+  if (setsockopt(gSock2, SOL_SOCKET, SO_REUSEADDR, 
+		 (const char *)1, sizeof(char)) != 0)
+    proxy_errlog_2("setsockopt SO_REUSEADDR: %s", strerror(errno));  
+
+  if (setsockopt(gSock2, SOL_SOCKET, SO_KEEPALIVE, (const char *)0, 
+		 sizeof(char)) != 0)
+    proxy_errlog_2("setsockopt SO_KEEPALIVE: %s", strerror(errno));
+#endif
+
+  
+  proxy_debug_3(DBG_HTTP, "Listening on port %d\n", port);
+
+  /* spawn a local worker thread  */
+  THR_OP("Init attributes",
+	 pthread_attr_init(&attr));
+  THR_OP("Get HTTP thread params",
+	 pthread_attr_getschedparam(&attr, &param));
+#ifdef HAVE_PTHREAD_MIT_PTHREAD_ATTR_H
+  param.prio += 30;
+#else
+  param.sched_priority += 30;
+#endif
+  THR_OP("Set HTTP thread params",
+	 pthread_attr_setschedparam(&attr, &param));
+  THR_OP("Thread create HTTP",
+         pthread_create(&thr_http2, (pthread_attr_t *)&attr,
+                        harvest_http_eventloop_proc, (void *)NULL));
+  
+  proxy_debug_2(DBG_HTTP, "Spawned HTTP worker thread\n");
+  return thr_http2;
+
+}
+@
+
+
+1.15
+log
+@config.h is now config_tr.h
+@
+text
+@d1 1
+a1 1
+#include <proxy.h>
+d4 1
+a4 1
+#include <httpreq.h>
+d77 1
+a77 1
+  inst_set_thread_state(t->thrindex, THR_CACHE);
+d86 1
+a86 1
+  inst_set_thread_state(t->thrindex, THR_WRITEBACK);
+@
+
+
+1.15.8.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d1 1
+a1 1
+#include <config_tr.h>
+d4 1
+a4 1
+#include <frontend.h>
+d77 1
+a77 1
+  INST_set_thread_state(t->thrindex, THR_CACHE);
+d86 1
+a86 1
+  INST_set_thread_state(t->thrindex, THR_WRITEBACK);
+@
+
+
+1.14
+log
+@added stuff to do timestamp monitoring at various interesting points in
+a worker thread's lifetime.  also split out monitoring stuff into its
+own file thr_mon.c.
+@
+text
+@d12 1
+a12 1
+#include "config.h"
+@
+
+
+1.13
+log
+@Changed client library interface to accept a preinitialized monitor
+object.
+@
+text
+@d77 1
+a77 1
+  set_thread_state(t->thrindex, THR_CACHE);
+d86 1
+a86 1
+  set_thread_state(t->thrindex, THR_WRITEBACK);
+@
+
+
+1.12
+log
+@Minor tweaks (I think).
+@
+text
+@d16 2
+d37 1
+a37 1
+    proxy_errlog_1("Usage: test_harvest num_threads [portnum [cfgfile]]");
+d48 1
+a48 1
+  if ((resp = Clib_Initialize(filename) != CLIB_OK)) {
+d77 1
+a77 1
+
+d86 1
+@
+
+
+1.11
+log
+@Put ifdef for pthread_mit_pthread_attr_h in, since linux pthreads uses
+a different thread priority field name.
+@
+text
+@d31 1
+d33 1
+a33 3
+  if ((resp = Clib_Initialize("part.config") != CLIB_OK)) {
+    exit(1);
+  }
+d35 1
+a35 1
+    proxy_errlog_1("Usage: test_harvest num_threads [portnum]");
+d40 1
+a40 1
+  else
+d42 7
+a48 1
+
+d50 1
+a50 1
+    proxy_errlog_1("Usage: test_harvest num_threads [portnum]");
+@
+
+
+1.10
+log
+@Fixed some performance bugs in the frontend, took out some tracing variable
+code, and added priority change for accept thread in test_harvest.c.
+@
+text
+@d12 1
+d153 3
+d157 1
+@
+
+
+1.9
+log
+@Hack hack hack...fixed lots of small buglets..
+@
+text
+@d17 1
+d29 1
+d34 5
+a38 2
+
+  if (argc == 1)
+d41 6
+a46 1
+    port = atoi(argv[1]);
+d48 1
+a48 1
+  (void)make_threads(200, 10);
+a59 1
+  proxy_errlog_1("harvest_http_go_proc");
+a69 1
+  proxy_errlog_2("about to lowlevel_op that puppy..%d", inlen);
+a78 1
+  proxy_errlog_1("time to write..");
+a79 1
+    printf("wrote %d\n", rv);
+a110 1
+    proxy_debug_3(DBG_HTTP, "Queueing connection %d", nreqs2);
+d123 2
+d148 7
+d156 1
+a156 1
+         pthread_create(&thr_http2, (pthread_attr_t *)NULL,
+@
+
+
+1.8
+log
+@Test!
+@
+text
+@d38 1
+a38 1
+  (void)make_threads(40, 10);
+a60 3
+  close(fd);
+  return (void *) 0;
+
+d72 2
+a73 1
+  if ((rv = write(fd, outbuf, outlen)) != outlen) {
+@
+
+
+1.7
+log
+@Getting closer..
+@
+text
+@d61 3
+@
+
+
+1.6
+log
+@Stilllooking..
+@
+text
+@d38 1
+a38 1
+  (void)make_threads(10, 10);
+@
+
+
+1.5
+log
+@Looking for fd bug..
+@
+text
+@d38 1
+a38 1
+  (void)make_threads(30, 10);
+@
+
+
+1.4
+log
+@more threads....
+@
+text
+@d38 1
+a38 1
+  (void)make_threads(50, 10);
+@
+
+
+1.3
+log
+@Fixed snafu if connection is broken in mid-load.
+@
+text
+@d38 1
+a38 1
+  (void)make_threads(20, 10);
+@
+
+
+1.2
+log
+@Fixed up test_harvest partition front end!
+@
+text
+@d56 5
+d63 4
+a66 2
+    free(inbuf);
+    free(outbuf);
+d73 4
+a76 2
+    free(inbuf);
+    free(outbuf);
+d81 4
+a84 2
+  free(inbuf);
+  free(outbuf);
+@
+
+
+1.1
+log
+@added test_harvest to Makefile.in
+@
+text
+@d27 5
+a32 1
+  Clib_Initialize("part.config");
+d50 1
+a50 1
+  proxy_errlog_2("harvest_http_go_proc %s", "1");
+a54 1
+  proxy_errlog_2("harvest_http_go_proc buf %s", inbuf);
+d56 1
+d64 1
+@

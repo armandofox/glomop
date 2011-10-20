@@ -1,0 +1,2158 @@
+head	1.24;
+access;
+symbols
+	Yatin-final:1.23.2.3
+	Yatin:1.23.0.2
+	pre-yatin-merge:1.23
+	transend-beta2:1.22
+	fox-dev:1.22
+	ptm-ng:1.21
+	transend-beta-latest:1.21
+	Aggregators:1.21
+	NoAggregators:1.21
+	iang:1.21.0.2
+	transend-beta:1.20.0.2
+	SOSP:1.20
+	stable_ptm:1.14
+	merged_preintegrate:1.7
+	heisenbug:1.7
+	PRE_INTEGRATION:1.6;
+locks; strict;
+comment	@// @;
+
+
+1.24
+date	98.01.16.22.16.19;	author yatin;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.09.08.23.32.23;	author yatin;	state Exp;
+branches
+	1.23.2.1;
+next	1.22;
+
+1.22
+date	97.06.06.01.09.09;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.04.28.18.46.40;	author yatin;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.03.09.05.51.04;	author yatin;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.03.06.02.49.16;	author yatin;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.03.04.17.59.24;	author yatin;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.02.27.01.13.57;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.02.26.04.15.01;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.17.03.01.15;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.07.21.54.50;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.05.20.20.51;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.05.03.49.02;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.29.23.26.12;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.29.06.00.52;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.05.22.02.57;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.04.09.55.41;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.13.02.11.26;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.18;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.18;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.08.21.36;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.00.42.28;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.52;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.46;	author yatin;	state Exp;
+branches;
+next	;
+
+1.23.2.1
+date	97.11.17.22.07.03;	author yatin;	state Exp;
+branches;
+next	1.23.2.2;
+
+1.23.2.2
+date	97.12.01.22.19.33;	author iang;	state Exp;
+branches;
+next	1.23.2.3;
+
+1.23.2.3
+date	98.01.16.20.35.06;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "log.h"
+#include "defines.h"
+#include "cache.h"
+#include "cachenet.h"
+#include "cacheman.h"
+
+
+#ifdef __INSTRUMENT__
+FILE *instFile=NULL;
+#endif
+
+
+DistillerCache::DistillerCache()
+  : BasicDistillerDatabase(), cacheMutex("dist-cache"), typeIndex(NULL)
+{
+#ifdef __INSTRUMENT__
+  instFile = fopen("ptm/frontend.log", "w");
+#endif
+
+  typeIndex = new DistillerTypeIndex;
+  if (typeIndex==NULL) VoidReturn(errOutOfMemory);
+  AddIndex(typeIndex); // ignore return value
+}
+
+
+DistillerCache::~DistillerCache()
+{
+  if (typeIndex!=NULL) {
+    RemoveIndex(typeIndex);
+    delete typeIndex;
+    typeIndex = NULL;
+  }
+}
+
+
+CachedDistiller*
+DistillerCache::getDistiller(DistillerType *type, DistillerStatus &status)
+{
+  CachedDistiller *distiller;
+
+  status = distOk;
+
+  // Lock the cache; remember to unlock it before doing any long blocking 
+  // operation
+  cacheMutex.Lock();
+  
+  // try to find a distiller in the cache
+  distiller = Find_(type);
+  
+  if (distiller==NULL) {
+    // if I can't find one, first look in the negative cache
+    if (negativeCache.IsThere(type)==gm_True) {
+      // it is in the negative cache; that means even the PTM doesn't
+      // know of it. So just return an error status
+      cacheMutex.Unlock();
+      status = distDistillerNotFound;
+      return NULL;
+    }
+
+    // if I can't find one, unlock the mutex, ask the PTM for a new 
+    // distiller, and retry
+    AskForDistillerStatus askStatus;
+    cacheMutex.Unlock();
+    //set_thread_state(THR_DISTPTM);
+    if (CacheManager::getInstance()->AskPTMForDistiller__(type, askStatus)
+	==gm_False) {
+      // could not get a distiller from the PTM
+      // return error status
+      // the function might have set an error status; clear it
+      Error::SetStatus(success);
+      switch (askStatus) {
+      case ptmDistillerLaunchTimeout:
+      case ptmAskForDistillerTimeout:
+	status = distLaunchTimeout;
+	return NULL;
+      default:
+	// the PTM couldn't find a distiller; save this info in the 
+	// negative cache
+	negativeCache.Add(type);
+	status = distDistillerNotFound;
+	return NULL;
+      }
+    }
+    
+    // AskPTMForDistiller succeeded
+    // so we probably have a new cached distiller; retry
+    // lock the cache first
+    
+    cacheMutex.Lock();
+    distiller = Find_(type);
+    
+    if (distiller==NULL) {
+      // still could not find a distiller! We're out of luck...
+      cacheMutex.Unlock();
+      status = distDistillerNotFound;
+      return NULL;
+    }
+  }
+  
+  // At this point, I've found a distiller (and the cache is still locked)
+  // increment the ref count of the distiller
+  distiller->IncrReference();
+  distiller->IncrPendingCount();
+  cacheMutex.Unlock();
+  return distiller;
+}
+
+
+gm_Bool
+DistillerCache::Update(DistillerInfoHandler *handler)
+{
+  BasicDistiller record;
+  gm_Bool returnValue = gm_True;
+  cacheMutex.Lock();
+
+  if (handler->IsCompleteUpdate()==gm_True) {
+    // first invalidate the entire cache; we'll validate entries as we find 
+    // them from the DistillerInfo
+    MarkAsValid_(gm_False);
+  }
+
+  // get the next record
+  while (handler->getNext(&record)==gm_True) {
+    // update that record
+    if (Update_(&record)==gm_False) break;
+  }
+
+  if (handler->IsCompleteUpdate()==gm_True) {
+    if (Error::getStatus()==success) {
+      // we were successful; sweep out the untouched distillers
+      Sweep_();
+      returnValue = gm_True;
+    }
+    else {
+      // something bad happenned; re-mark all distillers as valid and punt back
+      MarkAsValid_(gm_True);
+      returnValue = gm_False;
+    }
+  }
+  cacheMutex.Unlock();
+  return returnValue;
+}
+
+
+gm_Bool
+DistillerCache::Update_(BasicDistiller *newRecord)
+{
+  CachedDistiller *record, *copy;
+  record = Find_(&newRecord->rid);
+  if (record!=NULL) { 
+    // there is already a cached distiller at this address
+    if (record->type.Equal(&newRecord->type)==gm_True) {
+      // they are the same distiller
+      record->Update(newRecord);
+      record->MarkAsValid();
+      return gm_True;
+    }
+    else {
+
+#if OLD
+      // a different distiller at the same address
+      if (record->IsConnected__()==gm_True) {
+	// the proxy is connected to this distiller
+	// ignore the new distiller (this case shouldn't happen)
+	record->MarkAsValid();
+	return gm_True;
+      }
+      else {
+	// the old distiller was a stale cache copy; remove it
+
+	Remove_(record);
+	record->MarkForDeletion();
+	gm_Log("Replacing cache with new " << (char*) newRecord->type 
+	       << " distiller at " << newRecord->rid << "\n");
+	if ((copy=new CachedDistiller)==NULL) {
+	  Return(gm_False, errOutOfMemory);
+	}
+	*((BasicDistiller*)copy) = *newRecord;
+	copy->SetName();
+	gm_Bool returnValue = Add_(copy);
+	return returnValue;
+      }
+#endif
+
+      // we are most likely renaming the distiller
+      // be careful not to disconnect the distiller
+      
+      // XXX: How can I be sure that it is really the same distiller?
+      
+      gm_Log("Renaming " << (char*) record->type << " distiller at " 
+	     << record->rid << " to " << (char*) newRecord->type << "\n");
+      BasicDistillerDatabase::Remove(record);
+      *((BasicDistiller*)record) = *newRecord;
+      record->SetName();
+      gm_Bool returnValue = Add_(record);
+      return returnValue;
+
+#if OLD
+      Remove_(record);
+      record->MarkForDeletion();
+      gm_Log("Replacing cache with new " << (char*) newRecord->type 
+	     << " distiller at " << newRecord->rid << "\n");
+      if ((copy=new CachedDistiller)==NULL) {
+	Return(gm_False, errOutOfMemory);
+      }
+      *((BasicDistiller*)copy) = *newRecord;
+      copy->SetName();
+      gm_Bool returnValue = Add_(copy);
+      return returnValue;
+#endif
+    }
+  }
+  else {
+    // this is a brand new distiller
+    gm_Log("Caching new " << (char*) newRecord->type << " distiller at " 
+	   << newRecord->rid << "\n");
+    
+    if ((copy = new CachedDistiller)==NULL) {
+      Return(gm_False, errOutOfMemory);
+    }
+    *((BasicDistiller*)copy) = *newRecord;
+    copy->SetName();
+    gm_Bool returnValue = Add_(copy);
+    return returnValue;
+  }
+}
+
+
+gm_Bool
+DistillerCache::Add_(CachedDistiller *dist)
+{
+  return BasicDistillerDatabase::Add(dist);
+}
+
+
+void
+DistillerCache::Remove_(CachedDistiller *dist)
+{
+  gm_Log("Removing " << (char*) dist->type << " distiller from " << dist->rid 
+	 << "\n");
+  BasicDistillerDatabase::Remove(dist);
+  dist->Disconnect__();
+  
+  // I wonder why I had commented out that piece of code earlier!
+  // XXX: don't bother to disconnect; when the distiller is deleted, 
+  // it'll automatically get disconnected
+}
+
+
+CachedDistiller*
+DistillerCache::Find_Lottery_(DistillerType *type)
+{
+  List<DatabaseRecord> *list;
+  UINT32 totalTickets, winner;
+  ListIndex idx;
+  CachedDistiller *dist;
+
+  //list = typeIndex->getBucket(type);
+  list = getAllRecords();
+  totalTickets = 0;
+
+  // compute the total number of tickets
+  idx = list->BeginTraversal();
+  for (; list->IsDone(idx)==gm_False; idx = list->getNext(idx)) {
+      dist = (CachedDistiller*) list->getData(idx);
+      if (dist->type.CanSatisfy(type)==gm_True 
+	  && dist->ShouldIgnore()==gm_False)
+	totalTickets += (dist->getTickets());
+  }
+  list->EndTraversal();
+
+  // select the winning ticket
+  if (totalTickets==0) return NULL;
+  winner = lrand48() % totalTickets;
+
+  // determine the winning distiller
+  totalTickets = 0;
+  idx = list->BeginTraversal();
+  for (; list->IsDone(idx)==gm_False; idx = list->getNext(idx)) {
+      dist = (CachedDistiller*) list->getData(idx);
+      if (dist->type.CanSatisfy(type)==gm_True 
+	  && dist->ShouldIgnore()==gm_False) {
+	totalTickets += (dist->getTickets());
+	if (winner < totalTickets) {
+	  list->EndTraversal();
+	  return dist;
+	}
+      }
+  }
+  list->EndTraversal();
+  return NULL;
+}
+
+
+CachedDistiller*
+DistillerCache::Find_Random_(DistillerType *type)
+{
+  CachedDistiller *dist, *found, *lastDist;
+  List<DatabaseRecord> *list;
+  ListIndex idx;
+  int size, random, current;
+
+  //list     = typeIndex->getBucket(type);
+  list     = getAllRecords();
+  size     = list->getSize();
+  found    = NULL;
+  dist     = NULL;
+  lastDist = NULL;
+
+  if (size > 0) {
+    // there is something in the bucket
+
+    // pick a random distiller
+    random = lrand48() % size;
+
+    // need to make sure it is the right kind
+    idx = list->BeginTraversal();
+    for (current=0; current<=random; idx = list->getNext(idx), current++) {
+      dist = (CachedDistiller*) list->getData(idx);
+      if (dist->type.CanSatisfy(type)==gm_True) lastDist = dist;
+    }
+
+    if (dist==lastDist) {
+      found = dist;
+    }
+    else {
+      // the distiller at position random was not of the reqd type
+      // so look ahead
+
+      for (; list->IsDone(idx)==gm_False; idx = list->getNext(idx)) {
+	dist = (CachedDistiller*) list->getData(idx);
+	if (dist->type.CanSatisfy(type)==gm_True) {
+	  found = dist;
+	  break;
+	}
+      }
+      
+      if (found==NULL) found = lastDist;
+    }
+    list->EndTraversal();
+  }
+  return found;
+}
+
+
+CachedDistiller*
+DistillerCache::Find_(RemoteID *rid)
+{
+  return (CachedDistiller*) getMainIndex()->FindOne(rid);
+}
+
+
+
+struct SweepFinder {
+  List<CachedDistiller> list;
+};
+
+
+void
+DistillerCache::Sweep_() 
+{
+  SweepFinder finder;
+  ForEach(SweepFunction_, &finder); 
+  ListIndex idx;
+  idx = finder.list.BeginTraversal();
+  for (; finder.list.IsDone(idx)==gm_False; idx = finder.list.getNext(idx)) {
+    //XXXgm_Log("Sweeping out old distiller\n");
+    Remove_(finder.list.getData(idx));
+    finder.list.getData(idx)->MarkForDeletion();
+  }
+  finder.list.EndTraversal();
+}
+
+
+gm_Bool
+DistillerCache::SweepFunction_(Database */*db*/, DatabaseRecord *record,
+			       void *finder_)
+{
+  SweepFinder *finder = (SweepFinder*) finder_;
+  CachedDistiller *dist = (CachedDistiller*) record;
+  if (dist->IsValid()==gm_False && dist->IsConnected__()==gm_False) {
+    if (finder->list.InsertAtHead(dist)==gm_False) return gm_False;
+  }
+
+  return gm_True;
+}
+
+
+gm_Bool
+DistillerCache::Validate_(Database */*db*/, DatabaseRecord *record,void* valid)
+{
+  ((CachedDistiller*)record)->MarkAsValid(*((gm_Bool*)valid));
+  return gm_True;
+}
+
+
+DistillerStatus
+CachedDistiller::Distill(Argument *args, int numberOfArgs,
+			 DistillerInput *input, DistillerOutput *output)
+{
+  //set_thread_state(THR_DISTLOCK);
+  // first lock this distiller
+  distMutex.Lock();
+
+  // check whether someone has marked this object for deletion
+  if (IsDeleted()==gm_True) {
+    distMutex.Unlock();
+    return distSendError;
+  }
+
+  // connect to it if required
+  if (IsConnected_()==gm_False) {
+    if (Connect_()==gm_False) {
+      if (Error::getStatus()==errOutOfMemory) {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distOutOfLocalMemory;
+      }
+      else {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distSendError;
+      }
+    }
+  }
+
+  //set_thread_state(THR_DISTSEND);
+  // send stuff
+
+  // this has the side effect of starting the timer
+  DistillerRequest *request = new DistillerRequest(this);
+
+  if (AddRequest_(request)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      return distSendError;
+    }
+  }
+
+  DistillerConnection *conn = connection;
+  conn->IncrReference();
+  distMutex.Unlock();
+  if (request->SendAndWait(conn, args, numberOfArgs, input)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete request;
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete request;
+      return distSendError;
+    }
+  }
+  *output = * (request->getOutput());
+  request->getOutput()->DontFreeMe();
+  conn->DecrReference();
+  DistillerStatus retval = request->getStatus();
+  delete request;
+  return retval;
+}
+
+DistillerStatus
+CachedDistiller::DistillAsync(Argument *args, int numberOfArgs,
+			 DistillerInput *input, DistillerRequest *& newrequest)
+{
+  //set_thread_state(THR_DISTLOCK);
+  // first lock this distiller
+  distMutex.Lock();
+
+  // check whether someone has marked this object for deletion
+  if (IsDeleted()==gm_True) {
+    distMutex.Unlock();
+    return distSendError;
+  }
+
+  // connect to it if required
+  if (IsConnected_()==gm_False) {
+    if (Connect_()==gm_False) {
+      if (Error::getStatus()==errOutOfMemory) {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distOutOfLocalMemory;
+      }
+      else {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distSendError;
+      }
+    }
+  }
+
+  //set_thread_state(THR_DISTSEND);
+  // send stuff
+
+  // this has the side effect of starting the timer
+  newrequest = new DistillerRequest(this);
+
+  if (AddRequest_(newrequest)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      delete newrequest;
+      newrequest = NULL;
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      delete newrequest;
+      newrequest = NULL;
+      return distSendError;
+    }
+  }
+
+  DistillerConnection *conn = connection;
+  conn->IncrReference();
+  distMutex.Unlock();
+  if (newrequest->Send(conn, args, numberOfArgs, input)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete newrequest;
+      newrequest = NULL;
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete newrequest;
+      newrequest = NULL;
+      return distSendError;
+    }
+  }
+  conn->DecrReference();
+  return distOk;
+}
+
+gm_Bool
+CachedDistiller::Connect_()
+{
+  /*if (connection!=NULL) {
+    // there seems to be a previous connection (shouldn't happen)
+    // remove it
+    CacheManager::getInstance()->getEventSystem()->
+      RemoveCommunicationObject(connection);
+    delete connection;
+  }*/
+  assert (connection==NULL);
+
+  // create a new connection object
+  connection = new DistillerConnection(this);
+  if (connection==NULL) {
+    Return(gm_False, errOutOfMemory);
+  }
+  // try to connect to the remote distiller
+  connection->IncrReference();
+  if (connection->Connect(rid.ipAddress, rid.port)==gm_False) {
+    connection->DecrReference();
+    return gm_False;
+  }
+
+  /* // add the connection object to the event system
+  if (CacheManager::getInstance()->getEventSystem()->
+      AddCommunicationObject(connection)==gm_False) {
+    connection->DecrReference();
+    return gm_False;
+  }*/
+  connection->DecrReference();
+  return gm_True;
+}
+
+
+void
+CachedDistiller::Disconnect_()
+{
+  if (connection!=NULL) {
+    /*connection->IncrReference();
+    // remove the connection object from the event system
+    CacheManager::getInstance()->getEventSystem()->
+      RemoveCommunicationObject(connection);*/
+
+    RemoveAllRequests_();
+
+    // delete the object
+    connection->MarkForDeletion();
+    //connection->DecrReference();
+    connection = NULL;
+  }
+}
+
+
+void 
+CachedDistiller::RemoveAllRequests_()
+{
+  DistillerRequest *request;
+  while (pendingRequests.IsEmpty()==gm_False) {
+    request = pendingRequests.RemoveFromHead();
+    request->EvDistillerConnectionBroken();
+  }
+}
+
+
+
+NegativeCache::~NegativeCache()
+{
+  Flush();
+}
+
+
+gm_Bool
+NegativeCache::Add(DistillerType *type)
+{
+  NegativeCacheEntry *record;
+  mutex.Lock();
+  // check if this entry is already in the cache
+  if (index.FindOne(type)!=NULL) {
+    mutex.Unlock();
+    return gm_True;
+  }
+
+  // it's not already there, so add it!
+  // first check if we have overflowed the cache size
+  if (list.getSize() >= MaxNCSize) {
+    // remove the LRU entry from the cache
+    Evict_();
+  }
+
+  // now add the new record
+  record = new NegativeCacheEntry(type);
+  if (record==NULL) {
+    mutex.Unlock();
+    Return(gm_False, errOutOfMemory);
+  }
+  if (list.InsertAtHead(record)==gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+  if (index.Add(record)==gm_False) {
+    mutex.Unlock();
+    return gm_False;
+  }
+
+  // mark the record as most recently used
+  Touch_(record);
+  mutex.Unlock();
+  return gm_True;
+}
+
+
+void
+NegativeCache::Evict_()
+{
+  ListIndex idx, lru;
+  NegativeCacheEntry *record;
+  // find the least recently used record
+
+  idx = list.BeginTraversal();
+  lru = idx;
+  for (idx = list.getNext(idx); 
+       list.IsDone(idx)==gm_False; 
+       idx = list.getNext(idx)) {
+    if (list.getData(idx)->lastTouched < list.getData(lru)->lastTouched) {
+      lru = idx;
+    }
+  }
+  record = list.getData(lru);
+  list.Remove(lru);
+  list.EndTraversal();   
+
+  if (record!=NULL) {
+    index.Remove(record);
+    delete record;
+  }
+}
+
+
+void
+NegativeCache::Flush()
+{
+  NegativeCacheEntry *record;
+  mutex.Lock();
+  while (list.IsEmpty()==gm_False) {
+    record = list.RemoveFromHead();
+    if (record!=NULL) {
+      index.Remove(record);
+      delete record;
+    }
+  }
+
+  touchCounter = 0;
+  mutex.Unlock();
+}
+
+
+gm_Bool
+NegativeCache::IsThere(DistillerType *type)
+{
+  NegativeCacheEntry *record;
+
+  mutex.Lock();
+  record = (NegativeCacheEntry*) index.FindOne(type);
+  if (record==NULL) {
+    mutex.Unlock();
+    return gm_False;
+  }
+  Touch_(record);
+  mutex.Unlock();
+  return gm_True;
+}
+@
+
+
+1.23
+log
+@bug fix to select the right distiller even in the presence of wildcards
+@
+text
+@d159 2
+d170 1
+d183 28
+d429 5
+a433 2
+  DistillerRequest request(this);
+  if (AddRequest_(&request)==gm_False) {
+d449 1
+a449 1
+  if (request.SendAndWait(conn, args, numberOfArgs, input)==gm_False) {
+d453 1
+d459 1
+d463 2
+a464 2
+  *output = * (request.getOutput());
+  request.getOutput()->DontFreeMe();
+d466 3
+a468 1
+  return request.getStatus();
+d471 75
+@
+
+
+1.23.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a158 2
+
+#if OLD
+a179 17
+#endif
+
+      // the old distiller was a stale cache copy; remove it
+      // most likely, the old distiller renamed itself!
+
+      Remove_(record);
+      record->MarkForDeletion();
+      gm_Log("Replacing cache with new " << (char*) newRecord->type 
+	     << " distiller at " << newRecord->rid << "\n");
+      if ((copy=new CachedDistiller)==NULL) {
+	Return(gm_False, errOutOfMemory);
+      }
+      *((BasicDistiller*)copy) = *newRecord;
+      copy->SetName();
+      gm_Bool returnValue = Add_(copy);
+      return returnValue;
+
+@
+
+
+1.23.2.2
+log
+@Added DistillAsync and friends
+@
+text
+@d417 2
+a418 5
+
+  // this has the side effect of starting the timer
+  DistillerRequest *request = new DistillerRequest(this);
+
+  if (AddRequest_(request)==gm_False) {
+d434 1
+a434 1
+  if (request->SendAndWait(conn, args, numberOfArgs, input)==gm_False) {
+a437 1
+      delete request;
+a442 1
+      delete request;
+d446 2
+a447 2
+  *output = * (request->getOutput());
+  request->getOutput()->DontFreeMe();
+d449 1
+a449 3
+  DistillerStatus retval = request->getStatus();
+  delete request;
+  return retval;
+a451 75
+DistillerStatus
+CachedDistiller::DistillAsync(Argument *args, int numberOfArgs,
+			 DistillerInput *input, DistillerRequest *& newrequest)
+{
+  //set_thread_state(THR_DISTLOCK);
+  // first lock this distiller
+  distMutex.Lock();
+
+  // check whether someone has marked this object for deletion
+  if (IsDeleted()==gm_True) {
+    distMutex.Unlock();
+    return distSendError;
+  }
+
+  // connect to it if required
+  if (IsConnected_()==gm_False) {
+    if (Connect_()==gm_False) {
+      if (Error::getStatus()==errOutOfMemory) {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distOutOfLocalMemory;
+      }
+      else {
+	distMutex.Unlock();
+	Error::SetStatus(success);
+	return distSendError;
+      }
+    }
+  }
+
+  //set_thread_state(THR_DISTSEND);
+  // send stuff
+
+  // this has the side effect of starting the timer
+  newrequest = new DistillerRequest(this);
+
+  if (AddRequest_(newrequest)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      delete newrequest;
+      newrequest = NULL;
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      distMutex.Unlock();
+      delete newrequest;
+      newrequest = NULL;
+      return distSendError;
+    }
+  }
+
+  DistillerConnection *conn = connection;
+  conn->IncrReference();
+  distMutex.Unlock();
+  if (newrequest->Send(conn, args, numberOfArgs, input)==gm_False) {
+    if (Error::getStatus()==errOutOfMemory) {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete newrequest;
+      newrequest = NULL;
+      return distOutOfLocalMemory;
+    }
+    else {
+      Error::SetStatus(success);
+      conn->DecrReference();
+      delete newrequest;
+      newrequest = NULL;
+      return distSendError;
+    }
+  }
+  conn->DecrReference();
+  return distOk;
+}
+@
+
+
+1.23.2.3
+log
+@changes
+@
+text
+@a169 1
+
+d184 2
+a185 12
+      // we are most likely renaming the distiller
+      // be careful not to disconnect the distiller
+      
+      // XXX: How can I be sure that it is really the same distiller?
+      
+      gm_Log("Renaming " << (char*) record->type << " distiller at " 
+	     << record->rid << " to " << (char*) newRecord->type << "\n");
+      BasicDistillerDatabase::Remove(record);
+      *((BasicDistiller*)record) = *newRecord;
+      record->SetName();
+      gm_Bool returnValue = Add_(record);
+      return returnValue;
+a186 1
+#if OLD
+d198 1
+a198 1
+#endif
+@
+
+
+1.22
+log
+@Fixed up so that both Armando and I are happy...
+@
+text
+@d227 2
+a228 1
+  list = typeIndex->getBucket(type);
+d272 2
+a273 1
+  list     = typeIndex->getBucket(type);
+@
+
+
+1.21
+log
+@Added the DistillerBuffer data structure to provide a more elegant way of
+freeing buffers between the library and the main program
+@
+text
+@d17 1
+a17 1
+  instFile = fopen("../ptm/frontend.log", "w");
+@
+
+
+1.20
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d366 1
+a366 2
+			 DistillerInput *input, DistillerOutput *output,
+			 gm_Bool */*freeOutputBuffer*/)
+d426 1
+@
+
+
+1.19
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d8 5
+d16 4
+d103 1
+d235 2
+a236 2
+	  && dist->load.ShouldIgnore()==gm_False)
+	totalTickets += (dist->load.getTickets());
+d250 2
+a251 2
+	  && dist->load.ShouldIgnore()==gm_False) {
+	totalTickets += (dist->load.getTickets());
+@
+
+
+1.18
+log
+@Minor modifications to the PTM
+@
+text
+@d103 1
+a103 1
+  gm_Bool returnValue;
+d106 5
+a110 3
+  // first invalidate the entire cache; we'll validate entries as we find 
+  // them from the DistillerInfo
+  MarkAsValid_(gm_False);
+d118 11
+a128 9
+  if (Error::getStatus()==success) {
+    // we were successful; sweep out the untouched distillers
+    Sweep_();
+    returnValue = gm_True;
+  }
+  else {
+    // something bad happenned; re-mark all distillers as valid and punt back
+    MarkAsValid_(gm_True);
+    returnValue = gm_False;
+d224 2
+a225 1
+      if (dist->type.CanSatisfy(type)==gm_True)
+d239 2
+a240 1
+      if (dist->type.CanSatisfy(type)==gm_True) {
+d324 1
+@
+
+
+1.17
+log
+@Added priorities to remote execution
+Added FE_getDistillerStatusString to cacheman.cc
+Modified PTM invocation from the frontend to use the gm_options file rather
+than pass all options via the command line
+@
+text
+@d197 4
+a200 2
+  // dist->Disconnect__();
+  // don't bother to disconnect; when the distiller is deleted, 
+d458 2
+@
+
+
+1.16
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d42 9
+d68 3
+d475 108
+@
+
+
+1.15
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d9 1
+a9 1
+  : BasicDistillerDatabase(), cacheMutex(), typeIndex(NULL)
+d46 2
+a47 1
+    if (CacheManager::getInstance()->AskPTMForDistiller(type, askStatus)
+d143 1
+d150 1
+d165 1
+d182 2
+d185 3
+a187 1
+  dist->Disconnect__();
+d192 43
+a234 1
+DistillerCache::Find_(DistillerType *type)
+d338 1
+d364 1
+d367 1
+a367 1
+  if (request.SendAndWait(args, numberOfArgs, input)==gm_False) {
+d369 6
+d376 9
+d386 1
+a389 1
+      distMutex.Unlock();
+d391 1
+d396 1
+a396 1
+  distMutex.Unlock();
+d404 1
+a404 1
+  if (connection!=NULL) {
+d410 2
+a411 1
+  }
+d419 1
+d421 1
+d425 1
+a425 1
+  // add the connection object to the event system
+d428 1
+d430 2
+a431 1
+  }
+d440 1
+d443 2
+a444 1
+      RemoveCommunicationObject(connection);
+d446 2
+a447 1
+    delete connection;
+@
+
+
+1.14
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d9 1
+a9 1
+  : BasicDistillerDatabase(), mutex(), typeIndex(NULL)
+d27 2
+a28 2
+gm_Bool
+DistillerCache::Add(CachedDistiller *dist)
+d30 3
+a32 1
+  gm_Bool returnValue, locked=gm_False;
+d34 42
+a75 3
+  if (mutex.DidILock()==gm_False) {
+    if (mutex.Lock()==gm_False) return gm_False;
+    locked = gm_True;
+d77 6
+a82 5
+  returnValue = BasicDistillerDatabase::Add(dist);
+  if (locked==gm_True) {
+    if (mutex.Unlock()==gm_False) return gm_False;
+  }
+  return returnValue;
+d87 1
+a87 1
+DistillerCache::Remove(CachedDistiller *dist)
+d89 3
+a91 12
+  gm_Bool locked = gm_False;
+  if (mutex.DidILock()==gm_False) {
+    if (mutex.Lock()==gm_False) return gm_False;
+    locked = gm_True;
+  }
+  BasicDistillerDatabase::Remove(dist);
+  dist->Disconnect();
+  if (locked==gm_True) {
+    if (mutex.Unlock()==gm_False) return gm_False;
+  }
+  return gm_True;
+}
+d93 3
+d97 5
+a101 5
+CachedDistiller*
+DistillerCache::Find(RemoteID *rid)
+{
+  CachedDistiller *dist;
+  gm_Bool locked = gm_False;
+d103 4
+a106 3
+  if (mutex.DidILock()==gm_False) {
+    if (mutex.Lock()==gm_False) return NULL;
+    locked = gm_True;
+d108 4
+a111 4
+  dist = (CachedDistiller*) getMainIndex()->FindOne(rid);
+  if (dist==NULL) {
+    if (locked==gm_True) mutex.Unlock();
+    return NULL;
+d113 2
+a114 5
+
+  if (locked==gm_True) {
+    if (mutex.Unlock()==gm_False) return NULL;
+  }
+  return dist;
+d118 2
+a119 3
+#if 0
+CachedDistiller*
+DistillerCache::Find(DistillerType *type)
+d121 43
+a163 9
+  MatchingDistillerFinder finder(type);
+  gm_Bool locked = gm_False;
+  if (mutex.DidILock()==gm_False) {
+    if (mutex.Lock()==gm_False) return NULL;
+    locked = gm_True;
+  }
+  ForEach(MatchEachDistiller, &finder);
+  if (locked==gm_True) {
+    if (mutex.Unlock()==gm_False) return NULL;
+a164 1
+  return finder.distiller;
+d169 1
+a169 2
+DistillerCache::MatchEachDistiller(Database */*db*/, DatabaseRecord *record,
+				   void *args)
+d171 2
+a172 2
+  MatchingDistillerFinder *finder = (MatchingDistillerFinder*) args;
+  CachedDistiller *dist = (CachedDistiller*) record;
+a173 4
+  if(dist->type.CanSatisfy(finder->distillerType)==gm_True && 
+     finder->distiller==NULL){
+    finder->distiller = dist;
+  }
+d175 5
+a179 1
+  return gm_True;
+a180 2
+#endif
+
+d184 1
+a184 1
+DistillerCache::Find(DistillerType *type)
+d187 2
+a188 2
+  LinkedList<DatabaseRecord> *list;
+  ListIdx idx;
+a189 6
+  gm_Bool locked = gm_False;
+
+  if (mutex.DidILock()==gm_False) {
+    if (mutex.Lock()==gm_False) return NULL;
+    locked = gm_True;
+  }
+d204 3
+a206 4
+    for (idx=list->Head(), current=0; 
+	 current<=random; 
+	 idx = list->Next(idx), current++) {
+      dist = (CachedDistiller*) list->Record(idx);
+d217 2
+a218 2
+      for (; list->IsDone(idx)==gm_False; idx = list->Next(idx)) {
+	dist = (CachedDistiller*) list->Record(idx);
+d227 1
+a227 5
+
+  }
+
+  if (locked==gm_True) {
+    if (mutex.Unlock()==gm_False) return NULL;
+d233 2
+a234 3
+
+gm_Bool
+DistillerCache::Validate(Database */*db*/, DatabaseRecord *record, void* valid)
+d236 1
+a236 2
+  ((CachedDistiller*)record)->MarkAsValid(*((gm_Bool*)valid));
+  return gm_True;
+a239 9
+gm_Bool
+DistillerCache::Update(CachedDistiller *newRecord)
+{
+  CachedDistiller *record, *copy;
+  gm_Bool locked=gm_False;
+  if (mutex.DidILock()==gm_False) {
+    mutex.Lock();
+    locked = gm_True;
+  }
+d241 3
+a243 6
+  record = Find(&newRecord->rid);
+  if (record!=NULL) { // there is already a cached distiller at this address
+    if (record->type.Equal(&newRecord->type)==gm_True) {
+      // they are the same distiller
+      record->Update(newRecord);
+      record->MarkAsValid();
+a244 5
+      if (locked==gm_True) mutex.Unlock();
+      return gm_True;
+    }
+    else {
+      // a different distiller at the same address
+d246 10
+a255 32
+      if (record->IsConnected()==gm_True) {
+	// the proxy is connected to this distiller
+	// ignore the new distiller (this case shouldn't happen at all)
+
+	record->MarkAsValid();
+
+	if (locked==gm_True) mutex.Unlock();
+	return gm_True;
+      }
+      else {
+	// the old distiller was a stale cache copy; remove it
+	if (Remove(record)==gm_False) return gm_False;
+	gm_Log("Caching new " << (char*) newRecord->type << " distiller at "
+	       << newRecord->rid << "\n");
+	if ((copy=new CachedDistiller)==NULL) Return(gm_False, errOutOfMemory);
+	*copy = *newRecord;
+	gm_Bool returnValue = Add(copy);
+	if (locked==gm_True) mutex.Unlock();
+	return returnValue;
+      }
+    }
+  }
+  else {
+    // this is a brand new distiller
+    gm_Log("Caching new " << (char*) newRecord->type << " distiller at " 
+	   << newRecord->rid << "\n");
+    
+    if ((copy = new CachedDistiller)==NULL) Return(gm_False, errOutOfMemory);
+    *copy = *newRecord;
+    gm_Bool returnValue = Add(copy);
+    if (locked==gm_True) mutex.Unlock();
+    return returnValue;
+d257 1
+d262 2
+a263 2
+DistillerCache::SweepFunction(Database *db, DatabaseRecord *record,
+			      void */*dummy*/)
+d265 1
+d267 2
+a268 2
+  if (dist->IsValid()==gm_False && dist->IsConnected()==gm_False) {
+    if (((DistillerCache*)db)->Remove(dist)==gm_False) return gm_False;
+d276 1
+a276 2
+DistillerCache::PrintFunction(Database */*db*/, DatabaseRecord *record, 
+			      void */*dummy*/)
+d278 1
+a278 5
+  CachedDistiller *dist = (CachedDistiller*) record;
+
+  gm_Log("             " << dist->rid << " (" << (char*)dist->type);
+  if (dist->IsValid()==gm_False) gm_Log(" - invalid)\n")
+  else gm_Log(")\n");
+a282 1
+#include <fstream.h>
+a286 1
+     // the cache is already locked when this function is called
+d288 24
+a311 1
+  DistillerRequest request(connection);
+d313 2
+d316 10
+a325 2
+    if (Error::getStatus()==errOutOfMemory) return distOutOfLocalMemory;
+    else return distSendError;
+a326 1
+
+d328 1
+d334 1
+a334 1
+CachedDistiller::Connect()
+a335 8
+  DistillerCache *cache = CacheManager::getInstance()->getCache();
+  gm_Bool locked = gm_False;
+
+  if (cache->DidILock()==gm_False) {
+    if (cache->Lock()==gm_False) return gm_False;
+    locked = gm_True;
+  }
+
+d337 2
+d343 2
+a346 1
+    if (locked==gm_True) cache->Unlock();
+d349 1
+a350 1
+    if (locked==gm_True) cache->Unlock();
+d354 1
+a356 1
+    if (locked==gm_True) cache->Unlock();
+d359 1
+a359 1
+  return cache->Unlock();
+d363 2
+a364 2
+gm_Bool
+CachedDistiller::Disconnect()
+a365 7
+  gm_Bool locked = gm_False;
+  DistillerCache *cache = CacheManager::getInstance()->getCache();
+  if (cache->DidILock()==gm_False) {
+    if (cache->Lock()==gm_False) return gm_False;
+    locked = gm_True;
+  }
+
+d367 1
+d370 1
+a373 2
+
+  return cache->Unlock();
+d377 2
+a378 10
+DistillerRequest::DistillerRequest(DistillerConnection *c)
+  : RequestReply(CacheManager::getInstance()->getEventSystem(),
+		 SECONDS(DistillerRequestTimeout_ms),
+		 USECONDS(DistillerRequestTimeout_ms)), 
+    connection(c) 
+{
+}
+
+gm_Bool
+DistillerRequest::Send(Argument *args, int numberOfArgs, DistillerInput *input)
+d380 4
+a383 38
+  OStream stream;
+  int idx;
+
+
+  // marshall the arguments
+
+  stream << Binary(gm_True) << numberOfArgs;
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  for (idx=0; idx < numberOfArgs; idx++) {
+    stream << (UINT32) args->type << ARG_ID(*args);
+    switch(args->type) {
+    case typeInt:       stream << ARG_INT(*args); break;
+    case typeString:    stream << ARG_STRING(*args) << '\0'; break;
+    case typeDouble:
+      {
+	char   doubleString[MAX_ARG_STRING];
+	double arg_double = ARG_DOUBLE(*args);
+	sprintf(doubleString, "%f", arg_double);
+	stream << doubleString << '\0'; 
+	break;
+      }
+    }
+    args++;
+
+    if (stream.IsGood()==gm_False) return gm_False;
+  }
+
+
+  // marshall the data
+  if (input->data==NULL) input->length = 0;
+
+  stream << Binary(gm_True) << input->length << Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+
+  if (input->length > 0) {
+    stream.Append(input->data, input->length);
+    if (stream.IsGood()==gm_False) return gm_False;
+a384 43
+
+  stream << input->mimeType;
+  if (stream.IsGood()==gm_False) return gm_False;
+ 
+  Packet packet(pktDistillerInput, stream.getLength(), getID(), 
+		stream.getData());
+  return packet.Send(connection);
+}
+
+
+gm_Bool
+DistillerRequest::SendAndWait(Argument *args, int numberOfArgs, 
+			      DistillerInput *input)
+{
+  gm_Bool result = gm_False;
+
+  mutex.Lock();
+  if (connection->AddRequest(this)==gm_False)
+    goto SENDANDWAIT_RETURN;
+
+  if (Send(args, numberOfArgs, input)==gm_False) 
+    goto SENDANDWAIT_RETURN;
+
+  CacheManager::getInstance()->getCache()->Unlock();
+  condition.Wait(&mutex);
+  CacheManager::getInstance()->getCache()->Lock();
+  connection->RemoveRequest(this);
+  result = gm_True;
+SENDANDWAIT_RETURN:
+  mutex.Unlock();
+  return result;
+}
+
+
+gm_Bool
+DistillerRequest::EvReplyReceived(RequestReplyEventSystem */*evs*/, void *args)
+{
+  DistillerReply *distReply = (DistillerReply*) args;
+  mutex.Lock();
+  reply = *distReply;
+  condition.Signal();
+  mutex.Unlock();
+  return gm_True;
+a386 20
+
+gm_Bool
+DistillerRequest::EvTimer(RequestReplyEventSystem */*evs*/)
+{
+  mutex.Lock();
+  reply.status = distReplyTimeout;
+  condition.Signal();
+  mutex.Unlock();
+  return gm_True;
+}
+
+
+void
+DistillerRequest::EvDistillerConnectionBroken()
+{
+  mutex.Lock();
+  reply.status = distConnectionBroken;
+  condition.Signal();
+  mutex.Unlock();
+}
+@
+
+
+1.13
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d144 1
+a144 1
+    random = rand() % size;
+@
+
+
+1.12
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@d8 19
+d84 1
+d116 64
+@
+
+
+1.11
+log
+@More changes for killing processes via the monitor
+@
+text
+@a44 1
+  LinkedList<DatabaseRecord> list;
+d52 2
+a53 2
+  getMainIndex()->Find(rid, &list);
+  if (list.IsEmpty()==gm_True) {
+d57 1
+a57 1
+  dist = DoLottery(&list);
+a65 7
+DistillerCache::DoLottery(LinkedList<DatabaseRecord> *list)
+{
+  return (CachedDistiller*) list->Record(list->Head());
+}
+
+
+CachedDistiller*
+d191 1
+a321 1
+
+@
+
+
+1.10
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@a148 1
+	gm_Debug(dbgTmp, "************ Old stale distiller\n");
+a329 1
+  gm_Log("********** Sending packet to the distiller\n");
+@
+
+
+1.9
+log
+@A mutex.Unlock() in DistillerCache::Find was being compared with
+NULL instead of gm_False;  fixed.
+@
+text
+@d202 2
+a203 2
+			 void *input,   UINT32 inputLength,
+			 void **output, UINT32 *outputLength)
+d208 1
+a208 1
+  if (request.SendAndWait(args, numberOfArgs, input, inputLength)==gm_False) {
+d213 2
+a214 3
+  *output       = request.getReply();
+  *outputLength = request.getReplyLength();
+  return request.getReplyStatus();
+d283 1
+a283 1
+DistillerRequest::SendArguments(Argument *args, int numberOfArgs)
+d288 3
+d303 1
+a303 1
+	sprintf(doubleString, "%lf", arg_double);
+d313 16
+a328 1
+  Packet packet(pktDistillerArguments, stream.getLength(), getID(), 
+a329 3
+  return packet.Send(connection);
+}
+
+d331 1
+a331 4
+gm_Bool
+DistillerRequest::SendData(void *data, UINT32 dataLength)
+{
+  Packet packet(pktDistillerData, dataLength, getID(), (char*)data);
+d338 1
+a338 1
+			      void *data, UINT32 dataLength)
+d346 1
+a346 4
+  if (SendArguments(args, numberOfArgs)==gm_False) 
+    goto SENDANDWAIT_RETURN;
+
+  if (SendData(data, dataLength)==gm_False) 
+@
+
+
+1.8
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d84 1
+a84 1
+    if (mutex.Unlock()==NULL) return NULL;
+@
+
+
+1.7
+log
+@Added mutex releases in DistillerRequest::SendAndWait
+@
+text
+@d11 6
+a16 2
+  gm_Bool returnValue;
+  mutex.Lock();
+d18 3
+a20 1
+  mutex.Unlock();
+d25 1
+a25 1
+void
+d28 5
+a32 1
+  mutex.Lock();
+d34 5
+a38 1
+  mutex.Unlock();
+d46 7
+a52 1
+  mutex.Lock();
+d54 9
+a62 3
+  mutex.Unlock();
+  if (list.IsEmpty()==gm_True) return NULL;
+  return DoLottery(&list);
+d77 5
+a81 1
+  mutex.Lock();
+d83 3
+a85 1
+  mutex.Unlock();
+d95 1
+d97 3
+a99 2
+  if(((CachedDistiller*)record)->type.CanSatisfy(finder->distillerType)==gm_True){
+    finder->distiller = (CachedDistiller*) record;
+d110 1
+a110 1
+  gm_BoolErrorReturn(success);
+d118 6
+d130 3
+a132 1
+      gm_BoolErrorReturn(success);
+d142 3
+a144 1
+	gm_BoolErrorReturn(success);
+d148 5
+a152 4
+	Remove(record);
+	LOG("Caching new " << (char*) newRecord->type << " distiller at "
+	    << newRecord->rid << "\n");
+	if ((copy=new CachedDistiller)==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d154 3
+a156 1
+	return Add(copy);
+d162 2
+a163 2
+    LOG("Caching new " << (char*) newRecord->type << " distiller at " 
+	<< newRecord->rid << "\n");
+d165 1
+a165 1
+    if ((copy = new CachedDistiller)==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d167 3
+a169 1
+    return Add(copy);
+d180 1
+a180 1
+    ((DistillerCache*)db)->Remove(dist);
+d183 1
+a183 1
+  gm_BoolErrorReturn(success);
+d193 4
+a196 4
+  DEBUG("             " << dist->rid << " (" << (char*)dist->type);
+  if (dist->IsValid()==gm_False) DEBUG(" - invalid)\n");
+  else DEBUG(")\n");
+  gm_BoolErrorReturn(success);
+d204 1
+d209 1
+a209 1
+    if (GlobalErrorCode==errOutOfMemory) return distOutOfLocalMemory;
+d222 8
+d235 9
+a243 3
+  connection = new DistillerConnection;
+  if (connection==NULL) gm_BoolErrorReturn(errOutOfMemory);
+  if (connection->Connect(rid.ipAddress, rid.port)==gm_False) return gm_False;
+d245 27
+a271 2
+  return CacheManager::getInstance()->getEventSystem()->
+    AddCommunicationObject(connection);
+d341 1
+d343 1
+d346 1
+a346 1
+  SENDANDWAIT_RETURN:
+d360 1
+a360 1
+  gm_BoolErrorReturn(success);
+d371 1
+a371 1
+  gm_BoolErrorReturn(success);
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d240 2
+d243 5
+a247 1
+  if (connection->AddRequest(this)==gm_False) return gm_False;
+d249 2
+a250 2
+  if (SendArguments(args, numberOfArgs)==gm_False) return gm_False;
+  if (SendData(data, dataLength)==gm_False) return gm_False;
+d254 2
+d257 1
+a257 1
+  return gm_True;
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d8 1
+a8 1
+Bool
+d11 1
+a11 1
+  Bool returnValue;
+d35 1
+a35 1
+  if (list.IsEmpty()==TRUE) return NULL;
+d58 1
+a58 1
+Bool
+d64 1
+a64 1
+  if(((CachedDistiller*)record)->type.CanSatisfy(finder->distillerType)==TRUE){
+d68 1
+a68 1
+  return TRUE;
+d72 1
+a72 1
+Bool
+d75 2
+a76 2
+  ((CachedDistiller*)record)->MarkAsValid(*((Bool*)valid));
+  BoolErrorReturn(success);
+d80 1
+a80 1
+Bool
+d86 1
+a86 1
+    if (record->type.Equal(&newRecord->type)==TRUE) {
+d90 1
+a90 1
+      BoolErrorReturn(success);
+d95 1
+a95 1
+      if (record->IsConnected()==TRUE) {
+d100 1
+a100 1
+	BoolErrorReturn(success);
+d107 1
+a107 1
+	if ((copy=new CachedDistiller)==NULL) BoolErrorReturn(errOutOfMemory);
+d118 1
+a118 1
+    if ((copy = new CachedDistiller)==NULL) BoolErrorReturn(errOutOfMemory);
+d125 1
+a125 1
+Bool
+d130 1
+a130 1
+  if (dist->IsValid()==FALSE && dist->IsConnected()==FALSE) {
+d134 1
+a134 1
+  BoolErrorReturn(success);
+d138 1
+a138 1
+Bool
+d145 1
+a145 1
+  if (dist->IsValid()==FALSE) DEBUG(" - invalid)\n");
+d147 1
+a147 1
+  BoolErrorReturn(success);
+d158 1
+a158 1
+  if (request.SendAndWait(args, numberOfArgs, input, inputLength)==FALSE) {
+d169 1
+a169 1
+Bool
+d178 2
+a179 2
+  if (connection==NULL) BoolErrorReturn(errOutOfMemory);
+  if (connection->Connect(rid.ipAddress, rid.port)==FALSE) return FALSE;
+d194 1
+a194 1
+Bool
+d200 2
+a201 2
+  stream << Binary(TRUE) << numberOfArgs;
+  if (stream.IsGood()==FALSE) return FALSE;
+d219 1
+a219 1
+    if (stream.IsGood()==FALSE) return FALSE;
+d228 1
+a228 1
+Bool
+d236 1
+a236 1
+Bool
+d241 1
+a241 1
+  if (connection->AddRequest(this)==FALSE) return FALSE;
+d243 2
+a244 2
+  if (SendArguments(args, numberOfArgs)==FALSE) return FALSE;
+  if (SendData(data, dataLength)==FALSE) return FALSE;
+d249 1
+a249 1
+  return TRUE;
+d253 1
+a253 1
+Bool
+d261 1
+a261 1
+  BoolErrorReturn(success);
+d265 1
+a265 1
+Bool
+d272 1
+a272 1
+  BoolErrorReturn(success);
+@
+
+
+1.4
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d31 1
+a31 1
+  DatabaseRecord *record;
+d33 1
+a33 1
+  record = getMainIndex()->FindOne(rid);
+d35 4
+d40 4
+a43 1
+  return (CachedDistiller*) record;
+d105 1
+a105 1
+	LOG("Caching new " << (char*) newRecord->type << " distiller at " 
+@
+
+
+1.3
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d1 1
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d180 2
+a181 2
+		 DistillerRequestTimeout_ms/1000,
+		 DistillerRequestTimeout_ms%1000), 
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d2 3
+a4 1
+#include "cacheinterface.h"
+d42 27
+a68 1
+  return NULL;
+d72 204
+@

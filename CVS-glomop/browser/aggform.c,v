@@ -1,0 +1,614 @@
+head	1.13;
+access;
+symbols
+	v15b:1.13
+	v10b3:1.11
+	v10b2:1.8
+	v10b1:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.13
+date	97.11.15.00.26.04;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.11.09.21.43.22;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.10.29.22.07.27;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.10.24.16.02.39;	author iang;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.10.22.16.04.05;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.10.22.00.11.27;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.10.21.23.30.40;	author lcddave;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.10.21.23.10.47;	author lcddave;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.10.21.23.05.02;	author lcddave;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.10.21.21.08.10;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.10.21.05.59.21;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.10.21.04.45.07;	author lcddave;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.06.17.57.18;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@sendURL much changed and much prettier...history works now.
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "callback.h"
+#include "send.h"
+#include "aggform.h"
+#include "editmenu.h"
+#include "utils.h"
+
+static VoidHand hAggPopupEntries = NULL;
+/* handle to the PopupEntries. Init'ed out here multiple calls of the
+   aggform event loop use it, specifically open and close */
+
+static Word *aggDataEntries = NULL;
+
+static int enclen(CharPtr u)
+{
+    int len = 0;
+    if (!u) return 0;
+    while(*u) {
+	if (*u < '!' || *u > 'z' || *u == '%' || *u == '&' || *u == '?' ||
+	    *u == '=' || *u == '/' || *u == ':' || *u == ';' || *u == '*' ||
+	    *u == '^' || *u == '+' || *u == '#') {
+	    len += 2;
+	}
+	++len;
+	++u;
+    }
+    return len;
+}
+
+static void enccopy(CharPtr d, CharPtr _s)
+{
+    static const char * const h = "0123456789abcdef";
+    unsigned char *s = _s;
+    if (s) {
+	while(*s) {
+	    if (*s < '!' || *s > 'z' || *s == '%' || *s == '&' || *s == '?' ||
+		*s == '=' || *s == '/' || *s == ':' || *s == ';' || *s == '*'
+		|| *s == '^' || *s == '+' || *s == '#') {
+		*(d++) = '%';
+		*(d++) = h[(*s)>>4];
+		*(d++) = h[(*s)&0x0f];
+	    } else {
+		*(d++) = *s;
+	    }
+	    ++s;
+	}
+    }
+    *d = '\0';
+}
+
+Boolean AggFormHandleEvent (EventPtr e) {
+  Boolean handled = false;
+  FormPtr frm;
+  FieldPtr AggNameField, AggValField;
+  CharPtr aggname, aggval;
+  int aggnamelen, aggvallen;
+  VoidHand hAgg;
+  CharPtr AggPtr;
+  SWord aggDataSize, aggReadSize;
+
+  CALLBACK_PROLOGUE
+
+  switch (e->eType) {
+  case frmOpenEvent:
+    frm = FrmGetActiveForm();
+    {
+      ListPtr pAggPopList;
+
+      /* aggPref involves the stored (actual) preference in database*/
+      /* aggData involves the retreived (copy of) preference */
+      aggDataSize = 0; 
+      aggReadSize = PrefGetAppPreferences(APPTYPE, AGG_LIST_PREF,
+					       NULL, &aggDataSize, true);
+      /* aggDataSize is the actual size of the pref; aggReadSize is
+         the read amount */
+
+      pAggPopList = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+							      AggSelectPopList));
+
+      if ((aggReadSize != noPreferenceFound) && (aggDataSize > 0)) {
+	UInt aggDataNumEntries;
+	char **aggPopupEntries;
+
+	/* getting the data into a usable form */
+	aggDataEntries = MemPtrNew((ULong) aggDataSize);
+	ErrFatalDisplayIf(!aggDataEntries, "Cannot allocate memory");
+	(void) PrefGetAppPreferences(APPTYPE, AGG_LIST_PREF,
+				   aggDataEntries, &aggDataSize, true);
+	aggDataNumEntries = aggDataEntries[0];
+	hAggPopupEntries = SysFormPointerArrayToStrings((char *)
+							(aggDataEntries + 1),
+							aggDataNumEntries);
+							
+
+	/* -> at this point agg PopupEntries is a unlocked handle */
+	aggPopupEntries = MemHandleLock(hAggPopupEntries);
+	
+	LstSetListChoices(pAggPopList, aggPopupEntries, aggDataNumEntries);
+	if (aggDataNumEntries < 5) {
+	  LstSetHeight(pAggPopList, aggDataNumEntries);
+	} else {
+	  LstSetHeight(pAggPopList, 5);
+	}
+
+	MemHandleLock(hAggPopupEntries);
+      } else {
+	/* NULL */
+      }
+    }
+
+    /* Possibly restore the saved name and value from last time */
+    aggDataSize = 0;
+    aggReadSize = PrefGetAppPreferences(APPTYPE, AGG_SAVE_PREF, NULL,
+					&aggDataSize, true);
+    if ((aggReadSize != noPreferenceFound) && (aggDataSize > 0)) {
+	/* Get the saved values */
+	ULong nlen, vlen;
+	FieldPtr pAggNameFld =
+	  FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggNameFld));
+	FieldPtr pAggValFld =
+	  FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggValFld));
+	CharPtr saveddata = MemPtrNew((ULong) aggDataSize);
+	ErrFatalDisplayIf(!saveddata, "Cannot allocation memory");
+	(void) PrefGetAppPreferences(APPTYPE, AGG_SAVE_PREF, saveddata,
+				     &aggDataSize, true);
+	nlen = StrLen(saveddata);
+	SetFld(pAggNameFld, saveddata, nlen);
+	vlen = StrLen(saveddata+nlen+1);
+	SetFld(pAggValFld, saveddata+nlen+1, vlen);
+	MemPtrFree(saveddata);
+    }
+
+    FrmDrawForm(frm);
+    FrmSetFocus(frm, FrmGetObjectIndex(frm, AggNameFld));
+
+    handled = true;
+    break;
+
+  case menuEvent:
+    MenuEraseStatus(NULL);
+    if (EditMenuHandleEvent(e->data.menu.itemID, FrmGetActiveForm())) {
+	handled = true;
+    } else {
+	switch(e->data.menu.itemID) {
+	}
+    }
+    handled = true;
+    break;
+
+  case keyDownEvent:
+    switch(e->data.keyDown.chr) {
+    Word focus;
+    Word fldid;
+    case nextFieldChr:
+    case prevFieldChr:
+	/* Go to the other field */
+	frm = FrmGetActiveForm();
+	focus = FrmGetFocus(frm);
+	if (focus == noFocus) break;
+	fldid = FrmGetObjectId(frm, focus);
+	if (fldid == AggNameFld && e->data.keyDown.chr == nextFieldChr) {
+	    FrmSetFocus(frm, FrmGetObjectIndex(frm, AggValFld));
+	} else if (fldid == AggValFld && e->data.keyDown.chr == prevFieldChr) {
+	    FrmSetFocus(frm, FrmGetObjectIndex(frm, AggNameFld));
+	}
+	handled = true;
+	break;
+    }
+    break;
+
+  case ctlSelectEvent:
+    switch(e->data.ctlEnter.controlID) {
+    case AggSelectPopCtl:
+      frm = FrmGetActiveForm();
+      {
+	ListPtr pAggPopList =
+	  FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggSelectPopList));
+	FieldPtr pAggNameFld =
+	  FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggNameFld));
+	short aggSelected = LstPopupList(pAggPopList);
+	if (aggSelected != -1) {
+	  CharPtr aggSelectedText =
+	    LstGetSelectionText(pAggPopList, aggSelected);
+	  SetFld(pAggNameFld, aggSelectedText, StrLen(aggSelectedText));
+	  FldDrawField(pAggNameFld);
+	}
+      }
+    break;
+
+    case AggFormOK:
+    case AggFormHelp:
+      frm = FrmGetActiveForm();
+      AggNameField = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggNameFld));
+      AggValField = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, AggValFld));
+
+      /* get the name and the value and copy them into a buffer */
+      if (e->data.ctlEnter.controlID == AggFormOK) {
+	  aggname = FldGetTextPtr(AggNameField);
+	  aggnamelen = enclen(aggname);
+	  if (!aggnamelen) {
+	    aggname = "help";
+	    aggnamelen = 4;
+	  }
+	  aggval = FldGetTextPtr(AggValField);
+	  aggvallen = enclen(aggval);
+      } else {
+	aggname = "help";
+	aggnamelen = 4;
+	aggval = NULL;
+	aggvallen = 0;
+      }
+      hAgg = MemHandleNew((ULong) (8 + aggnamelen + aggvallen));
+      ErrFatalDisplayIf(!hAgg, "Out of memory!");
+      AggPtr = MemHandleLock(hAgg);
+      StrCopy(AggPtr, "agg://");
+      enccopy(AggPtr+6, aggname);
+      AggPtr[6+aggnamelen] = '/';
+      enccopy(AggPtr+7+aggnamelen, aggval);
+      MemHandleUnlock(hAgg);
+
+      /* Send the URL, but ignore the local cache */
+      /*
+      if (transURL) {
+	MemHandleFree(transURL);
+      }
+      transURLLength = 8 + aggnamelen + aggvallen;
+      transURL = hAgg; 
+      */
+      
+      if (!SendURL(&conID,  hAgg, true, false, true, true)) {
+	MemHandleFree(hAgg);
+      }
+
+      if (e->data.ctlEnter.controlID == AggFormOK) {
+	  /* Save the current values of the name and val fields */
+	  ULong nlen, vlen;
+	  CharPtr save;
+	  aggname = FldGetTextPtr(AggNameField);
+	  aggval = FldGetTextPtr(AggValField);
+	  nlen = aggname ? StrLen(aggname) : 0;
+	  vlen = aggval ? StrLen(aggval) : 0;
+	  save = MemPtrNew(nlen+vlen+2);
+	  ErrFatalDisplayIf(!save, "Cannot allocate memory");
+	  if (nlen) MemMove(save, aggname, nlen);
+	  save[nlen] = '\0';
+	  if (vlen) MemMove(save+nlen+1, aggval, vlen);
+	  save[nlen+vlen+1] = '\0';
+	  PrefSetAppPreferences(APPTYPE, AGG_SAVE_PREF, 0, save, nlen+vlen+2,
+				true);
+	  MemPtrFree(save);
+      }
+
+      /* FALLTHROUGH */
+
+    case AggFormCan:
+
+      /* cleaning up agg listing handle */
+      if (hAggPopupEntries) { /* why would this handle be invalid? */
+	MemHandleFree(hAggPopupEntries);
+      }
+      if (aggDataEntries) {
+	MemPtrFree(aggDataEntries);
+      }
+      FrmReturnToForm(0); 
+      break;
+    }
+    handled = true;
+    break;
+
+  default:
+    break;
+  }
+
+  CALLBACK_EPILOGUE
+
+  return handled;
+}
+
+static int gotagglist = 0;
+
+int NeedAggList(void)
+{
+    return !gotagglist;
+}
+
+void GotAggList(void *agglist, Word size)
+{
+    PrefSetAppPreferences(APPTYPE, AGG_LIST_PREF, 0, agglist, size, true);
+    gotagglist = 1;
+}
+@
+
+
+1.12
+log
+@Recover from CVS repository crash.  Changes include:
+o Editing of entries in hotlist and storage
+o Server-side imagemaps
+o Recognition of ImageViewer .pdb files
+@
+text
+@d223 1
+d228 6
+a233 2
+      transURL = hAgg;
+      SendURLNoCache(transURL, 1);
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d7 1
+a7 1
+#include "prefs.h"
+@
+
+
+1.10
+log
+@Added some missing "handled = true;"s
+@
+text
+@d7 1
+a14 4
+static void SetFld(FieldPtr fld, void * val, ULong len);
+/* notice: I copied this straight out prefs.c; Yes I know it's wrong,
+   but I'll fix it later */
+
+a272 15
+}
+
+static void SetFld(FieldPtr fld, void * val, ULong len) {
+  VoidHand txthand = MemHandleNew(len+1);
+  if (txthand) {
+    CharPtr txtptr = MemHandleLock(txthand);
+    if (txtptr) {
+      txtptr[0] = '\0';
+      if (val) MemMove(txtptr, val, len);
+      txtptr[len] = '\0';
+    }
+    MemHandleUnlock(txthand);
+    FldFreeMemory(fld);
+    FldSetTextHandle(fld, (Handle)txthand);    
+  }
+@
+
+
+1.9
+log
+@o Save the name and value fields in the aggregator form
+o nextField and prevField strokes work in the aggregator form
+o Updated version number to 1.0b3
+@
+text
+@d145 3
+a147 1
+    if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+@
+
+
+1.8
+log
+@All the agglist retrieval seems to work now! :-)
+@
+text
+@a13 1
+
+d63 1
+d71 2
+d75 2
+a76 2
+      SWord aggDataSize = 0; 
+      SWord aggReadSize = PrefGetAppPreferences(APPTYPE, AGG_LIST_PREF,
+d81 1
+a81 2
+      ListPtr pAggPopList = FrmGetObjectPtr(frm,
+					    FrmGetObjectIndex(frm,
+d115 22
+d152 21
+d231 19
+d300 1
+a300 1
+    PrefSetAppPreferences(APPTYPE, AGG_LIST_PREF, 0, agglist, size, 1);
+@
+
+
+1.7
+log
+@fixed agg list memory problems.
+@
+text
+@d227 13
+@
+
+
+1.6
+log
+@still trying to fix agg list memory problem.
+@
+text
+@d12 1
+a12 1
+static Word *aggDataEntries;
+d73 2
+a74 2
+      SWord aggDataSize = 0;
+      SWord aggPrefSize = PrefGetAppPreferences(APPTYPE, AGG_LIST_PREF,
+d76 3
+d83 1
+a83 1
+      if ((aggPrefSize != noPreferenceFound) && (aggPrefSize > 0)) {
+a87 1
+	aggDataSize = aggPrefSize;
+d94 1
+a94 1
+							++aggDataEntries,
+d187 1
+a187 9
+      /* cleaning up agg listing handle */
+      if (hAggPopupEntries) { /* why would this handle be invalid? */
+	MemHandleFree(hAggPopupEntries);
+      }
+      if (aggDataEntries) {
+	MemPtrFree(aggDataEntries);
+      }
+      FrmReturnToForm(0); 
+      break;
+@
+
+
+1.5
+log
+@trying to fix memory problem associated with aggregator list.
+@
+text
+@d73 2
+a74 2
+      Word aggDataSize = 0;
+      Word aggPrefSize = PrefGetAppPreferences(APPTYPE, AGG_LIST_PREF,
+d80 1
+a80 1
+      if (aggPrefSize != noPreferenceFound) {
+a85 3
+	if (aggDataSize < 0 || aggDataSize > 100) {
+	  	ErrFatalDisplayIf(1, "Memory size invalid");
+	}
+@
+
+
+1.4
+log
+@Store the received agglist in preferences.  _Using_ those prefs still doesn't
+work...
+@
+text
+@d11 3
+a13 4
+#if 0
+static char *aggPopFailsafe[1]; 
+/* backup popup display should it fail */
+#endif 
+a80 1
+	Word *aggDataEntries;
+d86 4
+a89 1
+	aggDataEntries = MemPtrNew(aggDataSize);
+d192 3
+d204 3
+a206 1
+
+@
+
+
+1.3
+log
+@fixed silly object index/id number confusion with agg list. Still
+unsure why it thinks the agg list is an invalid handle when I try to
+free it at the close of the dialog box. (I've worked around invalid
+handle by doing and if checking first).
+@
+text
+@d89 1
+@
+
+
+1.2
+log
+@Adding in aggfrom support for a popup list of aggregators. The list
+will not work yet since loading the list of aggs into the preferences
+area does not exist yet.
+@
+text
+@d11 4
+d77 4
+a84 1
+	ListPtr pAggPopList = FrmGetObjectPtr(frm, AggSelectPopList);      
+d106 2
+d133 4
+a136 2
+	ListPtr pAggPopList = FrmGetObjectPtr(frm, AggSelectPopList);
+	FieldPtr pAggNameFld = FrmGetObjectPtr(frm, AggNameFld);
+d142 1
+d187 3
+a189 2
+      MemHandleFree(hAggPopupEntries);
+
+d196 3
+a198 1
+      MemHandleFree(hAggPopupEntries);
+@
+
+
+1.1
+log
+@Added the aggregator form
+@
+text
+@d8 8
+d67 36
+d121 14
+d174 3
+d181 4
+d198 15
+@

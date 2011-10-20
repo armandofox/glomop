@@ -1,0 +1,107 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.11.22.49.21;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.11.22.49.21;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#include "Pilot.h"
+#include "ssh.h"
+#include "des.h"
+
+typedef struct {
+    des_key_schedule k1;
+    des_key_schedule k2;
+    des_key_schedule k3;
+    des_cblock ivec1;
+    des_cblock ivec2;
+    des_cblock ivec3;
+} T3des_state;
+
+void ssh_3des_encrypt(unsigned char *in, unsigned char *out, long len,
+    void *encryptstate_)
+{
+    T3des_state *encryptstate = encryptstate_;
+
+    des_ncbc_encrypt((des_cblock *)in, (des_cblock *)out, len,
+	encryptstate->k1, &(encryptstate->ivec1), DES_ENCRYPT);
+    des_ncbc_encrypt((des_cblock *)out, (des_cblock *)out, len,
+	encryptstate->k2, &(encryptstate->ivec2), DES_DECRYPT);
+    des_ncbc_encrypt((des_cblock *)out, (des_cblock *)out, len,
+	encryptstate->k3, &(encryptstate->ivec3), DES_ENCRYPT);
+}
+
+void ssh_3des_decrypt(unsigned char *in, unsigned char *out, long len,
+    void *decryptstate_)
+{
+    T3des_state *decryptstate = decryptstate_;
+
+    des_ncbc_encrypt((des_cblock *)in, (des_cblock *)out, len,
+	decryptstate->k3, &(decryptstate->ivec3), DES_DECRYPT);
+    des_ncbc_encrypt((des_cblock *)out, (des_cblock *)out, len,
+	decryptstate->k2, &(decryptstate->ivec2), DES_ENCRYPT);
+    des_ncbc_encrypt((des_cblock *)out, (des_cblock *)out, len,
+	decryptstate->k1, &(decryptstate->ivec1), DES_DECRYPT);
+}
+
+void ssh_3des_clean(ssh_state *state)
+{
+    MemPtrFree(state->encryptstate);
+    MemPtrFree(state->decryptstate);
+    state->encrypt = NULL;
+    state->decrypt = NULL;
+    state->cryptclean = NULL;
+}
+
+void *ssh_3des_encryptstate(ssh_state *state, Erf erf, void *erfp)
+{
+    T3des_state *encryptstate = MemPtrNew(sizeof(T3des_state));
+    if (!encryptstate) {
+	ssh_fatal("Out of mem");
+	return NULL;
+    }
+    des_set_key((des_cblock*)(state->sesskey),encryptstate->k1);
+    des_set_key((des_cblock*)(state->sesskey+8),encryptstate->k2);
+    des_set_key((des_cblock*)(state->sesskey+16),encryptstate->k3);
+    MemSet(encryptstate->ivec1, 8, 0);
+    MemSet(encryptstate->ivec2, 8, 0);
+    MemSet(encryptstate->ivec3, 8, 0);
+
+    return encryptstate;
+}
+
+void *ssh_3des_decryptstate(ssh_state *state, Erf erf, void *erfp)
+{
+    return ssh_3des_encryptstate(state, erf, erfp);
+}
+@
+
+
+1.1.1.1
+log
+@Top Gun ssh
+@
+text
+@@

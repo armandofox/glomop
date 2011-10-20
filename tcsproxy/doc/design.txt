@@ -1,0 +1,144 @@
+OPTIMIZATIONS/FEATURES
+
+Determine whether it makes sense to convert an image to jpeg/pjpeg based
+on the effective bpp of the encoding.
+
+Use LOWSRC to allow a limited amount of client choreographing of
+communication.  I.e. for images converted to JPEG, the tag should say
+SRC="foo_original.pjpg" LOWSRC="foo_distilled.jpg", ie the LOWSRC is a
+low quality jpg.
+
+DESIGN
+
+As far as CPU resources permit, do distillation for each request.
+When CPU resources don't permit, satisfy request by picking a "nearby"
+representation from cache, if available.
+If that fails, tunnel original.
+
+Do all renaming via URL munging: modify IMG SRC= tags in HTML to avoid
+client pollution.  Given a "distillation granularity" N and URL
+namespace U, you can build a namespace UxN for the distilled URL's.
+
+Granularity: suppose distillation granularity was N, and at time t=t0,
+it becomes M which is coarser than N.  For times t<<t0, the cache is
+caching URL's from namespace UxN; for times t>>t0, it is caching URL's
+from namespace UxM.  In the interim, requests will probably still arrive
+(due to client-cached HTML) for namespace UxN which will end up missing
+the cache even though an "nearly equivalent" representation in namespace
+UxM is in the cache.  But Steve points out this condition is transient-
+it only occurs when client cache contains HTML and not images, and that
+situation is rare.
+
+ARCHITECTURE
+
+Control point is always closest to the client.  "Partitioned Harvests"
+are off to one side.
+
+- HTML request: retrieve original HTML from Harvest or server; hand off
+to an HTML distiller to munge the IMG tags and do other stuff.  If
+retrieve from server, allow original HTML to be stored in Harvest, but
+never stored munged HTML.
+
+- Anything else: URL from client will already be munged, so do direct
+lookup in Harvest first, and return what you find if a hit; otherwise
+delegate to a distiller to get orig. from server, distill according to
+parameters in the munged URL, deliver munged version into cache, and
+return it.  (Do we cache original, and if so, how does it get there?)
+
+- Partition cache across several Harvest's.  Harvest client library hashes URL
+to determine which Harvest node to query for a URL.  For multiple
+representations, try to design hashing so that multiple representations
+of the same object will hash to different Harvest's; then you can poll
+all caches in parallel, and return the "best" representation from among
+the hits.
+
+Distillers will run on "all" available machines.  They will be added
+and deleted dynamically in response to changing load; TBD.  The PxFE
+maintains a working list of distillers it knows about and communicates
+with them using a custom ActiveMessages-based protocol.  New distillers
+must notify each PxFE as they come up; if a connection to a distiller
+fails, it's removed from that PxFE's list.
+
+May be more efficient to have only one kind of distiller running on a
+given machine; this also may allow allocating machines to reflect
+distillation latency, i.e. 1 HTML distiller per 10 image munchers, etc.
+Probably a heuristic, since under certain conditions 1 machine may be
+enough to support several other distillers with its spare cycles.
+
+
+SIMULATIONS/MEASUREMENTS
+
+- locality of "institutional" caches; compare to user traces
+  (Glassman DEC SRC cache, UK natl cache, NZ cache, BU traces)
+- UK,NZ cache papers measure cache performance in bytes saved, not hit rate.
+- expected "steady state" load levels for N users as seen at cache
+  (given, say, 10MB client cache)
+
+INTERESTING REGIONS OF OPERATION:
+
+                         /
+     |               ___/
+     |            __/   .
+   T |    _______/      .
+     |   /.             .
+     |  / .             .
+     | /  .             .
+     |/   .             .
+     /------------------.---------
+       A           B       C
+   offered load, distil requests/sec
+
+
+T is a target latency for satisfying user requests; for sufficiently
+fast distillers, T is dominated by queueing delay, not CPU cycles.
+
+Region A: offered load easily handled by deployed distillers, with
+cycles to spare.  (Can use those cycles for other stuff?  eg
+prefetching, "predistilling")
+
+Region B: load approaches threshold T beyond which distiller queues grow
+without bound, so must satisfy requests from cache only.  Can
+either try to keep system in that region, *or* add more machines running
+addl distillers (thereby raising T, and putting you back in region A).
+
+Region C: system is either I/O bound w/respect to all wide-area entry
+points, or compute or I/O bound w/r/t Harvest cache or proxy front-end.
+(i.e. you're hosed)
+
+Entering/leaving region B has to have some hysteresis.
+E.g. periodically snapshot the sizes of the distiller queues (have
+distillers piggyback state info on every k'th request).  Transitions
+between regions are confirmed after M consecutive snapshots that place
+the system in that region.  It is left to determine how to choose M.
+
+
+
+OPTIMIZATIONS/HACKS to HARVEST
+
+- how do you "push" something into the cache?
+- increase timeout to parent, to give proxy time to get & distill stuff
+- Fast Sockets (active msgs) for UDP calls to siblings
+- cache partitioning among siblings, rather than "full replication"
+- dynamically add/remove siblings
+
+AXES
+
+- image format: pjpg with jpg lowsrc, or gif
+- color depth: log2(4,16,256)
+- scale, subject to (maxx,maxy) constraint; 1/k of total area for k>=2.
+  (implies approximately 1/k bytes, modulo compression, etc.)
+
+THINGS TO INVESTIGATE
+
+- how does H parent relay big content to H? if model is UDP to ask
+parent but parent opens TCP to send stuff back, can just forward this
+info to distiller and have it send content directly back to H.
+- cost of GIF->JPG or PJPG
+- single-user Web traces to estimate Harvest hit rate
+
+HACKING TO BE DONE
+
+- more efficient distillers: giftogif, giftopjpeg (threaded?)
+- nonblocking LWP
+-
+

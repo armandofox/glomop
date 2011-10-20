@@ -1,0 +1,195 @@
+=head1 All About Customization
+
+This file explains how to use the customization facilities of the TACC
+tools in building TACC workers.
+
+=head1 Customization Database Model
+
+The customization database maintains a list of key/value pairs, called a
+I<profile>, for each user of the system.  There is no fixed schema for
+the profile: users need not all have the same key/value pairs, or any at
+all (it is possible to have an empty profile).  Currently users are
+identified by their IP address, so if you move to a different machine,
+your profile won't "follow" you from your last session.  This will be
+fixed soon; the mechanism for identifying users is orthogonal to the
+mechanism for accessing their profiles.
+
+The customization keys are named by argument ID, which is a 32-bit
+unsigned number.  Any worker is free to use any part of the argument ID
+range for itself; at the moment there is no central "registry"  of
+arguments and we just cross our fingers and hope for no collisions.  By
+convention, arg ID's less than 512 are reserved for dedicated functions
+in the front end.
+
+The actual customization key is the argument ID preceded by a single
+lowercase letter: one of I<s, f, i>, according as the argument should be
+interpreted as an ASCII string, floating point number, or signed
+integer.  The namespace is only the ID's, not the ID-plus-letter
+combination, so that (for example) C<s25> and C<i25> name I<the same>
+argument but cause it to be interpreted in two different ways.  For Perl
+workers, this is not a problem because Perl will usually coerce the
+value in some reasonable way; for C/C++ or Java workers, the results of
+misinterpreting an argument are undefined.
+
+=head1 How Customization Information Gets Passed to Workers
+
+Since there is no central registry of which workers care about which arg
+ID's, at the moment the entire profile corresponding to the current
+user is passed to every worker; the worker presumably will only look at
+the arguments it cares about.  A side effect of having no central registry is
+that a worker can define a new arg ID by simply referencing it, as
+described below in L<"/Permanently Modifying Customization Values">.
+
+In addition, key/value pairs can be specified as part of the HTTP URL
+directly in the client request, to temporarily override or augment the
+stored profile information without permanently modifying it.  When a URL
+is modified to embed augmented profile information, we call it a
+I<magified URL> (adjectival form of "magic").  The process of separating
+a magified URL into its "true" URL component and its
+profile-augmentation component is called I<un-magification>.
+
+So the algorithm for constructing the profile to pass to workers on a
+given request is as follows:
+
+=over 4
+
+=item 1.
+
+Identify the user (currently based on IP address, but this
+will change).
+
+=item 2.
+
+Use the ID token to retrieve the user's stored profile from the
+customization database.
+
+=item 3.
+
+If the request URL is magified, un-magify it and add the embedded
+profile information to the temporary copy of the profile. I<This does
+not modify the stored version of the profile.>  Argument values
+specified in the magified URL supersede values from the stored profile.
+
+=back
+
+So, if you want to test a mechanism without making the test condition a
+permanent part of your stored profile, manually augment the request URL
+with magic that temporarily sets the appropriate argument values to
+trigger the condition.
+
+The magification syntax is as follows:
+
+  http://original/url/goes/here*^id1=val1^id2=val2^...^idN=valN^
+
+Each id is an argument ID such as C<i25>, C<s257>, etc.  Each val is the
+corresponding value.  B<Note> that to ensure compliance with URL syntax
+rules, certain characters in string arguments will have to be
+URL-escaped using the notation "%xx" to substitute the hexadecimal ASCII
+code for the character in question.  For example, to encode the string
+"Hello; there!" as the value of argument s1000, you would construct the
+following magified URL:
+
+  http://original/url/goes/here*^s1000=Hello%3B%20there%21^
+
+observing that the ASCII codes for semicolon, space and bang are 0x3B,
+0x20, and 0x21 respectively.  (The use of '+' for space is also legal.)
+
+=head1 Accessing Customization Values in a Worker
+
+=head2 In Perl
+
+The C<%args> array passed to C<DistillerMain> is a hash whose keys and
+values represent the user's profile (including any arguments from magified
+URL) that have a nonempty value.  (For strings, nonempty means 1 or more
+characters; for numbers, any nonzero value.)
+
+Note that for string arguments, to be safe you should "unescape" the
+argument value, because it might have URL-escape sequences suchas "%3B"
+embedded in it.  The convenient TACCutils functions C<unescape> does
+this for you.  For example:
+
+     $string_val = &unescape($args{"s1000"});
+
+=head2 In C/C++
+
+In C/C++ you can test for the existence of a nonempty value for a given
+arg ID, but having found it, you have to know how to dereference it (as
+a string, int, or float).
+
+=item Looking For a Specific Argument
+
+    Argument *getArgumentFromId(Argument *args, int numberOfArgs, UINT32 id);
+
+If an argument with the given ID is in your argument list,
+returns a pointer to it, else NULL.  Note that id is just the numeric
+part of the arg ID; that is, 1000 and not "s1000".
+
+=item Getting Fields of an Argument
+
+    ARG_ID(arg), ARG_STRING(arg), ARG_INT(arg), ARG_DOUBLE(arg)
+
+Return an arg's ID (UINT32), string value (char *), int value (INT32),
+float value (double).  An arg may only have one value at a
+time.  It's up to you to decide which value to access, based on
+the arg ID.  Dereferencing the wrong value has undefined (but probably
+bad) results.  This is a macro; you need to pass the argument itself, not
+a pointer.
+
+=back
+
+=head2 In Java
+
+Under construction.
+
+=head1 Permanently Modifying Customization Values
+
+Workers do not write the customization database directly; instead, they
+generate HTML forms for users to submit.  The forms are constructed in
+such a way that, when submitted, they will cause permanent changes to
+the user's stored profile.
+
+There are two issues to deal with here: how to ask a worker to
+construct and return the form, and how the worker actually constructs
+the form.
+
+=head2 Asking A Worker to Construct the Form
+
+The easiest way to handle this is to have two different code paths in
+the worker: one to actually do whatever the worker does, the other to
+return a form allowing the user to change the worker's behavior.  It
+would be nice if some form of arg ID was reserved by convention as a
+signal for workers to generate the change form, but this is currently
+not the case, so you should just pick an argument.
+
+For example, suppose your worker will create a change form if it sees
+arg i5000 == 1.  Then an easy way for you (the user) to get the change
+form for this worker is to visit a URL that would cause this worker to
+be invoked, but magify the URL by adding "*^i5000=1^" to the end.  If
+you're studly, you can easily write some JavaScript code to do this,
+triggered by a button or icon on the page being viewed.  (Hint:
+JavaScript allows you to modify the "URL" property of the current
+document, which has the side effect of reloading with the new URL.)
+
+=head2 Actually Generating the Form
+
+The TACCutils function C<make_prefs_form> takes care of this.  You just
+specify a list of 4-tuples that describe which arguments the form allows
+the user to set.
+
+To declare a brand-new arg ID, just specify it in this list.  (Since
+there's no central argument registry and no fixed schema, this isn't a
+problem.)
+
+Note that the changes to the user's profile don't take place until the
+user actually submits the form.  For an example of these mechanisms in
+action, take a look at F<Dispatcher.pl> in the F<perl_dir> subdirectory.
+
+=head1 Interesting Built-In Args
+
+A few of the user profile arguments are "predefined" by the system.
+Some of these have default values but are permanently overwritable; some
+cannot be overwritten.  For a list of predefined arguments, look at
+F<frontend/include/ARGS.h>.  Interesting ones include the user's IP
+address as an unsigned long in network order (i10), a guess at the
+network MTU (i3), whether the user is a developer rather than naive
+luser (i15), and the "leave this page alone" flag (i2).

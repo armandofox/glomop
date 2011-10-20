@@ -1,0 +1,283 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.30.23.37.20;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@(1)
+[1] 
+Stateful Packet Inspection Firewalls
+------------------------------------
+o Stateful Packet Inspection Firewalls (SPIFs) potentially incur
+less prcessing overhead per packet than Application Level
+Proxying Firewalls (ALPFs) since the packet doesn't have to go
+up and down the entire protocol stack. This means that a SPIF
+is likely to be a performance bottleneck than a ALPF.
+
+o Except for cases like FTP, where a hole in the firewall is
+temporarily opened (to allow an incoming TCP connection for
+data), the mechanism for implementing SPIFs is relatively simple
+and consequently the trusted code base (that has to be bug-free)
+is smaller. (specifying the packet filter might be a challenging
+task, though)
+
+o Client applications do not have to be changed for SPIFs, whereas they
+might have to be for ALPFs (e.g. for ALPFs, a special version of ftp
+will have to be written which contacts the ALPF rather than the outside
+site. For WWW, a browser should have the option by which a user can
+specify a WWW proxy...etc..)
+
+Application Level Proxying Firewalls
+------------------------------------
+o ALPFs offer a much finer grain of control (as opposed to the
+coarse grain control offered by SPIFs) and are much more
+flexible and extensible. For e.g., suppose we
+wanted to allow FTP access without allowing the 'tar', this
+modification could easily be made with an ALPF, whereas for
+SPIFs, it  would involve a non-trivial amount of work. (The basic
+reason is that SPIFs are supposed to be network level
+agents. Embedding knowledge of application level semantics is
+something that goes against their original intended use as is a
+'hack' at best) 
+
+o ALPFs isolate the TCP/IP stacks of internal host machines from
+outsiders machines because of the 'split connections'. This
+means that one doesn't have to worry about things like "Is the
+TCP/IP stack on every internal host machine smart enough to reject
+attempts of outsiders to initiate connections by sending a TCP
+packet with SYN+ACK (instead of just SYN) so that it gets
+through the packet filter ? ". Also, ALPFs typically run
+app-level gateways or relays that implement a bare-bones subset
+of the application protocol (sufficient for common use, but
+without all the obscure fancy options). This means the app-level
+gateways running on the ALPF can perform stringent sanity checks
+on all incoming data and reject anything thats suspicious, thus
+isolating (potentially buggy) internal host implementations from
+outsiders. 
+   
+[2]
+Stateful Packet Inspection firewalls
+------------------------------------
+
+o SPIFS can ***PREVENT*** attacks unlike Network Intrusion Detection
+Systems (NIDSs) that can only ***DETECT*** attacks and alert the
+administrators.
+
+o SPIFs have to actively approve every packet (i.e. they are gateways),
+so there is no chance of the situation where the SPIFs state goes
+out-of-sync with the  internal host host because the SPIF couldn't keep
+up and had to drop packets. With NIDSs, this could happen and the
+outside attacker could  first generate a large amount of traffic to
+overload the NIDS and then mount his attack, which the NIDS doesn't
+detect since it didn't process all the attackers packets. 
+
+o SPIFs work at the Network (IP) layer and their goals are different
+from NIDSs. In particular, SPIFs, for the most part, are unaware of
+application level semantics. So, they usually have to maintain much less
+state and do much less processing per packet than NIDSs. 
+
+o SPIFs do not have to rely on correctly predicting how internal hosts
+will behave. For e.g., consider the attack where an outsider tries to
+initiate a TCP connection to an internal host by fragmenting the initial
+TCP handshake packet such that the first fragment contains SYN+ACK (so
+it goes thru), but the 2nd fragment overlaps the first and doesn't have
+the ACK field set. The SPIF can wait until all fragments arrive,
+reassemble the IP packet and forward it only if it passes sanity
+checks. With an NIDS, it has to know how the internal host's IP stack
+handles such a case, otherwise it loses sync. (Knowing this for all the
+internal hosts in a large organization is nearly impossible)
+There are a large number of such attacks that an outsider can mount.
+
+o SPIFs do not have to worry about generating 'false alarms' unlike
+NIDSs which have to worry about what exactly constitutes acceptable
+behaviour and what doesn't. If the 'false alarm' rate of an NIDs is too
+high, its effectiveness is undermined. 
+
+Network Intrusion Detection Systems (NIDS)
+------------------------------------------
+
+o An NIDS can handle application level semantics and consequently
+provides a better measure of security than just packet filtering at the
+IP level. A good implementation of a NIDS (such as Bro) can implement
+flexible and extensible security policy.
+
+o In a university environment, where a SPIF might be overly restrictive
+and detrimental to pursuit of research, a NIDS is an attractive
+alternative.
+
+o NIDSs are easily deployed without any disruption in the network (since
+they are not gateways, but merely passive monitoring agents)
+
+o Useful for catching hackers in the act (if preventing attacks is not
+sufficient) 
+
+o NIDSs can be used to detect insider attacks (as well as outsider
+attacks)
+
+---------------------------------------------------------------------
+
+(2) Buffer Overrun Exploits
+    -----------------------
+Changing the memory layout so that the stack grows upwards does help
+alleviate the problem a little bit, but does not solve all problems.
+The buffer overrun exploits we discussed in class are :
+
+o Security critical variables overwritten due to buffer overflows e.g.
+  ---------------------------------------------------------------
+        char home[512];
+        int isRunningAsRoot;
+        strcpy(home,getenv("HOME");
+Making the HOME env. variable really large so that the variable
+isRunningAsRoot is overwritten by the strcpy means the program thinks it
+should be running as root when it shouldn't. 
+
+CONCLUSION This kind of attack is not affected at all by making the
+stack grow upward. 
+
+o Abuse of stdio
+  --------------
+This abuse is not affected at all by changing the direction of stack
+growth since the abuse does not involve the stack at all. (The stdio
+io_buf variables are global variables stored in the data segment and
+they can be overwritten only by overrunning a buffer in the data segment
+i.e. a global buffer), which has nothing to do with the stack.
+
+CONCLUSION: Not affected by stack growth direction
+
+o Stack Smashing
+  --------------
+If the stack grows upwards, it is no longer possible to change the
+return address by overrunning a buffer that is a variable local to the
+currently executing function (simply because the Ret. Add. is in a
+lower memory location than the local variables.) 
+HOWEVER, attacks of this nature still exist. Consider the follwing
+program :
+        main()
+        {
+                char buffer[512];
+
+                /*** Other variables follow 
+                ... **/
+
+                get_input(buffer);
+
+                /*** Rest of program code 
+                ...
+                ...
+                **/
+        }
+
+        void get_input(char *buf)
+        {
+                gets(buf);
+        }
+
+Here, main() calls get_input() with an argument, buffer,  which is a
+local variable of main(). get_input() merely does a gets(). Making the
+input(redirecting STDIN to read from a file) to gets() really long so
+that buffer[] gets overrun will enable an attacker to smash the stack
+and overwrite the return address, just as in the other attacks.
+
+CONCLUSION: Changing the direction of stack growth will only eliminate
+exploits which overrun a buffer which is LOCAL TO THE CURRENTLY
+EXECUTING FUNCTION (and hence on the current stack frame), but this type
+of attack is still possible in some situations (as shown in the example)
+
+o Variants of Stack Smashing
+  --------------------------
+It doesn't matter where the malicious code is put as long as that code
+can somehow be executed. Smashing the stack makes this possible by
+overwriting the return address to point to the malicious code.
+As for the classic stack smashing case, it might be a little harder to
+overrun a buffer and overwrite the return address in the case of an
+upward growing stack (simply because the buffer has to be one that is
+not in the stack frame of the current function but in that of some
+function further down in the chain of function invocations currently on stack)
+
+CONCLUSION : A little harder (i.e. less likelihood of this attack being
+possible) but not entirely impossible to mount this kind of attack
+
+o Overwrite function pointer
+  --------------------------
+This attack does not depend on the return address on the stack being
+overwritten and hence is not affected much. The only requirement for
+this attack to succeed is that the attacker be able to overwrite the
+function pointer by overrunning a buffer. For a downward growing stack,
+this means the function pointer variable has to be declared before the
+buffer , while for an upward growing stack, the func.ptr. variable has
+to be declared after the buffer.
+
+
+
+o New Exploits:
+  ------------
+There are cases when a buffer overrun can be exploited to overwrite
+security critical data if the stack grows upwards which wouldn't be
+possible if the stack grew downwards. This happens when the security
+critical variable (isRunningAsRoot flag) is declared after the buffer
+which is going to be overrun. (Since stack grows upwards the data can be
+overwritten since its after the buffer).
+
+The only new exploit I could think of was overrunning a buffer to write to
+portions of stack space currently unused, with a view to writing initial
+values there (for local variables {possibly security critical} of some
+future function  invocation). Of course, this requires being able to
+guess what function(s) will be invoked subsequently and that the
+function(s) are careless enough not to initialize them but rely on their
+being zero by default (Highly unlikely ????)
+
+----------------------------------------------------------------------
+
+(3) Changes to the C compiler
+    -------------------------
+
+o Make compiler refuse to accept calls to gets(),strcpy(),sprint() etc..
+and force user to change these to safer variants of these functions
+(such as fgets(),strncpy(),snprintf()...)
+Perhaps the compiler can make these changes transparently in some cases
+(for e.g. if both the arguments to strcpy() are arrays [i.e. not
+pointers, but arrays, so that their size is known at compile time], the
+compiler can change that strcpy() to strncpy(), if the size of the
+source array is smaller than or equal to that of the destination array).
+However, it is difficult to see how the compiler can do this
+transparently in general for all cases.
+
+o Add code to perform array bounds checking at runtime
+
+o Use 2 stacks - one for local variables(data) and one for return addresses so
+that smashing the data stack doesn't allow an attacker to execute
+malicious code
+(Alternatively, just use a separate stack for arrays and the regular
+stack for other variables, return addresses etc..)
+
+o Grow stack upwards rather than downwards - I'm not sure how feasible
+this is. Perhaps the OS makes too many assumptions about the way the
+address space is managed in user processes for this to actually be
+possible. I assume the OS maintains a kernel stack that it uses when
+interrupts occur, so thats not a problem. But, how about system calls ?
+Is the address space  management too tied in to the way the OS works for
+such a change to be possible without having to change the OS ? I'm not sure...
+
+o Make compiler align the end of every array at the end of a page ; with
+an unmapped guard page following the last page of each array, so that
+any buffer overrrun will result in a segmentation violation (and a core
+dump). (Not sure if this is possible with changes restricted to the C
+compiler... will changes have to be made to the loader, kernel too ??)
+
+@

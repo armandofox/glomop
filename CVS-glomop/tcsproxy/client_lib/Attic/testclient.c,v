@@ -1,0 +1,450 @@
+head	1.4;
+access;
+symbols
+	steve:1.1.1.1
+	steve:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	96.10.28.01.14.34;	author gribble;	state dead;
+branches;
+next	1.3;
+
+1.3
+date	96.10.27.23.44.38;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.26.01.02.38;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.23.51.45;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.23.51.45;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Changed the directory structure around to match armando/yatin's.
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <netdb.h>
+#include <errno.h>
+#include <unistd.h>
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "configure.h"
+#include "utils.h"
+#include "part.h"
+
+extern int errno;
+extern ll config_list;
+extern struct sockaddr *localaddr;
+
+char defaulturl[] = "http://www.cs.berkeley.edu/";
+
+int get_data(char *host, char *port, char *url, char **header, char **body,
+	     int *bdlen);
+int do_proper_read(int tcp_fd, char *buff, size_t size);
+
+int main(int argc, char **argv)
+{
+  clib_data           returned_data, put_data;
+  char                *url = defaulturl;
+  char                *header1 = NULL, *body1 = NULL;
+  char                *header2 = NULL, *body2 = NULL;
+  int                 bdlen1, bdlen2;
+  char                srv1[2048], srv2[2048];
+  char                url1[2048], url2[2048], urlfin[4096];
+  clib_response       clresp;
+
+  if (argc == 2) {
+    url = argv[1];
+  }
+
+  Clib_Initialize("part.config");
+
+  clresp = Clib_Query(url);
+  Clib_Perror(clresp, "Query");
+  clresp = Clib_Fetch(url, &returned_data);
+  Clib_Perror(clresp, "Fetch");
+  printf("(%lu):%s\n(%lu):%s\n", returned_data.mime_size,
+	 returned_data.mime_headers, returned_data.data_size,
+	 returned_data.data);
+
+  /* Go out and fetch an URL/IP */
+  printf("Enter hostname of real server: ");
+  scanf("%s", srv1);
+  printf("Enter URL of real data: ");
+  scanf("%s", url1);
+  printf("Enter hostname of duped server: ");
+  scanf("%s", srv2);
+  printf("Enter URL of duped data: ");
+  scanf("%s", url2);
+  
+  get_data(srv1, "80", url1, &header1, &body1, &bdlen1);
+  get_data(srv2, "80", url2, &header2, &body2, &bdlen2);
+  sprintf(urlfin, "http://%s%s", srv2, url2);
+  put_data.mime_headers = header1;
+  put_data.mime_size = 0;  /* Isn't looked at on PUT */
+  put_data.data = body1;
+  put_data.data_size = bdlen1;
+  clresp = Clib_Push(urlfin, put_data);
+  Clib_Perror(clresp, "Push");
+
+  exit(0);
+}
+
+int get_data(char *host, char *port, char *url, char **header, char **body, 
+	     int *bdlen)
+{
+  int                 tcp_fd, totbodylen=0, totheaderlen=0, tlen;
+  int                 on_body = 0;
+  struct sockaddr_in  to_addr;
+  struct sockaddr_in  from_addr;
+  struct protoent     *tcp_proto;
+  char                superbuf[4096];
+
+  *header = *body = NULL;
+
+  make_inetaddr(host, port, &to_addr);
+  from_addr.sin_family = AF_INET;
+  from_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
+  from_addr.sin_port = htons(0);
+
+  tcp_proto = getprotobyname("tcp");
+  if (tcp_proto == NULL) {
+    perror("getprotobyname(\"tcp\") failed: ");
+    exit(1);
+  }
+
+  tcp_fd = socket(PF_INET, SOCK_STREAM, tcp_proto->p_proto);
+  if (tcp_fd < 0) {
+    perror("(tcp!) socket failed: ");
+    exit(1);
+  }
+
+  if (bind(tcp_fd, (struct sockaddr *) &from_addr, sizeof(from_addr)) < 0) {
+    perror("(tcp!) bind failed: ");
+    exit(1);
+  }
+
+  if (connect(tcp_fd, (struct sockaddr *) &to_addr, sizeof(to_addr)) < 0) {
+    perror("(tcp!) connect failed: ");
+    exit(1);
+  }
+
+  write(tcp_fd, "GET ", 4);
+  write(tcp_fd, url, strlen(url));
+  write(tcp_fd, " HTTP/1.0\r\n\r\n", strlen(" HTTP/1.0\r\n\r\n"));
+
+  while(1) {
+    int nextlen;
+    char *swappo;
+
+    if ((nextlen = do_proper_read(tcp_fd, superbuf, 4096)) <= 0) {
+      /* done reading */
+      close(tcp_fd);
+      return 1;
+    }
+    if (on_body == 0) {
+      swappo = realloc(*header, totheaderlen+nextlen+1);
+      if (swappo == NULL)
+	exit(1);
+      *header = swappo;
+      memcpy(*header+totheaderlen, superbuf, nextlen);
+      totheaderlen += nextlen;
+
+      if ((swappo = strstr(*header, "\r\n\r\n")) != NULL)
+	tlen = 4;
+      else if ((swappo = strstr(*header, "\n\n")) != NULL)
+	tlen = 2;
+      else if ((swappo = strstr(*header, "\r\n\n")) != NULL)
+	tlen = 3;
+
+      if (swappo != NULL) {
+	char bup;
+
+	on_body = 1;
+	bup = 	*(swappo + (unsigned) (tlen-1));
+	*(swappo + (unsigned) (tlen-1)) = '\0';
+	totbodylen = totheaderlen - strlen(*header) - 1;
+	*body = malloc(totbodylen);
+	if (*body == NULL)
+	  exit(1);
+	memcpy(*body, swappo+tlen, totbodylen);
+	totheaderlen = strlen(*header) + 1;
+	*(swappo + (unsigned) (tlen-1)) = bup;
+	*(swappo + (unsigned) (tlen)) = '\0';
+      }
+    } else {
+      swappo = realloc(*body, totbodylen+nextlen+1);
+      if (swappo == NULL)
+	exit(1);
+      *body = swappo;
+      memcpy(*body+totbodylen, superbuf, nextlen);
+      totbodylen += nextlen;
+      *bdlen = totbodylen;
+    }
+  }
+}
+
+/****
+**  This function will perform a blocking read of exactly size bytes from the
+**  stream-oriented file descriptor, or will fail.  It returns the number of bytes
+**  read, 0 for end-of-file, or -1 for error.
+****/
+
+int do_proper_read(int tcp_fd, char *buff, size_t size)
+{
+  int result, num_so_far = 0;
+
+  while (num_so_far != size) {
+    result = read(tcp_fd, buff + (unsigned) num_so_far, size-num_so_far);
+    if (result < 0) {
+       perror("do_proper_read: ");
+    }
+    if (result < 0) 
+      return result;
+    num_so_far += result;
+    if (result == 0)
+      return num_so_far;
+  }
+
+#if 0
+  {
+    int i, j;
+
+    for (i=0; i<num_so_far/5; i++) {
+      for (j=0; j<5; j++) {
+	printf("%.02x ", *((unsigned char *) (buff + (unsigned) (5*i+j))));
+      }
+      printf("\n");
+    }
+    if ((num_so_far/5)*5 != num_so_far) {
+      for (j=0; j<num_so_far % 5; j++)
+	printf("%.02x ", *((unsigned char *) (buff + (unsigned) (5 * (num_so_far/5) + j))));
+      printf("\n");
+    }
+  }
+#endif
+  return num_so_far;
+}
+
+@
+
+
+1.3
+log
+@Great!  Pretty much everything works now.  I'm still a little worried about
+blocking vs. non-blocking.
+@
+text
+@@
+
+
+1.2
+log
+@Woohoo!  Partitioning worked out.  Plus, I've thread-safefied the
+part.c partition adding/removing/querying functions.
+@
+text
+@d12 1
+a12 1
+#include "config.h"
+d28 1
+a28 2
+  int                 udp_fd, tcp_fd, resp;
+  icp_message_t       message_obj;
+a29 2
+  unsigned int        receivelen;
+  char               *receivedata = NULL;
+d41 1
+a41 33
+  Part_Initialize("part.config");
+
+  clresp = Part_GetUDPsock(url, &udp_fd);
+  if (clresp != CLIB_OK) {
+    fprintf(stderr, "Part_GetUDPsock failed.\n");
+    exit(1);
+  }
+  resp = do_icp_query(udp_fd, url,
+		      ((struct sockaddr_in *) localaddr)->sin_addr,
+		      1);
+  resp = do_icp_udp_receive(udp_fd, &message_obj);
+  printf("opcode %d version %d length %d reqnum %ld shostid %08lx\n",
+	 message_obj.header.opcode,
+	 message_obj.header.version,
+	 message_obj.header.length,
+	 message_obj.header.reqnum,
+	 message_obj.header.shostid);
+  if (message_obj.header.opcode == ICP_OP_HIT) {
+    printf("HIT url %s\n", message_obj.op.hit.h_url);
+  } else {
+    printf("MISS url %s\n", message_obj.op.miss.m_url);
+  }
+  shutdown(udp_fd, 2);
+  close(udp_fd);
+  exit(0);
+
+  resp = do_http_send(tcp_fd, url, NULL, 1, ICP_GET);
+  printf("do_http_send resp is %d\n", resp);
+  resp = do_http_receive(tcp_fd, &receivelen, &receivedata);
+  printf("do_http_receive resp is %d\n", resp);
+  printf("len: %d\n data: \n%s\n", receivelen, receivedata);
+  shutdown(tcp_fd, 2);
+  close(tcp_fd);
+d43 7
+a62 1
+
+d64 6
+a69 5
+  resp = do_http_put(tcp_fd, urlfin,
+     header1, body1, bdlen1); 
+  printf("do_http_put resp is %d\n", resp);
+  shutdown(tcp_fd, 2);
+  close(tcp_fd);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d18 1
+d28 1
+a28 4
+  int                 udp_fd, tcp_fd;
+  struct sockaddr_in  to_addr;
+  struct sockaddr_in  from_addr;
+  struct protoent    *proto, *tcp_proto;
+d31 1
+a31 1
+  int                 receivelen, resp;
+d38 1
+a44 44
+  {
+    ll tmp = config_list;
+    cfg_nv *nxt;
+
+    while(tmp != NULL) {
+      nxt = (cfg_nv *) tmp->data;
+      fprintf(stdout, "name: %s value: %s\n", nxt->name, nxt->value);
+      tmp = tmp->next;
+    }
+    tmp = config_list;
+    while (tmp != NULL) {
+      nxt = get_next_matching("partition", &tmp);
+      if (nxt != NULL) {
+	fprintf(stdout, "(!) name: %s value:%s\n", nxt->name, nxt->value);
+	tmp = tmp->next;
+      }
+    }
+  }
+  exit(0);
+
+  to_addr.sin_family = AF_INET;
+  to_addr.sin_addr.s_addr = inet_addr("128.32.33.253");
+  to_addr.sin_port = htons(atoi("3130"));
+
+  from_addr.sin_family = AF_INET;
+  from_addr.sin_addr.s_addr = inet_addr("0.0.0.0");
+  from_addr.sin_port = htons(0);
+
+  proto = getprotobyname("udp");
+  if (proto == NULL) {
+    perror("getprotobyname(\"udp\") failed: ");
+    exit(1);
+  }
+
+  udp_fd = socket(PF_INET, SOCK_DGRAM, proto->p_proto);
+  if (udp_fd < 0) {
+    perror("(udp) socket failed: ");
+    exit(1);
+  }
+
+  if (bind(udp_fd, (struct sockaddr *) &from_addr, sizeof(from_addr)) < 0) {
+    perror("(udp) bind failed: ");
+    exit(1);
+  }
+d46 3
+a48 2
+  if (connect(udp_fd, (struct sockaddr *) &to_addr, sizeof(to_addr)) < 0) {
+    perror("(udp) connect failed: ");
+a50 1
+
+d52 1
+a52 1
+		      from_addr.sin_addr,
+a53 1
+
+d66 3
+d70 1
+a70 25
+
+  tcp_proto = getprotobyname("tcp");
+  if (tcp_proto == NULL) {
+    perror("getprotobyname(\"tcp\") failed: ");
+    exit(1);
+  }
+
+  tcp_fd = socket(PF_INET, SOCK_STREAM, tcp_proto->p_proto);
+  if (tcp_fd < 0) {
+    perror("(tcp) socket failed: ");
+    exit(1);
+  }
+
+  if (bind(tcp_fd, (struct sockaddr *) &from_addr, sizeof(from_addr)) < 0) {
+    perror("(tcp) bind failed: ");
+    exit(1);
+  }
+
+  to_addr.sin_port = htons(atoi("3128"));
+  if (connect(tcp_fd, (struct sockaddr *) &to_addr, sizeof(to_addr)) < 0) {
+    perror("(tcp) connect failed: ");
+    exit(1);
+  }
+
+  /*  resp = do_http_send(tcp_fd, url, NULL, 1, ICP_GET);
+d75 2
+a76 1
+  exit(0);*/
+d95 1
+a95 5
+  printf("do_http_put resp is %d\n",
+  resp);
+
+  shutdown(udp_fd, 2);
+  close(udp_fd);
+d98 1
+@
+
+
+1.1.1.1
+log
+@Client-library for talking with the partitioned harvest cache subsystem.
+@
+text
+@@

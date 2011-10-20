@@ -1,0 +1,168 @@
+CC = @CC@
+CXX = @CXX@
+INCLUDEPATH = @INCLUDEPATH@
+INCLUDE = $(patsubst %,-I%,$(INCLUDEPATH))
+INSTALL = @INSTALL@
+CFLAGS = @CFLAGS@ @CPPFLAGS@ $(INCLUDE) -DLOGGING
+LIBS =  @LDFLAGS@ @LIBS@ -lgdbm @LIBTHREAD@
+SHLIB_SUFFIX = .so
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp -chain-length=30
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef TESTING
+	CFLAGS += -D_TESTING_
+endif
+
+TARGETS = frontend TAGS
+
+all: $(TARGETS)
+
+install: ../sbin/frontend
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+SRCS =  frontend.c \
+	httpreq.c httpgo.c httpsupport.c \
+	wingreq.c winggo.c \
+	comm_http.c \
+	thr_queue.c thr_mon.c log.c utils.c dispatch.c \
+	userpref.c parse_upref.c url_magic.c cacheop.c \
+	md5.c # dataflow.c
+
+OBJS = $(patsubst %.c,%.o,$(SRCS)) @LIBOBJS@
+
+INCLUDES = $(wildcard include/*.h)
+
+frontend: $(OBJS) \
+	../lib/libptmstub.a \
+	../lib/libclib.a \
+	../lib/libmon.a
+	$(LD) -o $@ $^ $(LIBS)
+
+test: test_thr_queue
+
+test_comm_http: test_comm_http.o comm_http.o httpsupport.o utils.o ../lib/libmon.a
+	$(CC) -o $@ $^
+
+test_pref: userpref.o testprefs.o
+	$(CC) -o $@ $^ $(LIBS)
+
+test_magic: url_magic.o test_magic.o
+	$(CC) -o $@ $^ $(LIBS)
+
+
+test_distiller: test_distiller.o thr_queue.o log.o utils.o ../ptm/libptmstub.a
+	$(LD) -o $@ $^ $(LIBS)
+
+test_harvest: test_harvest.o thr_queue.o log.o utils.o ../client_lib/libclib.a ../gui/libmon$(SHLIB_SUFFIX)
+	$(LD) -o $@ $^ $(LIBS) -I../client_lib/include
+
+test_ptm: test_ptm.o thr_queue.o log.o utils.o ../client_lib/libclib.a \
+	../ptm/libptmstub.a
+	$(LD) -o $@ $^ $(LIBS) -I../client_lib/include
+
+test_thr_queue: test_http.o httpreq.o httpgo.o httpsupport.o  \
+	thr_queue.o log.o utils.o dispatch.o \
+	userpref.o parse_upref.o accept_upref.o \
+	testlib.o
+	$(CC) -o $@ $^ $(LIBS)
+
+%.o: src/%.c
+	$(CC) $(CFLAGS) -o $@ -c $<
+
+src/utils.c: ../client_lib/src/utils.c
+	-ln -s ../$< $@
+
+TAGS: $(patsubst %,src/%,$(SRCS)) $(INCLUDES)
+	etags $^
+
+clean:
+	-/bin/rm -f *.o *~ src/*~ test_thr_queue test_harvest TAGS core frontend.log.*
+
+# DO NOT DELETE
+
+src/accept_upref.o: ../frontend/include/userpref.h
+src/accept_upref.o: ../ptm/include/proxyinterface.h
+src/accept_upref.o: ../ptm/include/distinterface.h ../config_tr.h
+src/accept_upref.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/cacheop.o: ../client_lib/include/clib.h ../gui/libmon.h
+src/cacheop.o: ../ptm/include/error.h ../frontend/include/frontend.h
+src/cacheop.o: ../frontend/include/thr_cntl.h ../ptm/include/proxyinterface.h
+src/cacheop.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/cacheop.o: ../frontend/include/userpref.h ../frontend/include/comm_http.h
+src/cacheop.o: ../frontend/include/ARGS.h
+src/comm_http.o: ../frontend/include/userpref.h
+src/comm_http.o: ../ptm/include/proxyinterface.h
+src/comm_http.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/comm_http.o: ../ptm/include/error.h ../client_lib/include/clib.h
+src/comm_http.o: ../frontend/include/thr_cntl.h
+src/comm_http.o: ../frontend/include/frontend.h ../client_lib/include/utils.h
+src/dataflow.o: ../frontend/include/dataflow.h
+src/dataflow.o: ../ptm/include/proxyinterface.h
+src/dataflow.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/dataflow.o: ../ptm/include/error.h ../client_lib/include/clib.h
+src/dispatch.o: ../frontend/include/userpref.h
+src/dispatch.o: ../ptm/include/proxyinterface.h
+src/dispatch.o: ../ptm/include/distinterface.h ../config_tr.h
+src/dispatch.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/dispatch.o: ../frontend/include/thr_cntl.h ../frontend/include/ARGS.h
+src/frontend.o: ../client_lib/include/clib.h ../gui/libmon.h
+src/frontend.o: ../ptm/include/error.h ../frontend/include/frontend.h
+src/frontend.o: ../ptm/include/proxyinterface.h
+src/frontend.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/frontend.o: ../frontend/include/userpref.h ../frontend/include/wingreq.h
+src/httpgo.o: ../frontend/include/frontend.h ../config_tr.h
+src/httpgo.o: ../frontend/include/thr_cntl.h ../ptm/include/proxyinterface.h
+src/httpgo.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/httpgo.o: ../ptm/include/error.h ../frontend/include/debug.h
+src/httpgo.o: ../frontend/include/comm_http.h ../frontend/include/url_magic.h
+src/httpgo.o: ../frontend/include/ARGS.h ../client_lib/include/utils.h
+src/httpreq.o: ../frontend/include/frontend.h ../config_tr.h
+src/httpreq.o: ../frontend/include/thr_cntl.h ../ptm/include/proxyinterface.h
+src/httpreq.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/httpreq.o: ../ptm/include/error.h ../frontend/include/debug.h
+src/httpsupport.o: ../frontend/include/frontend.h ../config_tr.h
+src/httpsupport.o: ../frontend/include/thr_cntl.h
+src/httpsupport.o: ../ptm/include/proxyinterface.h
+src/httpsupport.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/httpsupport.o: ../ptm/include/error.h ../frontend/include/debug.h
+src/httpsupport.o: ../frontend/include/userpref.h
+src/log.o: ../frontend/include/userpref.h ../ptm/include/proxyinterface.h
+src/log.o: ../ptm/include/distinterface.h ../config_tr.h
+src/log.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/md5.o: ../frontend/include/md5.h
+src/parse_upref.o: ../frontend/include/userpref.h
+src/parse_upref.o: ../ptm/include/proxyinterface.h
+src/parse_upref.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/parse_upref.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/parse_upref.o: ../frontend/include/frontend.h
+src/parse_upref.o: ../frontend/include/thr_cntl.h
+src/thr_mon.o: ../frontend/include/thr_cntl.h ../frontend/include/userpref.h
+src/thr_mon.o: ../ptm/include/proxyinterface.h ../ptm/include/distinterface.h
+src/thr_mon.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/thr_queue.o: ../ptm/include/proxyinterface.h
+src/thr_queue.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/thr_queue.o: ../ptm/include/error.h
+src/url_magic.o: ../ptm/include/proxyinterface.h
+src/url_magic.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/url_magic.o: ../ptm/include/error.h ../frontend/include/ARGS.h
+src/url_magic.o: ../frontend/include/thr_cntl.h
+src/url_magic.o: ../frontend/include/url_magic.h
+src/userpref.o: ../ptm/include/proxyinterface.h
+src/userpref.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/userpref.o: ../ptm/include/optdb.h ../ptm/include/error.h
+src/winggo.o: ../frontend/include/frontend.h ../config_tr.h
+src/winggo.o: ../frontend/include/thr_cntl.h ../ptm/include/proxyinterface.h
+src/winggo.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/winggo.o: ../ptm/include/error.h ../frontend/include/debug.h
+src/winggo.o: ../frontend/include/comm_http.h ../frontend/include/url_magic.h
+src/winggo.o: ../frontend/include/ARGS.h ../client_lib/include/utils.h
+src/wingreq.o: ../frontend/include/frontend.h ../config_tr.h
+src/wingreq.o: ../frontend/include/thr_cntl.h ../ptm/include/proxyinterface.h
+src/wingreq.o: ../ptm/include/distinterface.h ../ptm/include/monitor.h
+src/wingreq.o: ../ptm/include/error.h ../frontend/include/debug.h

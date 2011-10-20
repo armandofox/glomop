@@ -1,0 +1,210 @@
+head	1.2;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.11.11.20.07.02;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.11.22.48.50;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.11.22.48.50;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Recommit after crash
+@
+text
+@#include "Pilot.h"
+#include <sys/time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include "erf.h"
+#include "sock.h"
+
+typedef struct {
+    int fd;
+    char *connid;
+    void *up_state;
+    void (*up_dispatch)(unsigned char *,long,void *,Erf,void*);
+    void (*up_setconnid)(char *, void *,Erf,void*);
+} SockState;
+
+#define sock_fatal(reason) erf(1, "socket", reason, __FILE__, __LINE__, erfp)
+
+/* Initialize a socket */
+void *sock_init(char *host, unsigned short port, int *fd, Erf erf, void *erfp)
+{
+    struct hostent *h;
+    struct sockaddr_in sockaddr;
+    SockState *state;
+    ULong **addrp;
+    int err;
+    char *colon;
+
+    /* Create our state handle */
+    state = MemPtrNew(sizeof(SockState));
+    if (!state) {
+	sock_fatal("Out of mem");
+	return NULL;
+    }
+
+    /* Look up the hostname */
+    for(colon = host; *colon && *colon != ':'; ++colon) ;
+    if (*colon == ':') {
+	/* Use an alternate port */
+	char *onlyhost = MemPtrNew(colon-host+1);
+	if (!onlyhost) {
+	    sock_fatal("Out of mem");
+	    return NULL;
+	}
+	MemMove(onlyhost, host, colon-host);
+	onlyhost[colon-host] = '\0';
+	h = gethostbyname(onlyhost);
+	MemPtrFree(onlyhost);
+	port = StrAToI(colon+1);
+    } else {
+	h = gethostbyname(host);
+    }
+    if (!h) {
+	sock_fatal("Host not found");
+	return NULL;
+    }
+    for (addrp=(ULong **)h->h_addr_list;*addrp;++addrp) {
+	ULong a = (**addrp);
+	if (a != INADDR_ANY) {
+	    sockaddr.sin_addr.s_addr = a;
+	    break;
+	}
+    }
+    sockaddr.sin_family = AF_INET;
+    sockaddr.sin_port = htons(port);
+
+    *fd = socket(PF_INET, SOCK_STREAM, 0);
+    if (*fd < 0) {
+	sock_fatal("Cannot create socket");
+	return NULL;
+    }
+
+    err = connect(*fd, (struct sockaddr *)&sockaddr, sizeof(sockaddr));
+    if (err) {
+	sock_fatal("Could not connect");
+	return NULL;
+    }
+
+    state->fd = *fd;
+    state->connid = MemPtrNew(StrLen(host) + 10);
+    if (!state->connid) {
+	sock_fatal("Out of mem");
+	return NULL;
+    }
+    StrPrintF(state->connid, "%s:%u", host, (unsigned int)port);
+    state->up_setconnid = NULL;
+    state->up_dispatch = NULL;
+    state->up_state = NULL;
+
+    return state;
+}
+
+/* Write data to the socket */
+long sock_write(unsigned char *data, long len, void *state_, Erf erf,
+    void *erfp)
+{
+    SockState *state = state_;
+    long tot = 0;
+
+    if (len < 0) {
+	/* Clean up */
+	close(state->fd);
+	if (state->connid) MemPtrFree(state->connid);
+	MemPtrFree(state);
+    }
+
+    while (len) {
+	int res;
+	long piece = len;
+
+	if (piece > 1024) piece=1024;
+	res = write(state->fd, data, piece);
+	if (res < 0) return res;
+	if (res == 0) break;
+	len -= res;
+	data += res;
+	tot += res;
+    }
+    return tot;
+}
+
+/* Data has arrived at the socket; pass it up */
+void sock_dispatch(unsigned char *data, long len, void *state_, Erf erf,
+    void *erfp)
+{
+    SockState *state = state_;
+
+    if (state->up_dispatch) {
+	(state->up_dispatch)(data, len, state->up_state, erf, erfp);
+    }
+}
+
+void sock_set_dispatch(
+    void (*up_dispatch)(unsigned char *,long,void *,Erf,void*),
+    void *up_state, void *state_, Erf erf, void *erfp)
+{
+    SockState *state = state_;
+
+    state->up_dispatch = up_dispatch;
+    state->up_state = up_state;
+}
+
+void sock_set_setconnid(void (*up_setconnid)(char *, void *, Erf, void *),
+    void *state_, Erf erf, void *erfp)
+{
+    SockState *state = state_;
+
+    state->up_setconnid = up_setconnid;
+    if (state->up_setconnid) {
+	(state->up_setconnid)(state->connid, state->up_state, erf, erfp);
+    }
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a2 1
+#include <sys/types.h>
+d27 1
+d37 16
+a52 1
+    h = gethostbyname(host);
+@
+
+
+1.1.1.1
+log
+@Top Gun Login Library
+@
+text
+@@

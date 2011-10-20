@@ -1,0 +1,185 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.04.23.07.34.50;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.17.09.33.03;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@<html>
+<title>
+NOW-Sort
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+High-Performance Sorting on Networks of Workstations
+</h1>
+<strong>
+Andrea C. Arpaci-Dusseau, Remzi H. Arpaci-Dusseau, David E. Culler,
+Joseph M. Hellerstein, David A. Patterson
+</strong>
+
+<i>Summary by:  Armando Fox and Steve Gribble</i><p>
+
+
+<p><b>One-line summary:</b>
+Single- and multi-node parallel sorting on NOW point up both NOW's
+advantages and some (SPARC-specific?) weaknesses, but hold the current
+MinuteSort record.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Why NOW: performance isolation (analysis of behavior
+       node-by-node, factor-by-factor; CPU, disk, etc), incremental
+       scalability.
+  <li> NOW-sort: Split-C (split-phase transactions using AM), <i>uniform
+       key distribution</i> (as in previous work).  As in previous work,
+       expect performance to be dominated by I/O, not by in-core sorting
+       time.
+  <li> New tools developed:
+       <ul>
+         <li> <i>Diskconf:</i> measure achieved thruput of different
+              disks, to determine ratio of stripe sizes across them.
+         <li> <i>Memconf:</i> how much memory available at runtime,
+              after accounting for OS, buffers, daemons, etc.
+       </ul>
+  <li> Buffer management:
+       <ul>
+         <li> <i>read()</i> does its own (bad) buffer management;
+         <li> so does <i>mmap</i>;
+         <li> but <i>mmap</i> plus <i>madvise</i> works OK (but see
+              below). 
+       </ul>
+  <li> Core sorting algorithms:
+       <ul>
+         <li> Quicksort
+         <li> Bucket+Quicksort: group into buckets on high 32 bits,
+              common case needs to compare only those 32 bits, so a 
+              constant factor better than Quicksort.  Buckets sized to
+              fit in L2 cache (512KB for Ultras).
+         <li> Bucket+Radix Sort: best performance; linear in data
+              size.
+       </ul>
+  <li> One-pass parallel sort:
+       <ul>
+         <li> Buckets spread across nodes; any processor can deliver
+              keys to any node for bucketing.
+         <li> Each processor then sorts its local keys, and then gathers
+              and writes its records to local disk.
+         <li> Synchronous: each of the above phases done serially.
+         <li> Interleaved: single thread alternates between reading and
+              communicating during key bucketing.  Allows some overlap
+              of reading and communicating.
+         <li> Threaded: reader and communicator threads are separate.
+              This gave best performance due to finer-grained thread
+              scheduling (so better overlap of disk and network).
+         <li> Linear scaling; remote process startup is costly, due to
+              GLUnix. 
+       </ul>
+  <li> Two-pass, single-node:
+       <ul>
+         <li> Create sorted sub-runs on disk, using a reader thread and
+              writer thread.
+         <li> Merge sorted sub-runs, using a reader, merger, and writer
+              threads.
+         <li> Note: when reading from multiple disk streams in the above
+              step, mmap() does not prefetch enough to amortize seek, so
+              merge phase code explicitly manages prefetching with
+              multiple threads and buffers--ugh.
+         <li> Pipelining of phases performs much better than synchronous
+              phases, regardless of number of disks used; but since 
+              disk reading and writing are
+              both occurring nearly all the time in pipelined version,
+              must dedicate each
+              disk to either reading or writing but not both in order to
+              get best performance.
+         <li> Tradeoff between size of sub-runs created (don't want a
+              single one to be larger than physical memory) and number
+              of runs (merge phase cost is linear in number of runs).
+              Authors found that tradeoff doesn't significantly affect
+              performance until you hit the "memory wall".
+       </ul>
+  <li> Two-pass parallel sort:
+       <ul>
+         <li> Like two-pass single-node, but buckets distributed across
+              nodes.
+         <li> Reader, communicator, and writer threads, to exploit overlap.
+         <li> Parallel version on one CPU is slower than single-node
+              version, since all phases must be synchronous in parallel
+              version.
+         <li> Since authors' machines are memory-starved, need two
+              passes. (Previous MinuteSort algorithms worked in a single
+              pass.)  Result: authors need to do twice as much I/O in
+              the same amount of time, in order to beat standing record.
+       </ul>
+  <li> Observations from optimizing the various sorts:
+       <ul>
+         <li> UltraSPARC internal SCSI saturates w/more than one disk.
+         <li> mmap() and madvise() allow complete overlapping of key
+              bucketing with reading more keys from disk.
+         <li> SBUS I/O  bandwidth is severely limited--advertises 80MB/s,
+              authors saw about 36MB/s.  This means workstation can't
+              effectively use 2 disks and network at the same time!
+         <li> (Drastic proposal: communciation facilities that use the
+              memory bus directly without coherence.)
+         <li> Need OS facilities that do what <i>diskconf</i> and
+              <i>memconf</i> do.
+       </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+NOW beats enterprise workstations for sorting (typically something that
+SMP's are better at because of their tightly integrated I/O), even
+though internal I/O buses are too slow and nodes don't have enough RAM.
+
+<h2>Flaws/Lessons</h2>
+
+<ul>
+  <li> Flaw: this is a benchmark.  May not be representative of typical
+       sorting behavior, since much optimization was done to get the
+       benchmark to win.
+  <li> How hard to write such high-perf code in practice?  Should
+       programmers even have to deal with things like memconf and
+       diskconf, even if OS provides them?
+  <li> Mmap() prefetching and similar behaviors should be more
+       adjustable, to account for situations such  as amortizing seek
+       cost for  reading from multiple seqential streams.
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@added nowsort
+@
+text
+@d15 3
+@

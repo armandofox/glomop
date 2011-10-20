@@ -1,0 +1,769 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.10.26.04.13.09;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.25.00.59.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Bugfixes galore!  This version was the one that Eric took with him to Japan.
+The changelog has been disabled.  This is the final version pre-TCP.
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	Dialing
+#
+#	A simple example of how to use the Telenumber class
+#
+#	General Magic Developer Technical Support
+#	Copyright © 1992-1994 General Magic, Inc.
+#	All rights reserved.
+#
+#
+#	Version:	MC30
+#
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+#include "Modem.h"
+
+#include "ProxyMail_indexicals.h"
+
+#undef CURRENTCLASS
+#define CURRENTCLASS PhoneEditButton
+
+Method void
+PhoneEditButton_Action(ObjectID self)
+{
+	#pragma unused(self)
+	Dot position;
+
+	/* Get the position of the text field so that the window's ballon spout will
+	   point to it. */
+	Origin(ipPhonefield, &position);
+	/* Start editing the phone number. */
+	EditAttribute(iPhoneLabelEditSteps, ipTelenumber, ipPhonefield, &position);
+}
+ 
+#undef CURRENTCLASS 
+#define CURRENTCLASS MSResynchActor
+
+IntrinsicMethod Character
+MSResynchActor_ReadByte(ObjectID theStream, Boolean *success)   /* Get a single byte - this is a blocking call */
+{
+	uchar 		c;
+	int   		count=0, num;
+	ObjectID	TTickets;
+	
+	while(1)
+	{
+	   num = (int) ReadWithTimeout(theStream, &c, sizeof(c), 1000L);
+	   if (num > 0)
+	   {
+	   	  *success = true;
+	      return c;
+	   }
+	   RunNext(iScheduler);
+	   Log(("Spinning...."));
+	   count++;
+	   if (count > 15)
+	   {
+	      Log(("15 spins - timeout on readbyte!"));
+		  Announce(iCommunicationsError);
+		  ReplaceTextWithLiteral(iCommunicationsError, "Timeout on Read! Aborting.");
+		  
+		  while(1)
+		  {
+		  	 long int theLength, i;
+			 
+		     TTickets = FieldOf(iPostOffice, PostOffice_transfersInProgress);
+			 theLength = Length(TTickets);
+			 if (theLength< 0)
+			 	break;
+			 
+			 
+			 //for (i=theLength; i>=1L; i-=1L)
+			 //{
+			 //   AbortTransfer(iPostOffice, At(TTickets, i));
+			 //}
+			 AbortTransfer(iPostOffice, First(TTickets));
+			 
+			 //temporary?
+			 Log(("Done AbortTransfers in ReadByte."));
+			 *success = false;
+			 return 0;
+		  }
+		  *success = false;
+		  return 0;
+	   }
+	}
+	*success = true;
+	return c;
+}
+/*
+	Write the entire text object to the stream, one buffer's worth at a time
+*/
+IntrinsicMethod void
+MSResynchActor_WriteText(ObjectID stream, ObjectID text)
+{
+	TextRange	r;
+	ulong		count = TextLength(text);	
+	ulong		length;
+	Character	buffer[kMaxBuffer];
+	
+	r.start = 0;
+	// Write(stream, &count, sizeof(count));
+	while (count > 0)
+	{
+		r.length = length = (count>kMaxBuffer)?kMaxBuffer:count;
+		CopyTextRangeToBuffer(text, &r, buffer);
+		ConvertToMagic8Bit(buffer, (uchar*)buffer, length);
+		Write(stream, buffer, length);
+		r.start += length;
+		count -= length;
+	}
+}
+/*
+	Read a text object from the stream, one buffer's worth at a time
+*/
+IntrinsicMethod void
+MSResynchActor_ReadText(ObjectID stream, ObjectID text)
+{
+	uchar		source[kMaxBuffer+1];
+	ulong		count;
+	ulong		length;
+	
+	Read(stream, &count, sizeof(count));
+	while(count > 0) {
+		length = (count>kMaxBuffer)?kMaxBuffer:count;
+		Read(stream, source+1, length);
+		*source = length;
+		AppendStringToText(text, source);
+		count -= length;
+	}
+}
+
+IntrinsicMethod ulong
+MSResynchActor_ReadLong(ObjectID stream)
+{
+	ulong value;
+	
+	Read(stream, &value, sizeof(value));
+	return value;
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_ReadALine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine, Boolean *success)  /* Scan stream until endOLine - this is blocking also */
+{
+	int soFar = 0;
+	char  *theCharP;
+	Boolean theS;
+	
+	theCharP = intoMe;
+	while(soFar < maxLen-1)
+	{
+	   *(theCharP + ((long int) soFar)) = ReadByte(theStream, &theS);
+	   if (theS == false)
+	   {
+	   	  Log(("ReadByte false in ReadALine!"));
+	      *success = false;
+		  return 0L;
+	   }
+	   // Read(theStream, (Pointer) (theCharP + ((long int) soFar)), sizeof(char));
+	   
+	   if (*(theCharP + ((long int) soFar)) == (char) endOLine)
+	   {
+	      *(theCharP + ((long int) (soFar+1))) = '\0';
+		  *success = true;
+		  return soFar+1L;  /* returns number of characters (not including null-terminator) being returned in line */
+	   }
+	   soFar++;
+	}
+	*(theCharP + ((long int) (maxLen-1))) = '\0';
+	*success = true;
+	return maxLen-1L;
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_ReadNELine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine, Boolean *success)  /* Scan stream until find non-empty line */
+{
+    Unsigned  retVal;
+	char     *charIntoMe;
+	Boolean theS;
+	
+	charIntoMe = intoMe;
+	
+    while(1)
+	{
+       int j;
+	   
+	   Log(("In ReadNELine:  doing ReadALine."));
+       retVal = ReadALine(theStream, intoMe, maxLen, endOLine, &theS);
+	   if (theS == false)
+	   {
+	   	 Log(("ReadALIne: False!"));
+	     *success = false;
+		 return 0L;
+	   }
+	   Log(("reading (NE) line %s", intoMe));
+	   for (j=0; j<retVal; j++)
+	   {
+	      if ((*(charIntoMe + ((long int) j)) != ' ') && (*(charIntoMe + ((long int) j)) != '\t') && (*(charIntoMe + ((long int) j)) != '\n') &&
+		      (*(charIntoMe + ((long int) j)) != '\r') && (*(charIntoMe + ((long int) j)) != '\0') )
+		  {
+		  	 *success = true;
+			 return retVal;
+	 	   }
+	   }
+	   Log(("was empty."));
+	}
+	*success = false;
+	return 0L;
+}
+
+Private void DBgetArrow(ObjectID theStream, Boolean *success)  /* Scan stream until see "=>"  -  this is a blocking call */
+{
+    char nextByte = 0;
+	Boolean theS;
+
+    while(1)
+	{
+	    while(nextByte != '=')
+		{
+	       nextByte = ReadByte(theStream, &theS);
+		   if (theS == false)
+		   {
+		   	  *success = false;
+		   	  return;
+		   }
+		}
+		
+		while (nextByte == '=')
+		{
+		   nextByte = ReadByte(theStream, &theS);
+		   if (theS == false)
+		   {
+		     *success = false;
+		   	 return;
+		   }
+		}
+		
+		if (nextByte == '>')
+		{
+		   Log(("Got arrow."));
+		   *success = true;
+		   return;
+		}
+	}
+}
+
+Private int DBgetConnected(ObjectID theStream)  /* Look for "Connected" at beginning of a line - this will block */
+{
+    char nextL[512];
+	int  theLen;
+	Boolean theS;
+	
+	while(1)
+	{
+	   theLen = ReadNELine(theStream, nextL, 510, 10, &theS);   /** 10 is LF - follows CR **/
+	   if (theS == false)
+	   		return 0;
+	   if (theLen < 10)
+	       continue;
+	   if (CompareBytes(nextL, "Connected", 9, NULL) == 0)
+	       return 1;
+	   if (CompareBytes(nextL, "telnet:", 7, NULL) == 0)
+	       return 0;
+	}
+}
+
+IntrinsicMethod Unsigned
+MSResynchActor_DoAnnexHandshake(ObjectID theStream)  /* Handshake with annex to telnet into provided port and host */
+{
+	Str255  writeText;
+	Unsigned myAmountB;
+	Boolean theS;
+	
+    /* Ok - I assume we've connected;  we read from the stream, waiting for "=>" */
+	Write(theStream, "\r\r", 2);
+	DBgetArrow(theStream, &theS);
+	if (theS == false)
+	   return 0;
+	
+	Flush(theStream);
+	Write(theStream, (Pointer) "telnet -t ", 10);
+	
+	TextToString(ipHostfield, &writeText);
+	myAmountB = writeText[0];
+	Write(theStream, (Pointer) &(writeText[1]), myAmountB);
+    Write(theStream, (Pointer) " ", 1);
+	
+	TextToString(ipPortfield, &writeText);
+	myAmountB = writeText[0];
+	Write(theStream, (Pointer) &(writeText[1]), myAmountB);
+	Write(theStream, (Pointer) "\r", 1);
+	
+	/* Great - now wait for the "Connected to ??.cs." string */
+	if (DBgetConnected(theStream) == 0)
+	{
+	   Log(("DBgetConnected failed with telnet: connect to address."));
+	   return 0;
+	}
+	   
+	Log(("Done handshake!"));
+	
+	/* Done!  Flush everything and quit */
+	Flush(theStream);
+	return 1;
+}
+
+IntrinsicMethod ObjectID
+MSResynchActor_GetTOC(ObjectID theStream, Boolean *success)
+{
+   char       nextLine[1024];  /* ugly, but should work */
+   char      *id, *totchunk, *thischunk, *theNL;
+   ObjectID   newList, newMS;
+   long int   numMessages, i, curMessage;
+   Flags      theFlags;
+   Boolean	  theSS;
+   
+   /**** First, parse out the HERE line for TOC ****/
+   Log(("Waiting for HERE.."));
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10, &theSS);                  /* get the line */
+   if (theSS == false)
+   {
+      *success = false;
+	  return nilObject;
+   }
+   
+   theNL = nextLine +  (long int) ScanForChar(10, nextLine, 1022);      /* knock of trailing NL */
+   if (theNL >= nextLine)
+      *theNL = '\0';
+   Log(("Got HERE - %s", nextLine));
+   
+   id = nextLine + (long int) ScanForChar(' ', nextLine, 1022);                   /* find space between HERE and reqid */
+   totchunk = id + 1L + (long int) ScanForChar(' ', id + 1L, 1018);				  /* find space between reqid and totalchunks */
+   thischunk = totchunk + 1L + (long int) ScanForChar(' ', totchunk + 1L, 1018);  /* find space between totalchunks and thischunk */
+   *id = '\0';  id++;
+   *totchunk = '\0';  totchunk++;
+   *thischunk = '\0'; thischunk++;
+   
+   CtoPString(totchunk);
+   if (!StringToInt(totchunk, &numMessages))
+   {
+      PtoCString(totchunk);
+      Log(("Couldn't convert %s to int!\n", totchunk));
+	  *success = false;
+	  return nilObject;
+   }
+   CtoPString(thischunk);
+   if (!StringToInt(thischunk, &curMessage))
+   {
+      PtoCString(thischunk);
+	  Log(("Couldn't convert %s to int!\n", thischunk));
+	  *success = false;
+	  return nilObject;
+   }
+   if (curMessage != 0)
+   {
+      Log(("TOC out of order? %d should be zero.", (int) curMessage));
+	  *success = false;
+	  return nilObject;
+   }
+   else
+      Log(("TOC: numMess %d, curmess %d", (int) numMessages, (int) curMessage));
+   
+   /**** OK - now strip out the NDOCS and DSIZE line - for now I won't use them ****/
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10, &theSS);
+   if (theSS == false)
+   {
+      *success = false;
+	  return nilObject;
+   }
+   Log(("Dropping (NDOCS) line: %s", nextLine));
+   
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10, &theSS);
+   if (theSS == false)
+   {
+      *success = false;
+	  return nilObject;
+   }
+   Log(("Dropping (DSIZE) line: %s", nextLine));
+   
+   newList = NewNear(ObjectList_, iServiceAddressCard, nil);
+   for (i=0L; i<numMessages; i++)
+   {
+       /* Create MS, get it to parse synopsis line, add to newList. */
+	   newMS = CopyNear(iTemplateMS, iTemplateMS);
+	   theFlags = MS_wasReceived | MS_noteditable;
+	   SetInfo_flags(newMS, theFlags);
+	   decodeTOCEntry(newMS, theStream, &theSS);
+	   if (theSS == false)
+       {
+         *success = false;
+	     return nilObject;
+       }
+	   AddLast(newList, newMS);
+   }
+   Log(("Done all TOC adding!"));
+   
+   /* Strip and drop the END line */
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10, &theSS);
+   if (theSS == false)
+   {
+      *success = false;
+	  return nilObject;
+   }
+   Log(("Dropping (END) line: %s", nextLine));
+   
+   *success = true;
+   return newList;   
+}
+
+IntrinsicMethod ObjectID
+MSResynchActor_GetMSMessage(ObjectID theStream, ObjectID theMSlist, Boolean *success)
+{
+    char        nextLine[128];
+	ObjectID    theMSmsg;
+    char       *id, *totchunk, *thischunk, *theNL;
+    long int    numMessages, i, curMessage, dsize;
+	Boolean     res, theSS;
+		
+	/* OK - scan forward looking for a "HERE" string */
+	Log(("Getting HERE..."));
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10, &theSS); /* get the line */
+	if (theSS == false)
+	{
+	   *success = false;
+	   return nilObject;
+	}
+	Log(("Got HERE."));
+    theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+    if (theNL >= nextLine)
+      *theNL = '\0';
+	id = nextLine + (long int) ScanForChar(' ', nextLine, 127);                   /* find space between HERE and reqid */
+	totchunk = id + 1L + (long int) ScanForChar(' ', id + 1L, 123);				  /* find space between reqid and totalchunks */
+	thischunk = totchunk + 1L + (long int) ScanForChar(' ', totchunk + 1L, 123);  /* find space between totalchunks and thischunk */
+	*id = '\0';  id++;
+	*totchunk = '\0';  totchunk++;
+	*thischunk = '\0'; thischunk++;
+	CtoPString(totchunk);
+	if (!StringToInt(totchunk, &numMessages))
+	{
+	   PtoCString(totchunk);
+	   Log(("Couldn't convert %s to int!\n", totchunk));
+	   *success = false;
+	   return nilObject;
+	}
+	CtoPString(thischunk);
+	if (!StringToInt(thischunk, &curMessage))
+	{
+	   PtoCString(thischunk);
+	   Log(("Couldn't convert %s to int!\n", thischunk));
+	   *success = false;
+	   return nilObject;
+	}
+	Log(("Next message is number %d", (int) curMessage));
+	theMSmsg = At(theMSlist, curMessage);
+	Log(("Did at..."));
+	
+	/* Got theMSmsg - now deal with DRT */
+	res = parseDRTfromStream(theMSmsg, theStream);
+	if (res == false)
+	{
+	   *success = false;
+	   return nilObject;
+	}
+	
+	/* Now grab and parse the DSIZE line */
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10, &theSS);                  /* get the line */
+	if (theSS == false)
+	{
+	   *success = false;
+	   return nilObject;
+	}
+    theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+    if (theNL >= nextLine)
+      *theNL = '\0';
+	totchunk = nextLine + (long int) ScanForChar(' ', nextLine, 127);
+	*totchunk = '\0';  totchunk++;
+	CtoPString(totchunk);
+	if (!StringToInt(totchunk, &dsize))
+	{
+	   PtoCString(totchunk);
+	   Log(("Couldn't convert %s to int!\n", totchunk));
+	}
+	Log(("Length of message is %ld", dsize));
+	
+	/* Have length - call MS procedure to actually read in message from stream itself */
+	res = decodeFromStream(theMSmsg, theStream, (Unsigned) dsize);
+	if (res == false)
+	{
+	   *success = false;
+	   return nilObject;
+	}
+	
+	/* Got it!  Now get and junk the "END" line */
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10, &theSS);
+	if (theSS == false)
+	{
+	  *success = false;
+	  return nilObject;
+	}
+	
+	Log(("Junking (END): %s", nextLine));
+	*success = true;
+	return theMSmsg;
+}
+
+Private void CryptVec(int *cryptMe, int *theCrypted)
+{
+    int crypM[4][4];
+	int i, j;
+	
+	crypM[0][0] = 1;  crypM[0][1] = 0;  crypM[0][2] = 6;  crypM[0][3] = 7;
+	crypM[1][0] = 2;  crypM[1][1] = 4;  crypM[1][2] = 6;  crypM[1][3] = 3;
+	crypM[2][0] = 1;  crypM[2][1] = 3;  crypM[2][2] = 5;  crypM[2][3] = 5;
+	crypM[3][0] = 0;  crypM[3][1] = 3;  crypM[3][2] = 4;  crypM[3][3] = 6;
+	
+	Log(("Encrypting: %d %d %d %d", cryptMe[0], cryptMe[1], cryptMe[2], cryptMe[3]));
+	
+	for (i=0; i<4; i++)
+	{
+	   int nextTot = 0;
+	   
+	   for(j=0; j<4; j++)
+	      nextTot += crypM[i][j] * cryptMe[j];
+	   
+	   theCrypted[i] = nextTot;
+	}
+	Log(("Encrypted: %d %d %d %d", theCrypted[0], theCrypted[1], theCrypted[2], theCrypted[3]));
+}
+
+IntrinsicMethod void 
+MSResynchActor_DoAuthenticate(ObjectID theStream, ObjectID theTicket, Boolean *success)
+{
+	Str255     writeText;
+	Unsigned   myAmountB;
+	char      *theNL, saltLine[20], outL[32];
+	int        vec[4], encrvec[4];  // vector and encrypted vector
+	int        which, whichPW, whichS, j, lenOut;
+	ObjectID	announcement = theTicket;  // = StatusAnnouncement(theTicket);
+	Boolean		theSS;
+	
+	// begin authentication
+	Write(theStream, "c #magiccap##", 13L);
+	TextToString(ipUsernameTF, &(writeText[0]));
+	myAmountB = writeText[0];
+	Write(theStream, (Pointer) &(writeText[1]), myAmountB);
+    Write(theStream, (Pointer) "#\r", 2L);
+	
+	// Now suck in the salt
+	ReadNELine(theStream, (Pointer) saltLine, 20, 10, &theSS);
+	if (theSS == false)
+	{
+	   *success = false;
+	   return;
+	}
+	theNL = saltLine + (long int) ScanForChar(10, saltLine, 20);
+	if (theNL >= saltLine)
+	   *theNL = '\0';
+	
+	Log(("first few of username: %c %c %c %c %c", writeText[1], 
+		 writeText[2], writeText[3], writeText[4], writeText[5]));
+	Log(("received salt: %s", saltLine));
+	
+	// grab real password
+	TextToString(ipPasswordTF, &(writeText[0]));
+	myAmountB = writeText[0];
+	Log(("first few of password: %c %c %c %c", writeText[1], writeText[2],
+		writeText[3], writeText[4]));
+	
+	// Send out authentication password
+	Write(theStream, "a #", 3L);
+	
+	whichPW = 1;
+	whichS = 3;
+	for (which=0; which<4; which++)
+	{
+	   vec[0] = (whichPW > myAmountB) ? 0 : writeText[whichPW];
+	   vec[1] = saltLine[whichS];
+	   whichPW++;  whichS++;
+	   
+	   vec[2] = (whichPW > myAmountB) ? 0 : writeText[whichPW];
+	   vec[3] = saltLine[whichS];
+	   whichPW++;  whichS++;
+	   
+	   CryptVec(vec, &(encrvec[0]));
+	   for (j=0; j<4; j++)
+	   {
+	      SPrintF(outL, "%d", encrvec[j]);
+		  lenOut = CStringLength(outL);
+		  Write(theStream, outL, lenOut);
+		  
+		  if ((j!=3) || (which != 3))
+		    Write(theStream, " ", 1);
+	   }
+	}
+	Write(theStream, "#\r", 2L);
+	
+	// Now read result from stream
+	ReadNELine(theStream, (Pointer) writeText, 254, 10, &theSS);
+	if (theSS == false)
+	{
+	   *success = false;
+	   return;
+	}
+	theNL = writeText + (long int) ScanForChar(10, writeText, 254);
+	if (theNL >= writeText)
+		*theNL = '\0';
+	Log(("Returned value: %s", writeText));
+	
+	if (CompareBytes(writeText, "ERR", 3, NULL) == 0)
+	{
+	   Log(("Bad authentication.  (sigh)"));
+	   ReplaceTextWithLiteral(announcement, "Authentication failed! Aborting.");
+	   PermitRedraw();
+		RunNext(iScheduler);
+	   Honk();
+	   *success = false;
+	   // Abort(theTicket);
+	}
+	else
+	{
+	   ReplaceTextWithLiteral(announcement, "Authentication succeeded.");
+	   PermitRedraw();
+	   RunNext(iScheduler);
+	   *success = true;
+	   Log(("Good authentication.  (bliss)"));
+	}
+}
+
+#undef CURRENTCLASS@
+
+
+1.1
+log
+@The ProxyMail application - now all mail activites are integrated
+with the MagicCap mail paradigm.
+@
+text
+@d45 1
+a45 1
+MSResynchActor_ReadByte(ObjectID theStream)   /* Get a single byte - this is a blocking call */
+d47 3
+a49 1
+	uchar c;
+d51 43
+a93 2
+	Read(theStream, &c, sizeof(c));   /* was ReadAll */
+	/*Log(("[%d]/[%c]", c, c));*/
+d149 1
+a149 1
+MSResynchActor_ReadALine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine)  /* Scan stream until endOLine - this is blocking also */
+d153 1
+d158 9
+a166 1
+	   Read(theStream, (Pointer) (theCharP + ((long int) soFar)), sizeof(char));
+d170 1
+d176 1
+d181 1
+a181 1
+MSResynchActor_ReadNELine(ObjectID theStream, Pointer intoMe, Unsigned maxLen, Character endOLine)  /* Scan stream until find non-empty line */
+d185 1
+d193 8
+a200 1
+       retVal = ReadALine(theStream, intoMe, maxLen, endOLine);
+d206 2
+d209 1
+d213 1
+d217 1
+a217 1
+Private void DBgetArrow(ObjectID theStream)  /* Scan stream until see "=>"  -  this is a blocking call */
+d220 1
+d225 8
+a232 1
+	       nextByte = ReadByte(theStream);
+d235 8
+a242 1
+		   nextByte = ReadByte(theStream);
+d247 1
+d257 1
+d261 3
+a263 1
+	   theLen = ReadNELine(theStream, nextL, 510, 10);   /** 10 is LF - follows CR **/
+a267 2
+	   if (CompareBytes(nextL, "telnet: connect to address", 26, NULL) == 0)
+	       return 0;
+d278 1
+d282 4
+a285 1
+	DBgetArrow(theStream);
+d314 1
+a314 1
+MSResynchActor_GetTOC(ObjectID theStream)
+d321 1
+d324 8
+a331 1
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);                  /* get the line */
+d349 2
+d357 2
+d361 1
+d363 3
+d370 6
+a375 1
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+d377 7
+a383 1
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+d393 6
+a398 1
+	   decodeTOCEntry(newMS, theStream);
+d404 6
+a409 1
+   ReadNELine(theStream, (Pointer) nextLine, 1022, 10);
+d412 1
+d417 1
+a417 1
+MSResynchActor_GetMSMessage(ObjectID theStream, ObjectID theMSlist)
+d423 1
+a423 1
+	Boolean     res;
+d426 8
+a433 1
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);                  /* get the line */
+d448 2
+d456 2
+d461 1
+d465 5
+d472 6
+a477 1
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);                  /* get the line */
+d493 5
+d500 7
+a506 1
+	ReadNELine(theStream, (Pointer) nextLine, 127, 10);
+d508 1
+d510 123
+@

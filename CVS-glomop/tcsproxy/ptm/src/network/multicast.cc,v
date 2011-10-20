@@ -1,0 +1,695 @@
+head	1.16;
+access;
+symbols
+	Yatin-final:1.15.2.1
+	Yatin:1.15.0.2
+	pre-yatin-merge:1.15
+	transend-beta2:1.14
+	fox-dev:1.14
+	ptm-ng:1.12
+	transend-beta-latest:1.12
+	Aggregators:1.12
+	NoAggregators:1.12
+	iang:1.12.0.4
+	transend-beta:1.12.0.2
+	SOSP:1.12
+	stable_ptm:1.10
+	merged_preintegrate:1.9
+	heisenbug:1.8
+	PRE_INTEGRATION:1.6
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.16
+date	98.01.16.22.16.26;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.18.22.45.26;	author yatin;	state Exp;
+branches
+	1.15.2.1;
+next	1.14;
+
+1.14
+date	97.07.21.21.30.20;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.07.21.17.15.30;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.26.04.15.08;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.17.03.01.24;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.04.09.55.47;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.12.15.23.34.52;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.13.04.02.48;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.13.03.52.20;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.26;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.25;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.23.00.51.21;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.08.21.42;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.22.00.42.32;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.15;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.15;	author yatin;	state Exp;
+branches;
+next	;
+
+1.15.2.1
+date	97.11.17.22.07.08;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.16
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include <iostream.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+
+#ifndef INADDR_NONE
+#define INADDR_NONE             ((u_long)0xffffffff)    /* -1 return */
+#endif
+
+#include "defines.h"
+#include "communication.h"
+#include "utils.h"
+
+
+gm_Bool
+MulticastSocket::CreateSender(const char *ipAddress, Port port, int ttl)
+{
+  struct sockaddr_in sin;
+
+  socketID = socket(AF_INET, SOCK_DGRAM, 0);
+  if (socketID < 0) {
+    socketID = 0;
+    Return(gm_False, errSocketCreationError);
+  }
+
+  memset((char*)&sin, 0, sizeof(sin));
+  sin.sin_family = AF_INET;
+  sin.sin_port   = htons((u_short)port);
+
+  // use IP addresses only for IP-Multicast
+  if ((sin.sin_addr.s_addr = inet_addr(ipAddress))==INADDR_NONE) {
+    Close();
+    Return(gm_False, errMcastAddressError);
+  }
+
+  if (IN_CLASSD(ntohl(sin.sin_addr.s_addr))==0) {
+    Close();
+    Return(gm_False, errMcastAddressError);
+  }
+  
+  if (connect(socketID, (struct sockaddr*) &sin, sizeof(sin)) < 0) {
+    Close();
+    Return(gm_False, errSocketConnectError);
+  }
+
+  u_char t;
+
+  t = (ttl > 255) ? 255 : (ttl < 0) ? 0 : ttl;
+  if (setsockopt(socketID, IPPROTO_IP, IP_MULTICAST_TTL, (char*) &t, 
+		 sizeof(t)) < 0) {
+    Close();
+    Return(gm_False,  errMcastTTLError);
+  }
+
+  return gm_True;
+}
+
+
+gm_Bool
+MulticastSocket::CreateListener(const char *ipAddress, Port port)
+{
+  struct sockaddr_in sin;
+
+  socketID = socket(AF_INET, SOCK_DGRAM, 0);
+  if (socketID < 0) {
+    socketID = 0;
+    Return(gm_False, errSocketCreationError);
+  }
+
+  int on = 1;
+  if (setsockopt(socketID,SOL_SOCKET,SO_REUSEADDR,(char*)&on,sizeof(on))<0) {
+    Close();
+    Return(gm_False, errSocketCreationError);
+  }
+
+  memset((char*)&sin, 0, sizeof(sin));
+  sin.sin_family = AF_INET;
+  sin.sin_port   = htons((u_short)port);
+
+  // use IP addresses only for IP-Multicast
+  if ((sin.sin_addr.s_addr = inet_addr(ipAddress))==INADDR_NONE) {
+    Close();
+    Return(gm_False, errMcastAddressError);
+  }
+
+  if (IN_CLASSD(ntohl(sin.sin_addr.s_addr))==0) {
+    Close();
+    Return(gm_False, errMcastAddressError);
+  }
+
+  if (bind(socketID, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
+    sin.sin_addr.s_addr = INADDR_ANY;
+    if (bind(socketID, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
+      Close();
+      Return(gm_False, errSocketBindError);
+    }
+  }
+
+
+  // This multicast setup shouldn't really be required
+  struct ip_mreq mr;
+  mr.imr_multiaddr.s_addr = sin.sin_addr.s_addr;
+  mr.imr_interface.s_addr = INADDR_ANY;
+  if (setsockopt(socketID, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char*)&mr, 
+		 sizeof(mr)) < 0) {
+    Close();
+    Return(gm_False, errMcastAddMembershipError);
+  }
+
+  return gm_True;
+}
+
+int
+MulticastSocket::Read(char *data, int size, timeval *tv)
+{
+  int noOfBytesRead;
+
+
+  if (tv!=NULL) {
+    fd_set readfds, exceptfds;
+    timeval wait, startTime, endTime, diff;
+    int returnValue;
+
+    FD_ZERO(&readfds);
+    FD_ZERO(&exceptfds);
+    FD_SET(socketID, &readfds);
+    FD_SET(socketID, &exceptfds);
+    
+    gettimeofday(&startTime, NULL);
+    wait = *tv;
+    while (gm_True) {
+      returnValue = select(socketID+1, &readfds, (fd_set*)NULL, (fd_set*)NULL, 
+			   &wait);
+      if ( !(returnValue<0 && errno==EINTR) ) break;
+    }
+    gettimeofday(&endTime, NULL);
+    diff = tv_timesub(endTime, startTime);
+    *tv  = tv_timesub(*tv, diff);
+    if (tv->tv_sec < 0 || tv->tv_usec < 0) tv->tv_sec = tv->tv_usec = 0;
+    
+    // select error
+    if (returnValue < 0) {
+      Return(gm_False, errSocketReadError);
+    }
+    // if select times out, then return
+    if (returnValue==0 || (tv->tv_sec==0 && tv->tv_usec==0) ) {
+      Return(0, errSocketTimeout);
+    }
+  }
+  
+  
+  noOfBytesRead = read(socketID, data, size);
+  if(noOfBytesRead==-1) {
+    if(errno==EAGAIN)
+      Return(0, errSocketReadNothingAvailable)
+    else
+      Return(-1, errSocketReadError);
+  }
+  else if(noOfBytesRead==0)
+    Return(-1, errSocketEOF)
+  else if(noOfBytesRead < size)
+    Return(noOfBytesRead, errSocketReadNotEnoughData)
+  else
+    return noOfBytesRead;
+}
+
+gm_Bool
+MulticastSocket::Write(const char *buf, int size)
+{
+  if (write(socketID, buf, size) < 0)
+    Return(gm_False, errSocketWriteError)
+  else
+    return gm_True;
+}
+
+
+gm_CoordinationBus::gm_CoordinationBus(const char *ipAddress, Port port, 
+				       int ttl, gm_Bool listener_,  
+				       gm_Bool sender_)
+  : sender(), listener(this)
+{
+  if (listener_ == gm_True) {
+    if (listener.CreateListener(ipAddress, port)==gm_False) return;
+  }
+
+  if (sender_ == gm_True) {
+    if (sender.CreateSender(ipAddress, port, ttl)==gm_False) return;
+  }
+}
+@
+
+
+1.15
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d139 1
+a139 1
+      returnValue = select(socketID+1, &readfds, (fd_set*)NULL, &exceptfds, 
+@
+
+
+1.15.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d139 1
+a139 1
+      returnValue = select(socketID+1, &readfds, (fd_set*)NULL, (fd_set*)NULL, 
+@
+
+
+1.14
+log
+@Changes to monitor to do unicast and multicast listening properly
+Modified distiller database so that everything after "--" is assumed to
+be command line args to the distiller
+@
+text
+@d184 3
+a186 2
+CoordinationBus::CoordinationBus(const char *ipAddress, Port port, int ttl, 
+				 gm_Bool listener_,  gm_Bool sender_)
+@
+
+
+1.13
+log
+@minor changes to make monitor unicast-capable and allow compilation on other linuxes (need explicit link to libgcc?)
+@
+text
+@a37 1
+#if 0
+a46 1
+#endif
+@
+
+
+1.12
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d38 1
+d48 2
+a49 1
+
+@
+
+
+1.11
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d19 1
+d121 1
+a121 1
+MulticastSocket::Read(char *data, int size)
+d125 34
+@
+
+
+1.10
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d132 1
+a132 1
+    Return(-1, errSocketReadEOF)
+@
+
+
+1.9
+log
+@Various changes and 'fixes' but they are not stable yet.  the 'heisenbug' contour seems more stable; should debug from that contour, then merge diffs with head (i.e. this) contour.
+@
+text
+@d29 1
+a29 1
+    gm_BoolErrorReturn(errSocketCreationError);
+d39 1
+a39 1
+    gm_BoolErrorReturn(errMcastAddressError);
+d44 1
+a44 1
+    gm_BoolErrorReturn(errMcastAddressError);
+d49 1
+a49 1
+    gm_BoolErrorReturn(errSocketConnectError);
+d58 1
+a58 1
+    gm_BoolErrorReturn(errMcastTTLError);
+d61 1
+a61 1
+  gm_BoolErrorReturn(success);
+d73 1
+a73 1
+    gm_BoolErrorReturn(errSocketCreationError);
+d79 1
+a79 1
+    gm_BoolErrorReturn(errSocketCreationError);
+d89 1
+a89 1
+    gm_BoolErrorReturn(errMcastAddressError);
+d94 1
+a94 1
+    gm_BoolErrorReturn(errMcastAddressError);
+d101 1
+a101 1
+      gm_BoolErrorReturn(errSocketBindError);
+d113 1
+a113 1
+    gm_BoolErrorReturn(errMcastAddMembershipError);
+d116 1
+a116 1
+  gm_BoolErrorReturn(success);
+d127 1
+a127 1
+      ErrorReturn(errSocketReadNothingAvailable, 0)
+d129 1
+a129 1
+      ErrorReturn(errSocketReadError, -1);
+d132 1
+a132 1
+    ErrorReturn(errSocketReadEOF, -1)
+d134 1
+a134 1
+    ErrorReturn(errSocketReadNotEnoughData, noOfBytesRead)
+d136 1
+a136 1
+    ErrorReturn(success, noOfBytesRead);
+d143 3
+a145 3
+    gm_BoolErrorReturn(errSocketWriteError)
+    else
+      gm_BoolErrorReturn(success);
+a159 2
+
+  VoidErrorReturn(success);
+@
+
+
+1.8
+log
+@minor bugfix
+@
+text
+@d139 9
+@
+
+
+1.7
+log
+@made specific Read method for MluticastSocket, to get correct read() behavior for UDP
+@
+text
+@d124 1
+a124 1
+  noOfBytesRead = read(socketID, buf, size);
+a138 2
+
+}
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d119 22
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d21 1
+a21 1
+Bool
+d29 1
+a29 1
+    BoolErrorReturn(errSocketCreationError);
+d39 1
+a39 1
+    BoolErrorReturn(errMcastAddressError);
+d44 1
+a44 1
+    BoolErrorReturn(errMcastAddressError);
+d49 1
+a49 1
+    BoolErrorReturn(errSocketConnectError);
+d58 1
+a58 1
+    BoolErrorReturn(errMcastTTLError);
+d61 1
+a61 1
+  BoolErrorReturn(success);
+d65 1
+a65 1
+Bool
+d73 1
+a73 1
+    BoolErrorReturn(errSocketCreationError);
+d79 1
+a79 1
+    BoolErrorReturn(errSocketCreationError);
+d89 1
+a89 1
+    BoolErrorReturn(errMcastAddressError);
+d94 1
+a94 1
+    BoolErrorReturn(errMcastAddressError);
+d101 1
+a101 1
+      BoolErrorReturn(errSocketBindError);
+d113 1
+a113 1
+    BoolErrorReturn(errMcastAddMembershipError);
+d116 1
+a116 1
+  BoolErrorReturn(success);
+d121 1
+a121 1
+				 Bool listener_,  Bool sender_)
+d124 2
+a125 2
+  if (listener_ == TRUE) {
+    if (listener.CreateListener(ipAddress, port)==FALSE) return;
+d128 2
+a129 2
+  if (sender_ == TRUE) {
+    if (sender.CreateSender(ipAddress, port, ttl)==FALSE) return;
+@
+
+
+1.4
+log
+@Update after merging config.h.in
+@
+text
+@d22 1
+a22 1
+MulticastSocket::CreateSender(char *ipAddress, Port port, int ttl)
+d66 1
+a66 1
+MulticastSocket::CreateListener(char *ipAddress, Port port)
+d120 1
+a120 1
+CoordinationBus::CoordinationBus(char *ipAddress, Port port, int ttl, 
+@
+
+
+1.3
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d13 1
+a13 1
+#ifdef SUNOS
+@
+
+
+1.2
+log
+@Just before adding stuff for using the monitoring GUI
+@
+text
+@d42 1
+a42 1
+  if (IN_CLASSD(sin.sin_addr.s_addr)==0) {
+d92 1
+a92 1
+  if (IN_CLASSD(sin.sin_addr.s_addr)==0) {
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d120 14
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

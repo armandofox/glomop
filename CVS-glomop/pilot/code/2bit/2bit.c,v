@@ -1,0 +1,631 @@
+head	1.5;
+access;
+symbols
+	start:1.1.1.1
+	iang:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	97.07.11.02.22.17;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.09.17.12.56;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.09.01.56.09;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.22.19.13.52;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.20.01.52.10;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.20.01.52.10;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@looks like it's working...
+@
+text
+@#include <Pilot.h>
+#include <UI/ScrDriver.h>
+
+#include "2bitRsc.h"
+#include "callback.h"
+
+#define TWOBIT
+
+static WinHandle twobitwindow = NULL;
+
+#include "scrstubs.c"
+
+/* static WinHandle twobitwin = NULL; */
+static const void *oldSSA = NULL;
+
+/* Set up the display in either greyscale or B/W mode.  vpw is the virtual
+   page width _in words_ (word = 16 bits).  This bit derived from code
+   in a _PDA Developers_ article by Edward Keyes. */
+static const void *setgrey(int grey, const void *newSSA, unsigned char vpw)
+{
+    const void *oldSSA;
+    const void * volatile *SSA = (const void**)0xfffffa00;
+    volatile unsigned char *CKCON = (unsigned char *)0xfffffa27;
+    volatile unsigned char *VPW = (unsigned char *)0xfffffa05;
+    volatile unsigned char *PICF = (unsigned char *)0xfffffa20;
+    volatile unsigned char *LBAR = (unsigned char *)0xfffffa29;
+    volatile unsigned char *FRCM = (unsigned char *)0xfffffa31;
+    volatile unsigned char *POSR = (unsigned char *)0xfffffa2d;
+    volatile Word *GPMR = (Word *)0xfffffa32;
+    unsigned gray0 = 0, gray1 = 3, gray2 = 4, gray3 = 6;
+
+    oldSSA = *SSA;
+    *CKCON &= 0x7f;
+    *SSA = newSSA;
+    if (grey) {
+        *VPW = vpw;
+        *PICF |= 0x01;
+        *LBAR = 22;
+        *FRCM = 0xb9;
+        *GPMR = gray2 + (gray3<<4) + (gray0<<8) + (gray1<<12);
+        *POSR &= 0xf0;
+    } else {
+        *VPW = vpw;
+        *PICF &= 0xfe;
+        *LBAR = 10;
+        *POSR &= 0xf0;
+    }
+    SysTaskDelay(2);
+    *CKCON |= 0x80;
+    return oldSSA;
+}
+
+#if 0
+static const unsigned char bw2gr[16] = {
+    0x00, 0x03, 0x0c, 0x0f, 0x30, 0x33, 0x3c, 0x3f,
+    0xc0, 0xc3, 0xcc, 0xcf, 0xf0, 0xf3, 0xfc, 0xff
+};
+
+static unsigned short grmask(int bwoff)
+{
+    unsigned short ret = 0;
+    if (bwoff < 20*45 || bwoff > 20*118) ret = 0;
+    else {
+	switch(bwoff%20) {
+	    case 10: ret = 0x003f; break;
+	    case 11: case 12: case 13: case 14: case 15: case 16:
+		ret = 0xffff; break;
+	    case 17: ret = 0xfc00; break;
+	    default: ret = 0; break;
+	}
+    }
+    return ret;
+}
+
+static void greyify(const unsigned char *bwssa, unsigned char *grssa)
+{
+    const unsigned char *bwptr = bwssa;
+    const unsigned char *bwend = bwssa + 20*160;
+    unsigned char mask0, mask1, res;
+    unsigned short mask;
+    while(0 && bwptr < bwend) {
+	mask = grmask(bwptr-bwssa);
+	mask0 = mask >> 8;
+	mask1 = mask & 0xff;
+	res = grssa[0] & mask0;
+	res |= (~mask0)&bw2gr[(*bwptr)>>4];
+	grssa[0] = res;
+	res = grssa[1] & mask1;
+	res |= (~mask1)&bw2gr[(*bwptr)&0x0f];
+	grssa[1] = res;
+	++bwptr;
+	grssa += 2;
+    }
+}
+#endif
+
+static void draw_2bit(void)
+{
+#ifdef TWOBIT
+    WinHandle olddraw;
+    BitmapPtr bmp;
+    VoidHand hBmp;
+
+    hBmp = DmGetResource('Tbmp', 1001);
+    if (!hBmp) return;
+    bmp = MemHandleLock(hBmp);
+
+    olddraw = WinGetDrawWindow();
+    WinSetDrawWindow(twobitwindow);
+    WinDrawBitmap(bmp, 85*2, 45);
+    WinSetDrawWindow(olddraw);
+
+    MemHandleUnlock(hBmp);
+    DmReleaseResource(hBmp);
+#endif
+}
+
+static void go_2bit(void)
+{
+    Err err;
+    WinHandle olddraw;
+
+    /* Allocate a window */
+    twobitwindow = WinCreateOffscreenWindow(320,160,screenFormat,&err);
+    olddraw = WinGetDrawWindow();
+    WinSetDrawWindow(twobitwindow);
+    WinEraseWindow();
+    WinSetDrawWindow(olddraw);
+
+#ifdef TWOBIT
+    ScrLineRoutine_1bit =
+	(ScrLineRoutineType)GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase] =
+	(Ptr)ScrLineRoutine_2bit;
+
+    ScrRectangleRoutine_1bit =
+	(ScrRectangleRoutineType)GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase] =
+	(Ptr)ScrRectangleRoutine_2bit;
+
+    ScrDrawChars_1bit =
+	(ScrDrawCharsType)GSysDispatchTableP[sysTrapScrDrawChars-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrDrawChars-sysTrapBase] =
+	(Ptr)ScrDrawChars_2bit;
+
+    ScrCopyRectangle_1bit =
+	(ScrCopyRectangleType)GSysDispatchTableP[sysTrapScrCopyRectangle-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrCopyRectangle-sysTrapBase] =
+	(Ptr)ScrCopyRectangle_2bit;
+
+#if 0
+    WinCreateOffscreenWindow_1bit =
+	(WinCreateOffscreenWindowType)GSysDispatchTableP[sysTrapWinCreateOffscreenWindow-sysTrapBase];
+    GSysDispatchTableP[sysTrapWinCreateOffscreenWindow-sysTrapBase] =
+	(Ptr)WinCreateOffscreenWindow_2bit;
+
+    WinSaveBits_1bit =
+	(WinSaveBitsType)GSysDispatchTableP[sysTrapWinSaveBits-sysTrapBase];
+    GSysDispatchTableP[sysTrapWinSaveBits-sysTrapBase] =
+	(Ptr)WinSaveBits_2bit;
+
+    WinRestoreBits_1bit =
+	(WinRestoreBitsType)GSysDispatchTableP[sysTrapWinRestoreBits-sysTrapBase];
+    GSysDispatchTableP[sysTrapWinRestoreBits-sysTrapBase] =
+	(Ptr)WinRestoreBits_2bit;
+#endif
+#endif
+
+    /* Go 2-bit */
+#ifdef TWOBIT
+    oldSSA = setgrey(1, (const void *)twobitwindow->displayAddr, 20);
+#endif
+}
+
+static void stop_2bit(void)
+{
+    /* Go 1-bit */
+    if (oldSSA) setgrey(0, oldSSA, 10);
+
+#ifdef TWOBIT
+    GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase] =
+	(Ptr)ScrLineRoutine_1bit;
+
+    GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase] =
+	(Ptr)ScrRectangleRoutine_1bit;
+
+    GSysDispatchTableP[sysTrapScrDrawChars-sysTrapBase] =
+	(Ptr)ScrDrawChars_1bit;
+
+    GSysDispatchTableP[sysTrapScrCopyRectangle-sysTrapBase] =
+	(Ptr)ScrCopyRectangle_1bit;
+
+#if 0
+    GSysDispatchTableP[sysTrapWinCreateOffscreenWindow-sysTrapBase] =
+	(Ptr)WinCreateOffscreenWindow_1bit;
+
+    GSysDispatchTableP[sysTrapWinSaveBits-sysTrapBase] =
+	(Ptr)WinSaveBits_1bit;
+
+    GSysDispatchTableP[sysTrapWinRestoreBits-sysTrapBase] =
+	(Ptr)WinRestoreBits_1bit;
+#endif
+#endif
+    WinDeleteWindow(twobitwindow, false);
+}
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+
+    CALLBACK_PROLOGUE
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	go_2bit();
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	draw_2bit();
+	handled = true;
+	break;
+
+    case frmUpdateEvent:
+    	if (e->data.frmUpdate.updateCode == frmRedrawUpdateCode) {
+	    FrmUpdateForm(MainForm, 1);
+	} else if (e->data.frmUpdate.updateCode == 1) {
+	    /* Draw extra 2-bit stuff */
+	    draw_2bit();
+	    handled = true;
+	}
+	break;
+
+    case frmCloseEvent:
+	stop_2bit();
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	}
+	break;
+
+#if 0
+    case winEnterEvent: case winExitEvent:
+	if (twobitwin && e->data.winEnter.enterWindow == twobitwin) {
+	    /* Go 2-bit */
+	    oldSSA = setgrey(1, (const void *)twobitwindow->displayAddr, 20);
+	} else {
+	    /* Go 1-bit */
+	    if (oldSSA) setgrey(0, oldSSA, 10);
+	}
+	break;
+#endif
+
+    default:
+        break;
+    }
+
+    CALLBACK_EPILOGUE
+
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e)
+{
+    FormPtr frm;
+    Word    formId;
+    Boolean handled = false;
+
+    if (e->eType == frmLoadEvent) {
+	formId = e->data.frmLoad.formID;
+	frm = FrmInitForm(formId);
+	/* twobitwin = (WinHandle)frm; */
+	FrmSetActiveForm(frm);
+
+	switch(formId) {
+	case MainForm:
+	    FrmSetEventHandler(frm, MainFormHandleEvent);
+	    break;
+	}
+	handled = true;
+    }
+
+    return handled;
+}
+
+/* Get preferences, open (or create) app database */
+static Word StartApplication(void)
+{
+
+    FrmGotoForm(MainForm);
+
+    return 0;
+}
+
+/* Save preferences, close forms, close app database */
+static void StopApplication(void)
+{
+    FrmSaveAllForms();
+    FrmCloseAllForms();
+}
+
+/* The main event loop */
+static void EventLoop(void)
+{
+    Word err;
+    EventType e;
+
+    do {
+	EvtGetEvent(&e, 10);
+	if (! SysHandleEvent (&e)) {
+	    if (! MenuHandleEvent (NULL, &e, &err)) {
+		if (! ApplicationHandleEvent (&e)) {
+		    FrmDispatchEvent (&e);
+		}
+	    }
+	}
+    } while (e.eType != appStopEvent);
+}
+
+/* Main entry point; it is unlikely you will need to change this except to
+   handle other launch command codes */
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+    Word err;
+
+    if (cmd == sysAppLaunchCmdNormalLaunch) {
+
+	err = StartApplication();
+	if (err) return err;
+
+	EventLoop();
+	StopApplication();
+
+    } else {
+	return sysErrParamErr;
+    }
+
+    return 0;
+}
+@
+
+
+1.4
+log
+@.
+@
+text
+@d123 7
+d145 22
+a168 7
+    /* Allocate a window */
+    twobitwindow = WinCreateOffscreenWindow(320,160,screenFormat,&err);
+    olddraw = WinGetDrawWindow();
+    WinSetDrawWindow(twobitwindow);
+    WinEraseWindow();
+    WinSetDrawWindow(olddraw);
+
+d189 14
+@
+
+
+1.3
+log
+@keep trying...
+@
+text
+@d7 2
+d99 1
+d115 54
+d180 1
+a196 1
+#if 0
+d198 1
+a198 1
+	twobitwin = NULL;
+a199 1
+#endif
+a261 21
+    Err err;
+    WinHandle olddraw;
+
+#if 1
+    ScrLineRoutine_1bit =
+	(ScrLineRoutineType)GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase] =
+	(Ptr)ScrLineRoutine_2bit;
+
+    ScrRectangleRoutine_1bit =
+	(ScrRectangleRoutineType)GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase];
+    GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase] =
+	(Ptr)ScrRectangleRoutine_2bit;
+#endif
+
+    /* Allocate a window */
+    twobitwindow = WinCreateOffscreenWindow(320,160,screenFormat,&err);
+    olddraw = WinGetDrawWindow();
+    WinSetDrawWindow(twobitwindow);
+    WinEraseWindow();
+    WinSetDrawWindow(olddraw);
+a264 5
+    /* Go 2-bit */
+#if 1
+    oldSSA = setgrey(1, (const void *)twobitwindow->displayAddr, 20);
+#endif
+
+a270 3
+    /* Go 1-bit */
+    if (oldSSA) setgrey(0, oldSSA, 10);
+
+a272 9
+
+    WinDeleteWindow(twobitwindow, false);
+#if 1
+    GSysDispatchTableP[sysTrapScrLineRoutine-sysTrapBase] =
+	(Ptr)ScrLineRoutine_1bit;
+
+    GSysDispatchTableP[sysTrapScrRectangleRoutine-sysTrapBase] =
+	(Ptr)ScrRectangleRoutine_1bit;
+#endif
+@
+
+
+1.2
+log
+@better...
+@
+text
+@a0 5
+/* Main code for template
+   See the README file for copyright/licensing terms */
+
+#pragma pack(2)
+
+d2 1
+d7 1
+a7 26
+#ifdef DEBUG
+extern long data_start, bss_start;
+static void StartDebug(void)
+{
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+        lea data_start(%%a4),%%a1
+        move.l %%a1,%%d2
+        lea bss_start(%%a4),%%a1
+        move.l %%a1,%%d1
+        lea start(%%pc),%%a0
+        move.l %%a0,%%d0
+        sub.l #start, %%d0
+        move.l #0x12BEEF34, %%d3
+        trap #8
+        move.l #0, %%d3
+        move.l #0, %%d0
+        move.l #0, %%d1
+        move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+d9 1
+a9 2
+}
+#endif
+d11 1
+a11 2
+static WinHandle offwin = NULL;
+static WinHandle twobitwin = NULL;
+a12 2
+typedef Word (*cjevwaitType)(void *, ULong, ULong, ULong, ULong);
+static cjevwaitType cjevwait = NULL;
+d51 1
+d79 1
+a79 1
+    while(bwptr < bwend) {
+d93 1
+a93 12
+
+static Word fakecjevwait(void *a, ULong b, ULong c, ULong d, ULong e)
+{
+    Word ret;
+    CALLBACK_PROLOGUE
+
+    greyify(oldSSA, offwin->displayAddr);
+    ret = cjevwait(a,b,c,d,e);
+
+    CALLBACK_EPILOGUE
+    return ret;
+}
+d106 1
+a106 1
+    WinSetDrawWindow(offwin);
+d139 1
+d143 1
+d163 1
+a163 1
+	    oldSSA = setgrey(1, (const void *)offwin->displayAddr, 20);
+d189 1
+a189 1
+	twobitwin = (WinHandle)frm;
+d209 11
+a219 2
+    cjevwait = (cjevwaitType)GSysDispatchTableP[715];
+    GSysDispatchTableP[715] = (Ptr)fakecjevwait;
+d222 1
+a222 1
+    offwin = WinCreateOffscreenWindow(320,160,screenFormat,&err);
+d224 1
+a224 1
+    WinSetDrawWindow(offwin);
+d231 3
+a233 1
+    oldSSA = setgrey(1, (const void *)offwin->displayAddr, 20);
+d247 8
+a254 2
+    WinDeleteWindow(offwin, false);
+    GSysDispatchTableP[715] = (Ptr)cjevwait;
+a282 3
+#ifdef DEBUG
+	StartDebug();
+#endif
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d42 1
+d88 17
+a104 1
+    
+d107 1
+d109 14
+a122 7
+    unsigned char mask = 0xff;
+    while(bwssa < bwend) {
+	*grssa = mask&bw2gr[(*bwssa)>>4]; ++grssa;
+	*grssa = mask&bw2gr[(*bwssa)&0x0f]; ++grssa;
+	++bwssa;
+	if (bwssa + 20*60 == bwend) mask = 0x55;
+	if (bwssa + 20*110 == bwend) mask = 0xaa;
+d138 19
+d161 2
+d168 1
+d172 14
+d200 12
+d215 3
+d230 1
+d248 1
+d255 6
+d262 1
+a262 1
+    /* Go 2-bit (ha!) */
+a264 1
+    FrmGotoForm(MainForm);
+d271 3
+a276 2
+    /* Go 1-bit */
+    setgrey(0, oldSSA, 10);
+@
+
+
+1.1.1.1
+log
+@2-bit demo
+@
+text
+@@

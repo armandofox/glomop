@@ -1,0 +1,925 @@
+head	1.24;
+access;
+symbols
+	Yatin-final:1.24
+	Yatin:1.24.0.2
+	pre-yatin-merge:1.24
+	transend-beta2:1.24
+	fox-dev:1.23
+	playback-ng:1.22
+	transend-beta-latest:1.22
+	Aggregators:1.22
+	NoAggregators:1.22
+	iang:1.21.0.2
+	transend-beta:1.20.0.2
+	SOSP:1.18
+	merged_preintegrate:1.14
+	heisenbug:1.14
+	PRE_INTEGRATION:1.14;
+locks; strict;
+comment	@ * @;
+
+
+1.24
+date	97.07.28.22.06.48;	author gribble;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.07.24.18.50.13;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.05.07.03.53.03;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.04.28.02.14.28;	author gribble;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.17.21.45.09;	author aspolito;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.03.18.02.27.35;	author gribble;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.03.09.03.01.20;	author gribble;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.06.19.00.58;	author gribble;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.02.24.23.09.43;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.05.03.53.59;	author gribble;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	96.12.10.22.42.53;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.12.05.01.14.02;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.12.03.11.05.28;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.12.01.13.44.59;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.12.01.06.59.59;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.11.28.14.27.46;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.11.24.14.11.07;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.11.24.13.02.52;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.08.30.24;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.29.10;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.07.58.24;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.24.01.40.34;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.23.02.54.24;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.21.01.59.23;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@Tweak to playback engine - hopefully fixes segfault that was happening
+because of a spurious free() in an error condition.
+@
+text
+@/*
+ *     Author: Steve Gribble
+ *       Date: Nov. 19th, 1996
+ *       File: main.c
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include "config_tr.h"
+#ifdef HAVE_PTHREAD_H
+#include "pthread.h"
+#endif
+
+#include "bp_timer.h"
+#include "http_task.h"
+#include "logparse.h"
+#include "utils.h"
+
+void timerproc(int id, void *data);
+void timeraddproc(int id, void *data);
+void speed_proc(int id, void *data);
+
+int numthreads = 0;
+extern int numconnecting;
+pthread_mutex_t numt_mutex;
+
+int   port, numpersec = 1, ceiling = 400;
+double numpersecd;
+char *ip_addr;
+FILE *outfile = stdout;
+char *lport;
+struct timeval last;
+
+int main(int argc, char **argv)
+{
+  struct timeval tv;
+
+  if ((argc != 6) && (argc != 7)) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport ceiling [of]\n");
+    exit(1);
+  }
+  if (sscanf(*(argv+2), "%d", &port) != 1) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport ceiling [of]\n");
+    exit(1);
+  }
+  if (sscanf(*(argv+3), "%lf", &numpersecd) != 1) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport ceiling [of]\n");
+    exit(1);
+  }
+  lport = *(argv+4);
+  fprintf(stderr, "Magic port: %s\n", lport);
+  ip_addr = *(argv+1);
+  if (sscanf(*(argv+5), "%d", &ceiling) != 1) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport ceiling [of]\n");
+    exit(1);
+  }
+  if (argc == 7) {
+    outfile = fopen(*(argv+6), "w");
+    if (outfile == NULL) {
+      fprintf(stderr, "Couldn't open file %s for writing.\n", *(argv+4));
+      exit(1);
+    }
+    setbuf(outfile, NULL);
+  } else
+    outfile = stdout;
+
+  if (bp_timer_init()) {
+    fprintf(stderr, "timer subsystem init failed\n");
+    exit(1);
+  }
+  if (initialize_http_tasks("UC Berkeley Trace Playback Engine (please contact gribble@@cs.berkeley.edu for inquiries regarding this access)",
+			    "Steven Gribble, http://www.cs.berkeley.edu/~gribble, gribble@@cs.berkeley.edu")) {
+    fprintf(stderr, "http_tasks subsystem init failed\n");
+    exit(1);
+  }
+
+  if (pthread_mutex_init(&numt_mutex, NULL) != 0)
+    exit(1);
+
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  bp_timer_add(RELATIVE, tv, speed_proc, (void *) NULL);
+  gettimeofday(&last, NULL);
+  timeraddproc(1, NULL);
+
+  while(1)
+    sleep(500);
+  exit(0);
+}
+
+void timeraddproc(int id, void *data)
+{
+  struct timeval  tv, diff;
+
+  while (numthreads > ceiling)
+      sleep(1);
+  gettimeofday(&tv, NULL);
+
+  if (numpersecd == 1.0) {
+    tv.tv_sec += 1;
+  } else {
+    tv.tv_usec += (int) (((double) 1000000.0) / numpersecd);
+    while (tv.tv_usec > 1000000) {
+      tv.tv_usec -= 1000000;
+      tv.tv_sec += 1;
+    }
+  }
+  {
+    lf_entry      *lfntree;
+
+    lfntree = (lf_entry *) malloc(sizeof(lf_entry));
+    if (lfntree == NULL) {
+      fprintf(stderr, "Out of mem in main.\n");
+      exit(1);
+    }
+    if (lf_get_next_entry(0, lfntree, 3) != 0) {
+      fprintf(stderr, "Failed to get next entry.\n");
+      exit(1);
+    }
+    
+    bp_timer_add(ABSOLUTE, tv, timerproc, (void *) lfntree);
+  }
+  bp_timer_add(ABSOLUTE, tv, timeraddproc, (void *) NULL);
+  diff = tv_timesub(tv, last);
+  if (diff.tv_sec >= 1) {
+    fprintf(outfile, "%d threads, %d connecting\n", numthreads, numconnecting);
+    last = tv;
+  }
+  bp_dispatch_signal();
+}
+
+void timerproc(int id, void *data)
+{
+  http_task      t;
+  lf_entry      *lfntree = (lf_entry *) data;
+  char          *retd;
+  int            retl, res;
+
+  if (pthread_mutex_lock(&numt_mutex) < 0)
+    exit(1);
+  numthreads++;
+  if (pthread_mutex_unlock(&numt_mutex) < 0)
+    exit(1);
+  t.url = (char *) lfntree->url;
+  if ( (strcmp(t.url, "-") == 0) ||
+       (strlen(t.url) < 5) ||
+       (lfntree->sip == 0xFFFFFFFF) ||
+       (lfntree->spt == 0xFFFF) ||
+       !((strncmp(t.url, "GET ", 4) == 0) ||
+	(strncmp(t.url, "POST ", 5) == 0) ||
+	(strncmp(t.url, "HEAD ", 5) == 0) ||
+	(strncmp(t.url, "PUT " , 4) == 0))
+    ) {
+    fprintf(stderr, "Ignoring bum url %s\n", t.url);
+    free(t.url);
+    free(lfntree);
+    if (pthread_mutex_lock(&numt_mutex) < 0)
+      exit(1);
+    numthreads--;
+    if (pthread_mutex_unlock(&numt_mutex) < 0)
+      exit(1);
+    return;
+  }
+  t.urllen = strlen(t.url);
+  t.dst_host = lfntree->sip;
+  t.dst_port = lfntree->spt;
+  t.client_pragmas = lfntree->cprg;
+  t.server_pragmas = lfntree->sprg;
+  t.client_if_modified_date = ntohl(lfntree->cims);
+  t.server_expires_date = ntohl(lfntree->sexp);
+  t.server_last_modified_date = ntohl(lfntree->slmd);
+  insert_host_into_url(&t);
+  t.dst_host = inet_addr(ip_addr); t.dst_port = htons(port);
+  if (t.dst_host == (unsigned long) -1) {
+    free(t.url);
+    free(lfntree);
+    if (pthread_mutex_lock(&numt_mutex) < 0)
+      exit(1);
+    numthreads--;
+    if (pthread_mutex_unlock(&numt_mutex) < 0)
+      exit(1);
+    return;
+  }
+  res = do_http_task(t, &retd, &retl);
+  if (res == 0) {
+    free(retd);
+  } else {
+    fprintf(outfile, "do_http_task failed. (%d threads, ignoring..)\n", 
+	    numthreads);
+    lfntree->url = (unsigned char *)t.url;
+    lf_dump(outfile, lfntree);
+    if (retd)
+      free(retd);
+  }
+  if (t.url)
+    free(t.url);
+  if (lfntree)
+    free(lfntree);
+  if (pthread_mutex_lock(&numt_mutex) < 0)
+    exit(1);
+  numthreads--;
+  if (pthread_mutex_unlock(&numt_mutex) < 0)
+    exit(1);
+}
+
+void speed_proc(int id, void *data)
+{
+  int speed_fd, conn_fd, done_sock =0;
+
+  conn_fd = slisten(lport);
+  if (conn_fd == -1) {
+    fprintf(stderr, "slisten failed\n");
+    exit(1);
+  }
+  
+  while (1) {
+    speed_fd = saccept(conn_fd);
+    if (speed_fd < 0) {
+      fprintf(stderr, "saccept failed\n");
+      exit(1);
+    }
+
+    while (!done_sock) {
+      char read_buf[1024];
+      int  i = 0, startline = 1;
+
+      while (1) {
+	if (correct_read(speed_fd, &(read_buf[i]), 1) <= 0) {
+	  done_sock = 1;
+	  break;
+	}
+	if (read_buf[i] == '\n') {
+	  if (startline == 1)
+	    continue;
+	  else {
+	    read_buf[i] = '\0';
+	    if (sscanf(read_buf, "%lf", &numpersecd) != 1) {
+	      fprintf(stderr, "bogus data %s, ignoring\n", read_buf);
+	    } else {
+	      fprintf(stderr, "set rate to %f\n", numpersecd);
+	      startline = 1;
+	      i = 0;
+	      continue;
+	    }
+	  }
+	} else if (startline == 1) {
+	    startline = 0;
+	    i++;
+	  } else
+	    i++;
+      }
+      if (done_sock == 1)
+	continue;
+    }
+    done_sock = 0;
+    close(speed_fd);
+  }
+}
+@
+
+
+1.23
+log
+@debugging/monitoring function interface in frontend cleaned up.  change to xs/Makefile.PL.in to avoid spurious double initialization of stuff in libdist.a when clib.so was dynamically loaded.
+@
+text
+@d202 4
+a205 2
+  free(t.url);
+  free(lfntree);
+@
+
+
+1.22
+log
+@Priority queueing now works.
+@
+text
+@d197 1
+a197 1
+    lfntree->url = t.url;
+d245 1
+a245 1
+	      fprintf(stderr, "set rate to %lf\n", numpersecd);
+@
+
+
+1.21
+log
+@Now can pass floating point request/sec to playback engine.
+@
+text
+@d34 1
+a34 1
+int   port, numpersec = 1;
+d45 2
+a46 2
+  if ((argc != 5) && (argc != 6)) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport [of]\n");
+d50 1
+a50 1
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport [of]\n");
+d54 1
+a54 1
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec listenport [of]\n");
+d60 6
+a65 2
+  if (argc == 6) {
+    outfile = fopen(*(argv+5), "w");
+d102 1
+a102 1
+  while (numthreads > 400)
+@
+
+
+1.20
+log
+@config.h is now config_tr.h
+@
+text
+@d34 2
+a35 1
+int   port, numpersec;
+d53 1
+a53 1
+  if (sscanf(*(argv+3), "%d", &numpersec) != 1) {
+a96 1
+/*  int             i;*/
+d102 1
+a102 1
+  if (numpersec == 1) {
+d105 2
+a106 2
+    tv.tv_usec += (1000000 / numpersec);
+    if (tv.tv_usec > 1000000) {
+d111 1
+a111 1
+/*  for (i=0; i<numpersec; i++)*/ {
+d238 1
+a238 1
+	    if (sscanf(read_buf, "%d", &numpersec) != 1) {
+d241 1
+a241 1
+	      fprintf(stderr, "set rate to %d\n", numpersec);;
+@
+
+
+1.19
+log
+@More args changed.
+@
+text
+@d16 1
+a16 1
+#include "config.h"
+@
+
+
+1.18
+log
+@Now with cool, whizzbang new shiny telnet port for controlling speed.
+@
+text
+@d37 1
+d44 2
+a45 3
+  fprintf(stderr, "Magic port: 4321\n");
+  if ((argc != 4) && (argc != 5)) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec [of]\n");
+d49 1
+a49 1
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec [of]\n");
+d53 1
+a53 1
+    fprintf(stderr, "usage: bp_engine target_IP target_port numpersec [of]\n");
+d56 2
+d59 2
+a60 2
+  if (argc == 5) {
+    outfile = fopen(*(argv+4), "w");
+a68 2
+  gettimeofday(&last, NULL);
+
+d85 1
+d211 1
+a211 1
+  conn_fd = slisten("4321");
+@
+
+
+1.17
+log
+@Limited output rate.
+@
+text
+@d24 1
+d28 1
+d41 3
+d82 3
+d204 54
+@
+
+
+1.16
+log
+@Much work done on playback engine.
+@
+text
+@d35 1
+d62 2
+d86 1
+a86 1
+  struct timeval  tv;
+d118 5
+a122 1
+
+a123 1
+  fprintf(outfile, "%d threads, %d connecting\n", numthreads, numconnecting);
+@
+
+
+1.15
+log
+@Playback engine now spews smooth traffic instead of bursts every second.
+@
+text
+@d29 2
+a30 2
+int numconnecting = 0;
+pthread_mutex_t numt_mutex, numc_mutex;
+a71 2
+    exit(1);
+  if (pthread_mutex_init(&numc_mutex, NULL) != 0)
+@
+
+
+1.14
+log
+@Various hacks to track down bugs.
+@
+text
+@d26 1
+a37 3
+  struct timeval  tv;
+  int             i;
+
+d65 2
+a66 2
+  if (initialize_http_tasks("UC Berkeley Trace Playback Engine",
+			    "gribble@@cs.berkeley.edu")) {
+d76 17
+a92 2
+  while(1) {
+    gettimeofday(&tv, NULL);
+d94 9
+a102 2
+    for (i=0; i<numpersec; i++) {
+      lf_entry      *lfntree;
+d104 9
+a112 9
+      lfntree = (lf_entry *) malloc(sizeof(lf_entry));
+      if (lfntree == NULL) {
+	fprintf(stderr, "Out of mem in main.\n");
+	exit(1);
+      }
+      if (lf_get_next_entry(0, lfntree, 3) != 0) {
+	fprintf(stderr, "Failed to get next entry.\n");
+	exit(1);
+      }
+d114 1
+a114 7
+      bp_timer_add(ABSOLUTE, tv, timerproc, (void *) lfntree);
+    }
+    bp_dispatch_signal();
+    fprintf(outfile, "%d threads, %d connecting\n", numthreads, numconnecting);
+    sleep(1);
+    while (numthreads > 400)
+      sleep(1);
+d116 4
+a119 3
+  
+  sleep(500);
+  exit(0);
+@
+
+
+1.13
+log
+@Now am filtering out apparently bogus GET requests from traces.  Also
+fixed so can point engine anywhere.
+@
+text
+@d29 1
+d31 1
+a31 1
+int   port;
+d33 1
+d38 1
+a38 1
+  int             i, j;
+d40 2
+a41 2
+  if (argc != 3) {
+    fprintf(stderr, "usage: bp_engine target_IP target_port\n");
+d45 5
+a49 1
+    fprintf(stderr, "usage: bp_engine target_IP target_port\n");
+d53 9
+d73 6
+a78 1
+  for (j=0; j<100000; j++) {
+d81 1
+a81 1
+    for (i=0; i<15; i++) {
+a92 1
+      /*      lf_dump(stderr, lfntree); */
+d97 1
+a97 1
+    printf("%d threads, %d connecting\n", numthreads, numconnecting);
+d99 2
+d114 2
+d117 2
+d121 1
+a121 1
+       (strlen(t.url) < 4) ||
+d129 1
+d132 2
+d135 2
+d152 2
+d155 2
+a160 2
+    /*    printf("is: %d (%d)\n%s", res, retl, retd); */
+    /*printf("is: %d %d\n", res, retl); */
+d163 6
+a168 2
+    printf("do_http_task failed. (%d threads)\n", numthreads);
+    exit(1);
+d172 2
+d175 2
+@
+
+
+1.12
+log
+@Added counting of parallel open tasks.
+@
+text
+@d30 3
+d38 10
+d95 14
+d118 7
+a124 1
+  t.dst_host = inet_addr("128.32.33.223"); t.dst_port = htons(5678);
+@
+
+
+1.11
+log
+@Finished modifying all sorts of little things.
+@
+text
+@d48 1
+a48 1
+    for (i=0; i<10; i++) {
+d91 1
+a91 1
+  t.dst_host = inet_addr("128.32.33.222"); t.dst_port = htons(5677);
+@
+
+
+1.10
+log
+@Fixed a sniglet in src/showtrace.c that was leaking memory.
+@
+text
+@d60 1
+a60 1
+      lf_dump(stderr, lfntree);
+d66 1
+a66 1
+    sleep(2);
+d95 1
+a95 1
+    printf("is: %d %d\n", res, retl); 
+@
+
+
+1.9
+log
+@Hack hack hack...fixed lots of small buglets..
+@
+text
+@a10 1
+#include <pthread.h>
+d15 5
+@
+
+
+1.8
+log
+@Getting really close to solution..
+@
+text
+@d44 1
+a44 1
+    for (i=0; i<30; i++) {
+d87 1
+a87 1
+  t.dst_host = inet_addr("128.32.44.155"); t.dst_port = htons(5678);
+@
+
+
+1.7
+log
+@I'm going to getthis..
+@
+text
+@d24 1
+d61 1
+@
+
+
+1.6
+log
+@More mumbling..
+@
+text
+@d23 2
+d28 1
+a28 4
+  http_task       t;
+  char           *retd = NULL;
+  int             retl = 0, res, i;
+  lf_entry        lfntree;
+d40 18
+a57 4
+  for (i=0; i<10; i++) {
+    if (lf_get_next_entry(0, &lfntree, 3) != 0) {
+      fprintf(stderr, "Failed to get next entry.\n");
+      exit(1);
+d59 2
+a60 3
+    lf_dump(stderr, &lfntree);
+    free(lfntree.url);
+    fprintf(stderr, "\r");
+d62 4
+d67 9
+a75 1
+  t.url = "GET http://www.cs.berkeley.edu/~gribble/ HTTP/1.0";
+d77 9
+a85 6
+  t.dst_host = inet_addr("128.32.44.155");
+  t.dst_port = htons(5676);
+  t.client_pragmas = t.server_pragmas = 0;
+  t.client_pragmas |= PG_CLNT_NO_CACHE | PG_CLNT_IF_MOD_SINCE;
+  gettimeofday(&tv, NULL);
+  t.client_if_modified_date = (time_t) tv.tv_sec;
+d88 2
+a89 1
+    printf("is: %d (%d)\n%s", res, retl, retd);
+d92 2
+a93 1
+    printf("do_http_task failed.\n");
+d95 3
+a97 22
+
+  /*** THE FOLLOWING TESTS OUT THE TIMER SUBSYSTEM ***/
+  tv.tv_sec = 3; tv.tv_usec = 0; 
+  bp_timer_add(RELATIVE, tv, timerproc, (void *) 100L);
+  tv.tv_sec = 7; bp_timer_add(RELATIVE, tv, timerproc, (void *) 100L);
+  tv.tv_sec = 5; bp_timer_add(RELATIVE, tv, timerproc, (void *) 100L);
+  bp_dispatch_signal();
+  
+  printf("(main) doing sleep 23\n");
+  sleep(23);
+  printf("exiting..\n");
+
+  exit(0);
+}
+
+void timerproc(int id, void *data)
+{
+  struct timeval tv;
+
+  gettimeofday(&tv, NULL);
+  fprintf(stdout, "(%d:%d) timerproc called with id %d, data %p\n",
+	  tv.tv_sec, tv.tv_usec, id, data);
+@
+
+
+1.5
+log
+@Mumblemumble.
+@
+text
+@d68 1
+a68 1
+  /*  tv.tv_sec = 3; tv.tv_usec = 0; 
+d76 1
+a76 1
+  printf("exiting..\n");*/
+@
+
+
+1.4
+log
+@Working on log parsing functionality - almost there..
+@
+text
+@d60 6
+a65 2
+  printf("is: %d (%d)\n%s", res, retl, retd);
+  free(retd);
+@
+
+
+1.3
+log
+@Built http_task.c, which goes out and gets a page from an HTTP server.
+@
+text
+@d19 1
+d28 2
+a29 1
+  int             retl = 0, res;
+d41 10
+d52 1
+@
+
+
+1.2
+log
+@Woohoo!  The core timer routines seem to be working ok.
+@
+text
+@d13 3
+d18 1
+d24 4
+a27 1
+  struct timeval tv;
+d33 5
+d39 13
+a51 1
+  tv.tv_sec = 3; tv.tv_usec = 0; 
+d59 2
+a60 1
+  printf("exiting..\n");
+@
+
+
+1.1
+log
+@Playback engine
+@
+text
+@d12 1
+d16 1
+a16 1
+void *bp_timer_mainloop(void *arg);
+d20 2
+d26 9
+a34 1
+  sleep(15);
+d37 9
+@

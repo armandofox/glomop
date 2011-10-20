@@ -1,0 +1,2057 @@
+head	1.17;
+access;
+symbols
+	Yatin-final:1.17
+	Yatin:1.17.0.2
+	pre-yatin-merge:1.17
+	transend-beta2:1.16
+	fox-dev:1.16
+	ptm-ng:1.16
+	transend-beta-latest:1.16
+	Aggregators:1.16
+	NoAggregators:1.16
+	iang:1.16.0.4
+	transend-beta:1.16.0.2
+	SOSP:1.16
+	stable_ptm:1.13
+	merged_preintegrate:1.8
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.17
+date	97.09.18.22.45.27;	author yatin;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.06.02.49.22;	author yatin;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.26.04.15.09;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.17.03.01.24;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.05.20.20.57;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.05.05.34.46;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.05.03.49.04;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.29.06.00.57;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.04.09.55.47;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.15.13.46.40;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.13.00.18.43;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.07.01.47.48;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.26;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.08.12.25;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.21.27.59;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.58;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.15;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.15;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@#include "packet.h"
+#include "communication.h"
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <iostream.h>
+#include <stdio.h>
+#include <errno.h>
+
+
+const int checksumSize = 4; // 4 bytes
+
+void
+gm_PacketHeader::HostToNetwork()
+{
+  magic  = htonl(magic);
+  type   = htonl(type);
+  length = htonl(length);
+  requestReplyID = htonl(requestReplyID);
+}
+
+
+void
+gm_PacketHeader::NetworkToHost()
+{
+  magic  = ntohl(magic);
+  type   = ntohl(type);
+  length = ntohl(length);
+  requestReplyID = ntohl(requestReplyID);
+}
+
+
+UINT32
+gm_PacketHeader::AddToPacket(char *pktStream)
+{
+  UINT32 bytesAdded;
+  gm_PacketHeader tmpHeader = *this;
+  tmpHeader.HostToNetwork();
+
+  bytesAdded = 0;
+  memcpy(pktStream+bytesAdded, (char*) &tmpHeader.magic,  sizeof(UINT32));
+  bytesAdded += sizeof(UINT32);
+
+  memcpy(pktStream+bytesAdded, (char*) &tmpHeader.type,   sizeof(UINT32));
+  bytesAdded += sizeof(UINT32);
+
+  memcpy(pktStream+bytesAdded, (char*) &tmpHeader.length, sizeof(UINT32));
+  bytesAdded += sizeof(UINT32);
+
+  memcpy(pktStream+bytesAdded, (char*) &tmpHeader.requestReplyID, 
+	 sizeof(UINT32));
+  bytesAdded += sizeof(UINT32);
+
+  return bytesAdded;
+}
+
+
+UINT32
+gm_PacketHeader::ExtractFromPacket(const char *pktStream)
+{
+  UINT32 bytesRead=0;
+
+  memcpy((char*) &magic,  pktStream+bytesRead, sizeof(UINT32));
+  bytesRead += sizeof(UINT32);
+
+  memcpy((char*) &type,   pktStream+bytesRead, sizeof(UINT32));
+  bytesRead += sizeof(UINT32);
+
+  memcpy((char*) &length, pktStream+bytesRead, sizeof(UINT32));
+  bytesRead += sizeof(UINT32);
+
+  memcpy((char*) &requestReplyID, pktStream+bytesRead, sizeof(UINT32));
+  bytesRead += sizeof(UINT32);
+
+  NetworkToHost();
+  return bytesRead;
+}
+
+
+gm_Packet::~gm_Packet()
+{
+  if (isDynamicallyAllocated==gm_True && data!=NULL) {
+    delete [] data;
+    data = NULL;
+  }
+}
+
+
+/*gm_Bool
+Socket::Write(gm_Packet *pkt)
+{
+  int  objectType, bytes;
+  char *sendBuffer;
+
+  if (pkt->header.length < 0 || (pkt->header.length > 0 && pkt->data==NULL))
+    Return(gm_False, errSocketWriteError);
+
+  if ((objectType=getObjectType())==-1) 
+    Return(gm_False, errSocketWriteError);
+
+  if (objectType==SOCK_STREAM) {
+    sendBuffer = new char [gm_PacketHeader::Size()];
+    if (sendBuffer==NULL) Return(gm_False, errOutOfMemory);
+
+    bytes = pkt->header.AddToPacket(sendBuffer);
+    if (Write(sendBuffer, bytes)==gm_False) {
+      delete [] sendBuffer;
+      return gm_False;
+    }
+
+    delete [] sendBuffer;
+
+    if (pkt->header.length== 0) return gm_True;
+    if (Write(pkt->data, pkt->header.length)==gm_False) return gm_False;
+    return gm_True;
+  }
+  else {
+    if (checksumSize + gm_PacketHeader::Size() + pkt->header.length>MAXDGRAMSIZE)
+      Return(gm_False, errTooLargeDatagram);
+
+    sendBuffer = new char[checksumSize + gm_PacketHeader::Size() 
+			 + pkt->header.length];
+    if (sendBuffer==NULL) Return(gm_False, errOutOfMemory);
+
+    bytes = checksumSize; // skip the first few bytes for the checksum
+
+    bytes += pkt->header.AddToPacket(sendBuffer+bytes);
+    memcpy(sendBuffer+bytes, pkt->data, pkt->header.length);
+    gm_Packet::CreateChecksum(sendBuffer, sendBuffer + checksumSize, 
+			   bytes+pkt->header.length-checksumSize);
+    if (Write(sendBuffer, bytes+pkt->header.length)==gm_False) {
+      delete [] sendBuffer;
+      return gm_False;
+    }
+
+    delete [] sendBuffer;
+    return gm_True;
+  }
+}
+
+
+gm_Bool
+Socket::Read(gm_Packet *pkt, timeval *tv)
+{
+  int objectType, dataRead;
+  UINT32 bytesExtracted;
+
+  if ((objectType=getObjectType())==-1) 
+    Return(gm_False, errSocketReadError);
+
+  if (objectType==SOCK_STREAM) {
+    char *buffer = new char [gm_PacketHeader::Size()];
+    if (buffer==NULL) Return(gm_False, errOutOfMemory);
+    
+    dataRead = Read(buffer, gm_PacketHeader::Size(), tv);
+    if (dataRead < 0) { delete [] buffer; return gm_False; }
+
+    pkt->header.ExtractFromPacket(buffer);
+    delete [] buffer;
+
+    if (pkt->header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+    if (pkt->header.length < 0) Return(gm_False, errSocketReadError);
+
+    if (pkt->data!=NULL && pkt->isDynamicallyAllocated==gm_True) {
+      delete [] pkt->data;
+      pkt->data = NULL;
+    }
+
+    if (pkt->header.length==0) {
+      pkt->data = NULL;
+      return gm_True;
+    }
+
+    pkt->data = new char[pkt->header.length];
+    if (pkt->data==NULL) Return(gm_False, errOutOfMemory);
+    pkt->isDynamicallyAllocated = gm_True;
+
+    dataRead = Read(pkt->data, pkt->header.length, tv);
+
+    if (dataRead < 0) return gm_False;
+    if (UINT32(dataRead) < pkt->header.length) {
+      Return(gm_False, errSocketReadNotEnoughData);
+    }
+    return gm_True;
+  }
+  else {
+    char buffer[MAXDGRAMSIZE];
+    dataRead = Read(buffer, MAXDGRAMSIZE, tv);
+
+    if (dataRead < 0) return gm_False;
+    Error::SetStatus(success);
+
+    if (UINT32(dataRead) < checksumSize + gm_PacketHeader::Size()) 
+      Return(gm_False, errSocketReadNotEnoughData);
+
+    if (gm_Packet::VerifyChecksum(buffer, buffer+checksumSize, 
+			       dataRead-checksumSize)!=gm_True)
+      Return(gm_False, errChecksumError);
+    bytesExtracted  = checksumSize;
+    bytesExtracted += pkt->header.ExtractFromPacket(buffer+bytesExtracted);
+    if (pkt->header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+    if (pkt->header.length > UINT32(dataRead-bytesExtracted))
+      Return(gm_False, errSocketReadNotEnoughData);
+    if (pkt->header.length < UINT32(dataRead-bytesExtracted))
+      Return(gm_False, errFormattingError);
+
+    if (pkt->data!=NULL && pkt->isDynamicallyAllocated==gm_True) {
+      delete [] pkt->data;
+      pkt->data = NULL;
+    }
+
+    if (pkt->header.length==0) {
+      pkt->data = NULL;
+      return gm_True;
+    }
+
+    pkt->data = new char[pkt->header.length];
+    if (pkt->data==NULL) Return(gm_False, errOutOfMemory);
+    pkt->isDynamicallyAllocated = gm_True;
+
+    memcpy(pkt->data, buffer+bytesExtracted, pkt->header.length);
+    return gm_True;
+  }
+}*/
+
+
+gm_Bool
+Socket::Write(gm_Packet *pkt)
+{
+  int  bytes;
+  char *sendBuffer;
+
+  if (pkt->header.length < 0 || (pkt->header.length > 0 && pkt->data==NULL))
+    Return(gm_False, errSocketWriteError);
+
+  sendBuffer = new char [gm_PacketHeader::Size()];
+  if (sendBuffer==NULL) Return(gm_False, errOutOfMemory);
+  
+  bytes = pkt->header.AddToPacket(sendBuffer);
+  if (Write(sendBuffer, bytes)==gm_False) {
+    delete [] sendBuffer;
+    return gm_False;
+  }
+  
+  delete [] sendBuffer;
+  
+  if (pkt->header.length== 0) return gm_True;
+  if (Write(pkt->data, pkt->header.length)==gm_False) return gm_False;
+  return gm_True;
+}
+
+
+gm_Bool
+MulticastSocket::Write(gm_Packet *pkt)
+{
+  int  bytes;
+  char *sendBuffer;
+
+  if (pkt->header.length < 0 || (pkt->header.length > 0 && pkt->data==NULL))
+    Return(gm_False, errSocketWriteError);
+
+  if (checksumSize + gm_PacketHeader::Size() + pkt->header.length>MAXDGRAMSIZE)
+    Return(gm_False, errTooLargeDatagram);
+  
+  sendBuffer = new char[checksumSize + gm_PacketHeader::Size() 
+		       + pkt->header.length];
+  if (sendBuffer==NULL) Return(gm_False, errOutOfMemory);
+  
+  bytes = checksumSize; // skip the first few bytes for the checksum
+  
+  bytes += pkt->header.AddToPacket(sendBuffer+bytes);
+  memcpy(sendBuffer+bytes, pkt->data, pkt->header.length);
+  gm_Packet::CreateChecksum(sendBuffer, sendBuffer + checksumSize, 
+			 bytes+pkt->header.length-checksumSize);
+  if (Write(sendBuffer, bytes+pkt->header.length)==gm_False) {
+    delete [] sendBuffer;
+    return gm_False;
+  }
+  
+  delete [] sendBuffer;
+  return gm_True;
+}
+
+
+gm_Bool
+Socket::Read(gm_Packet *pkt, timeval *tv)
+{
+  int dataRead;
+
+  char *buffer = new char [gm_PacketHeader::Size()];
+  if (buffer==NULL) Return(gm_False, errOutOfMemory);
+  
+  dataRead = Read(buffer, gm_PacketHeader::Size(), tv);
+  if (dataRead < 0) { delete [] buffer; return gm_False; }
+  
+  pkt->header.ExtractFromPacket(buffer);
+  delete [] buffer;
+  
+  if (pkt->header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+  if (pkt->header.length < 0) Return(gm_False, errSocketReadError);
+  
+  if (pkt->data!=NULL && pkt->isDynamicallyAllocated==gm_True) {
+    delete [] pkt->data;
+    pkt->data = NULL;
+  }
+  
+  if (pkt->header.length==0) {
+    pkt->data = NULL;
+    return gm_True;
+  }
+  
+  pkt->data = new char[pkt->header.length];
+  if (pkt->data==NULL) Return(gm_False, errOutOfMemory);
+  pkt->isDynamicallyAllocated = gm_True;
+  
+  dataRead = Read(pkt->data, pkt->header.length, tv);
+  
+  if (dataRead < 0) return gm_False;
+  if (UINT32(dataRead) < pkt->header.length) {
+    Return(gm_False, errSocketReadNotEnoughData);
+  }
+  return gm_True;
+}
+
+
+gm_Bool
+MulticastSocket::Read(gm_Packet *pkt, timeval *tv)
+{
+  int dataRead;
+  UINT32 bytesExtracted;
+
+  char buffer[MAXDGRAMSIZE];
+  dataRead = Read(buffer, MAXDGRAMSIZE, tv);
+  
+  if (dataRead < 0) return gm_False;
+  Error::SetStatus(success);
+  
+  if (UINT32(dataRead) < checksumSize + gm_PacketHeader::Size()) 
+    Return(gm_False, errSocketReadNotEnoughData);
+  
+  if (gm_Packet::VerifyChecksum(buffer, buffer+checksumSize, 
+			     dataRead-checksumSize)!=gm_True)
+    Return(gm_False, errChecksumError);
+  bytesExtracted  = checksumSize;
+  bytesExtracted += pkt->header.ExtractFromPacket(buffer+bytesExtracted);
+  if (pkt->header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+  if (pkt->header.length > UINT32(dataRead-bytesExtracted))
+    Return(gm_False, errSocketReadNotEnoughData);
+  if (pkt->header.length < UINT32(dataRead-bytesExtracted))
+    Return(gm_False, errFormattingError);
+  
+  if (pkt->data!=NULL && pkt->isDynamicallyAllocated==gm_True) {
+    delete [] pkt->data;
+    pkt->data = NULL;
+  }
+  
+  if (pkt->header.length==0) {
+    pkt->data = NULL;
+    return gm_True;
+  }
+  
+  pkt->data = new char[pkt->header.length];
+  if (pkt->data==NULL) Return(gm_False, errOutOfMemory);
+  pkt->isDynamicallyAllocated = gm_True;
+  
+  memcpy(pkt->data, buffer+bytesExtracted, pkt->header.length);
+  return gm_True;
+}
+
+
+void
+gm_Packet::CreateChecksum(char *checksumLocation, const char *buffer, 
+		       UINT32 bufferLength)
+{
+  UINT32 checksum = 0, idx;
+  int    offset = sizeof(UINT32)-checksumSize;
+
+  if (offset < 0) offset = 0;
+  for(idx=0; idx < bufferLength; idx++)
+    checksum += *(buffer++);
+  checksum = htonl(checksum);
+
+  memcpy(checksumLocation, ((char*)&checksum) + offset, checksumSize);
+}
+
+
+gm_Bool
+gm_Packet::VerifyChecksum(const char *checksumLocation, const char *buffer, 
+		       UINT32 bufferLength)
+{
+  UINT32 checksum = 0, idx;
+  int    offset = sizeof(UINT32)-checksumSize;
+
+  if (offset < 0) offset = 0;
+  for(idx=0; idx < bufferLength; idx++)
+    checksum += *(buffer++);
+  checksum = htonl(checksum);
+
+  return (memcmp(checksumLocation, ((char*)&checksum) + offset, 
+		 checksumSize)==0) ? gm_True:gm_False;
+}
+
+
+void 
+gm_PacketHeader::Print()
+{
+  gm_Debug(dbgTmp, "Magic: 0x" << hex << magic << "   Type: " << dec << type
+	   << '\n' << "Length: " << length << "   ReplyID: " << requestReplyID
+	   << '\n');
+}
+
+
+void 
+gm_Packet::PrintDump(const char *msg, const char *data_, UINT32 len)
+{
+  char buffer[100];
+  OStream stream;
+  stream << msg;
+  for (UINT32 idx=0; idx < len; idx++) {
+    unsigned int ch = (unsigned char) data_[idx];
+    sprintf(buffer, "%02X(%c) ", ch, ((ch<32 || ch >=127) ? '?' 
+				      : (char) ch));
+    stream << buffer;
+  }
+  stream << '\n';
+  gm_Debug(dbgTmp, stream.getData());
+}
+
+
+void
+gm_Packet::Print(UINT32 start, UINT32 len)
+{
+  if (len==0) len = header.length - start;
+  PrintDump("Data:\n", &data[start], len);
+}
+
+
+gm_Bool
+gm_PacketHandler::EvSelect(EventSystem *evs)
+{
+  gm_Packet packet;
+
+  if (ReadPacket(&packet)==gm_True) {
+    if (EvPacketReceived(evs, &packet)==gm_True) return gm_True;
+  }
+
+  if (Error::getStatus()==errSocketEOF) {
+    Error::SetStatus(success);
+    return EvConnectionBroken(evs);
+  }
+  else return HandleSelectError(evs, &packet);
+}
+
+
+gm_Bool
+gm_PacketHandler::HandleSelectError(EventSystem *evs, gm_Packet *packet)
+{
+  char buffer[256];
+
+  switch (Error::getStatus()) {
+  case errSocketReadNotEnoughData:
+    sprintf(buffer, "Ignoring incomplete packet (packet type was '%lu')\n",
+	    packet->getType());
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errInvalidMagicKey:
+    sprintf(buffer, "Packet with invalid magic key received\n");
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errChecksumError:
+    sprintf(buffer, "Error in datagram checksum. Ignoring this packet\n");
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errInvalidPacketType:
+    sprintf(buffer, "Ignoring invalid packet type '%lu'\n", packet->getType());
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+    
+  case errFormattingError:
+    sprintf(buffer, "Error in packet format (packet type was '%lu')\n"
+	    "Detected in %s at line %d\n",
+	    packet->getType(), Error::getFilename(), Error::getLineNo());
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errOutOfContextPacket:
+    sprintf(buffer,"Packet received out of context (packet type was '%lu')\n",
+	    packet->getType());
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errSocketEOF:
+    Error::SetStatus(success);
+    return EvConnectionBroken(evs);
+
+  case errSocketReadError:
+    sprintf(buffer, "Error occurred while reading packet: %s\n",
+	    strerror(errno));
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case errSocketWriteError:
+    sprintf(buffer, "Error occurred while writing packet: %s\n",
+	    strerror(errno));
+    ErrorOutput(buffer);
+    Error::SetStatus(success);
+    return gm_True;
+
+  case success:
+    // that's weird! just abort...
+    sprintf(buffer, "Some function returned gm_False without setting any "
+	    "errorcode (packet type %lu)\nAborting the program...\n", 
+	    packet->getType());
+    ErrorOutput(buffer);
+    abort();
+
+  default:
+    return gm_False;
+  }
+}
+
+
+#define StreamReturn(returnValue, errorCode) \
+{ \
+  if (errorCode==success) { \
+    SetGoodFlag(gm_True); \
+    return returnValue; \
+  } \
+  else { \
+    SetGoodFlag(gm_False); \
+    Return(returnValue, errorCode); \
+  } \
+}
+#define VOID
+
+IStream::IStream(const char *d, UINT32 l) 
+  : Stream(), data(d), length(l), stringWidth(l), 
+    current(NULL), delimiter('\0')
+{
+  if (data!=NULL && length>0) current = data;
+}
+
+
+IStream& 
+IStream::InputBinary(void *binaryData, UINT32 numberOfBytes)
+{
+  if (IsGood()==gm_False) return *this;
+
+  if ((current-data) + numberOfBytes > length) {
+    // not enough data
+    StreamReturn(*this, errFormattingError);
+  }
+
+  memcpy(binaryData, current, numberOfBytes);
+  current += numberOfBytes;
+
+  StreamReturn(*this, success);
+}
+
+
+IStream& 
+IStream::operator >> (char *string)
+{
+  if (IsGood()==gm_False) return *this;
+  const  char *original = current;
+  UINT32 strPos=0;
+  
+  while (IsDone()==gm_False && *current!=delimiter && strPos < getW()-1) {
+    string[strPos++] = *current;
+    current++;
+  }
+  string[strPos] = '\0';
+  
+  if (*current!=delimiter) { 
+    if (IsDone()==gm_True) { // delimiter not found
+      current = original; 
+      StreamReturn(*this, errFormattingError);
+    }
+    else { // getW() exceeded
+      current = original; 
+      StreamReturn(*this, errBufferOverflow);
+    }
+  }
+
+  //current++; do not skip the delimiter
+  StreamReturn(*this, success);
+}
+
+  
+IStream& 
+IStream::operator >> (int &integer)
+{
+  const UINT32 intWidth=20;
+  char intStr[intWidth];
+
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    UINT32 uinteger;
+    InputBinary(&uinteger, sizeof(UINT32));
+    if (IsGood()==gm_False) return *this;
+    uinteger = ntohl(uinteger);
+    integer  = (int) uinteger;
+    return *this;
+  }
+  else {
+    UINT32 origGetW = getW();
+    (*this) >> SetW(intWidth) >> intStr >> SetW(origGetW);
+    if (IsGood()==gm_False) return *this;
+    if (sscanf(intStr, "%d", &integer)!=1) { 
+      StreamReturn(*this, errFormattingError);
+    }
+    return *this;
+  }
+}
+
+
+IStream& 
+IStream::operator >> (UINT32 &value)
+{
+  const int uintWidth=20;
+  char uintStr[uintWidth];
+
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    InputBinary(&value, sizeof(UINT32));
+    if (IsGood()==gm_False) return *this;
+    value = ntohl(value);
+    return *this;
+  }
+  else {
+    UINT32 origGetW = getW();
+    (*this) >> SetW(uintWidth) >> uintStr >> SetW(origGetW);
+    if (IsGood()==gm_False) return *this;
+    if (sscanf(uintStr, "%lu", &value)!=1) { 
+      StreamReturn(*this, errFormattingError);
+    }
+    return *this;
+  }
+}
+
+IStream& 
+IStream::operator >> (INT32 &value)
+{
+  const int uintWidth=20;
+  char uintStr[uintWidth];
+
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    InputBinary(&value, sizeof(UINT32));
+    if (IsGood()==gm_False) return *this;
+    value = ntohl(value);
+    return *this;
+  }
+  else {
+    UINT32 origGetW = getW();
+    (*this) >> SetW(uintWidth) >> uintStr >> SetW(origGetW);
+    if (IsGood()==gm_False) return *this;
+    if (sscanf(uintStr, "%ld", &value)!=1) { 
+      StreamReturn(*this, errFormattingError);
+    }
+    return *this;
+  }
+}
+
+
+IStream&
+IStream::Extract(void *extract, UINT32 extractLength)
+{
+  if (IsGood()==gm_False) return *this;
+
+  if ((current-data) + extractLength > length) {
+    // not enough data
+    StreamReturn(*this, errFormattingError);
+  }
+
+  memcpy(extract, current, extractLength);
+  current += extractLength;
+
+  return *this;
+}
+
+
+OStream::OStream()
+  : Stream(), data(NULL), length(0), bytesWritten(0), isDynamic(gm_True)
+{
+  const int startBufferSize=64;
+  data = new char [startBufferSize];
+  if (data==NULL) { StreamReturn(VOID, errOutOfMemory); }
+
+  *data = '\0';
+  length  = startBufferSize;
+}
+
+
+OStream::OStream(char *buffer, UINT32 len)
+    : Stream(), data(buffer), length(len), bytesWritten(0), isDynamic(gm_False)
+{
+  *data = '\0';
+}
+
+
+
+gm_Bool
+OStream::GrowBufferToAtLeast(UINT32 newLength)
+{
+  char *newData;
+
+  if (isDynamic==gm_False) StreamReturn(gm_False, errBufferOverflow);
+  if (data==NULL) StreamReturn(gm_False, errOutOfMemory);
+
+  while (newLength > length) length *= 2;
+  newData = new char [length];
+  if (newData==NULL) {
+    delete [] data;
+    length = 0;
+    data = NULL;
+    StreamReturn(gm_False, errOutOfMemory);
+  }
+  memcpy(newData, data, bytesWritten+1);
+  delete [] data;
+  data = newData;
+  return gm_True;
+}
+
+
+OStream& 
+OStream::OutputBinary(const void *binaryData, UINT32 numberOfBytes)
+{
+  if (IsGood()==gm_False) return *this;
+  UINT32 newLength;
+  newLength = bytesWritten + numberOfBytes + 1;
+
+  if (newLength > length) {
+    if (GrowBufferToAtLeast(newLength)==gm_False) return *this;
+  }
+
+  memcpy(data + bytesWritten, binaryData, numberOfBytes);
+  bytesWritten += numberOfBytes;
+  *(data + bytesWritten) = '\0';
+
+  StreamReturn(*this, success);
+}
+
+
+OStream& 
+OStream::operator << (const char *string)
+{
+  if (IsGood()==gm_False || string==NULL) return *this;
+  UINT32 newLength, lengthOfString;
+  lengthOfString = strlen(string);
+  newLength      = bytesWritten + lengthOfString + 1;
+
+  if (newLength > length) {
+    if (GrowBufferToAtLeast(newLength)==gm_False) return *this;
+  }
+
+  strcpy(data + bytesWritten, string);
+  bytesWritten += lengthOfString;
+
+  StreamReturn(*this, success);
+}
+
+
+OStream&
+OStream::operator << (char ch)
+{
+  if (IsGood()==gm_False) return *this;
+
+  char dummy[2] = " ";
+  UINT32 chPos = bytesWritten;
+  *this << dummy;
+
+  if (IsGood()==gm_True) data[chPos] = ch;
+  return *this;
+}
+
+
+OStream&
+OStream::operator << (int integer)
+{
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    UINT32 uinteger = (UINT32)integer;
+    uinteger = htonl(uinteger);
+    return OutputBinary((char*) &uinteger, sizeof(UINT32));
+  }
+  else {
+    char string[25];
+    sprintf(string, "%d", integer);
+    return (*this << string);
+  }
+}
+
+
+OStream&
+OStream::operator << (UINT32 uinteger)
+{
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    uinteger = htonl(uinteger);
+    return OutputBinary((char*) &uinteger, sizeof(UINT32));
+  }
+  else {
+    char string[25];
+    sprintf(string, "%lu", uinteger);
+    return (*this << string);
+  }
+}
+
+OStream&
+OStream::operator << (INT32 integer)
+{
+  if (IsGood()==gm_False) return *this;
+
+  if (IsBinary()==gm_True) {
+    integer = htonl(integer);
+    return OutputBinary((char*) &integer, sizeof(INT32));
+  }
+  else {
+    char string[25];
+    sprintf(string, "%ld", integer);
+    return (*this << string);
+  }
+}
+
+
+OStream&
+OStream::Append(void *append, UINT32 appendLength)
+{
+  if (IsGood()==gm_False) return *this;
+  UINT32 newLength;
+  newLength = bytesWritten + appendLength + 1;
+
+  if (newLength > length) {
+    if (GrowBufferToAtLeast(newLength)==gm_False) return *this;
+  }
+
+  memcpy(data + bytesWritten, append, appendLength);
+  bytesWritten += appendLength;
+  *(data + bytesWritten) = '\0';
+
+  StreamReturn(*this, success);
+}
+@
+
+
+1.16
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d13 1
+a13 1
+PacketHeader::HostToNetwork()
+d23 1
+a23 1
+PacketHeader::NetworkToHost()
+d33 1
+a33 1
+PacketHeader::AddToPacket(char *pktStream)
+d36 1
+a36 1
+  PacketHeader tmpHeader = *this;
+d58 1
+a58 1
+PacketHeader::ExtractFromPacket(const char *pktStream)
+d79 1
+a79 1
+Packet::~Packet()
+d89 1
+a89 1
+Socket::Write(Packet *pkt)
+d101 1
+a101 1
+    sendBuffer = new char [PacketHeader::Size()];
+d117 1
+a117 1
+    if (checksumSize + PacketHeader::Size() + pkt->header.length>MAXDGRAMSIZE)
+d120 1
+a120 1
+    sendBuffer = new char[checksumSize + PacketHeader::Size() 
+d128 1
+a128 1
+    Packet::CreateChecksum(sendBuffer, sendBuffer + checksumSize, 
+d142 1
+a142 1
+Socket::Read(Packet *pkt, timeval *tv)
+d151 1
+a151 1
+    char *buffer = new char [PacketHeader::Size()];
+d154 1
+a154 1
+    dataRead = Read(buffer, PacketHeader::Size(), tv);
+d192 1
+a192 1
+    if (UINT32(dataRead) < checksumSize + PacketHeader::Size()) 
+d195 1
+a195 1
+    if (Packet::VerifyChecksum(buffer, buffer+checksumSize, 
+d227 1
+a227 1
+Socket::Write(Packet *pkt)
+d235 1
+a235 1
+  sendBuffer = new char [PacketHeader::Size()];
+d253 1
+a253 1
+MulticastSocket::Write(Packet *pkt)
+d261 1
+a261 1
+  if (checksumSize + PacketHeader::Size() + pkt->header.length>MAXDGRAMSIZE)
+d264 1
+a264 1
+  sendBuffer = new char[checksumSize + PacketHeader::Size() 
+d272 1
+a272 1
+  Packet::CreateChecksum(sendBuffer, sendBuffer + checksumSize, 
+d285 1
+a285 1
+Socket::Read(Packet *pkt, timeval *tv)
+d289 1
+a289 1
+  char *buffer = new char [PacketHeader::Size()];
+d292 1
+a292 1
+  dataRead = Read(buffer, PacketHeader::Size(), tv);
+d326 1
+a326 1
+MulticastSocket::Read(Packet *pkt, timeval *tv)
+d337 1
+a337 1
+  if (UINT32(dataRead) < checksumSize + PacketHeader::Size()) 
+d340 1
+a340 1
+  if (Packet::VerifyChecksum(buffer, buffer+checksumSize, 
+d371 1
+a371 1
+Packet::CreateChecksum(char *checksumLocation, const char *buffer, 
+d387 1
+a387 1
+Packet::VerifyChecksum(const char *checksumLocation, const char *buffer, 
+d404 1
+a404 1
+PacketHeader::Print()
+d413 1
+a413 1
+Packet::PrintDump(const char *msg, const char *data_, UINT32 len)
+d430 1
+a430 1
+Packet::Print(UINT32 start, UINT32 len)
+d438 1
+a438 1
+PacketHandler::EvSelect(EventSystem *evs)
+d440 1
+a440 1
+  Packet packet;
+d455 1
+a455 1
+PacketHandler::HandleSelectError(EventSystem *evs, Packet *packet)
+@
+
+
+1.15
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d518 8
+@
+
+
+1.14
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d88 2
+a89 2
+gm_Bool
+Packet::Send(CommunicationObject *object)
+d94 1
+a94 1
+  if (header.length < 0 || (header.length > 0 && data==NULL))
+d97 1
+a97 1
+  if ((objectType=object->getObjectType())==-1) 
+d104 2
+a105 2
+    bytes = header.AddToPacket(sendBuffer);
+    if (object->Write(sendBuffer, bytes)==gm_False) {
+d112 2
+a113 2
+    if (header.length== 0) return gm_True;
+    if (object->Write(data, header.length)==gm_False) return gm_False;
+d117 1
+a117 1
+    if (checksumSize + PacketHeader::Size() + header.length > MAXDGRAMSIZE) 
+d120 2
+a121 1
+    sendBuffer = new char[checksumSize + PacketHeader::Size() + header.length];
+d126 5
+a130 5
+    bytes += header.AddToPacket(sendBuffer+bytes);
+    memcpy(sendBuffer+bytes, data, header.length);
+    CreateChecksum(sendBuffer, sendBuffer + checksumSize, 
+		   bytes+header.length-checksumSize);
+    if (object->Write(sendBuffer, bytes+header.length)==gm_False) {
+d142 1
+a142 1
+Packet::Receive(CommunicationObject* object)
+d147 1
+a147 1
+  if ((objectType=object->getObjectType())==-1) 
+d153 2
+a154 2
+
+    dataRead = object->Read(buffer, PacketHeader::Size());
+d157 1
+a157 1
+    header.ExtractFromPacket(buffer);
+d160 2
+a161 2
+    if (header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+    if (header.length < 0) Return(gm_False, errSocketReadError);
+d163 3
+a165 3
+    if (data!=NULL && isDynamicallyAllocated==gm_True) {
+      delete [] data;
+      data = NULL;
+d168 2
+a169 2
+    if (header.length==0) {
+      data = NULL;
+d173 3
+a175 3
+    data = new char[header.length];
+    if (data==NULL) Return(gm_False, errOutOfMemory);
+    isDynamicallyAllocated = gm_True;
+d177 1
+a177 1
+    dataRead = object->Read(data, header.length);
+d180 1
+a180 1
+    if (UINT32(dataRead) < header.length) {
+d187 2
+a188 1
+    dataRead = object->Read(buffer, MAXDGRAMSIZE);
+d195 2
+a196 2
+    if (VerifyChecksum(buffer, buffer+checksumSize, dataRead-checksumSize)
+	!=gm_True)
+d199 3
+a201 3
+    bytesExtracted += header.ExtractFromPacket(buffer+bytesExtracted);
+    if (header.magic!=MAGIC_KEY) Return(gm_False, errInvalidMagicKey);
+    if (header.length > UINT32(dataRead-bytesExtracted))
+d203 1
+a203 1
+    if (header.length < UINT32(dataRead-bytesExtracted))
+d206 3
+a208 3
+    if (data!=NULL && isDynamicallyAllocated==gm_True) {
+      delete [] data;
+      data = NULL;
+d211 2
+a212 2
+    if (header.length==0) {
+      data = NULL;
+d216 108
+a323 3
+    data = new char[header.length];
+    if (data==NULL) Return(gm_False, errOutOfMemory);
+    isDynamicallyAllocated = gm_True;
+d325 33
+a357 1
+    memcpy(data, buffer+bytesExtracted, header.length);
+d360 7
+d416 2
+a417 1
+  gm_Debug(dbgTmp, msg);
+d420 3
+a422 3
+    sprintf(buffer, "%02X (%c)  ", ch, ((ch<32 || ch >=127) ? '?' 
+					: (char) ch));
+    gm_Debug(dbgTmp, buffer);
+d424 2
+a425 1
+  gm_Debug(dbgTmp, '\n');
+@
+
+
+1.13
+log
+@PTM stub now does a random selection from multiple distillers
+@
+text
+@d6 2
+d82 1
+a82 1
+    delete data;
+d147 1
+a147 1
+    Return(gm_False, errSocketWriteError);
+d163 1
+a163 1
+      delete data;
+d205 1
+a205 1
+      delete data;
+d298 1
+a298 1
+  if (Error::getStatus()==errSocketReadEOF) {
+d352 1
+a352 1
+  case errSocketReadEOF:
+d355 14
+@
+
+
+1.12
+log
+@Fixed some random bugs, most notably a lack of htons()in getLocalPort.
+@
+text
+@d269 1
+a269 1
+  for (int idx=0; idx < len; idx++) {
+@
+
+
+1.11
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@a174 1
+    PrintDump("PktRcv:", data, 8);
+@
+
+
+1.10
+log
+@Modified the ptm stub and distiller stub to use the new distiller API
+@
+text
+@d175 1
+d253 32
+@
+
+
+1.9
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d474 17
+d634 19
+@
+
+
+1.8
+log
+@Yatin's first commit from India
+@
+text
+@d93 1
+a93 1
+    gm_BoolErrorReturn(errSocketWriteError);
+d96 1
+a96 1
+    gm_BoolErrorReturn(errSocketWriteError);
+d100 1
+a100 1
+    if (sendBuffer==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d110 1
+a110 1
+    if (header.length== 0) gm_BoolErrorReturn(success);
+d112 1
+a112 1
+    gm_BoolErrorReturn(success);
+d116 1
+a116 1
+      gm_BoolErrorReturn(errTooLargeDatagram);
+d119 1
+a119 1
+    if (sendBuffer==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d133 1
+a133 1
+    gm_BoolErrorReturn(success);
+d145 1
+a145 1
+    gm_BoolErrorReturn(errSocketWriteError);
+d149 1
+a149 1
+    if (buffer==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d157 2
+a158 2
+    if (header.magic!=MAGIC_KEY) gm_BoolErrorReturn(errInvalidMagicKey);
+    if (header.length < 0) gm_BoolErrorReturn(errSocketReadError);
+d167 1
+a167 1
+      gm_BoolErrorReturn(success);
+d171 1
+a171 1
+    if (data==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d178 1
+a178 1
+      gm_BoolErrorReturn(errSocketReadNotEnoughData);
+d180 1
+a180 1
+    gm_BoolErrorReturn(success);
+d186 1
+d189 1
+a189 1
+      gm_BoolErrorReturn(errSocketReadNotEnoughData);
+d191 3
+a193 2
+    if (VerifyChecksum(buffer,buffer+checksumSize,dataRead-checksumSize)!=gm_True)
+      gm_BoolErrorReturn(errChecksumError);
+d196 1
+a196 1
+    if (header.magic!=MAGIC_KEY) gm_BoolErrorReturn(errInvalidMagicKey);
+d198 1
+a198 1
+      gm_BoolErrorReturn(errSocketReadNotEnoughData);
+d200 1
+a200 1
+      gm_BoolErrorReturn(errFormattingError);
+d209 1
+a209 1
+      gm_BoolErrorReturn(success);
+d213 1
+a213 1
+    if (data==NULL) gm_BoolErrorReturn(errOutOfMemory);
+d217 1
+a217 1
+    gm_BoolErrorReturn(success);
+d261 1
+a261 1
+    if (EvPacketReceived(evs, &packet)==gm_True) gm_BoolErrorReturn(success);
+d264 2
+a265 2
+  if (GlobalErrorCode==errSocketReadEOF) {
+    SetGlobalError(success);
+d277 1
+a277 1
+  switch (GlobalErrorCode) {
+d282 2
+a283 1
+    gm_BoolErrorReturn(success);
+d288 2
+a289 1
+    gm_BoolErrorReturn(success);
+d294 2
+a295 1
+    gm_BoolErrorReturn(success);
+d300 2
+a301 1
+    gm_BoolErrorReturn(success);
+d306 1
+a306 1
+	    packet->getType(), ErrorFilename, ErrorLineNo);
+d308 3
+a310 2
+    gm_BoolErrorReturn(success);
+    
+d315 2
+a316 1
+    gm_BoolErrorReturn(success);
+d319 1
+a319 1
+    SetGlobalError(success);
+d328 1
+a328 1
+#define StreamErrorReturn(errorCode, returnValue) \
+d330 10
+a339 3
+  SetGoodFlag( (errorCode==success) ? gm_True:gm_False ); \
+  ErrorReturn(errorCode, returnValue); \
+} \
+d356 1
+a356 1
+    StreamErrorReturn(errFormattingError, *this);
+d362 1
+a362 1
+  StreamErrorReturn(success, *this);
+d382 1
+a382 1
+      StreamErrorReturn(errFormattingError, *this);
+d386 1
+a386 1
+      StreamErrorReturn(errBufferOverflow, *this);
+d391 1
+a391 1
+  StreamErrorReturn(success, *this);
+d416 1
+a416 1
+      StreamErrorReturn(errFormattingError, *this); 
+d442 1
+a442 1
+      StreamErrorReturn(errFormattingError, *this); 
+d467 1
+a467 1
+      StreamErrorReturn(errFormattingError, *this); 
+d479 1
+a479 1
+  if (data==NULL) { StreamErrorReturn(errOutOfMemory, ); }
+d499 2
+a500 2
+  if (isDynamic==gm_False) StreamErrorReturn(errBufferOverflow, gm_False);
+  if (data==NULL) StreamErrorReturn(errOutOfMemory, gm_False);
+d508 1
+a508 1
+    StreamErrorReturn(errOutOfMemory, gm_False);
+d513 1
+a513 1
+  gm_BoolErrorReturn(success);
+d532 1
+a532 1
+  StreamErrorReturn(success, *this);
+d551 1
+a551 1
+  StreamErrorReturn(success, *this);
+@
+
+
+1.7
+log
+@Changed "int" argument type to be signed rather than unsigned.  Required
+addition of INT32 type to config.h.in, and addition of overload
+operators '<<', '>>' for type "long int" to IStream and OStream classes
+in ptm (mods to packet.{cc,h}).  Added various "make run" targets at top
+level.  Minor fixes to monitor's GUI.  Added simple argument parsing to
+gif_munge in ARGS.h, which will be the standard filename where distiller
+args are defined.  Added tags target to ptm makefile.
+@
+text
+@a365 1
+      DEBUG("Data was: " << data << '\n');
+d546 1
+a546 1
+  char *chPos = data + bytesWritten;
+d549 1
+a549 1
+  if (IsGood()==gm_True) *chPos = ch;
+@
+
+
+1.6
+log
+@Just doing a commit before leaving for India
+@
+text
+@d434 25
+d585 16
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d366 1
+@
+
+
+1.4
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d79 1
+a79 1
+  if (isDynamicallyAllocated==TRUE && data!=NULL) {
+d86 1
+a86 1
+Bool
+d93 1
+a93 1
+    BoolErrorReturn(errSocketWriteError);
+d96 1
+a96 1
+    BoolErrorReturn(errSocketWriteError);
+d100 1
+a100 1
+    if (sendBuffer==NULL) BoolErrorReturn(errOutOfMemory);
+d103 1
+a103 1
+    if (object->Write(sendBuffer, bytes)==FALSE) {
+d105 1
+a105 1
+      return FALSE;
+d110 3
+a112 3
+    if (header.length== 0) BoolErrorReturn(success);
+    if (object->Write(data, header.length)==FALSE) return FALSE;
+    BoolErrorReturn(success);
+d116 1
+a116 1
+      BoolErrorReturn(errTooLargeDatagram);
+d119 1
+a119 1
+    if (sendBuffer==NULL) BoolErrorReturn(errOutOfMemory);
+d127 1
+a127 1
+    if (object->Write(sendBuffer, bytes+header.length)==FALSE) {
+d129 1
+a129 1
+      return FALSE;
+d133 1
+a133 1
+    BoolErrorReturn(success);
+d138 1
+a138 1
+Bool
+d145 1
+a145 1
+    BoolErrorReturn(errSocketWriteError);
+d149 1
+a149 1
+    if (buffer==NULL) BoolErrorReturn(errOutOfMemory);
+d152 1
+a152 1
+    if (dataRead < 0) { delete [] buffer; return FALSE; }
+d157 2
+a158 2
+    if (header.magic!=MAGIC_KEY) BoolErrorReturn(errInvalidMagicKey);
+    if (header.length < 0) BoolErrorReturn(errSocketReadError);
+d160 1
+a160 1
+    if (data!=NULL && isDynamicallyAllocated==TRUE) {
+d167 1
+a167 1
+      BoolErrorReturn(success);
+d171 2
+a172 2
+    if (data==NULL) BoolErrorReturn(errOutOfMemory);
+    isDynamicallyAllocated = TRUE;
+d176 1
+a176 1
+    if (dataRead < 0) return FALSE;
+d178 1
+a178 1
+      BoolErrorReturn(errSocketReadNotEnoughData);
+d180 1
+a180 1
+    BoolErrorReturn(success);
+d185 1
+a185 1
+    if (dataRead < 0) return FALSE;
+d188 1
+a188 1
+      BoolErrorReturn(errSocketReadNotEnoughData);
+d190 2
+a191 2
+    if (VerifyChecksum(buffer,buffer+checksumSize,dataRead-checksumSize)!=TRUE)
+      BoolErrorReturn(errChecksumError);
+d194 1
+a194 1
+    if (header.magic!=MAGIC_KEY) BoolErrorReturn(errInvalidMagicKey);
+d196 1
+a196 1
+      BoolErrorReturn(errSocketReadNotEnoughData);
+d198 1
+a198 1
+      BoolErrorReturn(errFormattingError);
+d200 1
+a200 1
+    if (data!=NULL && isDynamicallyAllocated==TRUE) {
+d207 1
+a207 1
+      BoolErrorReturn(success);
+d211 2
+a212 2
+    if (data==NULL) BoolErrorReturn(errOutOfMemory);
+    isDynamicallyAllocated = TRUE;
+d215 1
+a215 1
+    BoolErrorReturn(success);
+d236 1
+a236 1
+Bool
+d249 1
+a249 1
+		 checksumSize)==0) ? TRUE:FALSE;
+d253 1
+a253 1
+Bool
+d258 2
+a259 2
+  if (ReadPacket(&packet)==TRUE) {
+    if (EvPacketReceived(evs, &packet)==TRUE) BoolErrorReturn(success);
+d270 1
+a270 1
+Bool
+d280 1
+a280 1
+    BoolErrorReturn(success);
+d285 1
+a285 1
+    BoolErrorReturn(success);
+d290 1
+a290 1
+    BoolErrorReturn(success);
+d295 1
+a295 1
+    BoolErrorReturn(success);
+d302 1
+a302 1
+    BoolErrorReturn(success);
+d308 1
+a308 1
+    BoolErrorReturn(success);
+d315 1
+a315 1
+    return FALSE;
+d322 1
+a322 1
+  SetGoodFlag( (errorCode==success) ? TRUE:FALSE ); \
+d337 1
+a337 1
+  if (IsGood()==FALSE) return *this;
+d354 1
+a354 1
+  if (IsGood()==FALSE) return *this;
+d358 1
+a358 1
+  while (IsDone()==FALSE && *current!=delimiter && strPos < getW()-1) {
+d365 1
+a365 1
+    if (IsDone()==TRUE) { // delimiter not found
+d386 1
+a386 1
+  if (IsGood()==FALSE) return *this;
+d388 1
+a388 1
+  if (IsBinary()==TRUE) {
+d391 1
+a391 1
+    if (IsGood()==FALSE) return *this;
+d399 1
+a399 1
+    if (IsGood()==FALSE) return *this;
+d414 1
+a414 1
+  if (IsGood()==FALSE) return *this;
+d416 1
+a416 1
+  if (IsBinary()==TRUE) {
+d418 1
+a418 1
+    if (IsGood()==FALSE) return *this;
+d425 1
+a425 1
+    if (IsGood()==FALSE) return *this;
+d435 1
+a435 1
+  : Stream(), data(NULL), length(0), bytesWritten(0), isDynamic(TRUE)
+d447 1
+a447 1
+    : Stream(), data(buffer), length(len), bytesWritten(0), isDynamic(FALSE)
+d454 1
+a454 1
+Bool
+d459 2
+a460 2
+  if (isDynamic==FALSE) StreamErrorReturn(errBufferOverflow, FALSE);
+  if (data==NULL) StreamErrorReturn(errOutOfMemory, FALSE);
+d468 1
+a468 1
+    StreamErrorReturn(errOutOfMemory, FALSE);
+d473 1
+a473 1
+  BoolErrorReturn(success);
+d480 1
+a480 1
+  if (IsGood()==FALSE) return *this;
+d485 1
+a485 1
+    if (GrowBufferToAtLeast(newLength)==FALSE) return *this;
+d499 1
+a499 1
+  if (IsGood()==FALSE || string==NULL) return *this;
+d505 1
+a505 1
+    if (GrowBufferToAtLeast(newLength)==FALSE) return *this;
+d518 1
+a518 1
+  if (IsGood()==FALSE) return *this;
+d524 1
+a524 1
+  if (IsGood()==TRUE) *chPos = ch;
+d532 1
+a532 1
+  if (IsGood()==FALSE) return *this;
+d534 1
+a534 1
+  if (IsBinary()==TRUE) {
+d550 1
+a550 1
+  if (IsGood()==FALSE) return *this;
+d552 1
+a552 1
+  if (IsBinary()==TRUE) {
+@
+
+
+1.3
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d56 1
+a56 1
+PacketHeader::ExtractFromPacket(char *pktStream)
+d221 1
+a221 1
+Packet::CreateChecksum(char *checksumLocation, char *buffer, 
+d237 1
+a237 1
+Packet::VerifyChecksum(char *checksumLocation, char *buffer, 
+a252 97
+#if 0
+struct PacketEvent {
+  PacketEvent(Packet *pkt, CommunicationObject *obj) 
+    : packet(pkt), object(obj) { };
+
+  Packet              *packet;
+  CommunicationObject *object;
+};
+
+
+Bool
+Packet::ReceiveAndHandle(EventSystem *evs, 
+			 PacketHandler *handler,
+			 CommunicationObject *object)
+{
+  if (Receive(object)==FALSE) return FALSE;
+
+  PacketEvent pktEv(this, object);
+  if (evs->SendEvent(evPacketReceived, handler, 
+		     (void*)&pktEv)==FALSE) {
+    return FALSE;
+  }
+  
+  return TRUE;
+}
+
+
+void
+Packet::HandleIgnorableErrors(void (*LogError)(char *))
+{
+  char buffer[256];
+  switch (GlobalErrorCode) {
+  case errSocketReadNotEnoughData:
+    sprintf(buffer, "Ignoring incomplete packet (packet type was '%lu')\n",
+	    getType());
+    (*LogError)(buffer);
+    VoidErrorReturn(success);
+
+  case errInvalidMagicKey:
+    sprintf(buffer, "Packet with invalid magic key received.");
+    (*LogError)(buffer);
+    VoidErrorReturn(success);
+
+  case errInvalidPacketType:
+    sprintf(buffer, "Ignoring invalid packet type '%lu'\n", getType());
+    (*LogError)(buffer);
+    VoidErrorReturn(success);
+    
+  case errFormattingError:
+    sprintf(buffer, "Error in packet format (packet type was '%lu')\n"
+	    "Detected in %s at line %d\n",
+	    getType(), ErrorFilename, ErrorLineNo);
+    (*LogError)(buffer);
+    VoidErrorReturn(success);
+    
+  case errOutOfContextPacket:
+    sprintf(buffer,"Packet received out of context (packet type was '%lu')\n",
+	    getType());
+    (*LogError)(buffer);
+    VoidErrorReturn(success);
+    
+  default:
+    return;
+  }
+}
+
+
+PacketHandler::PacketHandler()
+{
+}
+
+
+PacketHandler::~PacketHandler()
+{
+}
+
+
+Bool 
+PacketHandler::EvPacketReceived(EventSystem */*evs*/, Packet */*packet*/, 
+				CommunicationObject */*object*/)
+{
+  BoolErrorReturn(success);
+}
+
+
+Bool
+PacketHandler::HandleEvent(EventSystem *evs, EventType eventType, void* args)
+{
+  PacketEvent *pktEv = (PacketEvent*)args;
+
+  if (eventType!=evPacketReceived) BoolErrorReturn(errEvSysInvalidEvent);
+  return EvPacketReceived(evs, pktEv->packet, pktEv->object);
+}
+#endif
+
+
+
+d326 1
+a326 1
+IStream::IStream(char *d, UINT32 l) 
+d355 1
+a355 1
+  char   *original = current;
+d478 1
+a478 1
+OStream::OutputBinary(void *binaryData, UINT32 numberOfBytes)
+d497 1
+a497 1
+OStream::operator << (char *string)
+d499 1
+a499 1
+  if (IsGood()==FALSE) return *this;
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d8 2
+d30 1
+a30 1
+int
+d33 1
+a33 1
+  int bytesAdded;
+d55 1
+a55 1
+int
+d58 1
+a58 1
+  int bytesRead=0;
+d115 1
+a115 1
+    if (PacketHeader::Size() + header.length > MAXDGRAMSIZE) 
+d118 1
+a118 1
+    sendBuffer = new char [PacketHeader::Size() + header.length];
+d121 3
+a123 1
+    bytes = header.AddToPacket(sendBuffer);
+d125 2
+d141 2
+a142 1
+  int objectType, dataRead, bytesExtracted;
+d187 1
+a187 1
+    if (dataRead < PacketHeader::Size()) 
+d190 4
+a193 1
+    bytesExtracted = header.ExtractFromPacket(buffer);
+d220 32
+d380 6
+a385 1
+    sprintf(buffer, "Packet with invalid magic key received.");
+d424 2
+a425 2
+  : data(d), length(l), stringWidth(l), 
+    current(NULL), delimiter('\0'), isGood(TRUE), binaryMode(FALSE)
+d452 2
+a453 2
+  char *original = current;
+  int  strPos=0;
+d472 1
+a472 1
+  current++; // skip the delimiter
+d480 1
+a480 1
+  const int intWidth=20;
+d494 2
+a495 1
+    (*this) >> intStr;
+d520 2
+a521 1
+    (*this) >> uintStr;
+d532 1
+a532 2
+  : data(NULL), length(0), bytesWritten(0), isDynamic(TRUE), isGood(TRUE),
+    binaryMode(FALSE)
+d543 2
+a544 3
+OStream::OStream(char *buffer, int len)
+    : data(buffer), length(len), bytesWritten(0), isDynamic(FALSE),
+      isGood(TRUE), binaryMode(FALSE)
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d14 1
+d24 1
+d29 1
+a29 1
+PacketHeader::AddToStream(char *stream)
+d36 2
+a37 2
+  memcpy(stream+bytesAdded, (char*) &tmpHeader.magic,  sizeof(uint32));
+  bytesAdded += sizeof(uint32);
+d39 2
+a40 2
+  memcpy(stream+bytesAdded, (char*) &tmpHeader.type,   sizeof(uint32));
+  bytesAdded += sizeof(uint32);
+d42 6
+a47 2
+  memcpy(stream+bytesAdded, (char*) &tmpHeader.length, sizeof(uint32));
+  bytesAdded += sizeof(uint32);
+d54 1
+a54 1
+PacketHeader::ExtractFromStream(char *stream)
+d58 5
+a62 2
+  memcpy((char*) &magic,  stream+bytesRead, sizeof(uint32));
+  bytesRead += sizeof(uint32);
+d64 2
+a65 2
+  memcpy((char*) &type,   stream+bytesRead, sizeof(uint32));
+  bytesRead += sizeof(uint32);
+d67 2
+a68 2
+  memcpy((char*) &length, stream+bytesRead, sizeof(uint32));
+  bytesRead += sizeof(uint32);
+d100 1
+a100 1
+    bytes = header.AddToStream(sendBuffer);
+d119 1
+a119 1
+    bytes = header.AddToStream(sendBuffer);
+d141 2
+a142 1
+    char buffer[PacketHeader::Size()];
+d145 4
+a148 1
+    if (dataRead < 0) return FALSE;
+a149 1
+    header.ExtractFromStream(buffer);
+d151 1
+a151 2
+    if (header.length < 0)
+      BoolErrorReturn(errSocketReadError);
+d170 1
+a170 1
+    if (uint32(dataRead) < header.length) {
+d183 1
+a183 1
+    bytesExtracted = header.ExtractFromStream(buffer);
+d185 1
+a185 1
+    if (header.length > uint32(dataRead-bytesExtracted))
+d187 2
+a188 2
+    if (header.length < uint32(dataRead-bytesExtracted))
+      BoolErrorReturn(errInvalidPacketFormat);
+d211 1
+a211 1
+
+d259 4
+a262 3
+  case errInvalidPacketFormat:
+    sprintf(buffer, "Error in packet format (packet type was '%lu')\n",
+	    getType());
+d267 1
+a267 1
+    sprintf(buffer, "Packet received out of context (packet type was '%lu)\n", 
+d303 308
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

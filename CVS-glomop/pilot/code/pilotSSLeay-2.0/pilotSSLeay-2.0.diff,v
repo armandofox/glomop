@@ -1,0 +1,1582 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  start:1.1.1.1 iang:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.11.11.19.52.59;  author iang;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.11.11.19.52.59;  author iang;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@diff -urN -x Makefile -x include SSLeay-0.8.1-orig/Configure SSLeay-0.8.1/Configure
+--- SSLeay-0.8.1-orig/Configure	Fri Jul 18 11:15:56 1997
++++ SSLeay-0.8.1/Configure	Tue Nov  4 12:52:34 1997
+@@@@ -70,6 +70,10 @@@@
+ "gcc",		"gcc:-O3::BN_LLONG:::",
+ "cc",		"cc:-O -DNOPROTO -DNOCONST:::::",
+ 
++# For the 3Com PalmPilot
++"palmos", "m68k-palmos-coff-gcc:-O2 -g -fno-builtin::\
++	BN_LLONG SIXTEEN_BITS:asm/m68k-palmos.o:",
++
+ # My solaris setups
+ "solaris-x86-gcc","gcc:-O3 -fomit-frame-pointer -m486 -Wall -DL_ENDIAN:\
+ 	-lsocket -lnsl:BN_LLONG $x86_gcc_des $x86_gcc_opts:asm/x86-sol.o:asm/dx86-sol.o asm/cx86-sol.o:asm/bx86-sol.o",
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/Makefile.ssl SSLeay-0.8.1/Makefile.ssl
+--- SSLeay-0.8.1-orig/Makefile.ssl	Fri Jul 18 12:18:10 1997
++++ SSLeay-0.8.1/Makefile.ssl	Tue Nov  4 18:01:46 1997
+@@@@ -96,12 +96,12 @@@@
+ #BF_ENC= asm/bx86-out.o	# a.out, FreeBSD
+ #BF_ENC= asm/bx86bsdi.o	# bsdi
+ 
+-DIRS=	crypto ssl rsaref apps test tools
++DIRS=	crypto
+ # dirs in crypto to build
+ SDIRS=  \
+-	md sha mdc2 des rc4 rc2 idea bf bn rsa dsa dh \
+-	buffer bio stack lhash rand err objects \
+-	evp pem asn1 x509 conf txt_db pkcs7
++	md sha rand des rc4 rc2 idea bf bn rsa dh
++	# mdc2 dsa buffer bio stack lhash rand err objects \
++	# evp pem asn1 x509 conf txt_db pkcs7
+ 
+ # If you change the INSTALLTOP, make sure to also change the values
+ # in crypto/location.h
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/Makefile.ssl SSLeay-0.8.1/crypto/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/Makefile.ssl	Fri Jul 18 12:18:22 1997
++++ SSLeay-0.8.1/crypto/Makefile.ssl	Tue Nov  4 14:11:55 1997
+@@@@ -49,7 +49,7 @@@@
+ top:
+ 	@@(cd ..; $(MAKE) DIRS=$(DIR) all)
+ 
+-all: date.h lib subdirs
++all: subdirs
+ 
+ date.h: ../Makefile.ssl ../VERSION
+ 	echo "#define DATE	\"`date`\"" >date.h
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bf/Makefile.ssl SSLeay-0.8.1/crypto/bf/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/bf/Makefile.ssl	Fri Jul 18 12:18:25 1997
++++ SSLeay-0.8.1/crypto/bf/Makefile.ssl	Tue Nov  4 12:59:52 1997
+@@@@ -24,7 +24,7 @@@@
+ TEST=bftest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libbf.a
+ LIBSRC=bf_skey.c bf_ecb.c bf_enc.c bf_cbc.c bf_cfb64.c bf_ofb64.c 
+ LIBOBJ=bf_skey.o bf_ecb.o $(BF_ENC) bf_cbc.o bf_cfb64.o bf_ofb64.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bf/bf_pi.h SSLeay-0.8.1/crypto/bf/bf_pi.h
+--- SSLeay-0.8.1-orig/crypto/bf/bf_pi.h	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bf/bf_pi.h	Tue Nov  4 13:00:15 1997
+@@@@ -56,7 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
+-static BF_KEY bf_init= {
++static const BF_KEY bf_init= {
+ 	{
+ 	0x243f6a88L, 0x85a308d3L, 0x13198a2eL, 0x03707344L,
+ 	0xa4093822L, 0x299f31d0L, 0x082efa98L, 0xec4e6c89L,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bf/bf_skey.c SSLeay-0.8.1/crypto/bf/bf_skey.c
+--- SSLeay-0.8.1-orig/crypto/bf/bf_skey.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bf/bf_skey.c	Tue Nov  4 13:00:45 1997
+@@@@ -58,6 +58,7 @@@@
+ 
+ #include <stdio.h>
+ #include <string.h>
++#include "cryptlib.h"
+ #include "blowfish.h"
+ #include "bf_locl.h"
+ #include "bf_pi.h"
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/Makefile.ssl SSLeay-0.8.1/crypto/bn/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/bn/Makefile.ssl	Fri Jul 18 12:18:25 1997
++++ SSLeay-0.8.1/crypto/bn/Makefile.ssl	Tue Nov  4 17:20:52 1997
+@@@@ -13,6 +13,7 @@@@
+ MAKEFILE=	Makefile.ssl
+ BN_MULW=	bn_mulw.o
+ AR=		ar r
++AS=$(CC) -c
+ 
+ CFLAGS= $(INCLUDES) $(CFLAG)
+ 
+@@@@ -22,7 +23,7 @@@@
+ TEST=bntest.c exptest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libbn.a
+ LIBSRC=	bn_add.c bn_div.c bn_exp.c bn_lib.c bn_mod.c bn_mul.c \
+ 	bn_print.c bn_rand.c bn_shift.c bn_sub.c bn_word.c \
+ 	bn_gcd.c bn_prime.c $(ERRC).c bn_sqr.c bn_mulw.c bn_recp.c bn_mont.c
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/asm/m68k-palmos.s SSLeay-0.8.1/crypto/bn/asm/m68k-palmos.s
+--- SSLeay-0.8.1-orig/crypto/bn/asm/m68k-palmos.s	Wed Dec 31 16:00:00 1969
++++ SSLeay-0.8.1/crypto/bn/asm/m68k-palmos.s	Tue Nov  4 12:52:54 1997
+@@@@ -0,0 +1,91 @@@@
++|
++| Hand-coded instructions for the routines in bn_mulw.c
++|
++| Ian Goldberg <ian@@cypherpunks.ca>
++|
++| Last update: 19970822
++|
++.text
++	.even
++.globl bn_mul_add_word
++bn_mul_add_word:
++	movm.l %d3-%d4,-(%sp)
++	move.l 12(%sp),%a1
++	move.l 16(%sp),%a0
++	clr.l %d2
++	move.w 20(%sp),%d2
++	subq.l #1,%d2
++	move.w 22(%sp),%d1
++	clr.l %d0
++	clr.l %d4
++.L10:
++	move.w (%a1),%d4
++	move.w (%a0),%d3
++	add.l %d4,%d0
++	mulu.w %d1,%d3
++	add.l %d3,%d0
++	move.w %d0,(%a1)
++	clr.w %d0
++	swap %d0
++	addq.l #2,%a0
++	addq.l #2,%a1
++	dbra %d2,.L10
++	movm.l (%sp)+,%d3-%d4
++	rts
++	.even
++.globl bn_mul_word
++bn_mul_word:
++	move.l %d3,-(%sp)
++	move.l 8(%sp),%a1
++	move.l 12(%sp),%a0
++	clr.l %d2
++	move.w 16(%sp),%d2
++	subq.l #1,%d2
++	move.w 18(%sp),%d1
++	clr.l %d0
++.L20:
++	move.w (%a0),%d3
++	mulu.w %d1,%d3
++	add.l %d3,%d0
++	move.w %d0,(%a1)
++	clr.w %d0
++	swap %d0
++	addq.l #2,%a0
++	addq.l #2,%a1
++	dbra %d2,.L20
++	move.l (%sp)+,%d3
++	rts
++	.even
++.globl bn_sqr_words
++bn_sqr_words:
++	move.l 4(%sp),%a0
++	move.l 8(%sp),%a1
++	clr.l %d1
++	move.w 12(%sp),%d1
++	subq.l #1,%d1
++.L30:
++	move.w (%a1),%d0
++	mulu.w %d0,%d0
++	move.w %d0,(%a0)
++	swap %d0
++	move.w %d0,2(%a0)
++	addq.l #4,%a0
++	addq.l #2,%a1
++	dbra %d1,.L30
++	rts
++	.even
++.globl bn_div64
++bn_div64:
++	move.l 4(%sp),%d0
++	| We could try to do just the following, but it breaks if the
++	| quotient won't fit in 16 bits.  What is this routine supposed
++	| to return in that case? - Ian
++	|divu 8(%sp),%d0
++	| Instead, we call gcc's 32-bit by 16-bit divide.
++	clr.l %d1
++	move.w 8(%sp),%d1
++	move.l %d1,-(%sp)
++	move.l %d0,-(%sp)
++	bsr.w __udivsi3
++	lea 8(%sp),%sp
++	rts
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn.org SSLeay-0.8.1/crypto/bn/bn.org
+--- SSLeay-0.8.1-orig/crypto/bn/bn.org	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn.org	Tue Nov  4 13:04:20 1997
+@@@@ -292,6 +292,7 @@@@
+ 	BIGNUM *i, int nb, BN_CTX *ctx);
+ int	BN_mod_mul(BIGNUM *ret, BIGNUM *a, BIGNUM *b, BIGNUM *m,
+ 	BN_CTX *ctx);
++#ifndef __palmos__
+ #ifndef WIN16
+ int	BN_print_fp(FILE *fp, BIGNUM *a);
+ #endif
+@@@@ -300,6 +301,7 @@@@
+ #else
+ int	BN_print(char *fp, BIGNUM *a);
+ #endif
++#endif
+ int	BN_reciprocal(BIGNUM *r, BIGNUM *m, BN_CTX *ctx);
+ int	BN_rshift(BIGNUM *r, BIGNUM *a, int n);
+ int	BN_rshift1(BIGNUM *r, BIGNUM *a);
+@@@@ -317,7 +319,9 @@@@
+ 		BIGNUM *rem,void (*callback)(int,int));
+ int	BN_is_prime(BIGNUM *p,int nchecks,void (*callback)(int,int),
+ 		BN_CTX *ctx);
++#ifndef __palmos__
+ void	ERR_load_BN_strings(void );
++#endif
+ 
+ BN_ULONG bn_mul_add_word(BN_ULONG *rp, BN_ULONG *ap, int num, BN_ULONG w);
+ BN_ULONG bn_mul_word(BN_ULONG *rp, BN_ULONG *ap, int num, BN_ULONG w);
+@@@@ -370,10 +374,12 @@@@
+ int	BN_mask_bits();
+ int	BN_mod_mul_reciprocal();
+ int	BN_mod_mul();
++#ifndef __palmos__
+ #ifndef WIN16
+ int	BN_print_fp();
+ #endif
+ int	BN_print();
++#endif
+ int	BN_reciprocal();
+ int	BN_rshift();
+ int	BN_rshift1();
+@@@@ -389,7 +395,9 @@@@
+ BIGNUM *BN_mod_inverse();
+ BIGNUM *BN_generate_prime();
+ int	BN_is_prime();
++#ifndef __palmos__
+ void	ERR_load_BN_strings();
++#endif
+ 
+ BN_ULONG bn_mul_add_word();
+ BN_ULONG bn_mul_word();
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_err.c SSLeay-0.8.1/crypto/bn/bn_err.c
+--- SSLeay-0.8.1-orig/crypto/bn/bn_err.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_err.c	Tue Nov  4 13:12:19 1997
+@@@@ -55,6 +55,7 @@@@
+  * copied and put under another distribution licence
+  * [including the GNU Public Licence.]
+  */
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "err.h"
+ #include "bn.h"
+@@@@ -96,3 +97,4 @@@@
+ 		ERR_load_strings(ERR_LIB_BN,BN_str_reasons);
+ 		}
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_lib.c SSLeay-0.8.1/crypto/bn/bn_lib.c
+--- SSLeay-0.8.1-orig/crypto/bn/bn_lib.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_lib.c	Tue Nov  4 13:17:23 1997
+@@@@ -59,9 +59,46 @@@@
+ #include <stdio.h>
+ #include "cryptlib.h"
+ #include "bn_lcl.h"
++#ifdef __palmos__
++#define sprintf StrPrintF
++#endif
+ 
+ char *BN_version="Big Number part of SSLeay 0.8.1 19-Jul-1997";
+ 
++#ifdef __palmos__
++/* PalmOS doesn't provide a good equivalent to realloc, so we roll our own. */
++static void *PalmOS_realloc(void *ptr, unsigned long size)
++{
++    Err err;
++    unsigned long oldsize, copysize;
++    void *newptr;
++
++    /* Remember the special cases */
++    if (!size) {
++	MemPtrFree(ptr);
++	return NULL;
++    }
++    if (!ptr) {
++	return MemPtrNew(size);
++    }
++
++    /* First try a simple Resize.  This will only work if the ptr doesn't
++       have to move. */
++    err = MemPtrResize(ptr, size);
++    if (!err) return ptr;
++
++    /* Darn.  Let's play a game. */
++    oldsize = MemPtrSize(ptr);
++    copysize = (oldsize < size) ? oldsize : size;
++    newptr = MemPtrNew(size);
++    if (!newptr) return newptr;  /* Note that ptr is still valid */
++
++    MemMove(newptr, ptr, copysize);
++    MemPtrFree(ptr);
++    return newptr;
++}
++#endif
++
+ BIGNUM *BN_value_one()
+ 	{
+ 	static BN_ULONG data_one=1L;
+@@@@ -188,10 +225,14 @@@@
+ 	i=(a->top-1)*BN_BITS2;
+ 	if (l == 0)
+ 		{
++#ifdef __palmos__
++		ErrFatalDisplayIf(1, "BAD TOP VALUE");
++#else
+ #ifndef WIN16
+ 		fprintf(stderr,"BAD TOP VALUE\n");
+ #endif
+ 		abort();
++#endif
+ 		}
+ 	return(i+BN_num_bits_word(l));
+ 	}
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_prime.c SSLeay-0.8.1/crypto/bn/bn_prime.c
+--- SSLeay-0.8.1-orig/crypto/bn/bn_prime.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_prime.c	Tue Nov  4 13:19:20 1997
+@@@@ -57,7 +57,9 @@@@
+  */
+ 
+ #include <stdio.h>
++#ifndef __palmos__
+ #include <time.h>
++#endif
+ #include "cryptlib.h"
+ #include "bn_lcl.h"
+ #include "rand.h"
+@@@@ -270,10 +272,18 @@@@
+ int bits;
+ 	{
+ 	int i;
++#ifndef __palmos__
+ 	MS_STATIC BN_ULONG mods[NUMPRIMES];
++#else
++	BN_ULONG *mods;
++#endif
+ 	BN_ULONG delta;
+ 
+ 	if (!BN_rand(rnd,bits,1,1)) return(0);
++#ifdef __palmos__
++	mods = Malloc(NUMPRIMES*sizeof(BN_ULONG));
++	ErrFatalDisplayIf(!mods, "Malloc failure");
++#endif
+ 	/* we now have a random number 'rand' to test. */
+ 	for (i=1; i<NUMPRIMES; i++)
+ 		mods[i]=BN_mod_word(rnd,(BN_ULONG)primes[i]);
+@@@@ -290,6 +300,9 @@@@
+ 			goto loop;
+ 			}
+ 		}
++#ifdef __palmos__
++	Free(mods);
++#endif
+ 	if (!BN_add_word(rnd,delta)) return(0);
+ 	return(1);
+ 	}
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_prime.h SSLeay-0.8.1/crypto/bn/bn_prime.h
+--- SSLeay-0.8.1-orig/crypto/bn/bn_prime.h	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_prime.h	Tue Nov  4 13:19:47 1997
+@@@@ -61,7 +61,7 @@@@
+ #else
+ #define NUMPRIMES 54
+ #endif
+-static unsigned int primes[NUMPRIMES]=
++static const unsigned int primes[NUMPRIMES]=
+ 	{
+ 	   2,   3,   5,   7,  11,  13,  17,  19,
+ 	  23,  29,  31,  37,  41,  43,  47,  53,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_print.c SSLeay-0.8.1/crypto/bn/bn_print.c
+--- SSLeay-0.8.1-orig/crypto/bn/bn_print.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_print.c	Tue Nov  4 17:21:07 1997
+@@@@ -57,7 +57,11 @@@@
+  */
+ 
+ #include <stdio.h>
++#ifdef __palmos__
++#define NO_BIO
++#else
+ #include <ctype.h>
++#endif
+ #include "cryptlib.h"
+ #include "buffer.h"
+ #include "bn_lcl.h"
+@@@@ -113,8 +117,13 @@@@
+ 
+ 	if (*a == '-') { neg=1; a++; }
+ 
++#ifndef __palmos__
+ 	for (i=0; isxdigit(a[i]); i++)
+ 		;
++#else
++	for (i=0; (a[i]>='0' && a[i]<='9') || (a[i]>='a' && a[i]<='f')
++		|| (a[i]>='A' && a[i]<='F'); i++) ;
++#endif
+ 
+ 	num=i+neg;
+ 	if (bn == NULL) return(num);
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/bn/bn_rand.c SSLeay-0.8.1/crypto/bn/bn_rand.c
+--- SSLeay-0.8.1-orig/crypto/bn/bn_rand.c	Fri Jul 18 11:16:00 1997
++++ SSLeay-0.8.1/crypto/bn/bn_rand.c	Tue Nov  4 13:22:18 1997
+@@@@ -57,7 +57,9 @@@@
+  */
+ 
+ #include <stdio.h>
++#ifndef __palmos__
+ #include <time.h>
++#endif
+ #include "cryptlib.h"
+ #include "bn_lcl.h"
+ #include "rand.h"
+@@@@ -84,7 +86,11 @@@@
+ 		}
+ 
+ 	/* make a random number and set the top and bottom bits */
++#ifdef __palmos__
++	tim = TimGetSeconds();
++#else
+ 	time(&tim);
++#endif
+ 	RAND_seed((unsigned char *)&tim,sizeof(tim));
+ 
+ 	RAND_bytes(buf,(int)bytes);
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/cryptlib.c SSLeay-0.8.1/crypto/cryptlib.c
+--- SSLeay-0.8.1-orig/crypto/cryptlib.c	Fri Jul 18 11:15:57 1997
++++ SSLeay-0.8.1/crypto/cryptlib.c	Tue Nov  4 13:24:08 1997
+@@@@ -62,6 +62,10 @@@@
+ #include "crypto.h"
+ #include "date.h"
+ 
++#ifdef __palmos__
++#define sprintf StrPrintF
++#endif
++
+ /* real #defines in crypto.h, keep these upto date */
+ static char* lock_names[CRYPTO_NUM_LOCKS] =
+ 	{
+@@@@ -142,7 +146,7 @@@@
+ 		ret=(unsigned long)GetCurrentTask();
+ #elif defined(WIN32)
+ 		ret=(unsigned long)GetCurrentThreadId();
+-#elif defined(MSDOS)
++#elif defined(MSDOS) || defined(__palmos__)
+ 		ret=1L;
+ #else
+ 		ret=(unsigned long)getpid();
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/cryptlib.h SSLeay-0.8.1/crypto/cryptlib.h
+--- SSLeay-0.8.1-orig/crypto/cryptlib.h	Fri Jul 18 11:15:57 1997
++++ SSLeay-0.8.1/crypto/cryptlib.h	Tue Nov  4 18:02:56 1997
+@@@@ -70,17 +70,64 @@@@
+ 
+ #include "e_os.h"
+ #include "crypto.h"
++#ifndef __palmos__
+ #include "buffer.h" 
+ #include "bio.h" 
+ #include "err.h"
++#endif
+ 
+ #else
+ 
+ #include "../e_os.h"
+ #include "crypto.h"
++#ifndef __palmos__
+ #include "buffer/buffer.h"
+ #include "bio/bio.h"
+ #include "err/err.h"
++#endif
++#endif
++
++#ifdef __palmos__
++/* We don't use the supplied error lib, as that would require lhash, etc.,
++   so we just do something simple */
++#define ERR_R_FATAL            32      
++#define        ERR_R_MALLOC_FAILURE                    (1|ERR_R_FATAL)
++#define        ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED       (2|ERR_R_FATAL)
++#define        ERR_R_PASSED_NULL_PARAMETER             (3|ERR_R_FATAL)
++#define ERR_LIB_BN             3
++#define ERR_R_BN_LIB   ERR_LIB_BN
++#define BNerr(f,r) ErrFatalDisplayIf(1, \
++    r==ERR_R_MALLOC_FAILURE ? "malloc failure" : \
++    r==BN_R_BAD_RECIPROCAL ? "bad reciprocal" : \
++    r==BN_R_CALLED_WITH_EVEN_MODULUS ? "called with even modulus" : \
++    r==BN_R_DIV_BY_ZERO ? "div by zero" : \
++    r==BN_R_NO_INVERSE ? "no inverse" : \
++    "unknown error");
++#define RSAerr(f,r) ErrFatalDisplayIf(1, \
++    r==ERR_R_MALLOC_FAILURE ? "malloc failure" : \
++    r==ERR_LIB_BN ? "bn lib error" : \
++    r==RSA_R_ALGORITHM_MISMATCH ? "algorithm mismatch" : \
++    r==RSA_R_BAD_E_VALUE ? "bad e value" : \
++    r==RSA_R_BAD_FIXED_HEADER_DECRYPT ? "bad fixed header decrypt" : \
++    r==RSA_R_BAD_PAD_BYTE_COUNT ? "bad pad byte count" : \
++    r==RSA_R_BAD_SIGNATURE ? "bad signature" : \
++    r==RSA_R_BLOCK_TYPE_IS_NOT_01 ? "block type is not 01" : \
++    r==RSA_R_BLOCK_TYPE_IS_NOT_02 ? "block type is not 02" : \
++    r==RSA_R_DATA_GREATER_THAN_MOD_LEN ? "data greater than mod len" : \
++    r==RSA_R_DATA_TOO_LARGE_FOR_KEY_SIZE ? "data too large for key size" : \
++    r==RSA_R_DIGEST_TOO_BIG_FOR_RSA_KEY ? "digest too big for rsa key" : \
++    r==RSA_R_NULL_BEFORE_BLOCK_MISSING ? "null before block missing" : \
++    r==RSA_R_SSLV3_ROLLBACK_ATTACK ? "sslv3 rollback attack" : \
++    r==RSA_R_THE_ASN1_OBJECT_IDENTIFIER_IS_NOT_KNOWN_FOR_THIS_MD ? "the asn1 object identifier is not known for this md" : \
++    r==RSA_R_UNKNOWN_ALGORITHM_TYPE ? "unknown algorithm type" : \
++    r==RSA_R_UNKNOWN_PADDING_TYPE ? "unknown padding type" : \
++    r==RSA_R_WRONG_SIGNATURE_LENGTH ? "wrong signature length" : \
++    "unknown error");
++#define DHerr(f,r) ErrFatalDisplayIf(1, \
++    r==ERR_R_MALLOC_FAILURE ? "malloc failure" : \
++    r==ERR_LIB_BN ? "bn lib error" : \
++    r==DH_R_NO_PRIVATE_VALUE ? "no private value" : \
++    "unknown error");
+ #endif
+ 
+ #define X509_CERT_AREA		"/usr/local/ssl"
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/crypto.h SSLeay-0.8.1/crypto/crypto.h
+--- SSLeay-0.8.1-orig/crypto/crypto.h	Fri Jul 18 11:15:57 1997
++++ SSLeay-0.8.1/crypto/crypto.h	Tue Nov  4 13:25:57 1997
+@@@@ -104,6 +104,14 @@@@
+ 
+ /* The following stuff is not being used, it was not finished for
+  * SSLeay 0.6.0 */
++#ifdef __palmos__
++#define CRYPTO_w_lock(type)
++#define CRYPTO_w_unlock(type)
++#define CRYPTO_r_lock(type)
++#define CRYPTO_r_unlock(type)
++#define CRYPTO_add(addr,amount,type)
++#endif
++
+ #ifndef CRYPTO_w_lock
+ #define CRYPTO_w_lock(type)	\
+ 	CRYPTO_lock(CRYPTO_LOCK|CRYPTO_WRITE,type,__FILE__,__LINE__)
+@@@@ -156,10 +164,17 @@@@
+ #define FreeFunc	CRYPTO_free
+ #define Free(addr)	CRYPTO_free((char *)(addr))
+ #else
++#ifdef __palmos__
++#define Malloc         MemPtrNew
++#define Realloc(a,n)   PalmOS_realloc(a,n)
++#define FreeFunc       MemPtrFree
++#define Free(addr)     MemPtrFree(addr)
++#else
+ #define Malloc		malloc
+ #define Realloc		realloc
+ #define FreeFunc	free
+ #define Free(addr)	free((char *)(addr))
++#endif /* __palmos__ */
+ #endif /* WIN32 || MFUNC */
+ #endif /* MDEBUG */
+ 
+@@@@ -196,8 +211,10 @@@@
+ char *CRYPTO_dbg_realloc(char *addr,int num,char *file,int line);
+ void CRYPTO_dbg_free(char *);
+ char *CRYPTO_dbg_remalloc(char *addr,int num,char *file,int line);
++#ifndef __palmos__
+ #ifndef WIN16
+ void CRYPTO_mem_leaks_fp(FILE *);
++#endif
+ #endif
+ #ifdef HEADER_BIO_H
+ void CRYPTO_mem_leaks(BIO *);
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/cversion.c SSLeay-0.8.1/crypto/cversion.c
+--- SSLeay-0.8.1-orig/crypto/cversion.c	Fri Jul 18 11:15:57 1997
++++ SSLeay-0.8.1/crypto/cversion.c	Tue Nov  4 13:23:36 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include <stdio.h>
+ #include <string.h>
+ #include "cryptlib.h"
+@@@@ -97,3 +98,4 @@@@
+ 	return(SSLEAY_VERSION_NUMBER);
+ 	}
+ 
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/Makefile.ssl SSLeay-0.8.1/crypto/des/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/des/Makefile.ssl	Fri Jul 18 12:18:24 1997
++++ SSLeay-0.8.1/crypto/des/Makefile.ssl	Tue Nov  4 18:03:19 1997
+@@@@ -23,7 +23,7 @@@@
+ TEST=destest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libdes.a
+ LIBSRC=	cbc3_enc.c cbc_cksm.c cbc_enc.c  cfb64enc.c cfb_enc.c  \
+ 	ecb3_enc.c ecb_enc.c  ede_enc.c  enc_read.c enc_writ.c \
+ 	fcrypt.c   ncbc_enc.c ofb64enc.c ofb_enc.c  pcbc_enc.c \
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/des.org SSLeay-0.8.1/crypto/des/des.org
+--- SSLeay-0.8.1-orig/crypto/des/des.org	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/des.org	Tue Nov  4 13:40:32 1997
+@@@@ -71,7 +71,9 @@@@
+ extern "C" {
+ #endif
+ 
++#ifndef __palmos__
+ #include <stdio.h>
++#endif
+ 
+ /* If this is set to 'unsigned int' on a DEC Alpha, this gives about a
+  * %20 speed up (longs are 8 bytes, int's are 4). */
+@@@@ -138,8 +140,19 @@@@
+ #define des_fixup_key_parity des_set_odd_parity
+ #define des_check_key_parity check_parity
+ 
++#ifdef __palmos__
++#ifndef NOPROTO
++int *_des_check_key_ptr(void);
++#else
++int *_des_check_key_ptr();
++#endif
++#define des_check_key (*_des_check_key_ptr())
++#else
+ extern int des_check_key;	/* defaults to false */
++#endif
++#ifndef __palmos__
+ extern int des_rw_mode;		/* defaults to DES_PCBC_MODE */
++#endif
+ 
+ /* The next line is used to disable full ANSI prototypes, if your
+  * compiler has problems with the prototypes, make sure this line always
+@@@@ -187,10 +200,12 @@@@
+ void des_xwhite_in2out(des_cblock (*des_key), des_cblock (*in_white),
+ 	des_cblock (*out_white));
+ 
++#ifndef __palmos__
+ int des_enc_read(int fd,char *buf,int len,des_key_schedule sched,
+ 	des_cblock *iv);
+ int des_enc_write(int fd,char *buf,int len,des_key_schedule sched,
+ 	des_cblock *iv);
++#endif
+ char *des_fcrypt(const char *buf,const char *salt, char *ret);
+ #ifdef PERL5
+ char *des_crypt(const char *buf,const char *salt);
+@@@@ -211,10 +226,12 @@@@
+ 	long length,int out_count,des_cblock *seed);
+ void des_random_seed(des_cblock key);
+ void des_random_key(des_cblock ret);
++#ifndef __palmos__
+ int des_read_password(des_cblock *key,char *prompt,int verify);
+ int des_read_2passwords(des_cblock *key1,des_cblock *key2,
+ 	char *prompt,int verify);
+ int des_read_pw_string(char *buf,int length,char *prompt,int verify);
++#endif
+ void des_set_odd_parity(des_cblock *key);
+ int des_is_weak_key(des_cblock *key);
+ int des_set_key(des_cblock *key,des_key_schedule schedule);
+@@@@ -228,6 +245,7 @@@@
+ int des_read_pw(char *buf, char *buff, int size, char *prompt, int verify);
+ 
+ /* Extra functions from Mark Murray <mark@@grondar.za> */
++#ifndef __palmos__
+ void des_cblock_print_file(des_cblock *cb, FILE *fp);
+ /* The following functions are not in the normal unix build or the
+  * SSLeay build.  When using the SSLeay build, use RAND_seed()
+@@@@ -237,6 +255,7 @@@@
+ void des_set_random_generator_seed(des_cblock *key);
+ void des_set_sequence_number(des_cblock new_sequence_number);
+ void des_generate_random_block(des_cblock *block);
++#endif
+ 
+ #else
+ 
+@@@@ -256,8 +275,10 @@@@
+ void des_encrypt3();
+ void des_decrypt3();
+ void des_ede3_cbc_encrypt();
++#ifndef __palmos__
+ int des_enc_read();
+ int des_enc_write();
++#endif
+ char *des_fcrypt();
+ #ifdef PERL5
+ char *des_crypt();
+@@@@ -269,9 +290,11 @@@@
+ DES_LONG des_quad_cksum();
+ void des_random_seed();
+ void des_random_key();
++#ifndef __palmos__
+ int des_read_password();
+ int des_read_2passwords();
+ int des_read_pw_string();
++#endif
+ void des_set_odd_parity();
+ int des_is_weak_key();
+ int des_set_key();
+@@@@ -284,6 +307,7 @@@@
+ void des_xwhite_in2out();
+ 
+ /* Extra functions from Mark Murray <mark@@grondar.za> */
++#ifndef __palmos__
+ void des_cblock_print_file();
+ /* The following functions are not in the normal unix build or the
+  * SSLeay build.  When using the SSLeay build, use RAND_seed()
+@@@@ -294,6 +318,7 @@@@
+ void des_set_random_generator_seed();
+ void des_set_sequence_number();
+ void des_generate_random_block();
++#endif
+ #endif
+ 
+ #endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/des_enc.c SSLeay-0.8.1/crypto/des/des_enc.c
+--- SSLeay-0.8.1-orig/crypto/des/des_enc.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/des_enc.c	Tue Nov  4 13:30:35 1997
+@@@@ -57,6 +57,7 @@@@
+  */
+ 
+ #include "des_locl.h"
++#include "spr.h"
+ 
+ void des_encrypt(data, ks, enc)
+ DES_LONG *data;
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/des_locl.org SSLeay-0.8.1/crypto/des/des_locl.org
+--- SSLeay-0.8.1-orig/crypto/des/des_locl.org	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/des_locl.org	Thu Nov  6 05:31:04 1997
+@@@@ -67,6 +67,8 @@@@
+ #ifndef HEADER_DES_LOCL_H
+ #define HEADER_DES_LOCL_H
+ 
++#include "cryptlib.h"
++
+ #if defined(WIN32) || defined(WIN16)
+ #ifndef MSDOS
+ #define MSDOS
+@@@@ -75,9 +77,11 @@@@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifndef __palmos__
+ #ifndef MSDOS
+ #include <unistd.h>
+ #endif
++#endif
+ #include "des.h"
+ 
+ #ifndef DES_DEFAULT_OPTIONS
+@@@@ -145,6 +149,8 @@@@
+   #define DES_PTR
+   #define DES_RISC1
+   #define DES_UNROLL
++#elif defined( __palmos__ )
++  #define DES_PTR
+ #endif /* Systems-specific speed defines */
+ #endif
+ 
+@@@@ -504,7 +510,11 @@@@
+ 	PERM_OP(l,r,tt, 4,0x0f0f0f0fL); \
+ 	}
+ 
++#ifndef __palmos__
+ extern const DES_LONG des_SPtrans[8][64];
++#else
++extern const DES_LONG *des_SPtrans;
++#endif
+ 
+ #ifndef NOPROTO
+ void fcrypt_body(DES_LONG *out,des_key_schedule ks,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/ecb_enc.c SSLeay-0.8.1/crypto/des/ecb_enc.c
+--- SSLeay-0.8.1-orig/crypto/des/ecb_enc.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/ecb_enc.c	Tue Nov  4 13:34:17 1997
+@@@@ -57,7 +57,9 @@@@
+  */
+ 
+ #include "des_locl.h"
+-#include "spr.h"
++#ifdef __palmos__
++#define sprintf StrPrintF
++#endif
+ 
+ char *libdes_version="libdes v 3.24 - 20-Apr-1996 - eay";
+ char *DES_version="DES part of SSLeay 0.8.1 19-Jul-1997";
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/enc_read.c SSLeay-0.8.1/crypto/des/enc_read.c
+--- SSLeay-0.8.1-orig/crypto/des/enc_read.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/enc_read.c	Tue Nov  4 13:34:34 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include <stdio.h>
+ #include <errno.h>
+ #include "des_locl.h"
+@@@@ -212,3 +213,4 @@@@
+ 	return((int)num);
+ 	}
+ 
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/enc_writ.c SSLeay-0.8.1/crypto/des/enc_writ.c
+--- SSLeay-0.8.1-orig/crypto/des/enc_writ.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/enc_writ.c	Tue Nov  4 13:34:50 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include <errno.h>
+ #include <time.h>
+ #include "des_locl.h"
+@@@@ -158,3 +159,4 @@@@
+ 
+ 	return(len);
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/rand_key.c SSLeay-0.8.1/crypto/des/rand_key.c
+--- SSLeay-0.8.1-orig/crypto/des/rand_key.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/rand_key.c	Tue Nov  4 13:35:54 1997
+@@@@ -57,7 +57,9 @@@@
+  */
+ 
+ #include "des_locl.h"
++#ifndef __palmos__
+ #include <time.h>
++#endif
+ 
+ static int seed=0;
+ static des_cblock init;
+@@@@ -81,7 +83,7 @@@@
+ 	DES_LONG t;
+ 	int i;
+ 
+-#ifdef MSDOS
++#if defined(MSDOS) || defined(__palmos__)
+ 	pid=1;
+ #else
+ 	if (!pid) pid=getpid();
+@@@@ -96,7 +98,11 @@@@
+ 			}
+ 		seed=0;
+ 		}
++#ifdef __palmos__
++	t=(DES_LONG)TimGetSeconds();
++#else
+ 	t=(DES_LONG)time(NULL);
++#endif
+ 	l2c(t,p);
+ 	t=(DES_LONG)((pid)|((c++)<<16));
+ 	l2c(t,p);
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/read2pwd.c SSLeay-0.8.1/crypto/des/read2pwd.c
+--- SSLeay-0.8.1-orig/crypto/des/read2pwd.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/read2pwd.c	Tue Nov  4 14:17:58 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include "des_locl.h"
+ 
+ int des_read_password(key, prompt, verify)
+@@@@ -88,3 +89,4 @@@@
+ 	memset(buff,0,BUFSIZ);
+ 	return(ok);
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/read_pwd.c SSLeay-0.8.1/crypto/des/read_pwd.c
+--- SSLeay-0.8.1-orig/crypto/des/read_pwd.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/read_pwd.c	Tue Nov  4 13:36:15 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #ifdef WIN16TTY
+ #undef WIN16
+ #undef _WINDOWS
+@@@@ -416,4 +417,5 @@@@
+ 		}
+ 	return(strlen(buf));
+ 	}
++#endif
+ #endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/set_key.c SSLeay-0.8.1/crypto/des/set_key.c
+--- SSLeay-0.8.1-orig/crypto/des/set_key.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/set_key.c	Tue Nov  4 13:41:57 1997
+@@@@ -63,6 +63,7 @@@@
+  * 1.1 added norm_expand_bits
+  * 1.0 First working version
+  */
++#include "cryptlib.h"
+ #include "des_locl.h"
+ #include "podd.h"
+ #include "sk.h"
+@@@@ -73,7 +74,13 @@@@
+ static int check_parity();
+ #endif
+ 
++#ifdef __palmos__
++/* We can't export global data, so we use this */
++static int _des_check_key_var = 0;
++int *_des_check_key_ptr(void) { return &_des_check_key_var; }
++#else
+ int des_check_key=0;
++#endif
+ 
+ void des_set_odd_parity(key)
+ des_cblock (*key);
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/spr.h SSLeay-0.8.1/crypto/des/spr.h
+--- SSLeay-0.8.1-orig/crypto/des/spr.h	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/spr.h	Tue Nov  4 13:43:27 1997
+@@@@ -56,7 +56,11 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifdef __palmos__
++static const DES_LONG des_SPtrans_table[8][64]={
++#else
+ const DES_LONG des_SPtrans[8][64]={
++#endif
+ {
+ /* nibble 0 */
+ 0x02080800L, 0x00080000L, 0x02000002L, 0x02080802L,
+@@@@ -202,3 +206,12 @@@@
+ 0x00000080L, 0x20820000L, 0x00820080L, 0x00000000L,
+ 0x20000000L, 0x20800080L, 0x00020000L, 0x00820080L,
+ }};
++#ifdef __palmos__
++/* We need to do this because we want the table to be in the text segment,
++   but the pointer to it needs to be in the data segment.  This should work
++   fine, as long as we make sure DES_PTR is defined.  - Ian */
++#ifndef DES_PTR
++#error "PalmOS requires DES_PTR"
++#endif
++const DES_LONG *des_SPtrans = (DES_LONG *)des_SPtrans_table;
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/supp.c SSLeay-0.8.1/crypto/des/supp.c
+--- SSLeay-0.8.1-orig/crypto/des/supp.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/supp.c	Tue Nov  4 13:43:40 1997
+@@@@ -90,6 +90,7 @@@@
+  * $Id: pilotSSLeay-2.0.diff,v 1.1.1.1 1997/11/06 16:29:35 iang Exp $
+  */
+ 
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "des_locl.h"
+ 
+@@@@ -107,3 +108,4 @@@@
+ 	}
+ 	fprintf(fp, " }");
+ }
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/des/xcbc_enc.c SSLeay-0.8.1/crypto/des/xcbc_enc.c
+--- SSLeay-0.8.1-orig/crypto/des/xcbc_enc.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/des/xcbc_enc.c	Tue Nov  4 13:43:56 1997
+@@@@ -60,7 +60,7 @@@@
+ 
+ /* RSA's DESX */
+ 
+-static unsigned char desx_white_in2out[256]={
++static const unsigned char desx_white_in2out[256]={
+ 0xBD,0x56,0xEA,0xF2,0xA2,0xF1,0xAC,0x2A,0xB0,0x93,0xD1,0x9C,0x1B,0x33,0xFD,0xD0,
+ 0x30,0x04,0xB6,0xDC,0x7D,0xDF,0x32,0x4B,0xF7,0xCB,0x45,0x9B,0x31,0xBB,0x21,0x5A,
+ 0x41,0x9F,0xE1,0xD9,0x4A,0x4D,0x9E,0xDA,0xA0,0x68,0x2C,0xC3,0x27,0x5F,0x80,0x36,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/dh/Makefile.ssl SSLeay-0.8.1/crypto/dh/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/dh/Makefile.ssl	Fri Jul 18 12:18:27 1997
++++ SSLeay-0.8.1/crypto/dh/Makefile.ssl	Tue Nov  4 13:44:55 1997
+@@@@ -21,7 +21,7 @@@@
+ TEST= dhtest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libdh.a
+ LIBSRC= dh_gen.c dh_key.c dh_lib.c dh_check.c $(ERRC).c
+ LIBOBJ= dh_gen.o dh_key.o dh_lib.o dh_check.o $(ERRC).o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/dh/dh.h SSLeay-0.8.1/crypto/dh/dh.h
+--- SSLeay-0.8.1-orig/crypto/dh/dh.h	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/dh/dh.h	Tue Nov  4 13:46:02 1997
+@@@@ -90,6 +90,7 @@@@
+ #define DH_UNABLE_TO_CHECK_GENERATOR	0x04
+ #define DH_NOT_SUITABLE_GENERATOR	0x08
+ 
++#ifndef __palmos__
+ #define DHparams_dup(x) (DH *)ASN1_dup((int (*)())i2d_DHparams, \
+ 		(char *(*)())d2i_DHparams,(char *)(x))
+ #define d2i_DHparams_fp(fp,x) (DH *)ASN1_d2i_fp((char *(*)())DH_new, \
+@@@@ -100,6 +101,7 @@@@
+ 		(char *(*)())d2i_DHparams,(bp),(unsigned char **)(x))
+ #define i2d_DHparams_bio(bp,x) ASN1_i2d_bio(i2d_DHparams,(bp), \
+ 		(unsigned char *)(x))
++#endif
+ 
+ #ifndef NOPROTO
+ DH *	DH_new(void);
+@@@@ -110,6 +112,7 @@@@
+ int	DH_check(DH *dh,int *codes);
+ int	DH_generate_key(DH *dh);
+ int	DH_compute_key(unsigned char *key,BIGNUM *pub_key,DH *dh);
++#ifndef __palmos__
+ DH *	d2i_DHparams(DH **a,unsigned char **pp, long length);
+ int	i2d_DHparams(DH *a,unsigned char **pp);
+ #ifndef WIN16
+@@@@ -121,6 +124,7 @@@@
+ int	DHparams_print(char *bp, DH *x);
+ #endif
+ void	ERR_load_DH_strings(void );
++#endif
+ 
+ #else
+ 
+@@@@ -131,6 +135,7 @@@@
+ int	DH_check();
+ int	DH_generate_key();
+ int	DH_compute_key();
++#ifndef __palmos__
+ DH *	d2i_DHparams();
+ int	i2d_DHparams();
+ #ifndef WIN16
+@@@@ -138,6 +143,7 @@@@
+ #endif
+ int	DHparams_print();
+ void	ERR_load_DH_strings();
++#endif
+ 
+ #endif
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/dh/dh_err.c SSLeay-0.8.1/crypto/dh/dh_err.c
+--- SSLeay-0.8.1-orig/crypto/dh/dh_err.c	Fri Jul 18 11:16:01 1997
++++ SSLeay-0.8.1/crypto/dh/dh_err.c	Tue Nov  4 13:46:19 1997
+@@@@ -55,6 +55,7 @@@@
+  * copied and put under another distribution licence
+  * [including the GNU Public Licence.]
+  */
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "err.h"
+ #include "dh.h"
+@@@@ -88,3 +89,4 @@@@
+ 		ERR_load_strings(ERR_LIB_DH,DH_str_reasons);
+ 		}
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/idea/Makefile.ssl SSLeay-0.8.1/crypto/idea/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/idea/Makefile.ssl	Fri Jul 18 12:18:25 1997
++++ SSLeay-0.8.1/crypto/idea/Makefile.ssl	Tue Nov  4 13:46:43 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST=ideatest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libidea.a
+ LIBSRC=i_cbc.c i_cfb64.c i_ofb64.c i_ecb.c i_skey.c
+ LIBOBJ=i_cbc.o i_cfb64.o i_ofb64.o i_ecb.o i_skey.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/md/Makefile.ssl SSLeay-0.8.1/crypto/md/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/md/Makefile.ssl	Fri Jul 18 12:18:23 1997
++++ SSLeay-0.8.1/crypto/md/Makefile.ssl	Tue Nov  4 13:47:25 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST=md2test.c md5test.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libmd.a
+ LIBSRC=md2_dgst.c md5_dgst.c md2_one.c md5_one.c
+ LIBOBJ=md2_dgst.o md5_dgst.o md2_one.o md5_one.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/md/md2_dgst.c SSLeay-0.8.1/crypto/md/md2_dgst.c
+--- SSLeay-0.8.1-orig/crypto/md/md2_dgst.c	Fri Jul 18 11:16:09 1997
++++ SSLeay-0.8.1/crypto/md/md2_dgst.c	Tue Nov  4 13:47:52 1997
+@@@@ -59,6 +59,7 @@@@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "cryptlib.h"
+ #include "md2.h"
+ 
+ char *MD2_version="MD2 part of SSLeay 0.8.1 19-Jul-1997";
+@@@@ -76,7 +77,7 @@@@
+ 
+ /* The magic S table - I have converted it to hex since it is
+  * basicaly just a random byte string. */
+-static MD2_INT S[256]={
++static const MD2_INT S[256]={
+ 	0x29, 0x2E, 0x43, 0xC9, 0xA2, 0xD8, 0x7C, 0x01,
+ 	0x3D, 0x36, 0x54, 0xA1, 0xEC, 0xF0, 0x06, 0x13,
+ 	0x62, 0xA7, 0x05, 0xF3, 0xC0, 0xC7, 0x73, 0x8C,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rand/Makefile.ssl SSLeay-0.8.1/crypto/rand/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/rand/Makefile.ssl	Fri Jul 18 12:18:28 1997
++++ SSLeay-0.8.1/crypto/rand/Makefile.ssl	Tue Nov  4 13:48:53 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST= randtest.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/librand.a
+ LIBSRC=md_rand.c randfile.c
+ LIBOBJ=md_rand.o randfile.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rand/md_rand.c SSLeay-0.8.1/crypto/rand/md_rand.c
+--- SSLeay-0.8.1-orig/crypto/rand/md_rand.c	Fri Jul 18 11:16:09 1997
++++ SSLeay-0.8.1/crypto/rand/md_rand.c	Tue Nov  4 17:22:38 1997
+@@@@ -59,8 +59,9 @@@@
+ #include <stdio.h>
+ #include "cryptlib.h"
+ #include <sys/types.h>
++#ifndef __palmos__
+ #include <time.h>
+-
++#endif
+ 
+ #if !defined(USE_MD5_RAND) && !defined(USE_SHA1_RAND) && !defined(USE_MDC2_RAND) && !defined(USE_MD2_RAND)
+ #ifndef NO_MD5
+@@@@ -227,6 +228,7 @@@@
+ 		/* put in some default random data, we need more than
+ 		 * just this */
+ 		RAND_seed((unsigned char *)&m,sizeof(m));
++#ifndef __palmos__
+ #ifndef MSDOS
+ 		l=getpid();
+ 		RAND_seed((unsigned char *)&l,sizeof(l));
+@@@@ -235,6 +237,12 @@@@
+ #endif
+ 		l=time(NULL);
+ 		RAND_seed((unsigned char *)&l,sizeof(l));
++#else
++		l=TimGetTicks();
++		RAND_seed((unsigned char *)&l,sizeof(l));
++		l=TimGetSeconds();
++		RAND_seed((unsigned char *)&l,sizeof(l));
++#endif
+ 
+ #ifdef DEVRANDOM
+ 		/* 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rand/rand.h SSLeay-0.8.1/crypto/rand/rand.h
+--- SSLeay-0.8.1-orig/crypto/rand/rand.h	Fri Jul 18 11:16:09 1997
++++ SSLeay-0.8.1/crypto/rand/rand.h	Tue Nov  4 19:19:57 1997
+@@@@ -70,9 +70,13 @@@@
+ int  RAND_load_file(char *file,long max_bytes);
+ int  RAND_write_file(char *file);
+ char *RAND_file_name(char *file,int num);
++#ifdef __palmos__
++int  RAND_load_db(LocalID lid, long bytes);
++#else
+ #ifdef WINDOWS
+ void RAND_screen(void);
+ #endif
++#endif
+ #else
+ void RAND_cleanup();
+ void RAND_bytes();
+@@@@ -80,8 +84,12 @@@@
+ int  RAND_load_file();
+ int  RAND_write_file();
+ char *RAND_file_name();
++#ifdef __palmos__
++int  RAND_load_db(LocalID lid, long bytes);
++#else
+ #ifdef WINDOWS
+ void RAND_screen();
++#endif
+ #endif
+ #endif
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rand/randfile.c SSLeay-0.8.1/crypto/rand/randfile.c
+--- SSLeay-0.8.1-orig/crypto/rand/randfile.c	Fri Jul 18 11:16:09 1997
++++ SSLeay-0.8.1/crypto/rand/randfile.c	Wed Nov  5 07:01:57 1997
+@@@@ -56,6 +56,168 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifdef __palmos__
++#include "cryptlib.h"
++#define RAND_DATA 1024 /* The amount of data to save, in bytes */
++
++struct dbinfo {
++    UInt cardNo;
++    LocalID dbID;
++    Char name[32];
++    UInt attributes;
++    UInt version;
++    ULong crDate;
++    ULong modDate;
++    ULong bckUpDate;
++    ULong modNum;
++    LocalID appInfoID;
++    LocalID sortInfoID;
++    ULong type;
++    ULong creator;
++};
++
++/* Use the contents of a database to seed the PRNG */
++int RAND_load_db(LocalID lid, long bytes)
++{
++    long ret = 0;
++    struct dbinfo di;
++    Err err;
++    UInt index, numrecs;
++    DmOpenRef db;
++    VoidHand rhand;
++    unsigned char *rptr;
++    ULong rsize;
++    long len;
++
++    /* Do a "stat" */
++    di.cardNo = 0;
++    di.dbID = lid;
++    DmDatabaseInfo(di.cardNo, di.dbID, di.name, &di.attributes, &di.version,
++		    &di.crDate, &di.modDate, &di.bckUpDate, &di.modNum,
++		    &di.appInfoID, &di.sortInfoID, &di.type, &di.creator);
++    len = bytes - ret;
++    if (len > sizeof(di)) len = sizeof(di);
++    RAND_seed((unsigned char *)&di, len);
++    ret += len;
++
++    if (di.attributes & dmHdrAttrResDB) {
++	/* If it's a resource database, read the resources */
++	db = DmOpenDatabase(0, lid, dmModeReadOnly);
++	if (db) {
++	    numrecs = DmNumResources(db);
++	    for(index=0; index < numrecs && ret < bytes; ++index) {
++		ULong type;
++		Int id;
++		err = DmResourceInfo(db, index, &type, &id, NULL);
++		if (!err) {
++		    rhand = DmGet1Resource(type, id);
++		    if (rhand) {
++			rptr = MemHandleLock(rhand);
++			rsize = MemHandleSize(rhand);
++			len = bytes - ret;
++			if (len > rsize) len = rsize;
++			RAND_seed(rptr, len);
++			MemHandleUnlock(rhand);
++			ret += len;
++		    }
++		    DmReleaseResource(rhand);
++		}
++	    }
++	    DmCloseDatabase(db);
++	}
++    } else {
++	/* If it's not a resource database, read the records */
++	db = DmOpenDatabase(0, lid, dmModeReadOnly);
++	if (db) {
++	    numrecs = DmNumRecords(db);
++	    for(index=0; index < numrecs && ret < bytes; ++index) {
++		rhand = DmQueryRecord(db, index);
++		if (rhand) {
++		    rptr = MemHandleLock(rhand);
++		    rsize = MemHandleSize(rhand);
++		    len = bytes - ret;
++		    if (len > rsize) len = rsize;
++		    RAND_seed(rptr, len);
++		    MemHandleUnlock(rhand);
++		    ret += len;
++		}
++	    }
++	    DmCloseDatabase(db);
++	}
++    }
++    return (int)ret;
++}
++
++int RAND_load_file(char *file, long bytes)
++{
++    int ret = 0;
++    LocalID lid = DmFindDatabase(0, file);
++    if (lid) {
++	ret = RAND_load_db(lid, bytes);
++    }
++    return ret;
++}
++
++int RAND_write_file(char *file)
++{
++    MS_STATIC unsigned char buf[32];
++    DmOpenRef db;
++    ULong numrec;
++    Err err;
++    VoidHand rhand;
++    unsigned char *rptr;
++    int ret;
++    LocalID lid = DmFindDatabase(0, file);
++    if (!lid) {
++	/* Create it then */
++	err = DmCreateDatabase(0, file, 'CrRN', 'RAND', false);
++	if (!err) {
++	    lid = DmFindDatabase(0, file);
++	}
++    }
++    ErrFatalDisplayIf(!lid, "Cannot save RAND state: no database");
++    db = DmOpenDatabase(0, lid, dmModeReadWrite);
++    ErrFatalDisplayIf(!db, "Cannot save RAND state: cannot write");
++    err = DmDatabaseSize(0, lid, &numrec, NULL, NULL);
++    ErrFatalDisplayIf(err, "Cannot save RAND state: cannot get database size");
++    if (numrec == 0) {
++	/* Create a new record */
++	UInt at = 0;
++	rhand = DmNewRecord(db, &at, RAND_DATA);
++    } else {
++	/* Resize the existing first record */
++	rhand = DmResizeRecord(db, 0, RAND_DATA);
++    }
++    ErrFatalDisplayIf(!rhand, "Cannot save RAND state: cannot write record");
++    rptr = MemHandleLock(rhand);
++    ret = 0;
++    while(ret < RAND_DATA) {
++	int bleft = RAND_DATA - ret;
++	if (bleft > 32) bleft = 32;
++	RAND_bytes(buf, bleft);
++	DmWrite(rptr, ret, buf, bleft);
++	ret += bleft;
++    }
++    MemHandleUnlock(rhand);
++    DmReleaseRecord(db, 0, true);
++    DmCloseDatabase(db);
++    return ret;
++}
++
++char *RAND_file_name(char *buf,int size)
++{
++    static const char *defname = "RAND Library saved state";
++    if (buf && size) {
++	if (size < StrLen(defname)+1) {
++	    MemMove(buf, (char *)defname, size-1);
++	    buf[size] = '\0';
++	} else {
++	    StrCopy(buf, defname);
++	}
++    }
++    return buf ? buf : (char *)defname;
++}
++#else
+ #include <stdio.h>
+ #include "cryptlib.h"
+ #include <sys/stat.h>
+@@@@ -164,3 +326,4 @@@@
+ 		}
+ 	return(ret);
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rc2/Makefile.ssl SSLeay-0.8.1/crypto/rc2/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/rc2/Makefile.ssl	Fri Jul 18 12:18:24 1997
++++ SSLeay-0.8.1/crypto/rc2/Makefile.ssl	Tue Nov  4 13:52:42 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST=rc2test.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/librc2.a
+ LIBSRC=rc2_ecb.c rc2_skey.c rc2_cbc.c rc2cfb64.c rc2ofb64.c
+ LIBOBJ=rc2_ecb.o rc2_skey.o rc2_cbc.o rc2cfb64.o rc2ofb64.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rc2/rc2_skey.c SSLeay-0.8.1/crypto/rc2/rc2_skey.c
+--- SSLeay-0.8.1-orig/crypto/rc2/rc2_skey.c	Fri Jul 18 11:16:09 1997
++++ SSLeay-0.8.1/crypto/rc2/rc2_skey.c	Tue Nov  4 13:52:54 1997
+@@@@ -59,7 +59,7 @@@@
+ #include "rc2.h"
+ #include "rc2_locl.h"
+ 
+-static unsigned char key_table[256]={
++static const unsigned char key_table[256]={
+ 	0xd9,0x78,0xf9,0xc4,0x19,0xdd,0xb5,0xed,0x28,0xe9,0xfd,0x79,
+ 	0x4a,0xa0,0xd8,0x9d,0xc6,0x7e,0x37,0x83,0x2b,0x76,0x53,0x8e,
+ 	0x62,0x4c,0x64,0x88,0x44,0x8b,0xfb,0xa2,0x17,0x9a,0x59,0xf5,
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rc4/Makefile.ssl SSLeay-0.8.1/crypto/rc4/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/rc4/Makefile.ssl	Fri Jul 18 12:18:24 1997
++++ SSLeay-0.8.1/crypto/rc4/Makefile.ssl	Tue Nov  4 13:53:04 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST=rc4test.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/librc4.a
+ LIBSRC=rc4_enc.c
+ LIBOBJ=rc4_enc.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/Makefile.ssl SSLeay-0.8.1/crypto/rsa/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/rsa/Makefile.ssl	Fri Jul 18 12:18:26 1997
++++ SSLeay-0.8.1/crypto/rsa/Makefile.ssl	Tue Nov  4 13:53:17 1997
+@@@@ -21,7 +21,7 @@@@
+ TEST=
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/librsa.a
+ LIBSRC= rsa_enc.c rsa_gen.c rsa_lib.c rsa_sign.c rsa_saos.c $(ERRC).c
+ LIBOBJ= rsa_enc.o rsa_gen.o rsa_lib.o rsa_sign.o rsa_saos.o $(ERRC).o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa.h SSLeay-0.8.1/crypto/rsa/rsa.h
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa.h	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa.h	Tue Nov  4 13:55:23 1997
+@@@@ -129,6 +129,7 @@@@
+ /* these are the actual SSLeay RSA functions */
+ RSA_METHOD *RSA_PKCS1_SSLeay(void);
+ 
++#ifndef __palmos__
+ void	ERR_load_RSA_strings(void );
+ 
+ RSA *	d2i_RSAPublicKey(RSA **a, unsigned char **pp, long length);
+@@@@ -159,6 +160,7 @@@@
+ 	unsigned char *sigret, unsigned int *siglen, RSA *rsa);
+ int RSA_verify_ASN1_OCTET_STRING(int type, unsigned char *m, unsigned int m_len,
+ 	unsigned char *sigbuf, unsigned int siglen, RSA *rsa);
++#endif
+ 
+ #else
+ 
+@@@@ -177,6 +179,7 @@@@
+ /* RSA_METHOD *RSA_PKCS1_RSAref(); */
+ RSA_METHOD *RSA_PKCS1_SSLeay();
+ 
++#ifndef __palmos__
+ void	ERR_load_RSA_strings();
+ 
+ RSA *	d2i_RSAPublicKey();
+@@@@ -197,6 +200,7 @@@@
+ 
+ int RSA_sign_ASN1_OCTET_STRING();
+ int RSA_verify_ASN1_OCTET_STRING();
++#endif
+ 
+ 
+ #endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa_err.c SSLeay-0.8.1/crypto/rsa/rsa_err.c
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa_err.c	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa_err.c	Tue Nov  4 13:56:08 1997
+@@@@ -55,6 +55,7 @@@@
+  * copied and put under another distribution licence
+  * [including the GNU Public Licence.]
+  */
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "err.h"
+ #include "rsa.h"
+@@@@ -109,3 +110,4 @@@@
+ 		ERR_load_strings(ERR_LIB_RSA,RSA_str_reasons);
+ 		}
+ 	}
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa_gen.c SSLeay-0.8.1/crypto/rsa/rsa_gen.c
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa_gen.c	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa_gen.c	Tue Nov  4 13:56:41 1997
+@@@@ -57,7 +57,9 @@@@
+  */
+ 
+ #include <stdio.h>
++#ifndef __palmos__
+ #include <time.h>
++#endif
+ #include "cryptlib.h"
+ #include "bn.h"
+ #include "rsa.h"
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa_lib.c SSLeay-0.8.1/crypto/rsa/rsa_lib.c
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa_lib.c	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa_lib.c	Tue Nov  4 13:57:35 1997
+@@@@ -128,7 +128,11 @@@@
+ 
+ 	if (r == NULL) return;
+ 
++#ifndef __palmos__
+ 	i=CRYPTO_add(&r->references,-1,CRYPTO_LOCK_RSA);
++#else
++	i = --(r->references);
++#endif
+ 	if (i > 0) return;
+ #ifdef REF_CHECK
+ 	if (i < 0)
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa_saos.c SSLeay-0.8.1/crypto/rsa/rsa_saos.c
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa_saos.c	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa_saos.c	Tue Nov  4 13:58:15 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "cryptlib.h"
+ #include "bn.h"
+@@@@ -151,3 +152,4 @@@@
+ 	return(ret);
+ 	}
+ 
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/rsa/rsa_sign.c SSLeay-0.8.1/crypto/rsa/rsa_sign.c
+--- SSLeay-0.8.1-orig/crypto/rsa/rsa_sign.c	Fri Jul 18 11:16:10 1997
++++ SSLeay-0.8.1/crypto/rsa/rsa_sign.c	Tue Nov  4 17:23:04 1997
+@@@@ -56,6 +56,7 @@@@
+  * [including the GNU Public Licence.]
+  */
+ 
++#ifndef __palmos__
+ #include <stdio.h>
+ #include "cryptlib.h"
+ #include "bn.h"
+@@@@ -194,3 +195,4 @@@@
+ 	return(ret);
+ 	}
+ 
++#endif
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/crypto/sha/Makefile.ssl SSLeay-0.8.1/crypto/sha/Makefile.ssl
+--- SSLeay-0.8.1-orig/crypto/sha/Makefile.ssl	Fri Jul 18 12:18:23 1997
++++ SSLeay-0.8.1/crypto/sha/Makefile.ssl	Tue Nov  4 13:58:44 1997
+@@@@ -19,7 +19,7 @@@@
+ TEST=shatest.c sha1test.c
+ APPS=
+ 
+-LIB=$(TOP)/libcrypto.a
++LIB=$(TOP)/libsha.a
+ LIBSRC=sha_dgst.c sha1dgst.c sha_one.c sha1_one.c
+ LIBOBJ=sha_dgst.o sha1dgst.o sha_one.o sha1_one.o
+ 
+diff -urN -x Makefile -x include SSLeay-0.8.1-orig/e_os.h SSLeay-0.8.1/e_os.h
+--- SSLeay-0.8.1-orig/e_os.h	Fri Jul 18 11:15:56 1997
++++ SSLeay-0.8.1/e_os.h	Tue Nov  4 12:56:45 1997
+@@@@ -76,7 +76,7 @@@@
+  ********************************************************************/
+ /* The following is used becaue of the small stack in some
+  * Microsoft operating systems */
+-#if defined(WIN16) || defined(MSDOS)
++#if defined(WIN16) || defined(MSDOS) || defined(__palmos__)
+ #  define MS_STATIC	static
+ #else
+ #  define MS_STATIC
+@@@@ -146,7 +146,15 @@@@
+ #  ifdef VMS
+ #    include <unixlib.h>
+ #  else
+-#    include <unistd.h>
++#    ifdef __palmos__
++#      include <Pilot.h>
++#      define memcpy(a,b,c) MemMove(a,b,c)
++#      define memset(a,b,c) MemSet(a,c,b)
++#      define memcmp(a,b,c) MemCmp(a,b,c)
++#      define strlen StrLen
++#    else
++#      include <unistd.h>
++#    endif
+ #  endif
+ 
+ #  define SSLEAY_CONF	"ssleay.cnf"
+@
+
+
+1.1.1.1
+log
+@pilotSSLeay-2.0
+@
+text
+@@

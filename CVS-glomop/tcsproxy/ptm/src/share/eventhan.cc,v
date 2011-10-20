@@ -1,0 +1,1192 @@
+head	1.13;
+access;
+symbols
+	Yatin-final:1.12.2.1
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.10
+	fox-dev:1.10
+	ptm-ng:1.10
+	transend-beta-latest:1.10
+	Aggregators:1.10
+	NoAggregators:1.10
+	iang:1.10.0.4
+	transend-beta:1.10.0.2
+	SOSP:1.10
+	stable_ptm:1.8
+	merged_preintegrate:1.7
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@// @;
+
+
+1.13
+date	98.01.16.22.16.30;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.18.22.45.30;	author yatin;	state Exp;
+branches
+	1.12.2.1;
+next	1.11;
+
+1.11
+date	97.09.15.03.09.42;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.26.04.15.14;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.17.03.01.31;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.04.09.55.51;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.07.01.47.50;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.27.31;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.12.31;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.23.06.03.27;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.09.13.30;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.43.06;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.40.40;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.40.40;	author yatin;	state Exp;
+branches;
+next	;
+
+1.12.2.1
+date	97.11.17.22.07.12;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "communication.h"
+#include "eventhan.h"
+#include <unistd.h>
+#include <errno.h>
+#include <iostream.h>
+#include <signal.h>
+
+#include "log.h"
+void LogMutex::Lock() {
+  gm_Log("Mutex " << getName() << ": trying to lock\n");
+  Mutex::Lock();
+  gm_Log("Mutex " << getName() << ": has locked\n");
+}
+void LogMutex::Unlock() {
+  gm_Log("Mutex " << getName() << ": trying to unlock\n");
+  Mutex::Unlock();
+  gm_Log("Mutex " << getName() << ": has unlocked\n");
+}
+
+//#define CO_Timer_ms 5000
+
+//EventSystem *gm_Timer::eventSystem=NULL;
+
+
+gm_Timer::gm_Timer(EventSystem *evSys, long seconds, long useconds, 
+		   gm_Bool repeat)
+  : repeatMode(repeat), eventSystem(evSys)
+{
+  timeoutInterval.tv_sec  = seconds;
+  timeoutInterval.tv_usec = useconds;
+
+  GetCurrentTime(&nextTimeout);
+  IncrementTimeout();
+
+  eventSystem->AddTimer(this);
+}
+
+
+gm_Timer::~gm_Timer()
+{
+  eventSystem->RemoveTimer(this);
+}
+
+
+
+int
+gm_Timer::Compare(gm_Timer *t1, gm_Timer *t2)
+{
+  if (t1->nextTimeout.tv_sec  < t2->nextTimeout.tv_sec)  return -1;
+
+  if (t1->nextTimeout.tv_sec == t2->nextTimeout.tv_sec) {
+    if (t1->nextTimeout.tv_usec < t2->nextTimeout.tv_usec) return -1;
+    if (t1->nextTimeout.tv_usec== t2->nextTimeout.tv_usec) return 0;
+  }
+
+  return 1;
+}
+
+
+void
+gm_Timer::IncrementTimeout()
+{
+  nextTimeout.tv_usec += timeoutInterval.tv_usec;
+
+  if (nextTimeout.tv_usec >= 1000000) {
+    nextTimeout.tv_usec -= 1000000;
+    nextTimeout.tv_sec++;
+  }
+
+  nextTimeout.tv_sec += timeoutInterval.tv_sec;
+}
+
+
+void
+gm_Timer::ComputeAheadOfGMT(timeval *ahead)
+{
+  timeval current;
+  GetCurrentTime(&current);
+
+  ahead->tv_sec  = nextTimeout.tv_sec  - current.tv_sec;
+  ahead->tv_usec = nextTimeout.tv_usec - current.tv_usec;
+
+  if (ahead->tv_usec < 0) {
+    ahead->tv_usec += 1000000;
+    ahead->tv_sec--;
+  }
+
+  if (ahead->tv_sec < 0) {
+    ahead->tv_sec = ahead->tv_usec = 0;
+  }
+}
+
+
+void
+gm_Timer::GetCurrentTime(timeval *tv)
+{
+  gettimeofday(tv, NULL);
+}
+
+
+gm_Bool
+gm_Timer::HandleEvent(EventSystem *evs, EventType eventType, void */*args*/)
+{
+  switch (eventType) {
+  case evTimer:
+    return EvTimer(evs);
+
+  default:
+    Return(gm_False, errEvSysInvalidEvent);
+  }
+}
+
+
+/*class CO_Timer_ : public Timer {
+public:
+  CO_Timer_(EventSystem *evs) 
+    : Timer(evs, SECONDS(CO_Timer_ms), USECONDS(CO_Timer_ms), gm_True) { };
+  ~CO_Timer_() { };
+
+protected:
+  gm_Bool EvTimer(EventSystem *evs) {return evs->CheckCommunicationObjects();};
+};*/
+
+
+
+gm_Bool
+EventSystem::TimerInfo::Add(gm_Timer *timer)
+{
+  ListIndex idx;
+  gm_Bool found=gm_False, returnValue;
+
+  idx = queue.BeginTraversal();
+  for (; queue.IsDone(idx)==gm_False; idx = queue.getNext(idx)) {
+    if (gm_Timer::Compare(queue.getData(idx), timer)>=0) {
+      returnValue = queue.InsertBefore(idx, timer);
+      found = gm_True;
+      break;
+    }
+  }
+  if (found==gm_False) {
+    returnValue = queue.InsertAtTail(timer, gm_True); //gm_True=>I'm traversing
+  }
+  queue.EndTraversal();
+  return returnValue;
+}
+
+
+EventSystem::CommunicationInfo::CommunicationInfo() : maxDescr(0)
+{
+  FD_ZERO(&descrs);
+}
+
+
+gm_Bool
+EventSystem::CommunicationInfo::Add(CommunicationObject *comm)
+{
+  int id = comm->getID();
+  if (objectList.InsertAtHead(comm)==gm_False) return gm_False;
+  FD_SET(id, &descrs);
+  if (id >= maxDescr) maxDescr = id+1;
+
+  return gm_True;
+}
+
+
+void
+EventSystem::CommunicationInfo::Remove(CommunicationObject *comm)
+{
+  ListIndex idx;
+  int id;
+
+  objectList.Remove(comm);
+  FD_CLR(comm->getID(), &descrs);
+
+  if (comm->getID()+1 >= maxDescr) {
+    maxDescr = 0;
+
+    idx = objectList.BeginTraversal();
+    for (; objectList.IsDone(idx)==gm_False; idx = objectList.getNext(idx)) {
+      id = objectList.getData(idx)->getID();
+      if (id >= maxDescr) 
+	maxDescr = id+1;
+    }
+    objectList.EndTraversal();
+  }
+}
+
+
+/*gm_Bool
+EventSystem::CommunicationInfo::Check(EventSystem *evs)
+{
+  fd_set fileDescrs;
+  timeval tv;
+  ListIdx idx;
+  int id, returnValue;
+
+  gm_Debug(dbgTmp, "EventSystem::CommunicationInfo::Check invoked\n");
+  tv.tv_sec = tv.tv_usec = 0;
+  for (idx = objectList.Head(); 
+       objectList.IsDone(idx)==gm_False; 
+       idx = objectList.Next(idx)) {
+    FD_ZERO(&fileDescrs);
+    id = objectList.Record(idx)->getID();
+    FD_SET(id, &fileDescrs);
+
+    returnValue = select(id+1, &fileDescrs, NULL, NULL, &tv);
+
+    if (returnValue < 0) {
+      if (errno==EBADF || errno==EINTR) continue;
+      Return(gm_False, errEvSysGetError);
+    }
+    if (returnValue==0) continue;
+
+    if (FD_ISSET(id, &fileDescrs)) {
+      gm_Debug(dbgTmp, "EventSystem::CommunicationInfo::Check is selecting\n");
+      if (evs->PostEventNoMutex(evSelect, objectList.Record(idx), 
+				NULL)==gm_False) {
+	return gm_False;
+      }
+    }
+  }
+  return gm_True;
+}*/
+
+
+
+
+EventSystem::EventSystem()
+  : mutex("*-evs"), pipeWriteFD(-1), pipeReadFD(-1), blockedOnSelect(gm_False)
+{
+  int fileIDs[2];
+
+  mutex.Lock();
+
+  signal(SIGPIPE, SIG_IGN);
+  if (pipe(fileIDs)!=0) VoidReturn(errEvSysCreationError);
+  pipeReadFD  = fileIDs[0];
+  pipeWriteFD = fileIDs[1];
+
+  mutex.Unlock();
+  //new CO_Timer_(this);
+}
+
+
+EventSystem::~EventSystem()
+{
+  mutex.Lock();
+  close(pipeReadFD);
+  close(pipeWriteFD);
+  mutex.Unlock();
+}
+
+
+
+
+gm_Bool
+EventSystem::GetEvent(Event *ev)
+{
+  int       maxDescr, returnValue;
+  Event     *queueEv;
+  fd_set    readFileDescrs;
+  gm_Timer  *timerObject;
+  timeval   timeVal, *tvp;
+  ListIndex idx;
+
+  mutex.Lock();
+  while (gm_True) {
+    // if there is something on the queue, remove it and return
+    if (eventQueue.IsEmpty()==gm_False) {
+      queueEv = eventQueue.RemoveFromHead();
+      *ev = *queueEv;
+      delete queueEv;
+      mutex.Unlock();
+      return gm_True;
+    }
+
+    // construct the readFD and time-to-wait structures
+    
+
+    FD_ZERO(&readFileDescrs);
+    memcpy(&readFileDescrs, &ci.descrs, sizeof(ci.descrs));
+    FD_SET(pipeReadFD, &readFileDescrs);
+    maxDescr = (((pipeReadFD+1) > ci.maxDescr) ? pipeReadFD+1 : ci.maxDescr);
+
+    timerObject = ti.TimerAtHead();
+    if (timerObject==NULL) tvp = NULL;
+    else {
+      timerObject->ComputeAheadOfGMT(&timeVal);
+      tvp = &timeVal;
+    }
+
+    // set a flag indicating that I am about to do a select & unlock the mutex
+    
+    blockedOnSelect = gm_True;
+
+    mutex.Unlock();
+
+    // perform a select
+    if (tvp!=NULL && tvp->tv_sec==0 && tvp->tv_usec==0) {
+      // timelimit is zero i.e. just about to timeout, so don't bother to
+      // select
+      returnValue = 0;
+      FD_ZERO(&readFileDescrs);
+    }
+    else {
+      returnValue = select(maxDescr, &readFileDescrs, NULL, NULL, tvp);
+    }
+    // grab the mutex & switch off the select-flag
+    
+    mutex.Lock();
+    blockedOnSelect = gm_False;
+    notifyCond.Broadcast(); // wake up all the notifying threads
+
+    // if select fails, unlock the mutex and return gm_False
+    
+    if (returnValue < 0) {
+      if (errno==EBADF || errno==EINTR) continue;
+
+      mutex.Unlock();
+      Return(gm_False, errEvSysGetError);
+    }
+
+    // if select times out, then a timer event has occurred
+    // unlock the mutex and add a timer event to the queue
+
+    if (returnValue==0) {
+      if (ti.TimerAtHead() != timerObject) {
+	// the timer object has dissapeared. Ignore this event
+	continue;
+      }
+
+      ti.RemoveFromHead();
+      queueEv = new Event(evTimer, timerObject, NULL);
+      if (queueEv==NULL) {
+	mutex.Unlock();
+	Return(gm_False, errOutOfMemory);
+      }
+
+      if (eventQueue.InsertAtTail(queueEv)==gm_False) {
+	mutex.Unlock();
+	return gm_False; // InsertAfter has already set "Error::status"
+      }
+      
+      if (timerObject->ShouldIRepeat()==gm_True) {
+	timerObject->IncrementTimeout();
+	if (ti.Add(timerObject)==gm_False) {
+	  mutex.Unlock();
+	  return gm_False; // AddTimer has already set "Error::status"
+	}
+      }
+
+      continue;
+    }
+
+    
+    // if select succeeds on "pipe", then read the next char off the pipe
+    // and continue (this is used as a signal to the event system that 
+    // something has changed) (e.g. stuff was added to the queue, or the file 
+    // descriptors to select on have changed or a new timeout has been 
+    // requested) 
+    
+    if (FD_ISSET(pipeReadFD, &readFileDescrs)) {
+      char dummy[257];
+      read (pipeReadFD, dummy, 256);
+
+      // don't "continue" here, because we must check whether any other 
+      // descriptors are ready as well
+    }
+
+    // check if any of the communication objects have succeeded on select
+    idx = ci.objectList.BeginTraversal();
+    for (; 
+	 ci.objectList.IsDone(idx)==gm_False; 
+	 idx = ci.objectList.getNext(idx)){
+
+      if (FD_ISSET(ci.objectList.getData(idx)->getID(), &readFileDescrs)) {
+
+	queueEv = new Event(evSelect, ci.objectList.getData(idx), NULL);
+	if (queueEv==NULL) {
+	  ci.objectList.EndTraversal();
+	  mutex.Unlock();
+	  Return(gm_False, errOutOfMemory);
+	}
+
+	if (eventQueue.InsertAtTail(queueEv)==gm_False) {
+	  ci.objectList.EndTraversal();
+	  mutex.Unlock();
+	  return gm_False; // InsertAfter has already set "Error::status"
+	}
+      }
+    } // for
+    ci.objectList.EndTraversal();
+  } // while
+}
+
+
+
+gm_Bool
+EventSystem::PostEvent(EventType eventType, EventHandler *object, void *args)
+{
+  gm_Bool returnValue;
+  mutex.Lock();
+  returnValue = PostEventNoMutex(eventType, object, args);
+  mutex.Unlock();
+  return returnValue;
+}
+
+
+gm_Bool
+EventSystem::PostEventNoMutex(EventType eventType, EventHandler *object, 
+			      void *args)
+{
+  Event *queueEv = new Event(eventType, object, args);
+  if (queueEv==NULL) Return(gm_False, errOutOfMemory);
+
+  if (eventQueue.InsertAtTail(queueEv)==gm_False) {
+    return gm_False;
+  }
+  
+  Notify();
+  return gm_True;
+}
+
+
+void 
+EventSystem::Notify()
+{
+  // Notify assumes that the mutex is locked before calling this function!
+  char dummy[257]="";
+
+  if (blockedOnSelect==gm_True) {
+    write (pipeWriteFD, dummy, 256);
+    notifyCond.Wait(&mutex);
+  }
+}
+
+
+gm_Bool
+EventSystem::Run()
+{
+  Event event;
+
+  while (GetEvent(&event)==gm_True) {
+    if (event.type==evQuit) return gm_True;
+    if (event.handler!=NULL) {
+      if (event.handler->HandleEvent(this, event.type, event.args)==gm_False) {
+	return gm_False;
+      }
+    }
+  }
+
+  return gm_False;
+}
+
+
+gm_Bool
+EventSystem::AddTimer(gm_Timer *timer)
+{
+  gm_Bool returnValue;
+  mutex.Lock();
+  returnValue = ti.Add(timer);
+  Notify();
+  mutex.Unlock();
+  return returnValue;
+}
+
+
+void
+EventSystem::RemoveTimer(gm_Timer *timer)
+{
+  mutex.Lock();
+  ti.Remove(timer);
+  Notify();
+  mutex.Unlock();
+}
+
+
+gm_Bool
+EventSystem::AddCommunicationObject(CommunicationObject *comm)
+{
+  gm_Bool returnValue;
+  mutex.Lock();
+  returnValue = ci.Add(comm);
+  Notify();
+  mutex.Unlock();
+  return returnValue;
+}
+
+
+void
+EventSystem::RemoveCommunicationObject(CommunicationObject *comm)
+{
+  mutex.Lock();
+  ci.Remove(comm);
+  Notify();
+  mutex.Unlock();
+}
+@
+
+
+1.12
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d8 12
+a273 1
+
+a307 1
+
+d363 2
+a364 2
+      char dummy[1];
+      read (pipeReadFD, dummy, 1);
+d429 1
+d432 1
+a432 1
+    write (pipeWriteFD, " ", 1);
+@
+
+
+1.12.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a7 12
+#include "log.h"
+void LogMutex::Lock() {
+  gm_Log("Mutex " << getName() << ": trying to lock\n");
+  Mutex::Lock();
+  gm_Log("Mutex " << getName() << ": has locked\n");
+}
+void LogMutex::Unlock() {
+  gm_Log("Mutex " << getName() << ": trying to unlock\n");
+  Mutex::Unlock();
+  gm_Log("Mutex " << getName() << ": has unlocked\n");
+}
+
+d262 1
+d297 1
+d353 2
+a354 2
+      char dummy[257];
+      read (pipeReadFD, dummy, 256);
+a418 1
+  char dummy[257]="";
+d421 1
+a421 1
+    write (pipeWriteFD, dummy, 256);
+@
+
+
+1.11
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d10 1
+a10 1
+//EventSystem *Timer::eventSystem=NULL;
+d13 2
+a14 1
+Timer::Timer(EventSystem *evSys,long seconds,long useconds,gm_Bool repeat)
+d27 1
+a27 1
+Timer::~Timer()
+d35 1
+a35 1
+Timer::Compare(Timer *t1, Timer *t2)
+d49 1
+a49 1
+Timer::IncrementTimeout()
+d63 1
+a63 1
+Timer::ComputeAheadOfGMT(timeval *ahead)
+d83 1
+a83 1
+Timer::GetCurrentTime(timeval *tv)
+d90 1
+a90 1
+Timer::HandleEvent(EventSystem *evs, EventType eventType, void */*args*/)
+d115 1
+a115 1
+EventSystem::TimerInfo::Add(Timer *timer)
+d122 1
+a122 1
+    if (Timer::Compare(queue.getData(idx), timer)>=0) {
+d250 1
+a250 1
+  Timer     *timerObject;
+d446 1
+a446 1
+EventSystem::AddTimer(Timer *timer)
+d458 1
+a458 1
+EventSystem::RemoveTimer(Timer *timer)
+@
+
+
+1.10
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d10 1
+a10 1
+EventSystem *Timer::eventSystem=NULL;
+d14 1
+a17 2
+  repeatMode              = repeat;
+  eventSystem             = evSys;
+@
+
+
+1.9
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d217 1
+a217 1
+  : pipeWriteFD(-1), pipeReadFD(-1), blockedOnSelect(gm_False)
+@
+
+
+1.8
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d117 2
+a118 1
+  ListIdx idx;
+d120 5
+a124 2
+  for (idx=queue.Head(); queue.IsDone(idx)==gm_False; idx = queue.Next(idx)) {
+    if (Timer::Compare(queue.Record(idx), timer)>=0)
+d126 1
+d128 2
+a129 6
+
+  if (queue.IsDone(idx)==gm_False) {
+    return queue.InsertAfter(queue.Prev(idx), timer);
+  }
+  else {
+    return queue.InsertAfter(queue.Tail(), timer);
+d131 2
+d157 1
+a157 1
+  ListIdx idx;
+d165 4
+a168 5
+    for (idx = objectList.Head(); 
+	 objectList.IsDone(idx)==gm_False; 
+	 idx = objectList.Next(idx)) {
+      
+      id = objectList.Record(idx)->getID();
+d172 1
+d247 6
+a252 6
+  int     maxDescr, returnValue;
+  Event   *queueEv;
+  fd_set  readFileDescrs;
+  Timer   *timerObject;
+  timeval timeVal, *tvp;
+  ListIdx idx;
+d329 1
+a329 1
+      if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==gm_False) {
+d361 2
+a362 1
+    for (idx = ci.objectList.Head(); 
+d364 1
+a364 1
+	 idx = ci.objectList.Next(idx)) {
+d366 1
+a366 1
+      if (FD_ISSET(ci.objectList.Record(idx)->getID(), &readFileDescrs)) {
+d368 1
+a368 1
+	queueEv = new Event(evSelect, ci.objectList.Record(idx), NULL);
+d370 1
+d375 2
+a376 1
+	if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==gm_False) {
+d382 1
+d406 1
+a406 1
+  if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==gm_False) {
+a435 1
+	gm_Debug(dbgTmp,"HandleEvent failed: Event type " << event.type<<'\n');
+@
+
+
+1.7
+log
+@Just doing a commit before leaving for India
+@
+text
+@d6 1
+d8 1
+d97 1
+a97 1
+    gm_BoolErrorReturn(errEvSysInvalidEvent);
+d102 11
+d133 6
+d147 1
+a147 1
+  gm_BoolErrorReturn(success);
+d174 37
+d220 2
+a221 1
+  if (pipe(fileIDs)!=0) VoidErrorReturn(errEvSysCreationError);
+a224 1
+  
+d226 1
+d260 1
+a260 1
+      gm_BoolErrorReturn(success);
+d265 2
+d285 10
+a294 1
+    returnValue = select(maxDescr, &readFileDescrs, NULL, NULL, tvp);
+d299 1
+d307 1
+a307 1
+      gm_BoolErrorReturn(errEvSysGetError);
+d323 1
+a323 1
+	gm_BoolErrorReturn(errOutOfMemory);
+d328 1
+a328 1
+	return gm_False; // InsertAfter has already set "globalErrorCode"
+d335 1
+a335 1
+	  return gm_False; // AddTimer has already set "globalErrorCode"
+d367 1
+a367 1
+	  gm_BoolErrorReturn(errOutOfMemory);
+d372 1
+a372 1
+	  return gm_False; // InsertAfter has already set "globalErrorCode"
+d381 10
+d393 2
+a394 1
+EventSystem::PostEvent(EventType eventType, EventHandler *object, void *args)
+d397 1
+a397 3
+  if (queueEv==NULL) gm_BoolErrorReturn(errOutOfMemory);
+
+  mutex.Lock();
+a399 1
+    mutex.Unlock();
+a403 2
+  mutex.Unlock();
+
+d411 2
+d415 1
+d429 1
+a429 1
+	DEBUG("HandleEvent failed: Event type " << event.type << '\n');
+@
+
+
+1.6
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d350 2
+a351 1
+      if (event.handler->HandleEvent(this, event.type, event.args)==gm_False) 
+d353 1
+@
+
+
+1.5
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d11 1
+a11 1
+Timer::Timer(EventSystem *evSys,long seconds,long useconds,Bool repeat)
+d87 1
+a87 1
+Bool
+d95 1
+a95 1
+    BoolErrorReturn(errEvSysInvalidEvent);
+d101 1
+a101 1
+Bool
+d106 1
+a106 1
+  for (idx=queue.Head(); queue.IsDone(idx)==FALSE; idx = queue.Next(idx)) {
+d111 1
+a111 1
+  if (queue.IsDone(idx)==FALSE) {
+d120 1
+a120 1
+Bool
+d124 1
+a124 1
+  if (objectList.InsertAtHead(comm)==FALSE) return FALSE;
+d128 1
+a128 1
+  BoolErrorReturn(success);
+d144 1
+a144 1
+	 objectList.IsDone(idx)==FALSE; 
+d158 1
+a158 1
+  : pipeWriteFD(-1), pipeReadFD(-1), blockedOnSelect(FALSE)
+d184 1
+a184 1
+Bool
+d195 1
+a195 1
+  while (TRUE) {
+d197 1
+a197 1
+    if (eventQueue.IsEmpty()==FALSE) {
+d203 1
+a203 1
+      BoolErrorReturn(success);
+d221 1
+a221 1
+    blockedOnSelect = TRUE;
+d230 1
+a230 1
+    blockedOnSelect = FALSE;
+d232 1
+a232 1
+    // if select fails, unlock the mutex and return FALSE
+d238 1
+a238 1
+      BoolErrorReturn(errEvSysGetError);
+d254 1
+a254 1
+	BoolErrorReturn(errOutOfMemory);
+d257 1
+a257 1
+      if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==FALSE) {
+d259 1
+a259 1
+	return FALSE; // InsertAfter has already set "globalErrorCode"
+d262 1
+a262 1
+      if (timerObject->ShouldIRepeat()==TRUE) {
+d264 1
+a264 1
+	if (ti.Add(timerObject)==FALSE) {
+d266 1
+a266 1
+	  return FALSE; // AddTimer has already set "globalErrorCode"
+d290 1
+a290 1
+	 ci.objectList.IsDone(idx)==FALSE; 
+d298 1
+a298 1
+	  BoolErrorReturn(errOutOfMemory);
+d301 1
+a301 1
+	if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==FALSE) {
+d303 1
+a303 1
+	  return FALSE; // InsertAfter has already set "globalErrorCode"
+d313 1
+a313 1
+Bool
+d317 1
+a317 1
+  if (queueEv==NULL) BoolErrorReturn(errOutOfMemory);
+d321 1
+a321 1
+  if (eventQueue.InsertAfter(eventQueue.Tail(), queueEv)==FALSE) {
+d323 1
+a323 1
+    return FALSE;
+d329 1
+a329 1
+  return TRUE;
+d336 1
+a336 1
+  if (blockedOnSelect==TRUE) {
+d342 1
+a342 1
+Bool
+d347 2
+a348 2
+  while (GetEvent(&event)==TRUE) {
+    if (event.type==evQuit) return TRUE;
+d350 2
+a351 2
+      if (event.handler->HandleEvent(this, event.type, event.args)==FALSE) 
+	return FALSE;
+d355 1
+a355 1
+  return FALSE;
+d359 1
+a359 1
+Bool
+d362 1
+a362 1
+  Bool returnValue;
+d381 1
+a381 1
+Bool
+d384 1
+a384 1
+  Bool returnValue;
+@
+
+
+1.4
+log
+@Removed bugs from stub.cc etc.
+@
+text
+@d18 1
+a18 1
+  GetCurrentGMT(&nextTimeout);
+d64 1
+a64 1
+  GetCurrentGMT(&current);
+d81 1
+a81 1
+Timer::GetCurrentGMT(timeval *tv)
+a82 1
+  time_t seconds;
+a83 2
+  seconds = (time_t) tv->tv_sec;
+  tv->tv_sec = mktime(gmtime(&seconds));
+@
+
+
+1.3
+log
+@Modified Timer::GetCurrentGMT() to use time_t
+@
+text
+@a228 1
+
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d83 1
+d85 2
+a86 1
+  tv->tv_sec = mktime(gmtime(&tv->tv_sec));
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d96 1
+a96 1
+    return FALSE;
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

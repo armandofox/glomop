@@ -1,0 +1,837 @@
+head	1.27;
+access;
+symbols
+	Yatin-final:1.27
+	Yatin:1.27.0.2
+	pre-yatin-merge:1.27
+	transend-beta2:1.25
+	fox-dev:1.25.4.1
+	frontend-ng:1.20
+	transend-beta-latest:1.20
+	Aggregators:1.19
+	NoAggregators:1.19
+	iang:1.18.0.4
+	transend-beta:1.18.0.2
+	SOSP:1.17
+	merged_preintegrate:1.9
+	heisenbug:1.9
+	PRE_INTEGRATION:1.9;
+locks; strict;
+comment	@ * @;
+
+
+1.27
+date	97.09.06.02.29.49;	author gribble;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	97.08.30.21.34.19;	author fox;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.07.25.03.37.39;	author fox;	state Exp;
+branches
+	1.25.4.1;
+next	1.24;
+
+1.24
+date	97.07.24.18.50.04;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.07.16.08.15.31;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.07.15.02.43.07;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.06.12.18.31.38;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.06.04.01.16.44;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.05.11.11.23.34;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.04.09.01.31.23;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.09.09.08.10;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.06.09.44.52;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.27.03.10.53;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.26.04.14.35;	author yatin;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.19.01.29.29;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.07.22.47.57;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.28.23.49.28;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.28.03.57.43;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.12.12.02.16.52;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.11.05.25.53;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.11.01.12.16;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.09.02.38.14;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.24.08.21.45;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.22.21.40.07;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.15.00.47.48;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.01.50.44;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.07.49.09;	author fox;	state Exp;
+branches;
+next	;
+
+1.25.4.1
+date	97.08.11.04.12.51;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.27
+log
+@Incorporated wingman protocol directly into the frontend.
+@
+text
+@/*
+ *  This is the front end that listens for HTTP requests from the
+ *  outside world.  It runs as a single thread.  When a request is
+ *  received, it is placed on a work queue for other threads to grab.
+ *  The queue length is periodically monitored to see if new threads
+ *  should be spawned.
+ */
+
+#include "frontend.h"
+#include "debug.h"
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include "utils.h"
+
+/*
+ *  Private declarations for this file
+ */
+
+static int gSock;
+static pthread_t thr_http;
+
+/*
+ *  Forward declarations
+ */
+
+UINT32 n_httpreqs;
+static ThrFunc http_eventloop_proc;
+ThrFunc http_go_proc;
+
+/*
+ *  httpreq_init
+ *  Initialize HTTPd-like front end by opening a socket for listening, and
+ *  spawning a thread that will listen on that socket and farm out incoming
+ *  requests by putting them on the thread work queue.
+ *
+ *  ARGS:
+ *    i: port number to listen on
+ *    i: amount by which to boost accept() thread's priority (0 = don't boost,
+ *       -1=use default) 
+ *  Returns: gm_True or gm_False
+ *  Thread-safe: no
+ */
+
+gm_Bool
+httpreq_init(int port, int boost_prio)
+{
+  char portnum[8];
+  int i;
+  pthread_attr_t att;
+  struct sched_param sched;
+
+  sprintf(portnum,"%d",port);
+  gSock = slisten(portnum);
+
+  if (gSock < 1) {
+    /* failed to open listening socket */
+    MON_SEND_2(MON_ERR,"Socket listen failed: %s\n", strerror(errno));
+    return gm_False;
+    /* NOTREACHED */
+  }
+
+  i = 1;
+  if (setsockopt(gSock, SOL_SOCKET, SO_REUSEADDR, (const char *)&i, sizeof(int))
+      != 0) {
+    MON_SEND_2(MON_ERR,"setsockopt SO_REUSEADDR: %s", strerror(errno));  
+  }
+  
+  i = 0;
+  if (setsockopt(gSock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&i, sizeof(int))
+      != 0) {
+    MON_SEND_2(MON_ERR,"setsockopt SO_KEEPALIVE: %s", strerror(errno));
+  }
+
+  MON_SEND_2(MON_LOGGING,"(HTTP): listening on port %d\n", port);
+
+  n_httpreqs = 1;
+
+  /* spawn a local worker thread  */
+
+  THR_OP("HTTP thread attrs init", pthread_attr_init(&att));
+  THR_OP("HTTP set global scope",
+         pthread_attr_setscope(&att, PTHREAD_SCOPE_SYSTEM));
+  THR_OP("HTTP get sched params",
+         pthread_attr_getschedparam(&att, &sched));
+
+#ifdef _MIT_POSIX_THREADS
+  sched.prio += boost_prio;
+#else
+  sched.sched_priority += boost_prio;
+#endif
+
+  THR_OP("HTTP boost prio",
+         pthread_attr_setschedparam(&att, &sched));
+  MON_SEND_2(MON_LOGGING,"Boosting HTTP accept() thread prio by %d\n",
+	     boost_prio);
+  THR_OP("Thread create HTTP",
+         pthread_create(&thr_http, (pthread_attr_t *)&att,
+                        http_eventloop_proc, (void *)NULL));
+  
+  proxy_debug_2(DBG_HTTP, "Spawned HTTP worker thread\n");
+  return gm_True;
+
+}
+
+/*
+ *  http_eventloop_proc
+ *  This thread accepts connections (ostensibly from HTTP clients) and
+ *  immediately puts the accepted connection on the work queue,specifying
+ *  http_go_proc as the "continuation" procedure.  
+ *
+ *  REENTRANT: no - only one thread assumed to be in this eventloop
+ *  RETURNS: never returns
+ *  ARGS: None
+ *
+ */
+
+static int newconn = 0;
+
+static void *
+http_eventloop_proc(void *arg)
+{
+  task_t *request;    
+  
+  proxy_debug_2(DBG_HTTP, "(HTTP): Accepting connections");
+
+  while (1) {
+    newconn = saccept(gSock);
+    if (newconn == -1) {
+      MON_SEND_2(MON_ERR,"(HTTP): Accept connection: %s", strerror(errno));
+      continue;
+    }
+    /* Put the connection on the queue. */
+
+    proxy_debug_3(DBG_HTTP, "(HTTP): Queueing connection %d", n_httpreqs);
+    new_task(&request);
+    SET_TASK_ID(request,n_httpreqs);
+    n_httpreqs++;
+    SET_TASK_GO_PROC(request, http_go_proc);
+    /*
+     *  Set parent, child_index, and metadata to null, to indicate this request
+     *  is direct from client. 
+     */
+    SET_TASK_PARENT(request,0);
+    SET_TASK_CHILD_INDEX(request,0);
+    SET_TASK_METADATA(request,NULL);
+    /*
+     *  Set task_data to the file descriptor for this socket.  When a
+     *  worker thread picks up this task, it will change task_data to a
+     *  pointer to the Request struct describing this request.
+     *  That structure includs a field for the file descriptor (among
+     *  other thigns), but we can't fill in the structure here because
+     *  the structure is managed per worker thread.
+     */
+    SET_TASK_DATA(request, newconn);
+    assert(dispatch(request) == 0);
+  }
+}
+
+@
+
+
+1.26
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@d27 1
+a27 1
+UINT32 nreqs;
+d75 1
+a75 1
+  MON_SEND_2(MON_LOGGING,"Listening on port %d\n", port);
+d77 1
+a77 1
+  nreqs = 1;
+d95 2
+a96 1
+  MON_SEND_2(MON_LOGGING,"Boosting accept() thread prio by %d", boost_prio);
+d125 1
+a125 1
+  proxy_debug_2(DBG_HTTP, "Accepting connections");
+d130 1
+a130 1
+      MON_SEND_2(MON_ERR,"Accept connection: %s", strerror(errno));
+d135 1
+a135 1
+    proxy_debug_3(DBG_HTTP, "Queueing connection %d", nreqs);
+d137 2
+a138 2
+    SET_TASK_ID(request,nreqs);
+    nreqs++;
+@
+
+
+1.25
+log
+@evil bug in parse_status_and_headers was overwriting caller stack and
+causing coredumps....we flushed it out of hiding by forcing everything
+to bypass.  still need to test steve's changes and retrofit the new
+mechanism for dealing with push.jpg.
+@
+text
+@d9 1
+a9 2
+#include "proxy.h"
+#include "thr_cntl.h"
+a10 1
+#include "httpreq.h"
+d146 8
+a158 30
+void
+proxy_shutdown(int sig)
+{
+  MON_SEND_2(MON_LOGGING,"Going down on signal %d", sig);
+  /*
+   *  NOTE!  We can't call shutdown() and close() before exiting, because we
+   *  are in a signal handler and those things are implicitly mutex-protected
+   *  by the kernel -- if someone else has the lock (which it does; the
+   *  http-accept thread), we will just block here forever.
+   */
+  MonitorClient_Gasp(0);
+  log_close();
+#if 0
+  shutdown(gSock, 2);
+  close(gSock);
+#endif
+  exit(1);
+}
+
+/*
+ *  This function is called as a signal handler for SIGWAITING (all
+ *  threads are blocked)
+ */
+
+void proxy_blocked(int sig)
+{
+  extern Monitor *gMon;
+
+  MON_SEND(MON_ERR,"Received SIGWAITING!  All threads are blocked! Help!\n");
+}
+@
+
+
+1.25.4.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d9 2
+a10 1
+#include "frontend.h"
+d12 1
+a147 8
+    /*
+     *  Set task_data to the file descriptor for this socket.  When a
+     *  worker thread picks up this task, it will change task_data to a
+     *  pointer to the Request struct describing this request.
+     *  That structure includs a field for the file descriptor (among
+     *  other thigns), but we can't fill in the structure here because
+     *  the structure is managed per worker thread.
+     */
+d153 30
+@
+
+
+1.24
+log
+@debugging/monitoring function interface in frontend cleaned up.  change to xs/Makefile.PL.in to avoid spurious double initialization of stuff in libdist.a when clib.so was dynamically loaded.
+@
+text
+@d163 2
+a165 3
+  proxy_errlog_2("Going down on signal %d", sig);
+#endif
+  log_close();
+d168 1
+a168 2
+  MonitorClient_Gasp(0);
+  fprintf(stderr, "exiting\n");
+@
+
+
+1.23
+log
+@makefile changes to get everything to compile with 2 different versions of pthreads, and with tcl/tk that does not already link the gcc library.
+@
+text
+@a50 1
+  char error[80];
+d60 1
+a60 2
+    sprintf(error, "Socket listen failed: %s\n", strerror(errno));
+    MON_LOG_ERR(error);
+d67 3
+a69 2
+      != 0)
+    proxy_errlog_2("setsockopt SO_REUSEADDR: %s", strerror(errno));  
+d73 3
+a75 2
+      != 0)
+    proxy_errlog_2("setsockopt SO_KEEPALIVE: %s", strerror(errno));
+d77 1
+a77 2
+  sprintf(error, "Listening on port %d\n", port);
+  MON_LOG_MSG(error);
+d97 1
+a97 1
+  MON_LOG_MSG_2("Boosting accept() thread prio by %d", boost_prio);
+d125 1
+a125 1
+
+d131 1
+a131 1
+      proxy_errlog_2("Accept connection: %s", strerror(errno));
+d156 1
+a156 1
+  MON_LOG_MSG_2("Going down on signal %d", sig);
+d165 2
+a168 2
+#endif
+  log_close();
+d183 1
+a183 1
+  MON_LOG_ERR("Received SIGWAITING!  All threads are blocked! Help!\n");
+@
+
+
+1.22
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d90 3
+d94 1
+@
+
+
+1.21
+log
+@various changes to makefiles to support auto-installation into sbin and bin directories.  perl HTML distiller no longer inserts UI in pages with frames.  PREFS_URL and similar strings are now static char* instead of #defines, but still need them to be initialized in PTM stub so distillers can get at them.  "run" targets are better now, they run stuff from the sbin and bin directories.
+@
+text
+@d89 1
+a89 3
+#ifdef HAVE_PTHREAD_MIT_PTHREAD_ATTR_H
+  sched.prio += boost_prio;
+#else
+d91 1
+a91 1
+#endif
+@
+
+
+1.20
+log
+@merged changes from head of transend-beta branch
+@
+text
+@d15 1
+d58 8
+a65 1
+  assert(gSock > 0);
+@
+
+
+1.19
+log
+@changes for dataflow stuff, chaining stuff, aggregators
+@
+text
+@a22 1
+static int _res;                /* for THR_OP macro */
+@
+
+
+1.18
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@a20 2
+static UINT16 reqs_per_minute[FE_HISTORY_SIZE];
+static int minute_counter;
+a21 1
+
+d23 1
+d73 1
+a73 4
+  nreqs = 0;
+  minute_counter = 0;
+  for (i=0; i<FE_HISTORY_SIZE; i++)
+    reqs_per_minute[i] = 0;
+d131 1
+d133 7
+a141 1
+    nreqs++;
+@
+
+
+1.17
+log
+@fixed memory leak due to strtok_finish not being called, and signal handling so frontend now dies gracefully
+@
+text
+@d10 2
+d158 1
+@
+
+
+1.16
+log
+@added accept() priority boost stuff
+@
+text
+@d144 8
+d155 1
+d157 1
+@
+
+
+1.15
+log
+@added frontend reqs/sec meter, retries for distConnectionBroken
+@
+text
+@d39 4
+a42 2
+ *  ARGS: port number to listen on; event handler proc for handling an
+ *      accepted connection on the socket
+d48 1
+a48 1
+httpreq_init(int port)
+d53 2
+d80 13
+d94 1
+a94 1
+         pthread_create(&thr_http, (pthread_attr_t *)NULL,
+@
+
+
+1.14
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@a18 1
+static UINT32 nreqs;
+d29 1
+@
+
+
+1.13
+log
+@changes so that preferences are changed with an http://ChangePrefs
+not by connecting to a seperate port
+@
+text
+@d66 1
+a66 1
+  sprintf(error, "Listening on port %d", port);
+d143 1
+a143 1
+  MON_LOG_ERR("Received SIGWAITING!  All threads are blocked! Help!");
+@
+
+
+1.12
+log
+@User prefs skeleton working
+@
+text
+@a129 1
+  upref_shutdown();
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d41 1
+a41 1
+ *  Returns: thread id of HTTP thread for success, -1 for error
+d45 1
+a45 1
+pthread_t
+d49 1
+d51 1
+a51 1
+  
+d66 2
+a67 1
+  proxy_debug_3(DBG_HTTP, "Listening on port %d", port);
+d81 1
+a81 1
+  return thr_http;
+d96 3
+a101 1
+  int newconn;
+d130 1
+@
+
+
+1.10
+log
+@frontend now uses monitor for logging
+@
+text
+@d129 12
+@
+
+
+1.9
+log
+@End to end path works via dispatch.c, some error reporting still broken and some things still hardcoded that shouldn't be
+@
+text
+@d126 1
+@
+
+
+1.8
+log
+@all the stubs work; now adding the dispatching functionality in newly
+added dispatch.c
+@
+text
+@a13 1
+#include "proxyinterface.h"
+a54 2
+  proxy_debug_2(DBG_HTTP, "Setting up sock options");
+
+d65 1
+a65 1
+  proxy_debug_3(DBG_HTTP, "Listening on port %d\n", port);
+a71 7
+  /* initialize ptm stub */
+
+  InitializeDistillerCache("../ptm/.gm_options.sample", "", 0);
+
+  /* was:: "", "224.9.9.9", 9999, 1,
+			   "", 0, "224.9.9.9", 9999, 1);*/
+  
+d120 8
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@a55 2
+#if 0
+  /* BUG:: */
+d58 2
+a59 1
+  if (setsockopt(gSock, SOL_SOCKET, SO_REUSEADDR, (const char *)1, sizeof(char))
+d62 3
+a64 2
+
+  if (setsockopt(gSock, SOL_SOCKET, SO_KEEPALIVE, (const char *)0, sizeof(char))
+d67 1
+a67 2
+#endif
+  
+@
+
+
+1.6
+log
+@http parsing is breathing
+@
+text
+@d54 1
+a54 1
+  assert(gSock != 0);
+@
+
+
+1.5
+log
+@Caught up to the ptm stuff again.  (Steve)
+@
+text
+@d9 2
+a10 2
+#include <proxy.h>
+#include <httpreq.h>
+d13 2
+a14 2
+#include <utils.h>
+#include <proxyinterface.h>
+@
+
+
+1.4
+log
+@Fixed so that Yatin's changes work.
+@
+text
+@d78 4
+a81 2
+  InitializeDistillerCache("", "224.9.9.9", 9999, 1,
+			   "", 0, "224.9.9.9", 9999, 1);
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d78 2
+a79 2
+  InitializeDistillerCache("224.9.9.9", 9999,
+			   "", 0);
+@
+
+
+1.2
+log
+@configure script now generates include path automatically
+@
+text
+@d14 1
+d76 5
+@
+
+
+1.1
+log
+@httpreq.c is the main event loop for receiving HTTP requests
+@
+text
+@d39 2
+a40 1
+ *  Args: port number to listen on
+d45 1
+a45 1
+int
+d79 1
+a79 2
+                        http_eventloop_proc,
+                        (void *)NULL));
+d92 3
+a94 3
+ *  Reentrant: no - only one thread assumed to be in this eventloop
+ *  Returns: never returns
+ *  Args: dummy arg required by pthread_create
+a122 8
+void *
+http_go_proc(void *arg)
+{
+  task_t *t = (task_t *)arg;
+
+  fprintf(stderr, "task working: %d", (int)(TASK_ID(t)));
+  return (void *)0;
+}
+@

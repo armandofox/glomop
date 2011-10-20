@@ -1,0 +1,262 @@
+=head1 Writing Aggregators
+
+This is I<preliminary documentation> that describes how to write and
+deploy aggregators, in particular using Perl.
+
+Helpful information: you may want to see the man pages for both the
+standard and nonstandard Perl modules (e.g. LWP and CGI) referenced in
+this document. 
+To see them, add the following to your MANPATH: 
+F</disks/barad-dur/now/pythia/release/lib/perl-5.002/man>,
+F</usr/sww/share/lib/perl-5.002/man>. 
+
+To write and deploy a Perl distiller or aggregator, you need to understand:
+
+=over 4
+
+=item 1.
+
+How your userid (a new argument) and document MIME type are used to
+select a distiller
+
+=item 2.
+
+What the Perl distiller's API is, and what headers it is
+permitted to return
+
+=item 3.
+
+How the system finds Perl distillers
+
+=item 4.
+
+A new distiller return code that allows pipelining and, soon,
+asynchronous continuation-like behavior.
+
+=back
+
+=head2 The Userid Argument
+
+Rather than using only the MIME type to name a distiller, we now use the
+MIME type and your userid.  Your userid is a string which is argument ID
+11; you can set it using the standard trick (set your prefs, then
+resubmit the URL after adding in "s11=myuserid" somewhere).  Your
+personal HTML distiller would be named, e.g., "fox/text/html".
+
+We distinguish I<user-specific> distillers from I<generic> distillers.
+Generic distillers are those belonging to userid "transend", and are the
+distillers we've had in the system all along.  Therefore they have names
+such as "transend/text/html".
+
+The mapping of names to binaries is still done in F<distillers.db>, as always.
+
+The decision of what distiller to pick for this request goes as follows:
+
+=over 4
+
+=item *
+
+If the MIME headers of the request contain an C<X-Route> header, that
+header should be a semicolon-separated list of distiller names.  The
+front end will pop the first entry off the list and call that distiller;
+the distiller will see the C<X-Route> header with the first entry
+removed. 
+
+If the distiller so referenced is a user-specific distiller
+that doesn't exist, the corresponding generic distiller is substituted.
+This substitution can be suppressed by ending the distiller's name with
+a "!".  For example, the following line will cause the distiller
+"fox/text/html" to be called, followed by "fox/text/plain", but if
+"fox/text/html" is not found, "transend/text/html" will be used instead:
+
+    X-Route: fox/text/html;fox/text/plain
+
+(Note there must be no spaces in the list of distillers.)  Whereas the
+following line is different in that if fox/text/html is not found, the
+original content will be bypassed immediately, else fox/text/html will
+be chained to fox/text/plain:
+
+    X-Route: fox/text/html!;fox/text/plain
+
+=item *
+
+If there's no C<X-Route> header,  your userid is nonempty (arg ID 11
+is not the empty string), and a distiller exists whose name is
+I<youruserid>/I<mimetype>/I<subtype>, e.g. "fox/text/html" for a
+text/html document, that distiller is used.
+
+=item *
+
+Otherwise, the system's generic distiller for that MIME type is used.
+
+=item *
+
+Otherwise, if none of these succeeds, the original content is bypassed.
+Note that when we're talking about a pipeline of several distillers,
+"the original content" really means "the output of the last successful
+stage". 
+
+=back
+
+=head2 The Perl Distiller API
+
+To write a distiller in Perl, you must create a file containing your
+Perl code in the F<perl_dir> subdirectory of the source tree.  Your file
+must define the following functions, with the "prototypes" as given
+here.  (See the files currently in that directory for examples.)
+
+
+  use TACCutils;
+  use clib;
+
+  sub DistillerInit {
+      # "require" files or whatever else you need here
+      # possible return values are the DistillerStatus codes in 
+      # ptm/include/distinterface.h
+      return 0;  
+  }      
+
+  sub DistillerMain {
+      my($data,$headers,$mimetype,%args) = @_;
+      
+      # do what you want here
+      
+      $retcode = 0;    # DistillerStatus, from distinterface.h
+      return($data,$headers,$mimetype,$retcode);
+  }
+
+Important things to note:
+
+=over 4
+
+=item *
+
+The headers passed to you includes the initial server status line,
+e.g. C<HTTP/1.0 200 Document follows>.  You can safely ignore it.
+
+=item *
+
+Remember that header lines are separated by \r\n (not just \n),
+and that headers must end with a blank line (\r\n\r\n).  B<If you screw
+this up, a bunch of stuff won't work, so be careful when returning your
+own headers.>
+
+=item *
+
+You are not required to return your own headers for your output
+data.  If you do return new headers, they must be correct,
+i.e. Content-Type and Content-Length must match what you're actually
+returning; otherwise, badness 10000.  See below for utility routines to
+help with this.
+
+=item *
+
+If you
+return the empty string as headers, the front end will synthesize
+headers by combining the original server headers with a correct
+Content-type and Content-Length, based on your $mimetype and $data.
+
+=item *
+
+Don't return undef for anything; the prealpha Perl distiller
+stub probably will die.
+
+=item *
+
+Any C<use> statements must be outside all functions, but
+C<require> statements must be inside C<DistillerInit>.  I'm not sure why
+this happens.
+
+=back
+
+In the body of C<DistillerMain>, you can do whatever you want to the
+data.  Here are some utility functions you may find helpful.  You can
+get these by requiring F<html_utils.pl> from inside C<DistillerInit>.
+All of these functions are in package C<html_utils>.
+
+=over 4
+
+=item  $new_html = &html_utils::insert_at_top($orig_html, $new_stuff)
+
+Tries to insert $new_stuff at "the top of the page", wherever that may
+be for $new_html.  Makes some intelligent guesses about where it is.
+
+=item  $new_headers = &html_utils::add_header($old_hdrs,$new_hdr,$new_val)
+
+Adds a new header.  You can use this, e.g., to add an C<X-Route> header,
+thereby controlling which distiller (if any) gets called next.
+
+=item  $cgi = &html_utils::make_cgi_args($headers)
+
+Given the headers you received, returns a CGI object (see CGI manpage).
+Useful things you can do with this include dereferencing parameters
+encoded in a form-submission URL, as in:
+
+        $cgi = &make_cgi_args($headers);
+        $text_field_foo = $cgi->param("foo");  # foo is the name of the field
+                                               # on the html form  
+
+=item  $text = &html_utils::striphtml($html, $keep_comments, $keep_tags, $keep_entities)
+
+Strips various things from HTML.  Only the first arg is required.  If
+$keep_comments is nonzero, comments are not stripped; if $keep_tags is
+nonzero, tags are not stripped; if $keep_entities is nonzero, HTML
+entities such as "&gt;" are not translated to their ASCII counterparts
+such as ">".  Default behavior is to strip everything and return a glob
+of text suitable for printing on a line printer.
+
+=back
+
+Also supported are fetching things from, querying, and putting things
+into the Harvest cache.  To get these functions, you have to say "use
+clib" at the top of your script, outside any function.  (If you are
+requiring F<html_utils.pl>, it takes care of doing this for you.)  Note
+that the return codes from the following functions are from
+F<client_lib/include/clib.h>. 
+
+=over 4
+
+=item ($status,$headers,$data) = &Clib_Fetch($url,$headers)
+
+Fetch a URL.  Headers may be the empty string (undef will work too, I
+think), or they can be the standard client-request headers.
+
+A return status of anything other than 0 means failure.  In case of
+success, the headers will include the initial status line from the
+server (e.g. "HTTP/1.0 200 Document follows").
+
+=item $status = &Clib_Query($url)
+
+Check if something is in the cache.  Returns 1 if it is and 2 if it
+isn't, or an error code if something goes wrong.  
+
+=item $status = &Clib_Push($url,$headers,$data)
+
+Put something into the cache, with the given URL, headers, and data.
+The headers must include an initial status line such as "HTTP/1.0 200
+OK".  A return code of zero means success.
+
+=back
+
+=head2 The Return Code from DistillerMain
+
+The last argument in the return value list from C<DistillerMain> is the
+return code.  (See the DistillerStatus codes in
+F<ptm/include/distinterface.h>.)  Zero is C<distOK>, i.e. all is well.
+10 is C<distRedispatch>, indicating the front end should pass this
+request on to another distiller, chosen according to the rules above.
+Note that if you return something with an C<X-Route> argument but a
+return code of distOk, no additional distillers will be called.  I
+realize this is a bug, since it prevents you from "calling" distillers
+without them having to be aware of what's happening, but this whole part
+of the system is in quick-and-dirty mode for a class project.  It will
+get better over the summer.
+
+=head2 How Perl Distillers are located
+
+In the distillers.db file, the binary for I<any> Perl distiller should
+be F<../perl_stub/perl_stub>.  The Perl stub will look for a file in the
+F<perl_dir> subdirectory whose name is the distiller name with slashes
+converted to periods; for example, the Perl code for distiller
+"fox/text/html" would be found in the file F<fox.text.html>.
+

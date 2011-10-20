@@ -1,0 +1,556 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.14.01.50.10;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.09.08.11.06;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@armando's writeup updates
+@
+text
+@<html>
+<TITLE>CS294-5 project - Adaptive Digital Documents</TITLE>
+<body bgcolor=#ffffff>
+
+<H3><center>
+CS294-5 (Digital Documents) Course Project Writeup<BR>
+<H2><B>Digital Objects with Lazy Fixations</B><BR>
+       (DOLF)</H2>
+
+<P>
+<a href="http://www.cs.berkeley.edu/~gribble">Steven Gribble</a> and
+<a href="http://www.cs.berkeley.edu/~fox">Armando Fox</a>
+<BR>
+University of California at Berkeley
+</center></H3>
+
+<P><HR>
+
+<H1>Introduction</H1>
+
+The recent explosion of the Internet, and particularly of the World Wide
+Web, has resulted in an enormous number of new electronic documents in
+the infrastructure for public consumption.  Non-technical users can now
+painlessly publish content to an audience that is potentially
+millions strong.  The democratization of the Internet is well underway.
+<p>
+
+The proliferation of publishing tools has made publishing easier for the
+individual but resulted in a host of complexities for document
+consumers.  The two particular problems we address are the <i>naming and
+location</i> problem and the <i>document interchange</i> problem.<p>
+
+While the relatively unstructured hypertext nature of the web works well
+for &quot;browsing&quot; or &quot;surfing&quot;, it is much less
+efficacious for locating information given some sort of generic search
+criteria.  Even worse, the naming scheme for the web is not very robust
+- many dangling references exist, largely because of content that is
+been outdated, moved, or simply destroyed.  In [KW95], a framework for
+distributed digital objects is presented which can help to solve the
+problem of locating documents by associating with each document a unique
+<i>handle</i>, and using infrastructure elements known as handle servers
+to bind handles to repositories that store the digital objects referred
+to by those handles.  While the proposed framework is sufficiently
+general, it lacks sufficient detail to specify constraints on
+inter-operable implementations.  Some infrastructure elements have been
+built and made public (see, for example, CNRI's <a
+href="http://www.handle.net/">Handle System</a>), but their impact in
+the real world has, to date, been grossly overshadowed by the chaotic
+growth of the
+less-organized WWW.<p>
+
+Another complexity associated with this explosion of content on the web is
+the exacerbation of the document interchange problem.  No single client can
+possibly understand the increasing number of document formats that currently
+exist (and nor should they need to).  While a number of common document
+interchange formats have been proposed (such as ODA, PDF, and OpenDoc),
+none has gained universal acceptance as a de facto standard.  So even
+if content could be reliably found on the WWW, there is no guarantee
+that the content will be viewable by any particular client.  Furthermore,
+consider the abstract notion of a &quot;work&quot;.  Intuitively, any given
+representation of a digital object or document is just one particular
+instantiation of that work, but the &quot;work&quot; is, in some semantic
+sense, the union of all
+possible of such instantiations.  This notion is currently unsupported by
+today's WWW and Internet infrastructure.<p>
+
+In this project we attempt to address each of these complexities and
+limitations through the use of intelligent computational infrastructure.
+Instead of forcing clients or servers to be able to handle arbitrary
+formats, we displace that complexity from the end-points of the system into
+the infrastructure middleware.  Specifically, we insert an intelligent
+proxy between a 
+client and a server; the proxy  adapts content as well as
+representation  to best suit the needs of a particular
+client.  In a sense, the proxy is a level of "computational indirection"
+in a manner analogous to the level of "naming indirection" realized by
+the handle infrastructure; the rest of this 
+document describes an implementation of such a proxy, and its relationship
+to the infrastructure described in [KW95].
+
+<H1>DOLF - Digital Objects with Lazy Fixations</H1>
+<H2>The Role of Proxies</H2>
+
+It has been said that all problems in computer science can be solved with a
+level of indirection.  This assertion is supported
+by the recent surge of interest in <i>proxied architectures</i>.  In a proxied
+architecture, clients no longer communicate directly with servers, but
+rather rely on a proxy agent to communicate with servers on their behalf.
+The proxy agent is often responsible for acquiring content, adapting that
+content to best suit the particular characteristics of each individual
+client, and delivering the content using a protocol that the client can
+easily understand.  Proxies are strategically located in the infrastructure
+to give them high bandwidth access to servers; the latency of fetching
+content is thus small.  Proxies also make use of a rich computational
+infrastructure, such as those provided by Networks of Workstations [And95],
+and are therefore well-suited to provide content adaptation and transcoding
+services. <p>
+
+The usefulness of proxies is not limited to adapting content and
+protocols for clients.  Network-level proxies can help to shield clients
+from the effects of slow networks by performing on-the-fly protocol
+compression or transport-level optimizations.  Proxies themselves can be
+partitioned between clients and infrastructure hosts, allowing the two
+partitions to communicate with an optimized protocol, once again
+increasing communication efficiency.  Because proxies are (by assumption
+and design) cycle and bandwidth rich, it is also possible to partition a
+complex application across a client and a proxy; only those pieces that
+are absolutely necessary to run on the client need to run there, and the
+rest of the complexity can be shuffled off to a willing and capable
+proxy.<p>
+
+By introducing proxies into the Kahn-Wilensky handle infrastructure, it
+becomes possible to use unmodified, already existing clients (such as web
+browsers) to access content within the context of this
+infrastructure, with the proxy acting as a gateway between the two worlds
+and using its adaptation capabilities to ensure that
+the delivered content is appropriate for the client.
+
+<H2>The Kahn-Wilensky Handle Infrastructure</H2>
+
+In [KW95], an infrastructure framework is introduced which is intended to
+support a distributed digital library services.  This infrastructure
+manages digital objects (DOs), which are essentially  data structures 
+composed of content (called &quot;data&quot;) and key-metadata (data
+that describes the DO).  Included in the key-metadata is a field called a
+<i>handle</i>, which is a unique identifier associated with the DO, and
+which can be used in conjunction with a &quot;handle server&quot; to locate
+a repository that can serve that DO to clients using a <i>repository access
+protocol</i> (RAP).  An author of a DO (known as an originator) registers
+the digital object by acquiring a unique handle for the DO from a handle
+generator.  This registered digital object (RDO) can then be located using
+the handle server infrastructure. Digital objects can take a number of
+different elemental forms, including bit-sequences, embedded digital
+objects, sets of bit-sequences, sets of digital objects, and sets of
+handles. <P>
+
+Many issues are raised but not explicitly solved by the handle
+infrastructure (often on purpose to maintain the full generality of the
+infrastructure).  Although the RAP is reasonably well defined, other
+protocols (such as those for communicating with handle servers, handle
+generators, or other infrastructure components) are not.  The mutability of
+digital objects is neither explicitly asserted nor denied.  Also, no
+mechanism is specified for clients to deduce the format of
+DOs.  (A particular formatted instance of a digital object is known as
+a <i>fixation</i> of the object.)  Format information could be embedded in the
+key-metadata, negotiated with repositories at the time DOs are accessed, or
+simply assumed by the particular implementation of the infrastructure.
+
+<H2>Type Graphs</H2>
+
+The mechanism that we use to generate fixations of a digital object is
+based on the notion of a <i>type graph</i>.  Consider the set of known document
+formats, and transformations between pairs of formats as implemented by
+particular transcoders available to the proxy.  If we think of document
+formats as nodes of a graph, and transformations between formats as
+directed edges of the graph, then converting between two formats in the
+graph is a matter of finding a path between the associated two nodes in the
+graph. <p>
+
+An edge of the graph can be weighted based on the computational
+complexity of the transformation it represents.  Furthermore, not every
+node is reachable from each other node.  Given a request for a document, 
+our proxy deduces the content type of that original document, and then
+solves the <i>single-source shortest paths</i> problem in order to find a
+list of reachable types, and the set of transformations that will most
+efficiently compute those types.  Since the weights on
+our nodes are all positive, we use Dijkstra's algorithm to
+obtain our solutions.<p>
+
+Here is an example of a DOLF type graph specification: <p>
+
+<center>
+<table border>
+<tr>
+<th>input mimetype</th> <th>output mimetype</th> <th>executable</th>
+</tr>
+
+<tr>
+<td>application/postscript</td> <td>text/html</td> <td>pstotext.SunOS %IF</td>
+</tr>
+<tr>
+<td>image/gif</td> <td>image/x-portable-pixmap</td> <td>giftopnm</td>
+</tr>
+<tr>
+<td>image/jpeg</td> <td>image/x-portable-pixmap</td> <td>djpeg</td>
+</tr>
+<tr>
+<td>image/x-portable-pixmap</td> <td>image/jpeg</td> <td>cjpeg</td>
+</tr>
+<tr>
+<td>image/x-portable-pixmap</td> <td>image/gif</td> <td>ppmquant 256 | ppmtogif</td>
+</tr>
+<tr>
+<td>text/html</td> <td>text/plain</td> <td>striphtmltags</td>
+</tr>
+<tr>
+<td>text/plain</td> <td>audio/basic</td> <td>say.solaris -a -o %OF</td>
+</tr>
+<tr>
+<td>text/plain</td> <td>application/postscript</td>  <td>enscript -p%OF</td>
+</tr>
+<tr>
+<td>application/x-psgz</td> <td>application/postscript</td>  <td>gunzip</td>
+</tr>
+</table>
+</center>
+<p>
+Given this type graph and a document of source type
+<b>application/postscript</b>, it is possible to generate fixations of type
+<b>text/html</b>, <b>text/plain</b>, and <b>audio/basic</b> by using the
+<i>pstotext.SunOS</i>, <i>striphtmltags</i>, and <i>say.solaris</i>
+transcoder executables.<p>
+
+Type graphs have limitations.  The type graph as presented above
+performs only format transformations; transfer encoding transformations
+cannot easily coexist with this type graph notion, nor can content
+transformations that preserve format.  (For example, in the above type
+graph, the type <i>application/x-psgz</i> is distinct from
+<i>application/postscript</i>, even though it is simply the composition
+of the latter with <i>gzip</i> encoding.)  Instead of attempting to
+conflate these separate mechanisms, we would like to rely on the
+stackable nature of HTTP proxies to perform content transformation
+(generically called <i>distillation</i>) in a separate proxy from that
+which implements the type graph.  In practice, for our current
+implementation, we use the "flat" type graph in the above example, since
+this unfortunate artifact is already pervasive throughout the WWW
+infrastructure and one of our goals was transparent interoperability
+with the existing Web.
+
+
+<h1>DOLF</h1>
+
+DOLF presents one possible implementation of the concepts in [KW95] and
+of the "abstract notion of a work".  Three important ideas underlie DOLF:
+
+<ul>
+  <li> The use of the type graph to produce new document fixations
+  <li> A <i>virtual repository</i> provided by a standard WWW caching
+       system and the ability to generate new fixations on demand
+  <li> Embedding of the above services in an HTTP proxy service,
+       providing transparent access to the entire system using commodity
+       WWW client software.
+</ul>
+
+<h2>Virtual Repository</h2>
+
+[KW95] proposes that there be a collection of <i>repositories</i> that
+house the digital objects which may correspond to documents.  They
+discuss the possibilities of mirroring or replicating repositories, as
+long as the handle server infrastructure is able to resolve a handle
+into at least one of the repositories currently holding the object.
+They also mention the possibility that beyond the basics of the
+Repository Access Protocol (RAP), repositories could perform additional
+services before delivering a <i>dissemination</i> to a client, for
+example encryption or compression.<p>
+
+We generalize this notion to provide a <i>virtual repository</i>.  The
+virtual repository holds digital objects, which may be "meta-objects"
+that list available fixations of a work, or objects corresponding to the
+fixations themselves.  In either case, the object's handle contains the
+information necessary to describe how the object was derived (we think
+of the object handles as being <i>self-describing</i>).  In particular,
+the handles encode the following information:<p>
+
+<b>For a meta-object:</b>
+<ul>
+  <li> DOLF version identifier
+  <li> Token indicating that this is a meta-DO handle (as opposed to a
+       fixation-DO 
+       handle)
+  <li> The URL, MIME type, and content-transfer-encoding
+       (e.g. <i>gzip</i>) of the original fixation published on the
+       WWW
+  <li> The cache server associated with the virtual repository that
+       created this object
+</ul>
+
+<b>For a fixation object:</b>
+<ul>
+  <li> DOLF version identifier
+  <li> Token indicating that this is a fixation-DO
+  <li> URL of the original fixation
+  <li> MIME type of this fixation
+  <li> Path through the type graph required to produce this fixation,
+       relative to the virtual repository that created this object
+</ul>
+
+Note that although the cache and type graph path information only make
+sense relative to a particular virtual repository, they can be used by a
+different virtual repository.  Specifically, the cache information can
+be discarded since the cache is used only as an optimization as
+described below, and the MIME type of the fixation can be used to derive
+the appropriate path through the type graph on a different virtual
+repository (in conjunction with the MIME type of the original URL, which
+can be determined by retrieving the original fixation).
+
+<h2>Distributed Virtual Repository Operation</h2>
+
+Given the above explanation, we can see how the virtual repository is
+implemented.  The repository is queried using self-describing handles as
+mentioned above.  If the queried object is present in the cache, it is simply
+returned.  If it is not present, the information in the self-describing
+handle is used to construct the object on the fly, and the resulting
+object is stored in the cache.  In the future, even if the object is
+evicted, it can always be reconstructed at higher computational cost.
+Thus, via lazy evaluation of self-describing handles, the virtual
+repository gives the illusion of a highly-available complete repository,
+while expending very little computational effort up front.  In fact, the
+only up-front cost associated with this scheme is the cost to solve
+single-source shortest-path through the type graph when the DO is first
+generated; this is required in order to construct the self-describing
+handles for the DO itself and for the possible fixations.  Any
+additional costs to actually deliver fixations are assessed only if and
+when a client actually requests a particular fixation.<p>
+
+Some other DOLF benefits:
+
+<Ul>
+  <li><b>Distributed repository.</b> Because a WWW cache is part of the
+       VR, and that cache can query other Internet servers to retrieve original
+       fixations, we realize an additional benefit of <i>distributing</i> the
+       VR: even though the original fixation of an object is associated with a
+       single server, cached versions of the original fixation (and probably of
+       on-demand generated DOLF fixations as well) end up distributed among
+       various DOLF instances.
+  <li> <b>Abstract notion of a "work".</b>  Querying for a specific
+       document results not in the original fixation itself, but instead
+       in the DO that describes which fixations are possible.  Modulo
+       the information loss involved in the transformation, the union of
+       the fixations can be said to correspond to the abstract notion of
+       a work --  a notion about which much has appeared in the
+       literature but which is not convincingly instantiated in any
+       well-deployed system.
+</ul>
+
+<h1>DOLF Implementation</h1>
+
+We implemented DOLF on top of an existing substrate for building proxied
+WWW services.  In this category we include application-level services
+that benefit from  the allocation of resources such as computation and
+mass storage implemented in the network infrastructure rather than at
+clients or servers.  We have previously argued [FB96,FGB+96] that there
+are both technical and economic benefits to be realized from placing
+such resources at an infrastructure proxy rather than at either endpoint.<p>
+
+A DOLF user interacts with the service semi-transparently: DOLF
+intervenes only on requests for which it is possible to transform the
+original WWW published fixation into a DOLF meta-DO.  Even in this case,
+each user can select whether "DOLFification" should be automatic and
+transparent, or whether the user must include a special "cue" in the URL
+in order to effect it.  As an example of the first method, if the user
+requests an HTML page, what will be delivered is a meta-DO listing the
+fixations, of which HTML is one (the "identity fixation"); the user can
+then separately request the HTML fixation.  In the second method, the
+page would be delivered as if DOLF were not present, but appending the
+string "DOLF!" to the URL would be enough to cue DOLF to intervene for
+this request.  (The actual "cue string" is a configurable option.)<p>
+
+
+We have built an extensible toolkit, mostly using Perl 5, for building
+such applications.  Among other things, the toolkit includes abstractions for:
+
+<ul>
+  <li> Maintaining per-user preferences and matching them up with
+       incoming requests
+  <li> Keeping track of a heterogeneous collection of server programs,
+       possibly running on various workstations, and distributing
+       requests to them based on MIME type, load, or any number of other
+       metrics
+  <li> Transparently handling incoming HTTP requests from clients and
+       being able to communicate with HTTP server agents and caches
+</ul>
+
+We have added the type graph mechanism described above, the lazy
+evaluation of a pipeline of programs, and the construction of
+self-describing handles to this infrastructure.  The result is a
+prototype implementation of DOLF, which, though not designed to be
+high-performance, is stable and usable by existing WWW clients.  
+
+<h1>Future Work</h1>
+
+<h2>Composition with Other Services</h2>
+
+<b>Other HTTP proxies.</b> There are existing HTTP proxies that support
+group annotation [Bro95], anonymization, and distillation [FB96].
+Because HTTP is a "stackable" protocol, it is simple to compose these
+proxies into a chain.<p>
+
+<b>Handle infrastructure.</b>  DOLF could be composed with the CNRI/PURL
+handle infrastructure.  In particular, DOLF could intercept requests
+that appear to be handle requests (perhaps cued by the syntactic
+structure of the request URL), transparently attempt to resolve the
+request via a handle server, and then retrieve the appropriate fixation
+and proceed as usual.  However, it is less clear whether the
+self-describing handles generated by DOLF to describe fixations and
+meta-DO's should be registered with handle servers.  Our current belief
+is that they should not: the distributed virtual repository provides
+most of the advantages provided that <i>some</i> handle to the
+originally published fixation is registered with the handle
+infrastructure, since the other handles (and corresponding objects) can
+be generated  on the fly, and it saves a fair amount of complexity in
+terms of keeping multiple handle servers coherent and dealing with
+different handle namespaces.<p>
+
+<b>Eager computation.</b> Idle resources in the DOLF system could be used
+to strategically precompute some representations of a document that are
+expected to have very high computation latency.  For example, our freeware
+text-to-speech converter, <i>rsynth</i>, takes <i>minutes</i> to encode an
+average-sized HTML page.  Of course, once the fixation has been generated
+for the first time, it should stay in the cache for some duration, but we
+could use idle time to precompute at least some of the representations.
+The general problem of determining which ones to precompute is open, to the
+best of our knowledge.<p>
+
+<b>The scalable proxy.</b> We are working on a high-performance, scalable
+version of our proxy-service toolkit, which will run on the Berkeley NOW.
+Implementation of a high-performance DOLF on that substrate should be
+trivial.  An even better possibility would be for someone else to extend
+the prototype into a real system that would really exploit the capabilities
+of the NOW-based proxy.
+
+<h1>Conclusions</h1>
+
+The DOLF proxy represents a real-world implementation of the ideas present
+in [KW95].  By using a proxy to provide the necessary level of indirection
+in the handle infrastructure, we were able to take advantage of the proxy's
+content and protocol adaptation services to bring dynamically generated
+digital object fixations to unmodified, existing world-wide web browsers.
+In addition, the following contributions were made and implemented:
+
+<UL>
+     <LI> The notion of <b>lazy fixation</b> generation.  Particular fixations
+	  of a document are generated dynamically, on-demand.
+     <LI> The notion of a <b>virtual repository</b>.  The set of all
+	  fixations
+	  that can be generated from all source documents represents an
+	  augmented, virtual repository document space from which clients
+	  can access objects.
+</UL>
+
+The prototype version of the DOLF proxy can be accessed by setting your
+Netscape HTTP proxy to hostname <b>latte.cs.berkeley.edu</b>, port
+<b>3128</b>.
+
+<h1>References</h1>
+
+[And95] Tom E. Anderson et al.  <i>The Case for NOW (Networks of
+Workstations).</i>  IEEE Micro, 15(1):54-64, Feb. 1995.<p>
+
+[Bro95] Charles Brooks, Murray S. Mazer, Scott Meeks, and Jim Miller.
+<i>Application-Specific Proxy Servers as HTTP Stream Transducers.</i>
+Proc. 4th Intl WWW Conference, Boston, Dec. 1995.<p>
+
+[FB96]  Armando Fox and Eric A. Brewer, <i>Reducing WWW Latency and
+Bandwidth Requirements by Real-Time Distillation</i>.  Proc. Fifth
+Intl. WWW Conference, Paris, May 1996.<p>
+
+[FGB+96] Armando Fox, Steven D. Gribble, Eric A. Brewer, and Elan Amir.
+<i>Adapting to Network and Client Variability via On-Demand Dynamic
+Distillation.</i> Proc. ASPLOS-VII, Boston, Oct. 1996.<p>
+
+[KW95] R. Kahn and R. Wilensky.  <i>A Framework for Distributed Digital
+Object Services.</i> URL: <a
+href="http://www.cnri.reston.va.us/home/cstr/arch/k-w.html">
+http://www.cnri.reston.va.us/home/cstr/arch/k-w.html</a>.<p>
+
+</body>
+<hr>
+    <address>fox@@cs.berkeley.edu</address><br>
+    <address>gribble@@cs.berkeley.edu</address>
+</html>
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d2 377
+a378 38
+<head>
+<title>About DOLF</title>
+</head>
+
+<body bgcolor="#ffffff">
+
+<h1>Introduction</h1>
+  - the problem statement
+     - doc interchange, handle infrastructure
+     - available infrastructure computation
+     - abstract work concept
+  - 2 parag. sketch of our method for solving problem
+
+<h1>Body</h1>
+
+<h2>Proxies</h2>
+
+     - usual blurb - we can get 1-1.5-2 pages for free
+<h2>Handle infrastructure</h2>
+<h2>Type Graphs</h2>
+     - what it is, how to solve it, example typegraph
+       that we use, limitations (content transformation
+       vs. format transformation not easily represented)
+
+<h2>DOLF</h2>
+     - marriage of typegraph/proxy and handle infrastructure
+     - take abstract notions in K/W paper and relate to real-world
+       implementation stuff in our DOLF proxy
+     - virtual repositories, notion of absract work
+<h2>DOLF Implementation</h2>
+     - gmproxyd description (extensible PERL proxy)
+     - lazy evaluation
+     - caching of representations
+     - DOLF URL munging details
+
+<h1>Related Work</h1>
+  - CNRI/PURL
+  - Other proxies
+d381 40
+a420 4
+  - composition of DOLF with other proxies (e.g. distillation,
+    anonymization)
+  - idleness is sloth - precomputation of representations
+  - scalable proxy version of DOLF (yeah, right)
+d423 49
+a471 1
+  - save the world with minimum effort by clients/servers
+@

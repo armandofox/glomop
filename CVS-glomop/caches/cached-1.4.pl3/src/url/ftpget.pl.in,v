@@ -1,0 +1,611 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  caches-tag:1.1.1.1 caches-tag:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     97.08.11.05.36.03;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.08.11.05.36.03;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@: # *-*-perl-*-*
+    eval 'exec perl -S $0 "$@@"'
+    if $running_under_some_shell;  
+
+# $Id: ftpget.pl.in,v 1.1.1.1 1996/10/25 23:50:55 gribble Exp $
+
+# 22-Feb-95
+#
+# Now we try the object as a directory before we try it as a file.
+# if the 'CWD $rfile' command succeeds, its a directory, otherwise
+# we assume it is a file that exists.  
+#
+# Also implemented the SIZE and MDTM commands.  If the server supports
+# these (as wu-ftpd does) then we can return the content-length and
+# Last-Modified times in the http header before getting any of the file
+# data.  
+
+# Exit code indicates severity of error (DW 6/9/95):
+#
+#      1-9     'soft', maybe temporary errors.  Doesn't necessarily
+#              mean the object doens't exist.
+#      10+     'hard' errors from remote HTTPD.  The URL is invalid
+#              or no longer exists
+#
+# Exit codes:
+#       0       Success
+#	1	DNS errors (from get_sockaddr())
+#	2	socket()/bind() errors
+#	3	connect() errors
+#	4	network write/read errors
+#	5	other misc soft errors
+#	10	HTTP errors
+
+
+
+$| = 1;
+$ENV{'HARVEST_HOME'} = "/usr/local/harvest" unless defined $ENV{'HARVEST_HOME'};
+unshift(@@INC, "$ENV{'HARVEST_HOME'}/lib");	# use local files 
+
+# Message sent in MIME headers
+$ServerMsg = 'Harvest/1.4beta4';			# version id
+
+##		 permissions     links   owner   group   size    date
+#$ls_pattern = '^([ldrwxsSt-]+)\s*(\d+)\s*(\S+)\s*(\S+)\s*(\d+)\s*(\w+\s*\d+\s*[\d:]+)\s*(.*)$';
+
+require 'ftp.pl';
+require 'timelocal.pl';
+
+@@weekday = (	'Sunday', 'Monday', 'Tuesday', 'Wednesday',
+		'Thursday', 'Friday', 'Saturday'		);
+
+@@month = (	'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+		'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'	);
+
+
+$debug		= 0;
+$htmlify	= 0;
+$sent_header	= 0;  # have we sent HTTP reply header yet?
+$mime_is_inited = 0;
+%isMonth = (
+	'Jan', 1,
+	'Feb', 1,
+	'Mar', 1,
+	'Apr', 1,
+	'May', 1,
+	'Jun', 1,
+	'Jul', 1,
+	'Aug', 1,
+	'Sep', 1,
+	'Oct', 1,
+	'Nov', 1,
+	'Dec', 1,
+);
+$fieldsize = 36;
+
+if ($#ARGV > $[-1 && $ARGV[0] eq '-v') {
+	@@F = split ('/', $0);
+	print pop @@F, ': ';
+	print '$Id: ftpget.pl.in,v 1.1.1.1 1996/10/25 23:50:55 gribble Exp $';
+	print "\n";
+	exit (0);
+}
+
+if ($#ARGV > 0 && $ARGV[0] eq "-fulldebug") {
+	shift(@@ARGV);
+	$debug	= 1;
+}
+
+if ($#ARGV > 0 && $ARGV[0] eq "-htmlify") {
+	shift(@@ARGV);
+	$htmlify = 1 if ($ARGV[0] eq "-");	# htmlify only if stdout
+}
+
+&usage() if ($#ARGV != 5);
+
+$lfile = shift(@@ARGV);		# local filename
+$host = shift(@@ARGV);		# FTP host
+$rfile = shift(@@ARGV);		# remote filename
+$mode = shift(@@ARGV);		# binary vs. ascii mode
+$user = shift(@@ARGV);		# user name
+$password = shift(@@ARGV);	# password
+
+$userinfo = '';
+$userinfo = $user . ':' . $password . '@@'
+	unless ($user eq 'anonymous');
+
+
+#  Fixes the Parent Directory link by removing traling /'s
+$rfile =~ s/\/+$// if ($rfile =~ /[^\/]+\/+$/o);
+
+$ftp_port	= 21;
+$retry_call	= $htmlify ? 0 : 1;	# retry failed connect(2)?
+$attempts	= $htmlify ? 1 : 3;	# how many times...
+
+if ($debug) {
+	$ftp'showfd = STDERR;
+	$ftp'ftp_show = 1;
+} else {
+	open(DEVNULL, "> /dev/null") || &fail (5, "Cannot write to /dev/null");
+	$ftp'showfd = DEVNULL;
+	#&ftp'debug(10);
+}
+
+
+&fail (3, "Cannot connect to $host: $ftp'response")
+	if (&ftp'open($host, $ftp_port, $retry_call, $attempts) != 1);
+
+&fail (5, "Cannot login to $host as $user: $ftp'response")
+	if (!&ftp'login($user, $password));
+
+&fail (5, "Cannot set mode to $mode")
+	if (&ftp'type($mode) == 0);
+
+# OK, so we made it this far.  Lets see if we can 'CWD' to the source
+# filename.  If so, then its a directory and we generate a listing.
+#
+if ($rfile eq '/' || &ftp'cwd($rfile)) {
+	if ($htmlify) {
+		&http_header('text/html', '', '1.0');
+		&fail (10, "Cannot retrieve file $rfile from $host")
+			if (&try_dir_listing_html($rfile, $lfile));
+	} else {
+		&fail (10, "Cannot retrieve file $rfile from $host")
+			if (&try_dir_listing($rfile, $lfile));
+	}
+} else {
+	if ($htmlify) {
+		# If we are here, the requested object is NOT a
+		# directory.  We assume the transfer will succeed and
+		# send an HTML success header.
+		#
+		($code, $size) = split (/\s+/, $ftp'response)
+			if (&ftp'quote ("SIZE $rfile"));
+		($code, $mdtm) = split (/\s+/, $ftp'response)
+			if (&ftp'quote ("MDTM $rfile"));
+		($type, $enc, $ver) = &get_mime ($rfile);
+		&http_header ($type, $enc, $ver, $size, $mdtm);
+	}
+	# Retrieve the file
+	#
+	&fail (10, "Cannot retrieve file $rfile from $host: $ftp'response")
+		if (!&ftp'get($rfile, $lfile, 0));
+}
+
+&ftp'quit();
+
+exit(0);
+
+
+# ========================================================================
+# SUBROUTINES
+
+
+sub usage {
+	print STDERR "Usage: ftpget.pl [-htmlify] localfile hostname filename A,I username password\n";
+	exit(1);
+}
+
+
+#  Gives a listing of the current directory.  Should only be called
+#  if &ftp'cwd($dir) was successful.
+#
+sub try_dir_listing {
+	local($dir, $lfile) = @@_;
+	local($x);
+
+	$x = &ftp'dir_open("-l");
+	$x = &ftp'dir_open if ($x == 2);
+	&fail (10, "Cannot list directory $dir on $host: $ftp'response")
+		if ($x != 1);
+	$rls = "ftp'NS";
+	if ($lfile eq "-") {
+		$OUT = STDOUT;
+	} else {
+		open ($OUT, ">$lfile") || &fail (5, "$lfile: $!");
+	}
+	print $OUT $_  while (<$rls>);
+	close ($OUT);
+	&ftp'dir_close();
+	0;
+}
+
+#
+#  Put hacks in here to HTML-ify FTP directories. 
+#
+#  Assume symlinks are pointers to files (mainly for the icons)
+#
+#  Before producting the listing, try to open a README file in
+#  the requested directory.  If the open is successful, show it.
+#
+#  Gives a listing of the current directory.  Should only be called
+#  if &ftp'cwd($dir) was successful.
+#
+sub try_dir_listing_html {
+	local($dir, $lfile) = @@_;
+	local($x);
+
+	open (OUT, ">$lfile") || &fail (5, "$lfile: $!");
+
+	$dir		= '/' if ($dir eq '.');
+	$dir		= '/' . $dir if ($dir !~ /^\//);
+	$dir_escaped	= &url_escape($dir);
+	$URL		= 'ftp://' . $host . $dir . '/';
+	$URL		=~ s'//$'/';
+	$URLescaped	= 'ftp://' . $userinfo . $host . $dir_escaped . '/';
+	$URLescaped	=~ s'//$'/';
+
+	print OUT "<!-- HTML listing generated by $ServerMsg -->\n";
+	print OUT "<TITLE>FTP Directory: $URL</TITLE>\n";
+	print OUT "<H2>FTP Directory: $URL</H2>\n";
+	$README = &tempnam;
+	if (&ftp'get ("$dir/README", $README, 0) != 0) {
+		open README;
+		unlink ($README);
+		print OUT "<HR>\n";
+		print OUT "<H4>README file from $URL</H4>\n";
+		print OUT "<PRE>\n";
+		while (<README>) {
+				# this s// makes URLs into live links
+				s/([a-z]+:\/\/\S+[\w\/])/<A HREF="$1">$1<\/A>/;
+				print OUT;
+		}
+		close README;
+		print OUT "</PRE>\n";
+		print OUT "<HR>\n";
+	}
+
+	$x = &ftp'dir_open("-l");
+	$x = &ftp'dir_open if ($x == 2);
+	&fail (10, "Cannot list directory $dir on $host: $ftp'response")
+		if ($x != 1);
+	$rls = "ftp'NS";
+	print OUT "<PRE>\n";
+	print OUT &htmlize_list_entry ("..\n");
+	while (<$rls>) {
+		s/\r//g;
+		next if (/\s+\.\.?$/);	# skip . and ..
+		print OUT &htmlize_list_entry ($_);
+	}
+	print OUT "</PRE>\n";
+	print OUT "<HR>\n";
+	@@T = gmtime(time);
+	print  OUT "<ADDRESS>\n";
+	printf OUT ("Generated %s, %02d-%s-%02d %02d:%02d:%02d GMT,",
+			$weekday[$T[6]],
+			$T[3],
+			$month[$T[4]],
+			$T[5] % 100,
+			$T[2], $T[1], $T[0]);
+	print  OUT " by ftpget.pl\n";
+	print  OUT "</ADDRESS>\n";
+	close (OUT);
+	&ftp'dir_close();
+	0;
+}
+
+## parse_listing and supporting routines by moy@@parc.xerox.com
+#
+sub parse_listing {
+	local($f) = @@_;
+	local(@@a) = split(/\s+/, $f);
+	local($i, $p, $s, $d, $t);
+
+	foreach $i (3..($#a - 3)) {
+		if($isMonth{$a[$i]} && $a[$i - 1] =~ /^\d+$/ &&
+		 $a[$i + 1] =~ /^\d+$/ &&
+		 ($a[$i + 2] =~ /^\d+:\d\d$/ || $a[$i + 2] =~ /^\d\d\d\d$/)) {
+			$p = substr($a[0], 0, 1);
+			$s = $a[$i - 1];
+			$d = sprintf("%s %2s %5s", $a[$i], $a[$i + 1],
+			 $a[$i + 2]);
+			if($f =~ /$d/) {
+				$f =~ s/^.*$d //;
+			} else {
+				$t = sprintf("%s %2s %-5s", $a[$i], $a[$i + 1],
+				 $a[$i + 2]);
+				$f =~ s/^.*$t //;
+			}
+			$f =~ s/ -> (.*)$//;
+			return($p, $s, $d, $f, $1);
+		}
+	}
+	# try DOS style
+	if($a[0] =~ /^\d\d-\d\d-\d\d$/ && $a[1] =~ /^\d\d:\d\d[ap]m$/i) {
+		if($a[2] =~ /^<dir>$/i) { # a directory
+			return undef if $a[3] =~ /^\.\.?$/;
+			$d = join('  ', $a[0], $a[1]);
+			return('d', undef, $d, $a[3], undef);
+		}
+		$d = join('  ', $a[0], $a[1]);
+		return('-', $a[2], $d, $a[3], undef);
+	}
+
+	undef;
+}
+
+sub url_escape {
+	local($string) = @@_;
+	local(@@chars) = split('', $string);
+	local($_);
+	grep($_ = &cvt2hex($_), @@chars);
+	join('', @@chars);
+}
+
+sub cvt2hex {
+	local($_) = @@_;
+	return($_) if /[*+.\/0-9\@@A-Z_a-z-]/;
+	sprintf("%%%02x", ord);
+}
+
+sub make_leader {
+	local($_) = @@_;
+	local($len) = length;
+	local($n, $s);
+	return($_) if $len >= $fieldsize;
+	$n = $fieldsize - $len;
+	$s = $n % 3;
+	$n = int($n / 3);
+	$_ . ' ' x $s . '  .' x $n;
+}
+
+sub htmlize_list_entry {
+        local($_) = shift;
+        local($icon, $link, $buf, $pd);
+        local($p, $s, $d, $f, $fl, $fA);
+        chop;
+
+        if ($_ eq ".." && $dir ne '/') {
+                $pd = $dir_escaped;
+                $pd =~ s'/[^/]+$'/';
+                $icon = '<IMG BORDER=0 SRC="internal-gopher-menu" ALT="[DIR] ">';
+                $link = sprintf ('<A HREF="ftp://%s%s%s">%s',
+			$userinfo, $host, $pd, "Parent Directory</A>");
+                $buf =  sprintf ("%s %s\n", $icon, $link);
+                return $buf;
+        } 
+
+        @@list = &parse_listing($_);
+        return "" unless $#list == 4;
+
+        ($p, $s, $d, $f, $fl) = @@list;
+        #$s /= 1024;                            # rounds down
+        $s = ($s + 1023) / 1024 if defined($s); # rounds up
+        $longf = $f;				# save original, long filename
+	$f = substr($f,0,$fieldsize-5) . '>'	# compensate for long filenames
+		if (length($f) > ($fieldsize-4));
+        $fA = "$f</A>";
+        $buf = "";
+
+        if ($p =~ /^-/) {
+                $icon = sprintf('<IMG BORDER=0 SRC="internal-gopher-%s" ALT="[FILE]">',
+                 &get_mime_icon($longf));
+                $link = sprintf ('<A HREF="%s%s">%s', $URLescaped,
+                 &url_escape($longf), &make_leader($fA));
+                $buf =  sprintf ("%s %s  [%s] %6dk\n", $icon, $link, $d, $s);
+        } elsif ($p =~ /^d/) {
+                $icon = '<IMG BORDER=0 SRC="internal-gopher-menu" ALT="[DIR] ">';
+                $link = sprintf ('<A HREF="%s%s/">%s', $URLescaped,
+                 &url_escape($longf), &make_leader($fA));
+                $buf =  sprintf ("%s %s  [%s]\n", $icon, $link, $d);
+        } elsif ($p =~ /^l/) {
+                $icon = sprintf('<IMG BORDER=0 SRC="internal-gopher-%s" ALT="[LINK]">',
+                 ($_ = &get_mime_icon($longf)) eq 'unknown' && defined($fl) ?
+                 &get_mime_icon($fl) : $_);
+                $link = sprintf ('<A HREF="%s%s">%s', $URLescaped,
+                 &url_escape($longf), &make_leader($fA));
+                $buf =  sprintf ("%s %s  [%s]\n", $icon, $link, $d);
+        }
+        $buf;
+}
+
+sub tempnam {
+	local ($f) = sprintf ("ftpget%d%06x", $$, rand (0xFFFFFF));
+	return "$ENV{'TMPDIR'}/$f"
+		if (-d $ENV{'TMPDIR'} && $ENV{'TMPDIR'} ne "");
+	return "/usr/tmp/$f"
+		if (-d "/usr/tmp");
+	return "/tmp/$f";
+}
+
+sub get_file_size {
+	local ($f) = shift;
+	local (@@sb) = stat ($f);
+	return -1 if (@@sb == ());
+	return $sb[7];
+}
+
+sub fail {
+	local ($exitstat, $msg) = @@_;
+
+	$exitstat = 1 if ($exitstat < 1);	# always exit > 0 if here
+
+	# If this is a 'raw' transfer, don't write a HTTP error header,
+	#
+	unless ($htmlify) {
+		print STDERR "ftpget.pl: ", $msg, "\n";
+		exit($exitstat);
+	}
+	if ($sent_header) {
+		print STDOUT "$msg\n";
+		exit($exitstat);
+	}
+
+	$rfile = '/' . $rfile unless ($rfile =~ /^\//);
+	$html = <<EOF;
+<HTML>
+<HEAD>
+<TITLE>Error Message</TITLE>
+</HEAD>
+<BODY>
+<H1>Fatal Error 500</H1>
+<P>
+Can not access URL: ftp://$host$rfile
+<P>
+<B>Reason:</B> $msg
+</BODY>
+</HTML>
+EOF
+
+	$len = length ($html);
+	print <<EOF;
+HTTP/1.0 500 Internal error
+MIME-Version: 1.0
+Server: $ServerMsg
+Content-Type: text/html
+Content-Length: $len
+
+$html
+EOF
+exit ($exitstat);
+}
+
+
+sub init_mime {
+	local ($i) = 0;
+	local($ext, $type, $enc, $qual, $icon);
+	undef %MIMEType;
+	undef %MIMEEnc;
+	undef %MIMEIcon;
+	while (<DATA>) {
+		next if (/^#/);
+		s/^\s+//;
+		s/\s+$//;
+		($ext, $type, $enc, $qual, $icon) = split;
+		$MIMEType{$ext} = $type;
+		$MIMEEnc{$ext}  = $enc;
+		$MIMEIcon{$ext} = $icon;
+		$i++;
+	}
+	$mime_is_inited++;
+	$i;
+}
+
+sub get_mime {
+	local ($pathname) = shift;
+	local (@@parts);
+	local ($ext1) = undef;
+	local ($ext2, $type1, $type2);
+	local ($ver) = '1.0';
+	local ($html) = '.html';
+
+	&init_mime if !$mime_is_inited;
+	return($type1, $MIMEEnc{$html}, $ver)
+		if ($did_directory && defined($type1 = $MIMEType{$html}));
+
+	@@comps = split ('/', $pathname);
+	$filename = pop @@comps;
+	$filename =~ tr/A-Z/a-z/;
+	print STDERR "get_mime: \$filename=$filename\n"		if ($debug);
+
+	@@parts = split ('\.', $filename);
+	$ext1 = pop @@parts if ($#parts > $[);
+	print STDERR "get_mime: \$ext1=$ext1\n" if ($debug);
+
+	print STDERR "get_mime: \$MIMEType{", ".$ext1", "}="	if ($debug);
+	print STDERR $MIMEType{".$ext1"}, "\n"			if ($debug);
+	return ('text/plain', undef, $ver)
+		unless defined($type1 = $MIMEType{".$ext1"});
+
+	return ($type1, undef, $ver)
+		unless $#parts > $[;
+
+	$ext2 = pop @@parts;
+	print STDERR "get_mime: \$ext2=$ext2\n"			if ($debug);
+	return ($type1, undef, $ver)
+		unless defined($type2 = $MIMEType{".$ext2"});
+	return ($type2, $MIMEEnc{".$ext1"}, $ver);
+}
+
+sub get_mime_icon {
+	local ($filename) = shift;
+	local (@@parts);
+	local ($ext, $icon1, $icon2);
+
+	&init_mime if !$mime_is_inited;
+	$filename =~ tr/A-Z/a-z/;
+	@@parts = split ('\.', $filename);
+	$ext = pop @@parts if ($#parts > $[);
+	return ('unknown')
+		unless defined ($icon1 = $MIMEIcon{".$ext"});
+	return ($icon1)
+		unless $#parts > $[;
+	$ext = pop @@parts;
+	return ($icon1)
+		unless defined ($icon2 = $MIMEIcon{".$ext"});
+	return ($icon2);
+}
+
+
+sub http_header {
+	local ($type, $enc, $ver, $size, $mdtm) = @@_;
+
+# $mdtm is an ISO 3307 style time: YYYYMMDDHHMMSS or YYYYMMDDHHMMSS.xxx
+# We need to convert it to http time: Weekday, 00-Mon-00 00:00:00 GMT
+
+	local ($http_time) = undef;
+
+	if ($debug) {
+		print STDERR "http_header: \$type=$type\n";
+		print STDERR "http_header: \$enc=$enc\n";
+		print STDERR "http_header: \$ver=$ver\n";
+		print STDERR "http_header: \$size=$size\n";
+		print STDERR "http_header: \$mdtm=$mdtm\n";
+	}
+
+	if ($mdtm =~ /^(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d).*$/) {
+		local (@@T) = gmtime (&timegm ($6,$5,$4,$3,$2-1,$1-1900));
+		$http_time = sprintf ("%s, %02d-%s-%02d %02d:%02d:%02d GMT",
+			$weekday[$T[6]],
+			$T[3],
+			$month[$T[4]],
+			$T[5] % 100,
+			$T[2], $T[1], $T[0]);
+	}
+
+	print "HTTP/1.0 200 Gatewaying\r\n";
+	print "Server: $ServerMsg\r\n";
+	print "MIME-Version: $ver\r\n"		if ($ver  ne '');
+	print "Content-Length: $size\r\n"	if ($size > 0);
+	print "Content-Type: $type\r\n"		if ($type ne '');
+	print "Content-Encoding: $enc\r\n"	if ($enc  ne '');
+	print "Last-Modified: $http_time\r\n"	if ($http_time ne '');
+	print "\r\n";
+	$sent_header = 1;
+}
+
+#
+# The following section will be read by the <DATA> filehandle.
+#
+# NOTE: the section below is appended when this script is installed.
+#       The mime table should really be edited at src/common/url/mime.table
+
+__END__
+@
+
+
+1.1.1.1
+log
+@Harvest and squid caches.
+@
+text
+@@

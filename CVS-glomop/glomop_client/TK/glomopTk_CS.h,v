@@ -1,0 +1,340 @@
+head	1.7;
+access;
+symbols
+	stable:1.5
+	current:1.5
+	release:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	96.08.23.19.57.36;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.07.25.22.12.22;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.07.05.08.36;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.07.00.26.44;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.01.00.04.33;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.24.21.30.49;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.22.00.45.53;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTk_CS.h --
+ *
+ * Chunk scheduler and storage routines.
+ *
+ * $Id: glomopTk_CS.h,v 1.1 96/08/19 14:39:23 glomop Exp $
+ * 
+ */
+
+#ifndef GLOMOP_TKCS
+#define GLOMOP_TKCS
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "glomopTk_pub.h"
+
+#define PHOST_MAXSIZE 100
+#define PPORT_MAXSIZE 10
+
+/*--- Data structures ---*/
+
+/*
+ * The "proxyConnection" structure is used to characterize a connection to
+ * a proxy.  The "connect_id" field is guaranteed to be unique among all
+ * proxy connections, and is thus used as the key for the "connections"
+ * hash table.
+ */
+
+typedef struct _connst {
+  GM_ConnectId   connect_id;                  /* key field */
+  hash_table     documents_ht;                /* active documents */
+  int            proxy_socket;                /* socket to talk to proxy */
+  char           proxy_host[PHOST_MAXSIZE];   /* character proxy host */
+  char           proxy_port[PPORT_MAXSIZE];   /* character proxy port */
+  char           session_key[8];              /* session DES key */
+  unsigned short is_asynchronous;             /* is this session asynch? */
+} proxyConnection;
+
+/*
+ * The "proxySockConn" structure is used to map socket id's into
+ * GM_ConnectId's, and is used in the "socket_connects" hash table.
+ */
+
+typedef struct _sockconn {
+  int proxy_socket;                           /* key field */
+  GM_ConnectId proxy_connection;              /* which connection? */
+} proxySockConn;
+
+/*
+ * The "documentInfo" describes what information the CS has for a particular
+ * document within a proxy connection.  It contains the cached chunks,
+ * and all state information for the document.  The "document_id" field
+ * is guaranteed to be unique among documents of a proxy connection, and
+ * is therefore used as the key for the documents_ht has table in the
+ * proxyConnection structures.
+ */
+
+#define DI_EXTRALEN 16
+typedef struct _docst {
+  GM_DocId       document_id;                 /* key field */
+  hash_table     chunks_ht;                   /* chunks in document */
+  GM_DocCallbackProcPtr callback_ptr;         /* pointer to callback routine */
+  unsigned       callbackThreshold;           /* callback threshold value */
+  unsigned       maxChunks;                   /* maximum chunks per doc */
+  unsigned       numChunks;                   /* number of chunks stored */
+  char           extra[DI_EXTRALEN];          /* cheat callback Tcl string */
+} documentInfo;
+
+/*
+ * The chunk scheduler initialization routine.  It returns 0 if initialization
+ * was successful, and -1 otherwise.
+ */
+
+int CS_init(void);
+
+/*
+ * The CS_addConnection and CS_removeConnection procedures are used to
+ * store or remove state information associated with a proxy connection.
+ * They both return 0 if successful, and -1 otherwise.  CS_getConnection
+ * is used to return the connection state for a given connectId.
+ * The CS_getConnectId function is used to get the GM_ConnectId associated
+ * with a socket, or it returns 0 if such an associated doesn't exist.
+ */
+
+int CS_addConnection(GM_ConnectId connect_id, int socketID, char *proxyhost,
+		     char *proxyport, char *session_key,
+		     unsigned short is_asynch);
+int CS_removeConnection(GM_ConnectId connect_id);
+proxyConnection *CS_getConnection(GM_ConnectId connect_id);
+GM_ConnectId CS_getConnectId(int socketID);
+
+/*
+ * The CS_addDocument and CS_removeDocument procedures are used to store
+ * or remove state information associated with a document/proxyconnection
+ * pair.  They both return 0 if successful, and -1 otherwise.
+ * CS_getDocument is used to return the document state.
+ */
+
+int CS_addDocument(GM_ConnectId connect_id, GM_DocId doc_id,
+		   GM_DocCallbackProcPtr callback_ptr,
+		   unsigned callbackThreshold, unsigned maxChunks,
+		   char *extra);
+int CS_removeDocument(GM_ConnectId connect_id, GM_DocId doc_id);
+documentInfo *CS_getDocument(GM_ConnectId connect_id, GM_DocId doc_id);
+
+/*
+ * The CS_addChunk and CS_removeChunk procedures are used to store or
+ * remove state information associated with a chunk/doc/proxyconn
+ * triplet.  They both return 0 if successful, and -1 otherwise.
+ * CS_getChunk is used to return the chunk's state. 
+ * The BlobPtr inside the chunk will be freed by GloMop on removal.
+ */
+
+int CS_addChunk(GM_ConnectId connect_id, GM_DocId doc_id, GM_ChunkId chunk_id,
+		GM_DocLocator refine_dl, GM_MimeType mime_type,
+		BlobPtr metadata_obj, long int metadata_len,
+		BlobPtr chunk_obj, long int blob_len);
+int CS_removeChunk(GM_ConnectId connect_id, GM_DocId doc_id,
+		   GM_ChunkId chunk_id);
+GM_DocChunk *CS_getChunk(GM_ConnectId connect_id, GM_DocId doc_id,
+			 GM_ChunkId chunk_id);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+
+@
+
+
+1.6
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d2 8
+d14 1
+a14 1
+ * $Id: glomopTk_CS.h,v 1.5 1996/06/07 05:08:36 gribble Exp $
+a15 26
+ * $Log: glomopTk_CS.h,v $
+ * Revision 1.5  1996/06/07 05:08:36  gribble
+ * Threw in "extra" field into document structure to store callback
+ * command name for Tcl (yes, a hack), and added a BlobPtr length field
+ * to keep track of how big chunks are.  Built straw-man GetImageChunk
+ * and GetChunkType procedures and Tcl commands to actually retrieve
+ * chunks.  Built Tcl callback functionality (I think).
+ *
+ * Revision 1.4  1996/06/07 00:26:44  gribble
+ * Tweaked the chunk format to better suit the minimalistic GloMop API.
+ *
+ * Revision 1.3  1996/06/01 00:04:33  gribble
+ * Fixed up so that the gm_connectproxy command successfully uses the
+ * Charon authentication module.
+ *
+ * Revision 1.2  1996/05/24 21:30:49  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+ * Revision 1.1  1996/02/22 00:45:53  gribble
+ * Skeleton core structure complete.  Next stage: implementation of core
+ * routines.
+ *
+ *
+d21 4
+d126 1
+d132 4
+@
+
+
+1.5
+log
+@Threw in "extra" field into document structure to store callback
+command name for Tcl (yes, a hack), and added a BlobPtr length field
+to keep track of how big chunks are.  Built straw-man GetImageChunk
+and GetChunkType procedures and Tcl commands to actually retrieve
+chunks.  Built Tcl callback functionality (I think).
+@
+text
+@d6 1
+a6 1
+ * $Id: glomopTk_CS.h,v 1.4 1996/06/07 00:26:44 gribble Exp $
+d9 7
+d60 1
+d110 2
+a111 1
+		     char *proxyport, char *session_key);
+@
+
+
+1.4
+log
+@Tweaked the chunk format to better suit the minimalistic GloMop API.
+@
+text
+@d6 1
+a6 1
+ * $Id: glomopTk_CS.h,v 1.3 1996/06/01 00:04:33 gribble Exp $
+d9 3
+d74 1
+d82 1
+d116 2
+a117 1
+		   unsigned callbackThreshold, unsigned maxChunks);
+d131 1
+a131 1
+		BlobPtr chunk_obj);
+@
+
+
+1.3
+log
+@Fixed up so that the gm_connectproxy command successfully uses the
+Charon authentication module.
+@
+text
+@d6 1
+a6 1
+ * $Id: glomopTk_CS.h,v 1.2 1996/05/24 21:30:49 gribble Exp $
+d9 4
+d119 2
+a120 1
+ * CS_getChunk is used to return the chunk's state.
+d124 1
+a124 2
+		GM_DocId refine_id, int chunk_nrefs,
+		GM_DocLocator *chunk_refs, GM_DocSubType subtype,
+@
+
+
+1.2
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d6 1
+a6 1
+ * $Id: glomopTk_CS.h,v 1.1 1996/02/22 00:45:53 gribble Exp $
+d9 6
+d27 2
+a28 1
+#define PADDR_MAXSIZE 100
+d43 3
+a45 1
+  char           proxy_addr[PADDR_MAXSIZE];   /* character proxy address */
+d92 2
+a93 1
+int CS_addConnection(GM_ConnectId connect_id, int socketID, char *proxyAddr);
+@
+
+
+1.1
+log
+@Skeleton core structure complete.  Next stage: implementation of core
+routines.
+@
+text
+@d6 1
+a6 1
+ * $Id$
+d8 5
+a12 1
+ * $Log$
+d19 47
+d67 49
+d118 1
+@

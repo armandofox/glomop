@@ -1,0 +1,282 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.6
+	Yatin:1.6.0.2
+	pre-yatin-merge:1.6
+	transend-beta2:1.4
+	fox-dev:1.4
+	ptm-ng:1.4
+	transend-beta-latest:1.4
+	Aggregators:1.4
+	NoAggregators:1.4
+	iang:1.4.0.4
+	transend-beta:1.4.0.2
+	SOSP:1.4
+	stable_ptm:1.2
+	merged_preintegrate:1.2
+	heisenbug:1.2
+	PRE_INTEGRATION:1.2;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	97.09.18.22.45.20;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.15.03.09.34;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.26.04.14.54;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.17.03.01.09;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.05.01.27.12;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.39;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@#ifndef __REQREP_H__
+#define __REQREP_H__
+
+#include "eventhan.h"
+#include "database.h"
+
+
+class RequestReplyTimer;
+class RequestReplyEventSystem;
+
+struct RequestReplyKey : public IndexKey {
+  RequestReplyKey() : id(NoRequestReply) { };
+  gm_Bool Equal(IndexKey *key) 
+  { return (id==((RequestReplyKey*)key)->id) ? gm_True : gm_False; };
+  UINT32 Hash() { return id; };
+
+  UINT32 id;
+};
+
+
+class RequestReply : public EventHandler, public DatabaseRecord {
+public:
+  RequestReply(RequestReplyEventSystem *evs, long timeoutSec,long timeoutUsec);
+  virtual ~RequestReply();
+
+  virtual gm_Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args)=0;
+  virtual gm_Bool EvTimer(RequestReplyEventSystem *evs)=0;
+  gm_Bool    Retry(long timeoutSec, long timeoutUsec);
+
+  void    SetID(UINT32 id) { key.id = id; };
+  UINT32  getID() { return key.id; };
+
+  RequestReplyKey   key;
+protected:
+  gm_Bool   HandleEvent(EventSystem *evs, EventType eventType, void *args);
+
+  RequestReplyTimer *timer;
+  RequestReplyEventSystem *eventSystem;
+};
+
+
+class RequestReplyTimer : public gm_Timer {
+public:
+  RequestReplyTimer(EventSystem *evs, RequestReply *rr, long timeoutSec,
+		    long timeoutUsec) 
+    : gm_Timer(evs, timeoutSec, timeoutUsec, gm_False), requestReply(rr) { };
+
+protected:
+  gm_Bool EvTimer(EventSystem *evs);
+  RequestReply *requestReply;
+};
+
+
+
+class RequestReplyEventSystem : public EventSystem {
+public:
+  RequestReplyEventSystem() : transactionCount(0), requestReplyMutex("*-rr"){};
+
+  gm_Bool AddRequestReply   (RequestReply *requestReplyObject);
+  void RemoveRequestReply(RequestReply *requestReplyObject);
+
+  gm_Bool SendReplyReceivedEvent(UINT32 transactionID, void *args);
+protected:
+  class RequestReplyIndex : public Index {
+  public:
+    RequestReplyIndex(gm_Bool dupsAllowed=gm_False,
+		      int numberOfBuckets=DefaultNumberOfBuckets)
+      : Index(dupsAllowed, numberOfBuckets) { };
+  protected:
+    IndexKey *getIndexKey(DatabaseRecord *record)
+    { return &((RequestReply*)record)->key; }
+  };
+
+  UINT32 transactionCount;
+  RequestReplyIndex requestReplyIndex;
+  Mutex requestReplyMutex;
+};
+
+
+#endif // __REQREP_H__
+
+@
+
+
+1.5
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d42 1
+a42 1
+class RequestReplyTimer : public Timer {
+d46 1
+a46 1
+    : Timer(evs, timeoutSec, timeoutUsec, gm_False), requestReply(rr) { };
+@
+
+
+1.4
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d38 1
+a38 2
+
+  static RequestReplyEventSystem *eventSystem;
+@
+
+
+1.3
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d58 1
+a58 1
+  RequestReplyEventSystem() : transactionCount(0) { };
+@
+
+
+1.2
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d5 1
+d71 1
+a71 1
+    IndexKey *GetIndexKey(DatabaseRecord *record)
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d12 2
+a13 2
+  Bool Equal(IndexKey *key) 
+  { return (id==((RequestReplyKey*)key)->id) ? TRUE : FALSE; };
+d25 3
+a27 3
+  virtual Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args)=0;
+  virtual Bool EvTimer(RequestReplyEventSystem *evs)=0;
+  Bool    Retry(long timeoutSec, long timeoutUsec);
+d34 1
+a34 1
+  Bool   HandleEvent(EventSystem *evs, EventType eventType, void *args);
+d46 1
+a46 1
+    : Timer(evs, timeoutSec, timeoutUsec, FALSE), requestReply(rr) { };
+d49 1
+a49 1
+  Bool EvTimer(EventSystem *evs);
+d59 1
+a59 1
+  Bool AddRequestReply   (RequestReply *requestReplyObject);
+d62 1
+a62 1
+  Bool SendReplyReceivedEvent(UINT32 transactionID, void *args);
+d66 1
+a66 1
+    RequestReplyIndex(Bool dupsAllowed=FALSE,
+@

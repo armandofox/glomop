@@ -1,0 +1,214 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.03.13.16.56.35;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.03.13.16.26.40;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@more
+@
+text
+@<html>
+<title>
+Recovery
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Principles of Transaction-Oriented Database Recovery
+</h1>
+<strong>
+Theo Haerder and Andreas Reuter
+</strong>
+<p>
+<i>Summary authors: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+A massive summary of transaction-oriented DB recovery techniques, from
+logging to checkpointing to recovery.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> Transactions: ACID
+     <li> Failures:
+	  <ul>
+	       <li> transaction failure - transaction does not reach commit
+		    (abort, deadlock, system abort)
+	       <li> system failure - DB/OS bug, hardware failure
+	       <li> media failure - disk crash, magnetic decay, etc.
+	  </ul>
+     <li> Recoveries: <i>transaction is the only unit of recovery</i>
+	  <ul>
+	       <li> transaction undo - graceful transaction/system
+		    initiated undo
+	       <li> global undo - when recovering from system failure,
+		    effects of all incomplete transactions are rolled back
+	       <li> partial redo - results of complete transactions must be
+		    reflected in DB after system failure
+	       <li> global redo - &quot;archive recovery&quot; - DB
+		    physically destroyed, start from old copy, and play
+		    transaction log at it.
+	  </ul>
+	  Temporary log file on disk for crash recovery;  archive log file
+	  archive DB in tertiary storage in case building bursts into
+	  flames.
+     <li> Views of DB
+	  <ul>
+	       <li> current DB - all objects accessible to DBMS during
+		    normal operation
+	       <li> materialized DB - state of DB at restart after crash.
+		    May have updates written to disk but no metadata update
+		    for it (lost update)
+	       <li> physical DB - all blocks of on-ine copy of page images
+		    - current or obsolete.  This view used by salvage
+		    program.
+	  </ul>
+     <li> DB updates
+	  <ul>
+	       <li> direct page allocation - each page of seegment is
+		    related to one block of file, output of modified page
+		    causes replacement in place.  Crash in middle of
+		    replacement may leave materialized/physical DB in
+		    inconsistent state
+	       <li> indirect page allocation - each output directed to new
+		    block, leaving old contents unchanged.  Gives way to
+		    back out to old state of DB.  Can use indirect+shadow
+		    to give atomic update of multiple pages.
+	  </ul>
+     <li> Crash recovery
+	  <ul>
+	       <li> must start with materialized DB + temporary log file.
+	       <li> direct page allocation + non-atomic writes -
+		    can't tell which pages in materialized DB were modified
+		    by complete transactions but not flushed by buffer
+		    manager (requiring partial REDO) or modified by
+		    incomplete transaction (requiring partial UNDO).
+	       <li> indirect and atomic - state in DB is exactly that
+		    produced by most recent successful propagation.  May be
+		    inconsistent at transaction leel, but all internal
+		    pointers, tree structures, etc. are correct.
+	       <li> log information necessary
+		    <ul>
+			 <li> STEAL: modified pages may be written at any
+			      time.  (NOT)-STEAL: modified pages are kept
+			      in buffer until end of transaction.
+			      (NOT)-STEAL eliminates need for logging for
+			      UNDO purposes.
+			 <li> EOT processing: all pages modified by
+			      transaction are propagated to materialized
+			      DB.  FORCE: all modified pages are written
+			      ane propagated during EOT processing.
+			      (NOT)-FORCE: no
+			      propagation is triggered during EOT
+			      processing.  For (NOT)-FORCE, need logging to
+			      do partial REDO.
+			 <li> physical logging: the physical pattern (bit
+			      pattern) of data is written to log.  logical
+			      logging: operators and arguments recorded on
+			      a higher level.  Either state
+			      or transition of DB (data or deltas) can be
+			      recorded in log.  State requires before and
+			      after picture;  transition requires only one
+			      record (delta).
+			 <li> If log at higher level (e.g. access path)
+			      don't need to dump as much data - write
+			      objects as opposed to pages.
+			 <li> UNDO information must always be written to
+			      log before corresponding updates are
+			      propagated to materialized DB.  (Write-ahead
+			      log principle.)  REDO information must be
+			      written to temporary and archive log file
+			      before EOT is acknowledged to transaction
+			      program.
+			 <li> After crash, must scan back to beginning of
+			      transaction (BOT) entry of oldest incomplete
+			      transaction.
+			 <li> Checkpoints - makes restart costs independent
+			      of mean time between failure.  Need BEGIN_CP,
+			      write data, then END_CP to go in log.
+		    </ul>
+	  </ul>
+     <li> Checkpoints
+	  <ul>
+	       <li> transaction-oriented: if use FORCE-discipline, all
+		    pages written before EOT - thus EOT is both BEGIN_CP
+		    and END_CP.  Expensive if have hot-spots in DB.
+	       <li> transaction-consistent: when checkpoint starts, all
+		    incomplete transactions are run to completion first,
+		    and new transactions are not admitted until CP is
+		    finished.  This delay is intolerable for commercial DB.
+	       <li> action-consistent: actions affect DB on
+		    record-oriented level.  Checkpoint when no update action is
+		    being processed.
+	       <li> fuzzy checkpoints: combine action-consistent with
+		    indirect checkpointing - at checkpoint time, numbers of
+		    all pages currently in buffer are written to log file.
+		    If no hot spots, nothing else is done.  Else if
+		    modified page is found at two subsequent checkpoints
+		    without having been propagated, it will be propagated
+		    during checkpoint generation.  Thus, scope of partial
+		    REDO is limited to two checkpoint intervals.
+	       <li> in general, ATOMIC achieves action- or transaction-
+		    consistent materialized DB. (NOT)-ATOMIC achieves
+		    chaotic materialized DB.  And, in general, all
+		    transaction-oriented and transaction-consisten schemes
+		    have high checkpoint costs.
+	  </ul>
+     <li> Archives
+	  <ul>
+	       <li> can be made on-the-fly - &quot;fuzzy&quot; dump.
+	       <li> can me made incrementally - only changed pages.
+	       <li> archives very suceptible to magnetic decay as they
+		    aren't used much.
+	  </ul>
+	  
+</ul>
+
+<h2>Relevance</h2>
+Obvious, I hope.  Can see how file-system world and distributed system
+world have been influenced by this topic.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> paper is absolutely huge - and has a low signal to noise ratio
+     <li> more detailed costs analysis for various techniques would be
+	  beneficial - difficult to figure out exactly when each technique
+	  could be applicable/beneficial
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@Added recovery paper.
+@
+text
+@d13 2
+a14 2
+
+<i>authors: Steve Gribble and Armando Fox</i>
+@

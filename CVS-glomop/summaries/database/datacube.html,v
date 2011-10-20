@@ -1,0 +1,197 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.05.01.17.27.44;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.01.16.33.31;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@datacube summary modified, array summary added.
+@
+text
+@<html>
+<title>
+Datacube
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+Data Cube: A Relational Aggregation Operator Generalizing Group-By,
+Cross-Tab, and Sub-Totals.
+</h1>
+<strong>
+Jim Gray, Adam Bosworth, Andrew Layman, and Hamid Pirahesh.
+</strong>
+
+<P><i>Summary by: Steve Gribble and Armando Fox</i>
+
+<p><b>One-line summary:</b>
+Aggregates and group-by operators produce 0- or 1-dimensional answers;
+cross-tabs produce 2-d answers;  the data-cube produces N-dimensional
+aggregates and answers by treating each of the N aggregation attributes as
+a dimension of N-space.
+</p>
+
+<h2>Relevance</h2>
+Cool new operator - proven to be very, very useful while playing with data,
+and has become widely adopted.  Good to read about.
+
+<h2>Flaws</h2>
+
+<ul>
+     <li> I cannot easily imagine the visualization techniques necessary to
+	  extend this to N>3 dimensions.  Sure, color and motion could be
+	  used, but that is not at all intuitive for a human.  3-d shadows,
+	  slices, or extrusions could be used, but that gets cluttered and
+	  confusing (e.g. after many years of churning away at it, I still
+	  can't totally grok a hypercube.  Maybe I'm just bad at this sort
+	  of a thing.)
+     <li> The section discussing algebraic vs. distributive vs. holistic
+	  wasn't clear about the exact cost of computing the power set.
+	  Give me the gory details!
+     <li> Can the power set be lazily generated somehow?  Probably don't
+	  need all dimentionalities of aggregations, and could compute on
+	  demand.
+</ul>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+     <li> aggregation operators:
+	  <ul>
+	       <li> 5 functions in SQL: <code>count, sum, min, max, and avg
+		    </code>;
+		    these return a single value.
+	       <li> group by operator creates a table of aggregates indexed
+		    by some set of attributes (e.g. <code>max(salary) group by
+		    department</code>)
+	       <li> proprietary extensions to SQL:  <code>cumulative sum,
+		    running sum, running average</code> (Red Brick systems).
+	  </ul>
+     <li> problems with group by:
+	  <ul>
+	       <li> does not easily permit histograms (need to construct
+		    table-valued expression, then aggregate over the
+		    resulting table, and even then histogram does not
+		    necessarily have evenly spaced categories)
+	       <li> roll-up totals and sub-totals for drill-downs.
+		    Requires N unions for an N-dimensional roll-up.
+		    <ul>
+			 <li> roll-up total: reports aggregate data at a
+			      coarse level (e.g. <code>average(sales) group
+			      by model</code>), then at a finer level
+			      (e.g. <code>average(sales) group by
+			      model,year</code>), etc. for successively
+			      finer levels
+			 <li> going from finer to coarser is rolling-up the
+			      data, from coarser to finer is drilling-down
+			      the data (<i>I think - paper was ambiguous
+			      about which term corresponds to which
+			      direction.</i>) 
+		    </ul>
+	       <li> cross-tabulations.  imagine data:
+		    <table border>
+		    <tr>
+		    <th>Model</th><th>Year</th><th>Color</th><th>sales</th>
+		    </tr>
+		    <tr>
+		    <td>Chevy</td><td>1994</td><td>black</td><td>50</td>
+		    </tr>
+		    <tr>
+		    <td>Chevy</td><td>1994</td><td>white</td><td>40</td>
+		    </tr>
+		    <tr>
+		    <td>Chevy</td><td>1995</td><td>black</td><td>85</td>
+		    </tr>
+		    <tr>
+		    <td>Chevy</td><td>1995</td><td>white</td><td>115</td>
+		    </tr>
+		    </table>
+
+		    The cross-tabulation for this adds rows and colums to
+		    give symmetric aggregation results across each
+		    dimension:
+
+		    <table border>
+		    <tr>
+		    <th>Chevy</th><th>1994</th><th>1995</th><th>total(ALL)</th>
+		    </tr>
+		    <tr>
+		    <th>black</th><td><i>50</i></td><td><i>85</i></td><td>135</td>
+		    </tr>
+		    <tr>
+		    <th>white</th><td><i>40</i></td><td><i>115</i></td><td>155</td>
+		    </tr>
+		    <tr>
+		    <th>total(ALL)</th><td>90</td><td>200</td><td>290</td>
+		    </tr>
+		    </table>
+
+		    The data in italics is the original data from the
+		    table.  The extra column on the right is the
+		    aggregation across years grouped by color,  The extra
+		    row on the bottom is the aggregation across color
+		    grouped by year (i.e. 1-dimensional aggregate of 2-d
+		    data).  The extra point in the bottom-right
+		    is the aggregation across all data (i.e. 0-dimensional
+		    aggregate of the 2-d data).
+	  </ul>
+     <li> data-cube:  simply a generalization of the cross-tab to
+	  N-dimensions (usually 3).  Core cube is data.  Extra planes are
+	  added for 2-d aggregations of the 3-d data.  Extra edges are
+	  added for 1-d aggregations of the 3-d data.  An extra vertex is
+	  added for 0-d aggregation of the 3-d data.
+     <li> end up with 2^n aggregates for the N-d data cube, one for each
+	  set in the power set that represents the cube.
+     <li> issues:
+	  <ul>
+	       <li> to implement as a relation, need the power set of the
+		    relation in question - use the special token ALL to
+		    indicate fields that have been aggregated across
+		    (e.g. if a tuple from the sales table is
+		    <code>(Chevy, 1990, blue, 64)</code>, then you could
+		    imagine a new field in the power set
+		    <code>(Chevy, ALL, blue, 182)</code> which is the
+		    aggregation across all years of blue Chevys.)
+	       <li> ALL token greatly complicates SQL code.  Think of ALL
+		    as being a set-value, e.g. above, ALL would represent
+		    multiple years <code>{1990, 1991, 1992}</code>.
+	       <li> How do you efficiently compute this power set (which is
+		    really the data cube)? (If data
+		    aggregation function has special properties, e.g. is
+		    <i>Distributive</i>, <i>Algebraic</i>, or
+		    <i>Holistic</i>, can exploit those properties in the
+		    algorithm for computing the data cube.
+	  </ul>
+</ul>
+
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@data cube summary
+@
+text
+@d133 2
+@

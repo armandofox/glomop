@@ -1,0 +1,1983 @@
+head	1.29;
+access;
+symbols
+	v1_2:1.28
+	v1_1:1.22
+	v1_0:1.18
+	start:1.1.1.1
+	soda445:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.29
+date	98.07.24.02.55.42;	author gribble;	state Exp;
+branches;
+next	1.28;
+
+1.28
+date	97.07.07.02.27.33;	author iang;	state Exp;
+branches;
+next	1.27;
+
+1.27
+date	97.07.06.00.27.19;	author iang;	state Exp;
+branches;
+next	1.26;
+
+1.26
+date	97.07.05.23.10.48;	author iang;	state Exp;
+branches;
+next	1.25;
+
+1.25
+date	97.07.04.00.54.06;	author iang;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.07.03.00.08.45;	author iang;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.07.02.22.15.07;	author iang;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.07.02.09.34.23;	author iang;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.07.02.09.27.57;	author iang;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.07.02.06.26.47;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.07.02.04.48.05;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.07.01.09.39.46;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.07.01.07.48.39;	author iang;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.07.01.01.01.01;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.06.30.21.57.37;	author iang;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.06.30.20.40.19;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.06.30.17.44.20;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.06.30.02.27.42;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.06.28.22.57.16;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.06.28.02.03.10;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.05.21.21.50.26;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.05.21.03.20.30;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.05.20.07.00.30;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.05.20.00.51.05;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.19.01.56.09;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.05.19.00.44.53;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.18.17.46.15;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.18.00.24.21;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.13.22.39.23;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.05.13.22.39.23;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.29
+log
+@took out duplicate #include <sys/types.h> so it wouldnt break with new gcc
+@
+text
+@/* Main code for Top Gun Postman
+   See the README file for copyright/licensing terms */
+
+#include <Pilot.h>
+#include <SysEvtMgr.h>
+// #include <sys/types.h>
+#include <sys/socket.h>
+#include "TGpostman.h"
+#include "smtp.h"
+#include "pop.h"
+#include "popquery.h"
+
+/* The current open socket */
+static struct sockhandler cursockh;
+
+static enum { progress_none, progress_smtp, progress_pop } progressStart;
+
+static WinHandle progbarWindow = 0;
+
+Err errno = 0;
+
+static int do_pop_later = 0;  /* Set this if we want to do SMTP and POP with
+                                  one button tap */
+
+static void disp_info(CharPtr msg, ULong n, ULong d, VoidHand diH)
+{
+    FormPtr frm = FrmGetActiveForm();
+    Word formID = FrmGetFormId(frm);
+    FieldPtr fld;
+    VoidHand thnd;
+    CharPtr ttxt;
+    WinHandle drawwin;
+    RectangleType progbarrect = { { 0, 0 }, { 150, 13 } };
+
+    if (formID != progressForm) return;
+
+    /* Draw the progress bar */
+    drawwin = WinGetDrawWindow();
+    WinSetDrawWindow(progbarWindow);
+    WinEraseWindow();
+    if (d > 0) {
+	Char label[50];
+	FontID oldfont = FntGetFont();
+	RectangleType r = { { 0, 0 }, { 0, 13 } };
+
+	StrPrintF(label, "%ld%%", (100UL*(ULong)n)/(ULong)d);
+
+	WinDrawRectangleFrame(rectangleFrame, &progbarrect);
+	FntSetFont(boldFont);
+	WinDrawChars(label, StrLen(label),
+	    (150-FntLineWidth(label, StrLen(label)))/2, 2);
+	FntSetFont(oldfont);
+	r.extent.x = (150UL*(ULong)n)/(ULong)d;
+	WinInvertRectangle(&r, 0);
+    }
+    WinSetDrawWindow(drawwin);
+
+    /* Draw the message, if necessary */
+    if (msg) {
+	fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, msgField));
+	thnd = MemHandleNew(StrLen(msg)+1);
+	ttxt = MemHandleLock(thnd);
+
+	StrCopy(ttxt, msg);
+	MemHandleUnlock(thnd);
+	FldFreeMemory(fld);
+	FldSetTextHandle(fld, (Handle)thnd);
+	FldDrawField(fld);
+    }
+
+    WinCopyRectangle(progbarWindow, drawwin, &progbarrect, 5, 63, scrCopy);
+}
+
+static void setfieldtxt(FormPtr frm, Word fid, CharPtr s1, CharPtr s2,
+    CharPtr s3)
+{
+    FieldPtr fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, fid));
+    Word len = (s1 ? StrLen(s1) : 0) + (s2 ? StrLen(s2) : 0) +
+		(s3 ? StrLen(s3) : 0) + 1;
+    VoidHand txthand = MemHandleNew(len);
+    if (txthand) {
+	CharPtr txtptr = MemHandleLock(txthand);
+	if (txtptr) {
+	    txtptr[0] = '\0';
+	    if (s1) StrCat(txtptr, s1);
+	    if (s2) StrCat(txtptr, s2);
+	    if (s3) StrCat(txtptr, s3);
+	}
+	MemHandleUnlock(txthand);
+	FldFreeMemory(fld);
+	FldSetTextHandle(fld, (Handle)txthand);
+    }
+}
+
+void show_error(CharPtr s1, CharPtr s2, CharPtr s3)
+{
+    /* Grumble... The following call tends to *CRASH* the Pilot... */
+    /* FrmCustomAlert(alertErrorDismiss, s1, s2, s3); */
+
+    /* Do this instead: */
+    FormPtr frm;
+
+    frm = FrmInitForm(ErrorForm);
+    setfieldtxt(frm, ErrorMsgFld, s1, s2, s3);
+    SndPlaySystemSound(sndError);
+    FrmDoDialog(frm);
+    FrmDeleteForm(frm);
+}
+
+/* Functions to open and close the Net Lib (and make sure PPP is up) */
+static int open_netlib(void)
+{
+    Err err, iferr;
+    Byte allup;
+
+    /* Open the net library */
+    err = NetLibOpen(AppNetRefnum, &iferr);
+    if ((err && err != netErrAlreadyOpen) || iferr) {
+	if (!err || err == netErrAlreadyOpen) {
+	    NetLibClose(AppNetRefnum, false);
+	}
+	return 1;
+    }
+    err = NetLibConnectionRefresh(AppNetRefnum, true, &allup, &iferr);
+    if (err || !allup) {
+	NetLibClose(AppNetRefnum, false);
+	return 1;
+    }
+
+    return 0;
+}
+
+static int close_netlib(void)
+{
+    Err err;
+
+    err = NetLibClose(AppNetRefnum, false);
+    if (err) {
+	return 1;
+    }
+
+    return 0;
+}
+
+static FieldPtr GetFocusObjectPtr(FormPtr frm)
+{
+    Word focus = FrmGetFocus(frm);
+    if (focus == noFocus) return NULL;
+
+    return FrmGetObjectPtr(frm, focus);
+}
+
+static Boolean EditMenuHandler(Word menuitem, FormPtr frm)
+{
+    Boolean handled = false;
+    FieldPtr fld;
+
+    switch(menuitem) {
+    case editMenuUndo:
+	fld = GetFocusObjectPtr(frm);
+	if (fld) {
+	    FldUndo(fld);
+	}
+	handled = true;
+	break;
+
+    case editMenuCut:
+	fld = GetFocusObjectPtr(frm);
+	if (fld) {
+	    FldCut(fld);
+	}
+	handled = true;
+	break;
+
+    case editMenuCopy:
+	fld = GetFocusObjectPtr(frm);
+	if (fld) {
+	    FldCopy(fld);
+	}
+	handled = true;
+	break;
+
+    case editMenuPaste:
+	fld = GetFocusObjectPtr(frm);
+	if (fld) {
+	    FldPaste(fld);
+	}
+	handled = true;
+	break;
+
+    case editMenuSelectAll:
+	fld = GetFocusObjectPtr(frm);
+	if (fld) {
+	    FldSetSelection(fld, 0, FldGetTextLength(fld));
+	}
+	handled = true;
+	break;
+
+    case editMenuKeyboard:
+	SysKeyboardDialog(kbdDefault);
+	handled = true;
+	break;
+
+    case editMenuGraffiti:
+	SysGraffitiReferenceDialog(referenceDefault);
+	handled = true;
+	break;
+    }
+
+    return handled;
+}
+
+static Boolean SMTPPrefsFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    CharPtr smtpserver = NULL;
+    CharPtr email = NULL;
+    CharPtr realname = NULL;
+    CharPtr prefs = NULL;
+    Word prefsize = 250;
+    Word len=0, smtpserverlen=0, emaillen=0, realnamelen=0;
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	/* Retrive the prefrences */
+	prefs = MemPtrNew(prefsize);
+	if (prefs) MemSet(prefs, prefsize, 0);
+	if (PrefGetAppPreferences('TGml', 1, prefs, &prefsize, 1) == 1) {
+	    smtpserver = prefs;
+	    email = smtpserver + StrLen(smtpserver) + 1;
+	    realname = email + StrLen(email) + 1;
+	    setfieldtxt(frm, SMTPPrefsServerFld, smtpserver, NULL, NULL);
+	    setfieldtxt(frm, SMTPPrefsEmailFld, email, NULL, NULL);
+	    setfieldtxt(frm, SMTPPrefsNameFld, realname, NULL, NULL);
+	}
+	MemPtrFree(prefs);
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+	    switch(e->data.menu.itemID) {
+	    }
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlSelect.controlID) {
+	case SMTPPrefsSaveBtn:
+	    /* Save the preferences */
+	    frm = FrmGetActiveForm();
+	    smtpserver = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, SMTPPrefsServerFld)));
+	    email = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, SMTPPrefsEmailFld)));
+	    realname = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, SMTPPrefsNameFld)));
+	    if (!smtpserver) smtpserver = "";
+	    if (!email) email = "";
+	    if (!realname) realname = "";
+
+	    smtpserverlen = StrLen(smtpserver);
+	    emaillen = StrLen(email);
+	    realnamelen = StrLen(realname);
+
+	    len = smtpserverlen + emaillen + realnamelen + 3;
+	    prefs = MemPtrNew(len);
+	    StrCopy(prefs, smtpserver);
+	    StrCopy(prefs+smtpserverlen+1, email);
+	    StrCopy(prefs+smtpserverlen+emaillen+2, realname);
+	    PrefSetAppPreferences('TGml', 1, 1, prefs, len, 1);
+	    MemPtrFree(prefs);
+	    /* FALLTHROUGH */
+
+	case SMTPPrefsCancelBtn:
+	    FrmGotoForm(mainForm);
+	    handled = true;
+	    break;
+
+	default:
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+static int popprefspasswd_done = 0;
+
+static CharPtr popprefs_getpasswd(void)
+{
+    Word err;
+    EventType e;
+    FormPtr frm;
+    FieldPtr fld;
+    CharPtr passwd;
+
+    FrmPopupForm(POPPrefsPasswdForm);
+
+    /* Do the event loop */
+    popprefspasswd_done = 0;
+    do {
+        EvtGetEvent(&e, evtWaitForever);
+        if (! SysHandleEvent (&e))
+            if (! MenuHandleEvent (NULL, &e, &err))
+                if (! ApplicationHandleEvent (&e))
+                    FrmDispatchEvent (&e);
+    } while (!popprefspasswd_done);
+
+    if (popprefspasswd_done > 0) {
+	frm = FrmGetActiveForm();
+	fld = FrmGetObjectPtr(frm,
+		FrmGetObjectIndex(frm, POPPrefsPasswdPassFld));
+	passwd = FldGetTextPtr(fld);
+	if (!passwd) {
+	    passwd = MemPtrNew(1);
+	    ErrFatalDisplayIf(!passwd, "Cannot allocate memory for password");
+	    passwd[0] = '\0';
+	} else {
+	    CharPtr newpw = MemPtrNew(StrLen(passwd)+1);
+	    ErrFatalDisplayIf(!newpw, "Cannot allocate memory for password");
+	    StrCopy(newpw, passwd);
+	    passwd = newpw;
+	}
+    } else {
+	passwd = NULL;
+    }
+
+    FrmReturnToForm(POPPrefsForm);
+
+    return passwd;
+}
+
+static Boolean POPPrefsPasswdFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+
+    switch(e->eType) {
+    case frmOpenEvent:
+        frm = FrmGetActiveForm();
+        FrmDrawForm(frm);
+	FrmSetFocus(frm, FrmGetObjectIndex(frm, POPPrefsPasswdPassFld));
+        handled = true;
+        break;
+
+    case menuEvent:
+        MenuEraseStatus(NULL);
+
+	if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+	    switch(e->data.menu.itemID) {
+	    }
+	}
+
+        handled = true;
+        break;
+
+    case ctlSelectEvent:
+        switch(e->data.ctlSelect.controlID) {
+	case POPPrefsPasswdOKBtn:
+	    popprefspasswd_done = 1;
+	    handled = true;
+	    break;
+
+	case POPPrefsPasswdCancelBtn:
+	    popprefspasswd_done = -1;
+	    handled = true;
+	    break;
+
+	default:
+	    break;
+	}
+
+	break;
+
+    default:
+	break;
+    }
+
+    return handled;
+}
+
+static Boolean POPPrefsFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    FieldPtr fld;
+    ControlPtr ctl;
+    ListPtr lst;
+    Word lstval;
+    CharPtr popserver = NULL;
+    CharPtr userid = NULL;
+    CharPtr password = NULL;
+    unsigned char *flagptr = NULL;
+    unsigned char flags = 0;
+    unsigned int truncsize = 0;
+    CharPtr prefs = NULL;
+    Word prefsize = 350;
+    Word len, popserverlen, useridlen, passwordlen;
+    static const truncsizes[] =
+	{ 512, 1024, 2048, 4096, 6144, 8192, 16384, 0 };
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	/* Retrive the prefrences */
+	prefs = MemPtrNew(prefsize);
+	if (prefs) MemSet(prefs, prefsize, 0);
+	if (PrefGetAppPreferences('TGml', 2, prefs, &prefsize, 1) == 1) {
+	    popserver = prefs;
+	    userid = popserver + StrLen(popserver) + 1;
+	    password = userid + StrLen(userid) + 1;
+	    flagptr = (password + StrLen(password) + 1);
+	    flags = flagptr[0];
+	    truncsize = (flagptr[1] << 8) + flagptr[2];
+	    setfieldtxt(frm, POPPrefsServerFld, popserver, NULL, NULL);
+	    setfieldtxt(frm, POPPrefsEmailFld, userid, NULL, NULL);
+	    setfieldtxt(frm, POPPrefsPassFld, password, NULL, NULL);
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsUseAPOPBtn));
+	    CtlSetValue(ctl, flags & POPPrefsUseAPOPFlag);
+	    lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsPasteHeadersList));
+	    LstSetSelection(lst, (flags & POPPrefsPasteHeadersFlag) ? 1 :
+		((flags & POPPrefsPasteHeadersBottomFlag) ? 2 : 0));
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsPasteHeadersCtl));
+	    CtlSetLabel(ctl, LstGetSelectionText(lst, LstGetSelection(lst)));
+	    lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsLimitList));
+	    if (truncsize == 0) {
+		lstval = 7;
+	    } else if (truncsize < 1024) {
+		lstval = 0;
+	    } else if (truncsize < 2048) {
+		lstval = 1;
+	    } else if (truncsize < 4096) {
+		lstval = 2;
+	    } else if (truncsize < 6144) {
+		lstval = 3;
+	    } else if (truncsize < 8192) {
+		lstval = 4;
+	    } else if (truncsize < 16384) {
+		lstval = 5;
+	    } else if (truncsize < 32768U) {
+		lstval = 6;
+	    } else {
+		lstval = 7;
+	    }
+	    LstSetSelection(lst, lstval);
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsLimitCtl));
+	    CtlSetLabel(ctl, LstGetSelectionText(lst, LstGetSelection(lst)));
+	    lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsDeleteList));
+	    LstSetSelection(lst, (flags & POPPrefsDeleteFlag) ?
+		((flags & POPPrefsDeleteNotTruncFlag) ? 2 : 1) : 0);
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsDeleteCtl));
+	    CtlSetLabel(ctl, LstGetSelectionText(lst, LstGetSelection(lst)));
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsQueryBtn));
+	    CtlSetValue(ctl, flags & POPPrefsQueryFlag);
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsUnreadOnlyBtn));
+	    CtlSetValue(ctl, flags & POPPrefsUnreadOnlyFlag);
+	}
+	MemPtrFree(prefs);
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+	    switch(e->data.menu.itemID) {
+	    }
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlSelect.controlID) {
+	case POPPrefsSaveBtn:
+	    /* Save the preferences */
+	    frm = FrmGetActiveForm();
+	    popserver = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsServerFld)));
+	    userid = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsEmailFld)));
+	    password = FldGetTextPtr(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsPassFld)));
+	    flags = 0;
+	    flags |= (CtlGetValue(FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+			    POPPrefsUseAPOPBtn))) ? POPPrefsUseAPOPFlag : 0);
+	    flags |= ((LstGetSelection(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsPasteHeadersList)))
+			    == 1) ?  POPPrefsPasteHeadersFlag : 0);
+	    flags |= ((LstGetSelection(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsPasteHeadersList)))
+			    == 2) ?  POPPrefsPasteHeadersBottomFlag : 0);
+	    flags |= ((LstGetSelection(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsDeleteList)))
+			    >= 1) ?  POPPrefsDeleteFlag : 0);
+	    flags |= ((LstGetSelection(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsDeleteList)))
+			    == 2) ?  POPPrefsDeleteNotTruncFlag : 0);
+	    flags |= (CtlGetValue(FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+			    POPPrefsQueryBtn))) ?
+			    POPPrefsQueryFlag : 0);
+	    flags |= (CtlGetValue(FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+			    POPPrefsUnreadOnlyBtn))) ?
+			    POPPrefsUnreadOnlyFlag : 0);
+	    truncsize = truncsizes[LstGetSelection(FrmGetObjectPtr(frm,
+			    FrmGetObjectIndex(frm, POPPrefsLimitList)))];
+	    if (!popserver) popserver = "";
+	    if (!userid) userid = "";
+	    if (!password) password = "";
+
+	    popserverlen = StrLen(popserver);
+	    useridlen = StrLen(userid);
+	    passwordlen = StrLen(password);
+	    len = popserverlen + useridlen + passwordlen + 3 + 1 + 2;
+
+	    prefs = MemPtrNew(len);
+
+	    StrCopy(prefs, popserver);
+	    StrCopy(prefs+popserverlen+1, userid);
+	    StrCopy(prefs+popserverlen+useridlen+2, password);
+	    *(prefs+popserverlen+useridlen+passwordlen+3) = flags;
+	    *(prefs+popserverlen+useridlen+passwordlen+4) = (truncsize >> 8);
+	    *(prefs+popserverlen+useridlen+passwordlen+5) = (truncsize & 0xff);
+	    PrefSetAppPreferences('TGml', 2, 1, prefs, len, 1);
+	    MemPtrFree(prefs);
+	    /* FALLTHROUGH */
+
+	case POPPrefsCancelBtn:
+	    FrmGotoForm(mainForm);
+	    handled = true;
+	    break;
+
+	case POPPrefsPassBtn:
+	    /* Pop up a form to get the password */
+	    password = popprefs_getpasswd();
+	    if (password) {
+		frm = FrmGetActiveForm();
+		fld = FrmGetObjectPtr(frm,
+			FrmGetObjectIndex(frm, POPPrefsPassFld));
+		FldFreeMemory(fld);
+		FldSetTextPtr(fld, password);
+	    }
+	    handled = true;
+	    break;
+
+	default:
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+static Boolean ProgressFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	handled = true;
+	switch(progressStart) {
+	case progress_smtp:
+	    progressStart = progress_none;
+	    if (cursockh.s < 0) {
+		CharPtr smtpserver = NULL;
+		CharPtr email = NULL;
+		CharPtr realname = NULL;
+		CharPtr prefs;
+		Word prefsize = 350;
+
+		/* Retrive the prefrences */
+		prefs = MemPtrNew(prefsize);
+		if (PrefGetAppPreferences('TGml', 1, prefs, &prefsize, 1)
+		    == 1) {
+		    smtpserver = prefs;
+		    email = smtpserver + StrLen(smtpserver) + 1;
+		    realname = email + StrLen(email) + 1;
+		}
+		if (smtp_start(&cursockh, disp_info, 0, smtpserver, email,
+				realname) < 0) {
+		    close_netlib();
+		    do_pop_later = 0;
+		    FrmReturnToForm(mainForm);
+		}
+		MemPtrFree(prefs);
+	    }
+	    break;
+	case progress_pop:
+	  progressStart = progress_none;
+	  if (cursockh.s < 0) {
+	    CharPtr popserver = NULL;
+	    CharPtr userid = NULL;
+	    CharPtr password = NULL;
+	    unsigned char *flagptr = NULL;
+	    unsigned char flags = 0;
+	    unsigned int truncsize = 0;
+	    CharPtr prefs;
+	    Word prefsize = 350;
+
+	    /* Retrieve the preferences */
+	    prefs = MemPtrNew(prefsize);
+	    if (prefs) MemSet(prefs, prefsize, 0);
+	    if (PrefGetAppPreferences('TGml', 2, prefs, &prefsize, 1) == 1) {
+	      popserver = prefs;
+	      userid = popserver + StrLen(popserver) + 1;
+	      password = userid + StrLen(userid) + 1;
+	      flagptr = (password + StrLen(password) + 1);
+	      flags = flagptr[0];
+	      truncsize = (flagptr[1] << 8) + flagptr[2];
+	    }
+	    if (pop_start(&cursockh, disp_info, 0, popserver, userid,
+			  password, flags, truncsize) < 0) {
+	      close_netlib();
+	      do_pop_later = 0;
+	      FrmReturnToForm(mainForm);
+	    }
+	    MemPtrFree(prefs);
+	  }
+	  break;
+	
+	default:
+	    break;
+	}
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlSelect.controlID) {
+	case cancelBtn:
+	    disp_info("Cancelling...", 0, 0, 0);
+	    if (cursockh.s >= 0) cursockh.finish(&cursockh);
+	    close_netlib();
+	    do_pop_later = 0;
+	    FrmReturnToForm(mainForm);
+	    handled = true;
+	    break;
+
+	default:
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	case SMTPPrefItem:
+	    FrmGotoForm(SMTPPrefsForm);
+	    break;
+	case POPPrefItem:
+	    FrmGotoForm(POPPrefsForm);
+	    break;
+	case AboutItem:
+	    frm = FrmInitForm(AboutForm);
+	    FrmDoDialog(frm);
+	    FrmDeleteForm(frm);
+	    break;
+	default:
+	    break;
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlSelect.controlID) {
+	case smtpPopBtn:
+	    do_pop_later = 1;
+	    /* FALLTHROUGH */
+	case smtpBtn:
+	    handled = true;
+	    if (cursockh.s < 0) {
+		if (open_netlib()) {
+		    do_pop_later = 0;
+		    show_error("Unable to get network connection.", "", "");
+		    break;
+		}
+		progressStart = progress_smtp;
+		FrmPopupForm(progressForm);
+	    } else {
+		show_error("Socket busy", "", "");
+	    }
+	    break;
+
+	case popBtn:
+	    handled = true;
+	    if (cursockh.s < 0) {
+		if (open_netlib()) {
+		    do_pop_later = 0;
+		    show_error("Unable to get network connection.", "", "");
+		    break;
+		}
+		progressStart = progress_pop;
+		FrmPopupForm(progressForm);
+	    } else {
+		show_error("Socket busy", "", "");
+	    }
+
+    	    break;
+	default:
+	    break;
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+/* Data has arrived on a socket.  Read and dispatch it. */
+static void read_sock(struct sockhandler *sh)
+{
+    static UChar recvbuf[200];
+    UInt amt;
+    int ret;
+
+    amt = recv(sh->s, recvbuf, sizeof(recvbuf), 0);
+    
+    if (amt <= 0) {
+	sh->finish(sh);
+	show_error("Server closed connection.", "", "");
+	close_netlib();
+	FrmReturnToForm(mainForm);
+	do_pop_later = 0;
+    }
+
+    ret = (sh->handler)(recvbuf, amt, (sh->cbH));
+    if (ret) {
+	/* Close the connection */
+	sh->finish(sh);
+	if (do_pop_later && ret == 2) {
+	    EventType e;
+	    e.eType = ctlSelectEvent;
+	    e.data.ctlSelect.controlID = popBtn;
+	    EvtAddEventToQueue(&e);
+	}
+	close_netlib();
+	FrmReturnToForm(mainForm);
+	do_pop_later = 0;
+    }
+}
+
+Boolean ApplicationHandleEvent(EventPtr e)
+{
+    FormPtr frm;
+    Word    formId;
+    Boolean handled = false;
+
+    if (e->eType == frmLoadEvent) {
+	formId = e->data.frmLoad.formID;
+	frm = FrmInitForm(formId);
+	FrmSetActiveForm(frm);
+
+	switch(formId) {
+	case mainForm:
+	    FrmSetEventHandler(frm, MainFormHandleEvent);
+	    break;
+
+	case progressForm:
+	    FrmSetEventHandler(frm, ProgressFormHandleEvent);
+	    break;
+
+	case SMTPPrefsForm:
+	    FrmSetEventHandler(frm, SMTPPrefsFormHandleEvent);
+	    break;
+
+	case POPPrefsForm:
+	    FrmSetEventHandler(frm, POPPrefsFormHandleEvent);
+	    break;
+
+	case POPPrefsPasswdForm:
+	    FrmSetEventHandler(frm, POPPrefsPasswdFormHandleEvent);
+	    break;
+
+	case POPQueryForm:
+	    FrmSetEventHandler(frm, POPQueryFormHandleEvent);
+	    break;
+	}
+	handled = true;
+    }
+
+    return handled;
+}
+
+/* Get preferences, open (or create) app database */
+static Word StartApplication(void)
+{
+    Word err;
+
+    /* Look up the Net Lib */
+    err = SysLibFind("Net.lib", &AppNetRefnum);
+    ErrFatalDisplayIf(err, "You do not have the required Network Library.");
+    AppNetTimeout = sysTicksPerSecond*10;
+
+    progressStart = progress_none;
+    cursockh.s = -1;
+    progbarWindow = WinCreateOffscreenWindow(150, 13, screenFormat, &err);
+    if (err) return err;
+
+    FrmGotoForm(mainForm);
+
+    return 0;
+}
+
+/* Save preferences, close forms, close app database */
+static void StopApplication(void)
+{
+    FrmSaveAllForms();
+    FrmCloseAllForms();
+
+    if (progbarWindow) WinDeleteWindow(progbarWindow, false);
+
+    if (cursockh.s >= 0) {
+	cursockh.finish(&cursockh);
+    }
+}
+
+/* The main event loop */
+static void EventLoop(void)
+{
+    Word err;
+    EventType e;
+
+    do {
+	Long evttimeout = 10;
+	/* See if data is available */
+	if (cursockh.s >= 0) {
+	    UInt noks;
+	    fd_set reads;
+	    FD_ZERO(&reads);
+	    FD_SET(STDIN_FILENO, &reads);
+	    FD_SET(cursockh.s, &reads);
+	    noks = NetLibSelect(AppNetRefnum, cursockh.s+1, &reads, NULL, NULL,
+				evtWaitForever, &errno);
+	    if (noks > 0 && FD_ISSET(cursockh.s, &reads)) {
+		/* Reset the auto-off timer */
+		EvtResetAutoOffTimer();
+		read_sock(&cursockh);
+	    }
+	}
+	EvtGetEvent(&e, evttimeout);
+	if (! SysHandleEvent (&e))
+	    if (! MenuHandleEvent (NULL, &e, &err))
+		if (! ApplicationHandleEvent (&e))
+		    FrmDispatchEvent (&e);
+    } while (e.eType != appStopEvent);
+}
+
+/* Main entry point; it is unlikely you will need to change this except to
+   handle other launch command codes */
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags)
+{
+    Word err;
+
+    if (cmd == sysAppLaunchCmdNormalLaunch) {
+
+	err = StartApplication();
+	if (err) return err;
+
+	EventLoop();
+	StopApplication();
+
+    } else {
+	return sysErrParamErr;
+    }
+
+    return 0;
+}
+@
+
+
+1.28
+log
+@o Added message truncation size selection to POP options
+@
+text
+@d6 1
+a6 1
+#include <sys/types.h>
+@
+
+
+1.27
+log
+@o Added option for deleting meesages from the server only if the message
+  was completely downloaded
+@
+text
+@d229 1
+d400 1
+d404 1
+d406 1
+d408 1
+a408 1
+    Word prefsize = 250;
+d410 2
+d418 1
+d423 3
+a425 1
+	    flags = *(password + StrLen(password) + 1);
+a431 4
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPPrefsPasteHeadersCtl));
+	    CtlSetLabel(ctl, (flags & POPPrefsPasteHeadersFlag) ? "Top" :
+		((flags & POPPrefsPasteHeadersBottomFlag) ? "Bottom" : "No"));
+d437 27
+a463 4
+		POPPrefsDeleteCtl));
+	    CtlSetLabel(ctl, (flags & POPPrefsDeleteFlag) ?
+		((flags & POPPrefsDeleteNotTruncFlag) ? "If complete"
+		: "Yes") : "No");
+d469 3
+d526 2
+d535 1
+a535 1
+	    len = popserverlen + useridlen + passwordlen + 3 + 1;
+d543 2
+d621 1
+d623 1
+d629 1
+d634 3
+a636 1
+	      flags = *(password + StrLen(password) + 1);
+d639 1
+a639 1
+			  password, flags) < 0) {
+@
+
+
+1.26
+log
+@o Edit menu in Prefs screens
+o To: and Cc: displayed in query form
+o Ability to paste headers at bottom of message
+@
+text
+@d432 8
+a439 2
+		POPPrefsDeleteBtn));
+	    CtlSetValue(ctl, flags & POPPrefsDeleteFlag);
+d483 6
+a488 3
+	    flags |= (CtlGetValue(FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+			    POPPrefsDeleteBtn))) ?
+			    POPPrefsDeleteFlag : 0);
+@
+
+
+1.25
+log
+@o Fixed PPP up/down confusion problem
+o Removed call to FrmCustomAlert(), as it tends to crash the Pilot
+o Fixed memory leak if connect() fails
+o Fixed bug wherein "Send mail" sometimes acts like "Both"
+@
+text
+@d145 68
+d245 3
+a247 1
+	switch(e->data.menu.itemID) {
+d359 4
+a362 2
+        switch(e->data.menu.itemID) {
+        }
+d398 1
+d424 7
+a430 2
+		POPPrefsPasteHeadersBtn));
+	    CtlSetValue(ctl, flags & POPPrefsPasteHeadersFlag);
+d449 3
+a451 1
+	switch(e->data.menu.itemID) {
+d471 6
+a476 3
+	    flags |= (CtlGetValue(FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+			    POPPrefsPasteHeadersBtn))) ?
+			    POPPrefsPasteHeadersFlag : 0);
+@
+
+
+1.24
+log
+@Fixed bug #18: incoming packets now reset auto-off timer
+@
+text
+@d74 2
+a75 6
+void show_error(CharPtr s1, CharPtr s2, CharPtr s3)
+{
+    FrmCustomAlert(alertErrorDismiss, s1, s2, s3);
+}
+
+static void setfieldtxt(FormPtr frm, Word fid, CharPtr s)
+d78 2
+a79 1
+    Word len = StrLen(s) + 1;
+d84 4
+a87 1
+	    StrCopy(txtptr, s);
+d95 50
+d165 3
+a167 3
+	    setfieldtxt(frm, SMTPPrefsServerFld, smtpserver);
+	    setfieldtxt(frm, SMTPPrefsEmailFld, email);
+	    setfieldtxt(frm, SMTPPrefsNameFld, realname);
+d344 3
+a346 3
+	    setfieldtxt(frm, POPPrefsServerFld, popserver);
+	    setfieldtxt(frm, POPPrefsEmailFld, userid);
+	    setfieldtxt(frm, POPPrefsPassFld, password);
+d481 2
+d508 2
+d535 2
+a553 1
+    Err err, iferr;
+d593 4
+a596 13
+	    if (!AppNetRefnum) {
+		/* Look up the Net Lib */
+		err = SysLibFind("Net.lib", &AppNetRefnum);
+		if (err) {
+		    show_error("You do not have the required Network Library.",
+			"", "");
+		    break;
+		}
+		err = NetLibOpen(AppNetRefnum, &iferr);
+		if (err || iferr) {
+		    show_error("Could not establish net connection.", "", "");
+		    if (!err) NetLibClose(AppNetRefnum, 0);
+		    AppNetRefnum = 0;
+a598 3
+		AppNetTimeout = 1000;
+	    }
+	    if (cursockh.s < 0) {
+d608 4
+a611 13
+	    if (!AppNetRefnum) {
+		/* Look up the Net Lib */
+		err = SysLibFind("Net.lib", &AppNetRefnum);
+		if (err) {
+		    show_error("You do not have the required Network Library.",
+			"", "");
+		    break;
+		}
+		err = NetLibOpen(AppNetRefnum, &iferr);
+		if (err || iferr) {
+		    show_error("Could not establish net connection.", "", "");
+		    if (!err) NetLibClose(AppNetRefnum, 0);
+		    AppNetRefnum = 0;
+a613 3
+		AppNetTimeout = 1000;
+	    }
+	    if (cursockh.s < 0) {
+d643 2
+a644 1
+	show_error("Server closed connection", "", "");
+d646 1
+d659 1
+d712 5
+a729 2
+    Err err;
+
+a736 4
+    }
+    if (AppNetRefnum) {
+	err = NetLibClose(AppNetRefnum, 0);
+	ErrFatalDisplayIf(err, "NetLibClose failed");
+@
+
+
+1.23
+log
+@o Made cursor blink by default in POP passwd form
+o Removed funny movement of progress bar when window is tapped on
+@
+text
+@d5 1
+d725 2
+@
+
+
+1.22
+log
+@Password field automatically gets focus
+@
+text
+@d230 1
+a231 1
+        FrmDrawForm(frm);
+@
+
+
+1.21
+log
+@Added "Both" button
+@
+text
+@d230 1
+@
+
+
+1.20
+log
+@Save only unread option
+@
+text
+@d21 3
+d133 1
+a133 1
+	switch(e->data.ctlEnter.controlID) {
+d244 1
+a244 1
+        switch(e->data.ctlEnter.controlID) {
+d326 1
+a326 1
+	switch(e->data.ctlEnter.controlID) {
+d475 1
+a475 1
+	switch(e->data.ctlEnter.controlID) {
+d530 4
+a533 1
+	switch(e->data.ctlEnter.controlID) {
+a552 1
+
+d618 6
+d625 1
+@
+
+
+1.19
+log
+@Hidden password field
+@
+text
+@d343 3
+@
+
+
+1.18
+log
+@DELE now works.  That should be it, folks!
+@
+text
+@a20 30
+#ifdef DEBUG
+extern long data_start, bss_start;
+static void StartDebug(void)
+{
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+	lea data_start(%%a4),%%a1
+	move.l %%a1,%%d2
+	lea bss_start(%%a4),%%a1
+	move.l %%a1,%%d1
+	lea start(%%pc),%%a0
+	move.l %%a0,%%d0
+	sub.l #start, %%d0
+	move.l #0x12BEEF34, %%d3
+	trap #8
+	move.l #0, %%d3
+	move.l #0, %%d0
+	move.l #0, %%d1
+	move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+
+}
+#endif
+
+d173 92
+d269 1
+d304 3
+d343 2
+a344 2
+			    POPPrefsQueryBtn))) ?
+			    POPPrefsQueryFlag : 0);
+d369 13
+d642 4
+d666 2
+d726 1
+a726 3
+#ifdef DEBUG
+        StartDebug(); 
+#endif
+a729 1
+	FrmGotoForm(mainForm);
+@
+
+
+1.17
+log
+@Whoa momma
+@
+text
+@d84 5
+a88 3
+    fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, msgField));
+    thnd = MemHandleNew(StrLen(msg)+1);
+    ttxt = MemHandleLock(thnd);
+d90 6
+a95 5
+    StrCopy(ttxt, msg);
+    MemHandleUnlock(thnd);
+    FldFreeMemory(fld);
+    FldSetTextHandle(fld, (Handle)thnd);
+    FldDrawField(fld);
+@
+
+
+1.16
+log
+@APOP, header pasting selection
+@
+text
+@d10 1
+d51 1
+a51 1
+static void disp_info(CharPtr msg, UInt n, UInt d, VoidHand diH)
+d232 6
+d270 6
+d532 1
+a532 1
+static Boolean ApplicationHandleEvent(EventPtr e)
+d558 4
+@
+
+
+1.15
+log
+@Added splash screen
+@
+text
+@d174 1
+a174 1
+	    len = smtpserverlen + emaillen + realnamelen + 4;
+d181 2
+d203 1
+d207 1
+d221 1
+d225 6
+d257 6
+d270 1
+a270 1
+	    len = popserverlen + useridlen + passwordlen + 4;
+d277 1
+d316 1
+a316 1
+		Word prefsize = 250;
+d339 1
+d341 1
+a341 1
+	    Word prefsize = 250;
+d349 1
+d352 1
+a352 1
+			  password) < 0) {
+@
+
+
+1.14
+log
+@Headers work.
+@
+text
+@d396 5
+@
+
+
+1.13
+log
+@Preferences done correctly, POPPrefsForm better.
+@
+text
+@d298 1
+a298 1
+		Word prefsize = 500;
+a317 3
+	    CharPtr smtpserver = NULL;
+	    CharPtr email = NULL;
+	    CharPtr realname = NULL;
+d322 1
+a322 1
+	    Word prefsize = 500;
+d326 2
+a327 5
+	    if (PrefGetAppPreferences('TGml', 1, prefs, &prefsize, 1) == 1) {
+	      smtpserver = prefs;
+	      email = smtpserver + StrLen(smtpserver) + 1;
+	      realname = email + StrLen(email) + 1;
+	      popserver = realname + StrLen(realname) + 1;
+@
+
+
+1.12
+log
+@Wohoo! Date works, mail works on pilot, I rule.
+@
+text
+@d20 1
+d48 1
+a123 3
+    CharPtr popserver = NULL;
+    CharPtr userid = NULL;
+    CharPtr password = NULL;
+d125 2
+a126 4
+    CharPtr prefsold = NULL;
+    Word prefsize = 500;
+    Word len=0, smtpserverlen=0, emaillen=0, realnamelen=0, 
+         popserverlen=0, useridlen=0, passwordlen=0;
+a136 3
+	    popserver = realname + StrLen(realname) + 1;
+	    userid = popserver + StrLen(popserver) + 1;
+	    password = userid + StrLen(userid) + 1;
+a140 1
+	/* XXX - should we MemPtrFree(prefs)? */
+a141 1
+
+a157 20
+	    /* retrieve old preferences, so can keep non-present fields */
+	    prefsold = MemPtrNew(prefsize);
+	    if (PrefGetAppPreferences('TGml', 1, prefsold, &prefsize, 1) == 1) {
+	      smtpserver = prefsold;
+	      email = smtpserver + StrLen(smtpserver) + 1;
+	      realname = email + StrLen(email) + 1;
+	      popserver = realname + StrLen(realname) + 1;
+	      userid = popserver + StrLen(popserver) + 1;
+	      password = userid + StrLen(userid) + 1;
+
+	      popserverlen = StrLen(popserver);
+	      useridlen = StrLen(userid);
+	      passwordlen = StrLen(password);
+	    } else {
+	      popserverlen = useridlen = passwordlen = 0;
+	      popserver = "";
+	      userid = "";
+	      password = "";
+	    }
+
+d174 1
+a174 3
+	    len = smtpserverlen + emaillen + realnamelen + 
+	      popserverlen + useridlen + passwordlen + 7;
+
+a175 1
+
+a178 3
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+3, popserver);
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+popserverlen+4, userid);
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+popserverlen+useridlen+5, password);
+a179 3
+
+	    MemPtrFree(prefsold);
+	    /* XXX - Should we MemPtrFree(prefs) as well? */
+a180 3
+
+	    /* FALLTHROUGH */
+
+a200 3
+    CharPtr smtpserver = NULL;
+    CharPtr email = NULL;
+    CharPtr realname = NULL;
+d205 2
+a206 4
+    CharPtr prefsold = NULL;
+    Word prefsize = 500;
+    Word len, smtpserverlen, emaillen, realnamelen, 
+         popserverlen, useridlen, passwordlen;
+d213 2
+a214 5
+	if (PrefGetAppPreferences('TGml', 1, prefs, &prefsize, 1) == 1) {
+	    smtpserver = prefs;
+	    email = smtpserver + StrLen(smtpserver) + 1;
+	    realname = email + StrLen(email) + 1;
+	    popserver = realname + StrLen(realname) + 1;
+a220 1
+	/* XXX - should we MemPtrFree(prefs)? */
+a221 1
+
+a237 20
+	    /* retrieve old preferences, so can keep non-present fields */
+	    prefsold = MemPtrNew(prefsize);
+	    if (PrefGetAppPreferences('TGml', 1, prefsold, &prefsize, 1) == 1) {
+	      smtpserver = prefsold;
+	      email = smtpserver + StrLen(smtpserver) + 1;
+	      realname = email + StrLen(email) + 1;
+	      popserver = realname + StrLen(realname) + 1;
+	      userid = popserver + StrLen(popserver) + 1;
+	      password = userid + StrLen(userid) + 1;
+
+	      smtpserverlen = StrLen(smtpserver);
+	      emaillen = StrLen(email);
+	      realnamelen = StrLen(realname);
+	    } else {
+	      smtpserverlen = emaillen = realnamelen = 0;
+	      smtpserver = "";
+	      email = "";
+	      realname = "";
+	    }
+
+d253 1
+a253 2
+	    len = smtpserverlen + emaillen + realnamelen + 
+	      popserverlen + useridlen + passwordlen + 7;
+d257 4
+a260 11
+	    StrCopy(prefs, smtpserver);
+	    StrCopy(prefs+smtpserverlen+1, email);
+	    StrCopy(prefs+smtpserverlen+emaillen+2, realname);
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+3, popserver);
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+popserverlen+4, userid);
+	    StrCopy(prefs+smtpserverlen+emaillen+realnamelen+popserverlen+useridlen+5, password);
+
+	    PrefSetAppPreferences('TGml', 1, 1, prefs, len, 1);
+
+	    MemPtrFree(prefsold);
+	    /* XXX - Should we MemPtrFree(prefs) as well? */
+a261 1
+
+@
+
+
+1.11
+log
+@it works!
+@
+text
+@a3 2
+#pragma pack(2)
+
+@
+
+
+1.10
+log
+@Much skullduggery and hackery in the POP side of TGpostman.
+@
+text
+@d683 3
+a685 1
+/* StartDebug(); */
+@
+
+
+1.9
+log
+@Worked around "uninitialized globals not being relocated" bug.
+@
+text
+@d11 1
+d16 1
+a16 1
+static enum { progress_none, progress_smtp } progressStart;
+d124 8
+a131 3
+    CharPtr prefs;
+    Word prefsize = 250;
+    Word len, slen, elen, rlen;
+d140 5
+a145 1
+	    email = smtpserver + StrLen(smtpserver) + 1;
+a146 1
+	    realname = email + StrLen(email) + 1;
+d149 3
+d168 20
+d200 127
+a326 4
+	    slen = StrLen(smtpserver);
+	    elen = StrLen(email);
+	    rlen = StrLen(realname);
+	    len = slen + elen + rlen + 4;
+d331 5
+a335 2
+	    StrCopy(prefs+slen+1, email);
+	    StrCopy(prefs+slen+elen+2, realname);
+d339 4
+d345 1
+a345 1
+	case SMTPPrefsCancelBtn:
+d379 1
+a379 1
+		Word prefsize = 250;
+d396 29
+d480 3
+a482 1
+
+d520 27
+d603 4
+@
+
+
+1.8
+log
+@SMTP client seems to be working
+@
+text
+@d15 1
+a15 1
+enum { progress_none, progress_smtp } progressStart;
+d19 1
+a19 1
+Err errno;
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d70 1
+a70 1
+	StrPrintF(label, "%d%%", (100UL*(ULong)n)/(ULong)d);
+d95 1
+a95 1
+void show_mem(void)
+d97 100
+a196 7
+    UInt hid = MemHeapID(0, 0);
+    ULong f, m;
+    Char s[50];
+
+    MemHeapFreeBytes(hid, &f, &m);
+    StrPrintF(s, "%ld %ld", f, m);
+    disp_info(s, m, 65535, 0);
+d213 17
+a229 3
+StartDebug();
+		if (smtp_start(&cursockh, disp_info, 0) < 0) {
+		    /* FrmReturnToForm(mainForm); */
+d231 1
+d286 6
+d305 1
+a305 2
+		    FrmCustomAlert(alertErrorDismiss,
+			"You do not have the required Network Library.",
+d311 1
+a311 2
+		    FrmCustomAlert(alertErrorDismiss,
+			"Could not establish net connection.", "", "");
+d323 1
+a323 1
+		FrmCustomAlert(alertErrorDismiss, "Socket busy", "", "");
+d349 1
+a349 1
+	FrmCustomAlert(alertErrorDismiss, "Server closed connection", "", "");
+d379 4
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d70 1
+a70 1
+	StrPrintF(label, "%d%%", (100*n)/d);
+d77 1
+a77 1
+	r.extent.x = (150*n)/d;
+d88 1
+d95 11
+d119 6
+a124 1
+	    if (cursockh.s < 0) smtp_start(&cursockh, disp_info, 0);
+d316 1
+a316 1
+	if (0 && cursockh.s >= 0) {
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d15 6
+d49 1
+a49 1
+static void disp_info(CharPtr msg, VoidHand diH)
+d52 33
+a84 3
+    FieldPtr fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, msgField));
+    VoidHand thnd = MemHandleNew(StrLen(msg)+1);
+    CharPtr ttxt = MemHandleLock(thnd);
+d90 52
+d190 4
+a193 2
+	    if (cursockh.s < 0) smtp_start(&cursockh, disp_info, NULL);
+	    else {
+d221 1
+d228 1
+d247 4
+d261 3
+d265 2
+d279 2
+d299 1
+a299 1
+	if (cursockh.s >= 0) {
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d45 9
+a53 1
+    FrmCustomAlert(alertErrorDismiss, msg, "", "");
+d194 1
+a194 1
+	Long evttimeout = evtWaitForever;
+d203 1
+a203 1
+				10, &errno);
+a206 1
+	    if (!FD_ISSET(STDIN_FILENO, &reads)) evttimeout = 10;
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d7 2
+a8 2
+#include <System/FeatureMgr.h>
+#include "netlib.h"
+a11 3
+/* The Net Lib reference number */
+UInt nlref = 0;
+
+d15 1
+a17 1
+ extern long data_start, bss_start;
+d74 1
+a74 1
+	    if (!nlref) {
+d76 1
+a76 1
+		err = SysLibFind("Net.lib", &nlref);
+d83 1
+a83 1
+		err = NetLibOpen(nlref, &iferr);
+d87 2
+a88 2
+		    if (!err) NetLibClose(nlref, 0);
+		    nlref = 0;
+d91 1
+a115 3
+    ULong nlerrno;
+    struct sockaddr_in sockaddr;
+    UInt addrlen = sizeof(sockaddr);
+d118 1
+a118 2
+    amt = NetLibReceive(nlref, sh->s, recvbuf, sizeof(recvbuf), 0,
+	(struct sockaddr *)&sockaddr, &addrlen, 1000, &nlerrno);
+d173 2
+a174 2
+    if (nlref) {
+	err = NetLibClose(nlref, 0);
+a189 1
+	    ULong nlerrno;
+d192 1
+a192 1
+	    FD_SET(FD_EVENT, &reads);
+d194 2
+a195 2
+	    noks = NetLibSelect(nlref, cursockh.s+1, &reads, NULL, NULL,
+				10, &nlerrno);
+d199 1
+a199 1
+	    if (!FD_ISSET(FD_EVENT, &reads)) evttimeout = 10;
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d7 1
+d18 33
+d53 1
+d76 27
+a102 1
+	    if (cursockh.s < 0) smtp_start(&cursockh);
+a162 8
+    Err err, iferr;
+
+    /* Look up the Net Lib */
+    err = SysLibFind("Net.lib", &nlref);
+    ErrFatalDisplayIf(err, "Cannot locate network library");
+    err = NetLibOpen(nlref, &iferr);
+    ErrFatalDisplayIf(err || iferr, "NetLibOpen failed");
+
+d223 1
+a223 1
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d1 1
+a1 1
+/* Generic main code
+d8 2
+d11 5
+a15 1
+#define MainForm 1000
+d40 3
+d52 25
+d89 1
+a89 1
+	case MainForm:
+d99 66
+d167 1
+a167 2
+    short err;
+    EventType e;
+d171 2
+a172 10
+	FrmGotoForm(MainForm);
+
+	do {
+	    Long timeout = evtWaitForever;
+	    EvtGetEvent(&e, timeout);
+	    if (! SysHandleEvent (&e))
+		if (! MenuHandleEvent (NULL, &e, &err))
+		    if (! ApplicationHandleEvent (&e))
+			FrmDispatchEvent (&e);
+	} while (e.eType != appStopEvent);
+d174 3
+a176 1
+	FrmCloseAllForms();
+@
+
+
+1.1.1.1
+log
+@TCP-aware programs for the Pilot
+@
+text
+@@

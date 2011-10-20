@@ -1,0 +1,411 @@
+head	1.4;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.4
+date	96.01.25.01.59.38;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.01.19.18.38.10;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.01.19.03.21.33;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.01.19.02.01.12;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.01.19.02.01.12;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@final edits for ipps96
+@
+text
+@\section{Summary \& Implications}
+\label{summary}
+% \subsection{Lessons from DS and Tokens}
+
+% One of our goals was to address limitations of the Brewer and Kuszmaul
+% techniques: the lack of hardware barriers and the weak performance
+% improvement on irregular traffic patterns.  
+
+We have demonstrated that
+although barriers provide the tightest synchronization and best
+performance for enforcing 1-on-1 communication, token passing works well
+for a large range of data block 
+sizes when fast barrier support is unavailable.  
+We also showed that the effect of dynamic scheduling is to
+``massage'' the communication into a permutation pattern at
+runtime, resulting in better performance for irregular traffic than
+can be achieved by interleaving.  
+% Dynamic scheduling
+% leverages the performance advantage of barrier synchronization
+% and strengthens its position as the best known technique
+% for choreographing communication in the problem domain we have
+% addressed.
+
+\subsection{Limitations and Future Work}
+
+One obvious extension to the dynamic scheduling algorithm is
+to replace barriers with tokens, just as we did for the \cite{bk94}
+technique. 
+% . This proved very effective when
+% applied to the \cite{bk94} technique that was used with
+% communication patterns known to be permutations in advance.
+% In dynamic scheduling nodes need a fairly strong concept of global
+% time (rounds) in order to make bookings with each other. Barriers
+% provide the needed synchronization. 
+Our experiments with using tokens
+every round and barriers somewhat less frequently have shown
+promise. The periodic barriers are used to
+prevent nodes from drifting too far
+out of sync for booking purposes, 
+while tokens permit low-overhead
+enforcement of 1-on-1 communication.
+
+We suspect that irregularly sized, irregularly distributed traffic will
+benefit from dynamic scheduling, but experiments on nonuniform data
+sizes have been inconclusive so far. The essence of the technique
+we are exploring is to fragment the irregular sized data into fixed
+sized chunks, one of which may 
+not be full, resulting in partial waste of allocated bandwidth when sent.
+We
+are attempting to quantify the effect this 
+will have on the overall useful bandwith.
+
+We performed some preliminary experiments in
+which we co-optimized the bandwidth matching constant and the DMA
+transfer size (Alewife) or network polling interval (CM-5).  Our
+experiments suggested that the interaction between these parameters is
+analytically characterizable, but we cannot
+provide such characterization at this point.
+
+The 4-node Alewife is too small to exhibit enough link contention to
+stress the performance of the algorithms we examined, but we were unable
+to run experiments on the 32-node machine due to hardware and kernel
+instability.
+
+We believe the communication patterns we synthesized characterize
+observed SPMD behavior fairly
+\cite{palthesis,salmonthesis,splash}.
+
+%This is not surprising, since the patterns are easy to code, map
+%naturally to the parallelism in many algorithms, and 
+%perform reasonably well on today's MPP systems.  
+%We believe our
+%test programs characterize these communication patterns fairly.
+
+
+\subsection{Communication Library Support}
+
+We believe the communication phase 
+of a scientific
+application should enjoy the following support in an optimized
+communication library:
+
+% {
+% % \begin{singlespace}
+% \begingroup
+% \begin{verbatim}
+% foreach proc in (dests_this_round)
+%         send(proc, BigDataChunk);
+% \end{verbatim}\endgroup
+% %  \end{singlespace}
+% }
+
+% We propose to replace this with the following:
+
+{
+% \begin{singlespace}
+\begingroup\begin{verbatim}
+foreach proc in (dests_this_round)
+        schedule(proc, BigDataChunk);
+service_queue;
+\end{verbatim}\endgroup
+% \end{singlespace}
+}
+
+The {\em schedule} call may either perform an actual
+send, or schedule a block for sending later.  {\em Service\_queue} delivers
+any remaining queued blocks, using either interleaving or dynamic scheduling,
+depending on the data size and machine.  
+Some MPPs, notably the
+Intel Paragon, feature a communication coprocessor, which we suspect
+can implement these operations.  In
+the research version of the Paragon kernel and Active Message layer that we
+used \cite{lok}, this coprocessor acts as a latency
+engine, since it provides
+% provides application-transparent
+% fragmentation of large sends into smaller DMA chunks of up to 8 Kbytes each,
+%but provides
+no services that benefit our
+techniques. 
+%In fact, the coprocessor is mostly acting  it adds latency at both ends
+%when the message size is already 
+%smaller than the maximum allowed DMA chunk size.
+%  It may
+% be more effective to move the coordination functionality
+% into the coprocessor.
+
+\subsection{Related Work: Static Scheduling}
+
+Wang, Ranka {\em et al.} \cite{syracuse-cm5,syracuse-paragon} construct
+near-permutations in which sender--receiver lists are distributed to all
+processors at the beginning of the communication phase.  All processors
+then execute a preprocessing step in parallel that constructs the
+partial permutations.  It is unclear whether they use the Brewer and
+Kuszmaul techniques to enforce 1-on-1 communication; in
+\cite{syr-bk94}, they cite \cite{bk94}, 
+yet in \cite{syr-nobarrier} they seem to make a point of stating that
+they do not use barriers during the communication phase.  
+
+We found their
+performance results difficult to interpret.  Since they assert that the
+computation and communication overhead of determining the schedules can
+be amortized by reusing the schedules, it was not clear whether this
+overhead was included in their best-case measurements.  In any case,
+dynamic scheduling achieves performance comparable to their static
+scheduling, and does not require any preprocessing overhead or global
+knowledge.  Because it imposes fewer restrictions, dynamic scheduling
+may be applicable to a larger set of applications, including those whose
+communication patterns can change from iteration to iteration.
+
+
+\subsection{Acknowledgments}
+
+Fred Chong, Kirk
+Johnson, John Kubiatowicz, and Beng-Hong Lim gave us time and debugging
+support on the brand-new 
+MIT Alewife machine,  Marvin
+Theimer  reviewed an early draft of this paper, and Alan Mainwaring
+coined the term ``latency engine.''
+@
+
+
+1.3
+log
+@more minor edits for ipps
+@
+text
+@d24 1
+a24 1
+\subsection{Future Work}
+a52 9
+
+% because dynamic scheduling depends
+%on a number of parameters (such as the size of the scheduling lookahead
+%window and the number of booking grants per request).  The parameter
+%values used in this paper were arrived at through experimentation; their
+%optimal values will be different for different platforms, and since we
+%cannot analytically characterize their behavior at this time, we cannot
+%provide insight into how the values might be computed in advance.
+
+d60 32
+a91 14
+\subsection{Implications for Communication Library Support}
+
+A typical code fragment from the communication phase of a scientific
+application has this structure:
+
+{
+% \begin{singlespace}
+\begingroup
+\begin{verbatim}
+foreach proc in (dests_this_round)
+        send(proc, BigDataChunk);
+\end{verbatim}\endgroup
+%  \end{singlespace}
+}
+d93 1
+a93 1
+We propose to replace this with the following:
+d105 2
+a106 2
+The qualitative difference is that {\em schedule} may either perform an actual
+send, or schedule the block for sending later.  {\em Service\_queue} delivers
+d108 2
+a109 4
+depending on the data size and machine.
+
+We believe that the {\em schedule} and {\em service\_queue} operations should
+be provided by an optimized communication library.  Some MPPs, notably the
+d113 2
+a114 2
+used \cite{lok}, the coprocessor manages fragmentation of large sends
+into smaller DMA chunks,
+d117 6
+a122 4
+but provides no other services that benefit our
+techniques. In fact, the coprocessor is mostly acting as a latency
+engine: it adds latency at both ends when the message size is already
+smaller than the maximum allowed DMA chunk size.
+a126 18
+\subsection{Limitations}
+
+We were unable to run experiments successfully on the 32-node MIT Alewife,
+largely due to problems related to hardware and kernel instability on
+the brand-new machine.  While the results on the 4-node Alewife
+matched our expectations, 4 is too few nodes to cause enough link contention
+to stress the performance of the various algorithms we examined.  
+
+A standard criticism of performance-oriented papers concerns the use of
+synthetic benchmarks.  While we did not pull code from actual scientific
+applications, the simple communication patterns we synthesized match the
+observed communication behavior of SPMD applications
+\cite{palthesis,salmonthesis,splash}. 
+This is not surprising, since the patterns are easy to code, map
+naturally to the parallelism in many algorithms, and 
+perform reasonably well on today's MPP systems.  We believe our
+test programs characterize these communication patterns fairly.
+
+d153 6
+a158 6
+We would like to thank Angela Schuett for collecting the CM-5 data for
+this paper and helping us write the initial draft; Fred Chong, Kirk
+Johnson, John Kubiatowicz, and Beng-Hong Lim for giving us time on the
+brand-new MIT Alewife machine and helping us port our code;  Marvin
+Theimer for reviewing an early draft of this paper; and Alan Mainwaring
+for coining the term ``latency engine.''
+@
+
+
+1.2
+log
+@first round edits for IPPS96 camera-ready
+@
+text
+@d3 1
+a3 1
+\subsection{Lessons from DS and Tokens}
+d5 18
+a22 15
+One of our goals was to address limitations of the Brewer and Kuszmaul
+techniques: the lack of hardware barriers and the weak performance
+improvement on irregular traffic patterns.  We have demonstrated that
+although barriers still provide the tightest synchronization and best
+performance, token passing works well for a large range of data block
+sizes when fast barriers are unavailable.  
+
+We showed that the qualitative effect of dynamic scheduling is to
+``massage'' the communication into a permutation-plus-barrier pattern at
+runtime.  The result is much better performance for irregular traffic than
+can be achieved by interleaving.  Dynamic scheduling
+leverages the performance advantage of barrier synchronization
+and strengthens its position as the best known technique
+for choreographing communication in the problem domain we have
+addressed.
+a42 1
+
+d62 1
+a62 1
+We performed some preliminary experiments on the Alewife machine in
+d64 1
+a64 2
+transfer size.  Similarly, we experimented with co-optimizing bandwidth
+matching and the decision of how much polling to do on the CM-5.  Our
+d66 2
+a67 3
+analytically characterizable, but we do not consider these experiments
+sufficiently thorough to draw any conclusions at this point, though we
+will address the issue in depth in a future paper.
+d103 2
+a104 2
+Intel Paragon, feature a communication coprocessor; we suspect that this
+coprocessor can profitably be put to work implementing these operations.  In
+d106 4
+a109 2
+used \cite{lok}, the coprocessor provides application-transparent
+fragmentation of large sends into smaller DMA chunks of up to 8 Kbytes each,
+d112 5
+a116 3
+engine: it adds latency at both ends. It may
+be more effective to move the coordination functionality
+into the coprocessor.
+d143 2
+a144 2
+Kuszmaul techniques to enforce 1-on-1 communication. In
+\cite{syr-bk94}, Ranka {\em et al.} include \cite{bk94} in the reference list,
+d152 1
+a152 1
+overhead was included in their best-case measurements.  At any rate,
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d15 1
+a15 1
+that achieved by interleaving.  Dynamic scheduling
+d23 10
+a32 7
+One very obvious extension to the dynamic scheduling algorithm is
+to replace barriers with tokens. This proved very effective when
+applied to the \cite{bk94} technique that was used with
+communication patterns known to be permutations in advance.
+In dynamic scheduling nodes need a fairly strong concept of global
+time (rounds) in order to make bookings with each other. Barriers
+provide the needed synchronization. Our experiments with using tokens
+d45 3
+a47 3
+sized chunks. The final chunk in such a fragmentation will of course
+not be full. Part of the available network bandwidth between
+those two nodes will go wasted during that particular round. We
+d75 1
+a75 1
+\begin{singlespace}
+d81 1
+a81 1
+\end{singlespace}
+d87 1
+a87 1
+\begin{singlespace}
+d93 1
+a93 1
+\end{singlespace}
+d98 2
+a99 2
+all unsent queued blocks, using either interleaving or dynamic scheduling as
+determined by the data size and machine.
+d108 1
+a108 1
+but otherwise provides no other services which would benefit our
+d128 1
+a128 1
+naturally to the parallelism in the algorithm being implemented, and 
+d139 1
+a139 1
+Kuszmaul techniques to enforce one-on-one communication. In
+@
+
+
+1.1.1.1
+log
+@initial import matches original submission to IPPS 96.
+@
+text
+@@

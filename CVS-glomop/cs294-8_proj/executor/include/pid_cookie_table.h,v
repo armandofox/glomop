@@ -1,0 +1,161 @@
+head	1.4;
+access;
+symbols
+	executor:1.1.1.1
+	executor:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.12.15.00.36.31;	author randit;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.09.06.26.01;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.08.11.35.08;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.11.26.02.46.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Cookie now must be a 16 byte Hexadecimal ASCII encoded string.
+Port number is a command line argument: ./executor -p 5004
+Will truncate stderr and stdout if use same COOKIE for a subsequent job.
+@
+text
+@/***
+***
+*** File:    pid_cookie_table.h
+*** Authors: Steve Gribble and Randi Thomas
+*** Purpose: Interface specification for the COOKIE->PID mapping table
+***
+***/
+
+#ifndef PID_COOKIE_H
+#define PID_COOKIE_H
+
+#include <sys/types.h>
+#include <unistd.h>
+#include "gdbm.h"
+
+#define NUM_COOKIE_ELS 16
+typedef char cookie[NUM_COOKIE_ELS];   /* COOKIES are just 16 bytes => 16 hex 
+					  characters which will become 64 
+					  bits*/
+
+/* This magic PID value indicates that the process has not yet been submitted, 
+   but that we do know about the cookie. Make sure you're dealing with
+   datatype pid_t so that you don't get burned by negative values. */
+#define MAGIC_PID_VALUE -1
+
+#define RECOV_SUCCESS 0
+#define RECOV_UNKNOWN_PID 1
+typedef int (*recovery_function)(pid_t p);
+
+/* All of the pid_cookie_table functions return one of the following status
+   codes */
+#define PCT_OK 0
+#define PCT_TABLE_INIT_FAILED 1
+#define PCT_CLOSE_FAILED 2
+#define PCT_WRITE_FAILED 3
+#define PCT_READ_NOSUCHCOOKIE 4
+#define PCT_READ_FAILED 5
+#define PCT_DELETE_FAILED 6
+#define PCT_GETKEY_FAILED 7
+
+/** Initialize the pid_cookie_table. The recovery_function f will be
+    called at least once (and possibly more than once!!) for each pid in the
+    pid_cookie_table - this is to allow us to rebuild state after a crash.
+    If f is NULL, nothing is called.
+
+    Returns 0 on success.  
+
+    This function is NOT RE-ENTRANT, and should be called once at startup
+    time. **/
+int initialize_db(char *dbname, recovery_function f);
+
+/** Exit cleanly. This function is also not re-entrant. **/
+int close_db(void);
+
+/** Given a (COOKIE, PID) pair, write that to the database synchronously. 
+    This function IS RE-ENTRANT, and may block. **/
+int write_pair_to_db(cookie c, pid_t p);
+
+/** Given a COOKIE, read the (COOKIE, PID) pair from the database. 
+    This function IS RE-ENTRANT, and may block. **/
+int read_pair_from_db(cookie c, pid_t *p);
+
+/** Given a COOKIE, remove the (COOKIE, PID) pair from the database.
+    This function IS RE-ENTRANT, and may block. **/
+int remove_pair_from_db(cookie c);
+
+int get_firstkey(cookie *c);
+int get_nextkey(cookie prev_c, cookie *c);
+
+#endif
+
+@
+
+
+1.3
+log
+@Everything seems to work!  (sorta)
+@
+text
+@d16 4
+a19 2
+#define NUM_COOKIE_ELS 8
+typedef char cookie[NUM_COOKIE_ELS];   /* COOKIES are just 8 bytes */
+@
+
+
+1.2
+log
+@ungodly amount of changes
+@
+text
+@d66 1
+a66 1
+int get_nextkey(cookie *c);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d36 2
+d60 7
+@
+
+
+1.1.1.1
+log
+@First cut at executor -we've implemented the persistent cookie/pid
+table.
+@
+text
+@@

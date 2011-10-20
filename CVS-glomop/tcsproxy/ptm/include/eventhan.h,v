@@ -1,0 +1,554 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.8.2.1
+	Yatin:1.8.0.2
+	pre-yatin-merge:1.8
+	transend-beta2:1.6
+	fox-dev:1.6
+	ptm-ng:1.6
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.6
+	stable_ptm:1.5
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	98.01.16.22.16.13;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.09.18.22.45.18;	author yatin;	state Exp;
+branches
+	1.8.2.1;
+next	1.7;
+
+1.7
+date	97.09.15.03.09.32;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.17.03.01.05;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.04.09.55.35;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.05.01.27.08;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.24.08.12.09;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.06.23.42.33;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.24.23.45.49;	author yatin;	state Exp;
+branches;
+next	;
+
+1.8.2.1
+date	97.11.17.22.06.59;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __EVENTHAN_H__
+#define __EVENTHAN_H__
+
+#include "defines.h"
+#include "linkedlist.h"
+#include "gm_mutex.h"
+#include <time.h>
+
+
+#define EventType UINT32
+
+
+class LogMutex : public Mutex {
+public:
+  LogMutex(const char *name_) : Mutex(name_) { }
+  
+  void Lock();
+  void Unlock();
+};
+
+
+enum __EventType {
+  evSelect=1,
+  evConnectionReceived,
+  evTimer,
+  evReplyReceived,
+  evQuit,
+
+  evUserDefinedEvent
+};
+
+
+class EventSystem;
+class CommunicationObject;
+
+
+class EventHandler {
+public:
+  virtual gm_Bool HandleEvent(EventSystem *evs, EventType evType, void *args)=0;
+};
+
+
+struct Event {
+  Event() : type(EventType(0)), handler(0), args(0) {};
+  Event(EventType t, EventHandler *h, void *a) : type(t),handler(h),args(a) {};
+  EventType    type;
+  EventHandler *handler;
+  void         *args;
+};
+
+
+
+class gm_Timer : public EventHandler {
+public:
+  gm_Timer(EventSystem *evSys, long seconds, long useconds, 
+	gm_Bool repeatMode=gm_True);
+  virtual ~gm_Timer();
+  void IncrementTimeout();
+  void ComputeAheadOfGMT(timeval *ahead);
+  gm_Bool ShouldIRepeat() { return repeatMode; }
+
+  static int  Compare(gm_Timer *t1, gm_Timer *t2);
+  static void GetCurrentTime(timeval *gmt);
+  
+protected:
+  virtual gm_Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+  virtual gm_Bool EvTimer(EventSystem */*evs*/) { return gm_True; };
+
+  struct timeval timeoutInterval, nextTimeout;
+  gm_Bool   repeatMode;
+  EventSystem *eventSystem;
+};
+
+
+
+class EventSystem {
+public:
+  EventSystem();
+  virtual ~EventSystem();
+
+  gm_Bool Run();
+  gm_Bool AddCommunicationObject   (CommunicationObject*);
+  void RemoveCommunicationObject(CommunicationObject*);
+  gm_Bool AddTimer(gm_Timer*);
+  void RemoveTimer(gm_Timer*);
+
+  gm_Bool PostEventNoMutex(EventType eventType, EventHandler *object, 
+			   void *args);
+  gm_Bool PostEvent(EventType eventType, EventHandler *object, void *args);
+  gm_Bool SendEvent(EventType eventType, EventHandler *object, void *args) 
+  { 
+    if (object!=NULL) 
+      return object->HandleEvent(this, eventType, args); 
+    else Return(gm_False, errEvSysSendError);
+  }
+
+  /*gm_Bool CheckCommunicationObjects() {
+    gm_Bool returnValue;
+    mutex.Lock();
+    returnValue = ci.Check(this);
+    mutex.Unlock();
+    return returnValue;
+  }*/
+
+protected:
+  gm_Bool GetEvent(Event *event);
+  void Notify();
+
+  struct CommunicationInfo {
+    CommunicationInfo();
+    gm_Bool Add   (CommunicationObject *comm);
+    void    Remove(CommunicationObject *comm);
+    //gm_Bool Check (EventSystem *evs);
+
+    List<CommunicationObject> objectList;
+    fd_set descrs;
+    int    maxDescr;
+  };
+  
+
+  struct TimerInfo {
+  public:
+    gm_Bool  Add   (gm_Timer *timer);
+    void     Remove(gm_Timer *timer) { queue.Remove(timer); };
+    gm_Timer*   RemoveFromHead() { return queue.RemoveFromHead();     };
+    gm_Timer*   TimerAtHead()    { return queue.PeekAtHead(); };
+  protected:
+    List<gm_Timer> queue;
+  };
+
+
+  List<Event>        eventQueue;
+  Mutex              mutex;
+  Condition          notifyCond;
+  int                pipeWriteFD, pipeReadFD; 
+  gm_Bool            blockedOnSelect;
+  // using a pipe as a condition variable for the queue, since the event system
+  // thread can only block while doing a select!
+
+  CommunicationInfo ci;
+  TimerInfo         ti;
+};
+
+
+
+#endif // __EVENTHAN_H__
+@
+
+
+1.8
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d13 9
+d132 2
+a133 2
+  List<Event> eventQueue;
+  Mutex       mutex;
+@
+
+
+1.8.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a12 9
+class LogMutex : public Mutex {
+public:
+  LogMutex(const char *name_) : Mutex(name_) { }
+  
+  void Lock();
+  void Unlock();
+};
+
+
+d123 2
+a124 2
+  List<Event>        eventQueue;
+  Mutex              mutex;
+@
+
+
+1.7
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d44 1
+a44 1
+class Timer : public EventHandler {
+d46 1
+a46 1
+  Timer(EventSystem *evSys, long seconds, long useconds, 
+d48 1
+a48 1
+  virtual ~Timer();
+d53 1
+a53 1
+  static int  Compare(Timer *t1, Timer *t2);
+d75 2
+a76 2
+  gm_Bool AddTimer    (Timer*);
+  void RemoveTimer (Timer*);
+d114 4
+a117 4
+    gm_Bool  Add   (Timer *timer);
+    void     Remove(Timer *timer) { queue.Remove(timer); };
+    Timer*   RemoveFromHead() { return queue.RemoveFromHead();     };
+    Timer*   TimerAtHead()    { return queue.PeekAtHead(); };
+d119 1
+a119 1
+    List<Timer> queue;
+@
+
+
+1.6
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d62 1
+a62 2
+
+  static EventSystem *eventSystem;
+@
+
+
+1.5
+log
+@Modifications made to the PTM to remove bugs found while in India.
+@
+text
+@d6 1
+a6 1
+#include "threads.h"
+d107 1
+a107 1
+    LinkedList<CommunicationObject> objectList;
+d115 1
+a115 1
+    gm_Bool     Add   (Timer *timer);
+d118 1
+a118 1
+    Timer*   TimerAtHead()    { return queue.Record(queue.Head()); };
+d120 1
+a120 1
+    LinkedList<Timer> queue;
+d124 5
+a128 5
+  LinkedList<Event> eventQueue;
+  Mutex             mutex;
+  Condition         notifyCond;
+  int               pipeWriteFD, pipeReadFD; 
+  gm_Bool              blockedOnSelect;
+@
+
+
+1.4
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d46 2
+a47 1
+  Timer(EventSystem *evSys, long seconds, long useconds, gm_Bool repeatMode=gm_True);
+d79 2
+d86 1
+a86 1
+    else gm_BoolErrorReturn(errEvSysSendError);
+d89 8
+d102 1
+a102 1
+    CommunicationInfo() : maxDescr(0) { };
+d104 2
+a105 1
+    void Remove(CommunicationObject *comm);
+d126 1
+@
+
+
+1.3
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d30 1
+a30 1
+  virtual Bool HandleEvent(EventSystem *evs, EventType evType, void *args)=0;
+d46 1
+a46 1
+  Timer(EventSystem *evSys, long seconds, long useconds, Bool repeatMode=TRUE);
+d50 1
+a50 1
+  Bool ShouldIRepeat() { return repeatMode; }
+d56 2
+a57 2
+  virtual Bool HandleEvent(EventSystem *evs, EventType evType, void *args);
+  virtual Bool EvTimer(EventSystem */*evs*/) { return TRUE; };
+d60 1
+a60 1
+  Bool   repeatMode;
+d72 2
+a73 2
+  Bool Run();
+  Bool AddCommunicationObject   (CommunicationObject*);
+d75 1
+a75 1
+  Bool AddTimer    (Timer*);
+d78 2
+a79 2
+  Bool PostEvent(EventType eventType, EventHandler *object, void *args);
+  Bool SendEvent(EventType eventType, EventHandler *object, void *args) 
+d83 1
+a83 1
+    else BoolErrorReturn(errEvSysSendError);
+d87 1
+a87 1
+  Bool GetEvent(Event *event);
+d92 1
+a92 1
+    Bool Add   (CommunicationObject *comm);
+d103 1
+a103 1
+    Bool     Add   (Timer *timer);
+d115 1
+a115 1
+  Bool              blockedOnSelect;
+@
+
+
+1.2
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d53 1
+a53 1
+  static void GetCurrentGMT(timeval *gmt);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d10 1
+a10 1
+#define EventType uint32
+d17 1
+@
+
+
+1.1.1.1
+log
+@include files for PTM
+@
+text
+@@

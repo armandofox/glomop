@@ -1,0 +1,496 @@
+head	1.8;
+access;
+symbols
+	Yatin-final:1.7.2.1
+	Yatin:1.7.0.2
+	pre-yatin-merge:1.7
+	transend-beta2:1.6
+	fox-dev:1.6
+	transend-beta-latest:1.6
+	Aggregators:1.6
+	NoAggregators:1.6
+	iang:1.6.0.4
+	transend-beta:1.6.0.2
+	SOSP:1.5;
+locks; strict;
+comment	@# @;
+
+
+1.8
+date	98.01.16.22.15.58;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.15.03.09.25;	author yatin;	state Exp;
+branches
+	1.7.2.1;
+next	1.6;
+
+1.6
+date	97.04.25.01.57.56;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.03.06.07.18.17;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.19.01.12.52;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.13.02.02.16;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.05.00.33.02;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.04.05.37.47;	author fox;	state Exp;
+branches;
+next	;
+
+1.7.2.1
+date	97.11.17.22.06.52;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#
+#  new_field, update_field, and script procedures for the
+#  Array function
+#  (display a small array of numbered indicators, each of which can
+#  display one of N possible sequentially-numbered states, 0...N-1)
+
+proc Array_new_field { frame unit field max_indicators width} {
+    label $frame.name -text $field
+    frame $frame.indicators
+    frame $frame.legend
+
+    set butSize 10
+
+    if {$width == 0} {
+        set width [expr ceil(sqrt($max_indicators))]        
+    }
+    set height [expr ceil($max_indicators/$width)]
+
+    canvas $frame.c -width [expr $butSize*$width + 4] \
+	    -height [expr $butSize*$height + 4]
+    set x 0
+    set col [Array_color $frame 0]
+    for {set j 0} {$j < $height  &&  $x < $max_indicators} {incr j} {
+        for {set i 0} {$i < $width  &&  $x < $max_indicators} \
+		{incr i ; incr x} {
+            set rectx [expr $i*$butSize]
+            set recty [expr $j*$butSize]
+            $frame.c create rectangle \
+                    $rectx $recty \
+                    [expr $rectx+$butSize-1] [expr $recty+$butSize-1] \
+                    -fill $col \
+                    -tags t$x
+        }
+    }
+    
+    label $frame.legend.b0 -bg [Array_color $frame 0] -text "thr_idle" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b0 -row 0 -column 0 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b1 -bg [Array_color $frame 1] -text "thr_accepted" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b1 -row 0 -column 1 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b2 -bg [Array_color $frame 2] -text "thr_cache" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b2 -row 0 -column 2 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b3 -bg [Array_color $frame 3] -text "thr_distiller" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b3 -row 1 -column 0 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b4 -bg [Array_color $frame 4] -text "thr_writeback" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b4 -row 1 -column 1 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b5 -bg [Array_color $frame 5] \
+	    -text "thr_distillersend" -fg white -anchor c -pady 0
+    grid $frame.legend.b5 -row 1 -column 2 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b6 -bg [Array_color $frame 6] -text \
+	    "thr_distillerwait" -fg white -anchor c -pady 0
+    grid $frame.legend.b6 -row 2 -column 0 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+    label $frame.legend.b7 -bg [Array_color $frame 7] -text "thr_state_max" \
+	    -fg white -anchor c -pady 0
+    grid $frame.legend.b7 -row 2 -column 1 -sticky nsew \
+	    -ipadx 0 -ipady 0 -padx 1 -pady 1
+
+    pack $frame.name -side top -anchor w -fill x
+    pack $frame.c -side top -fill both -expand 1
+    pack $frame.legend -side top -fill x
+    pack $frame -side top -expand true -fill both
+}
+
+proc Array_update_field { frame unit field value sender } {
+    set vals [split $value ","]
+    set which_but 0
+    foreach v $vals {
+        if [regexp  {^([0-9.]+)=([0-9.]+)$} "$v" dummy b n] {
+            set which_but [expr int($b)]
+            set new_val [expr int($n)]
+        } elseif [regexp -- {^[0-9.]+$} $v n] {
+            set new_val [expr int($n)]
+        } else {
+            continue
+        }
+        $frame.c itemconfigure t$which_but -fill [Array_color $frame $n]
+        incr which_but
+    }
+}
+    
+proc Array_color {frame indx} {
+    set colors {green yellow orange blue red brown magenta gray}
+    return [lindex $colors [expr {$indx % [llength $colors]}]]
+}
+
+# procedure to be specified as script for Array messages:
+# Array message will have the format:
+#  Value:  "v0,v1,v2" i.e. state values for each indicator: sets all
+# indicators
+#  Each vi can either be a numeric value or number=value.
+#  E.g. the arg list "3,5,7=4,6,9,13=10,20=0" would set indicator 0 to
+# the value 3, indicator 1 to the value 5, indicators 7-9 to the values
+# 4,6,9 respectively, indicator 13 to the value 10, indicator 20 to the
+# value 0, and leave all remaining indicators unchanged.
+#  Script Command: "Array <max_indicators> <max_val> <ncols>"
+#   ncols is the number of columns wide to make the table of
+# indicators.  If omitted, the table is made as square as possible.
+
+proc Array { args } {
+    set max_indicators [lindex $args 0]
+    set max_val [lindex $args 1]
+    set ncols [lindex $args 2]
+
+    if {$ncols == ""} {set ncols 0}
+
+    if {$max_indicators > 0 && $max_val > 1} {
+        eval " proc new_field {frame unit field} { \
+            Array_new_field \$frame \$unit \$field $max_indicators $ncols \
+        }"
+        proc update_field { frame unit field value sender } {
+            Array_update_field $frame $unit $field $value $sender
+        }
+    }
+}
+@
+
+
+1.7
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d37 1
+a37 1
+	    -fg white -anchor c
+d41 1
+a41 1
+	    -fg white -anchor c
+d45 1
+a45 1
+	    -fg white -anchor c
+d49 1
+a49 1
+	    -fg white -anchor c
+d53 1
+a53 1
+	    -fg white -anchor c
+d57 1
+a57 1
+	    -text "thr_distillersend" -fg white -anchor c
+d61 1
+a61 1
+	    "thr_distillerwait" -fg white -anchor c
+d65 1
+a65 1
+	    -fg white -anchor c
+@
+
+
+1.7.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d37 1
+a37 1
+	    -fg white -anchor c -pady 0
+d41 1
+a41 1
+	    -fg white -anchor c -pady 0
+d45 1
+a45 1
+	    -fg white -anchor c -pady 0
+d49 1
+a49 1
+	    -fg white -anchor c -pady 0
+d53 1
+a53 1
+	    -fg white -anchor c -pady 0
+d57 1
+a57 1
+	    -text "thr_distillersend" -fg white -anchor c -pady 0
+d61 1
+a61 1
+	    "thr_distillerwait" -fg white -anchor c -pady 0
+d65 1
+a65 1
+	    -fg white -anchor c -pady 0
+@
+
+
+1.6
+log
+@made blinkenlights smaller and faster, need to fix up the visual interface now...
+@
+text
+@d19 2
+a20 1
+    canvas $frame.c
+d24 2
+a25 1
+        for {set i 0} {$i < $width  &&  $x < $max_indicators} {incr i ; incr x} {
+d56 2
+a57 2
+    label $frame.legend.b5 -bg [Array_color $frame 5] -text "thr_distillersend" \
+	    -fg white -anchor c
+d60 2
+a61 2
+    label $frame.legend.b6 -bg [Array_color $frame 6] -text "thr_distillerwait" \
+	    -fg white -anchor c
+d69 1
+a69 1
+    pack $frame.name -side top -anchor w -fill both -expand 1
+d71 1
+a71 1
+    pack $frame.legend -side top -fill both -expand 1
+@
+
+
+1.5
+log
+@Modified the frontend and libptmstub to provide a more detailed "blinking
+light" view of the stuff being done inside the Distill() call
+@
+text
+@d12 2
+d19 1
+d21 1
+d24 7
+a30 4
+            label $frame.indicators.b$x -bg [Array_color $frame 0] -text $x \
+                    -fg white -anchor c
+            grid $frame.indicators.b$x -row $j -column $i -sticky nsew \
+                    -ipadx 0 -ipady 0 -padx 1 -pady 1
+d33 1
+a33 1
+
+d68 1
+a68 1
+    pack $frame.indicators -side top -fill both -expand 1
+d85 1
+a85 1
+        $frame.indicators.b$which_but configure -bg [Array_color $frame $n]
+@
+
+
+1.4
+log
+@Now shows a legend on the array of thread state.
+@
+text
+@d47 1
+a47 1
+    label $frame.legend.b5 -bg [Array_color $frame 5] -text "thr_distillerdone" \
+d51 1
+a51 1
+    label $frame.legend.b6 -bg [Array_color $frame 6] -text "thr_state_max" \
+d55 4
+d84 1
+a84 1
+    set colors {green yellow orange blue red brown gray}
+@
+
+
+1.3
+log
+@Added the brown color to the thread monitor panel
+@
+text
+@d10 1
+d26 30
+d58 1
+@
+
+
+1.2
+log
+@added thread-monitoring stuff to frontend, fixed thread-monitoring procs in GUI, added proxy autoconfig file target to toplevel Makefile
+@
+text
+@d48 1
+a48 1
+    set colors {green yellow orange blue red gray}
+@
+
+
+1.1
+log
+@array-of-indicators logging added to monitor
+@
+text
+@a7 1
+    $frame configure -class Array
+d12 1
+a12 1
+        set width [expr ceil(sqrt($max_indicators))]
+d17 2
+a18 2
+    for {set j 0} {$j < $height} {incr j} {
+        for {set i 0} {$i < $width} {incr i ; incr x} {
+d21 2
+a22 1
+            grid $frame.indicators.b$x -row $j -column $i
+d25 1
+a25 1
+    pack $frame.name -side top -anchor w -fill x -expand 1
+d27 1
+d33 2
+a34 2
+    foreach v vals {
+        if [regexp -- {^([0-9.]+)=([0-9.]+)$} $v dummy b n] {
+d37 1
+a37 1
+        } else if [regexp -- {^[0-9.]+$} $v n] {
+d42 2
+a43 1
+        $frame.indicators.b$b configure -bg [Array_color $frame $n]
+d48 1
+a48 4
+    set colors [option get $frame states]
+    if {$colors == ""} {
+        set colors {green yellow orange blue red gray}
+    }
+d72 7
+a78 5
+    proc new_field {frame unit field} {
+        Array_new_field $frame $unit $field $max_indicators $ncols
+    }
+    proc update_field { frame unit field value sender } {
+        Array_update_field $frame $unit $field $value $sender
+@

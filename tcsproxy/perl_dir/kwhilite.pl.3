@@ -1,0 +1,51 @@
+#  Hey emacs, this is a -*- perl -*- program
+#  Version 3: deliver a prefs-change form if the word to be hilited is "PREFS".
+#
+
+use TACCutils;
+use clib;
+
+sub DistillerInit {
+    &MonitorClient_Send("kwhilite.pl",
+                        "Keyword hiliter says, \"Hello world!\"",
+                        "Log");
+    0;                                      # the distOk return code
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @_;
+
+    # regexp to highlight
+
+    if ($args{"s9000"} eq "PREFS") {
+
+        # deliver a prefs-change form instead, allowing user to specify 
+        # the search pattern.
+        my $form = &make_prefs_form("Keywords to hilite", "s9000", "text", "NONE");
+
+        return (&htmlify("Fill in some preferences for the keyword hiliter." . $form),
+                "", "text/html", 0);
+    } else {
+
+        $pattern = $args{"s9000"};
+
+        unless ($pattern) {
+            my $errmsg = "No keyword (arg 9000) specified\n";
+            &MonitorClient_Send("kwhilite.pl", $errmsg, "Log");
+            return(&htmlify($errmsg, "Keyword Hilite Error"),
+                   "",  "text/html", 0);
+        }
+        
+        $data = &html_regsub($data,
+                             "s!($pattern)!<font size=+2 color=red><b>\$1</b></font>!ig");
+
+        # since this is a simple distiller, return an empty string and let the
+        # frontend construct the headers.
+        $hdrs = "HTTP/1.0 200 OK\r\nX-Route: transend/text/html\r\n\r\n";
+        return($data, $hdrs, "text/html", 10);
+    }
+}
+
+
+1;
+

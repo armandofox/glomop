@@ -1,0 +1,73 @@
+head	1.1;
+access;
+symbols
+	SOSP:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.05.08.38.11;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@Distiller spawning experiment:
+-----------------------------
+
+Pick the "user pain threshold" P - the amount of time you're wiling to
+make the user wait for a perceived delay in getting service. (for
+lightly loaded system, this time is normally 0.)  also pick the
+"endurance threshold" E - the amount of time you're willing to let the
+user be in that angry state until things return to normal.
+
+Then, if the pain as delivered by the system goes above P and stays
+there for time at least E, you spawn an additional worker.  (if it still
+stays there for another time at least E, you spawn another, etc.)
+
+How to map P into a number that the system can measure:
+-------------------------------------------------------
+In a controlled experiment, can do it by timing the exact distillation
+latency of a specific input, then recording average queue sizes (while
+repeatedly requesting that same input) and multiplying by the
+distillation latency.
+
+In the trace-driven experiment, instrument the distiller queues to
+timestamp each entry when it enters the queue and again when it leaves
+the queue to be serviced.  Aggregate these measurements over an
+appropriately chosen interval (see next paragraph).  The PTM can now use
+latency information directly to determine whether we have exceeded the
+"user pain" watermark, and for how long.
+
+Queue size averaging
+--------------------
+Queue size averaging: the averaging interval should certainly be no
+greater than P.  making it arbitrarily fine does not hurt - in fact it
+improves stability, according to the following argument from digital
+signal processing.  suppose the interval is k, so you get 
+measurements at k, 2k, ...  if the queue is seen to be above the
+watermark value at times k and 2k, but it actually fell *below* the
+watermark value below those times, you will incorrectly deduce that the
+watermark has been exceeded for time 2k when in fact it has been
+exceeded for at most some time less than k.  if 2k > P, you will
+(unnecessarily) spawn another worker, and the user will not benefit
+anyway because the "badness" (fluctuation in offered load) has been
+occurring on a timescale less than k anyway.
+
+ASSUMPTION: launch time for new distiller is about zero.  necessary
+because if it is any greater, say T, then the endurance E is effectively
+increased by T.  it's easy to arrange for this time to be short; we
+wanted to use existing tools (rsh, glurun) so in our initial
+implementation it's several seconds, but we'll run experiments using a
+fast rexec daemon or by having distillers already waiting to be
+contacted on other machines.
+@

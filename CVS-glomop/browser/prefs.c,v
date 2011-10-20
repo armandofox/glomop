@@ -1,0 +1,562 @@
+head	1.14;
+access;
+symbols
+	v15b:1.14
+	v10b3:1.11
+	v10b2:1.8
+	v10b1:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.14
+date	97.11.11.22.08.12;	author aspolito;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.11.11.21.24.38;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.11.09.21.43.29;	author iang;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.10.30.02.02.01;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.10.29.22.07.31;	author aspolito;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.10.24.16.02.41;	author iang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.10.21.04.45.08;	author lcddave;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.09.26.19.19.22;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.09.10.18.14.25;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.10.02.44.27;	author aspolito;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.09.08.19.58.41;	author aspolito;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.09.08.00.24.31;	author lcddave;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.08.28.01.16.28;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.08.01.23.08.30;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.14
+log
+@small bug fix
+@
+text
+@#pragma pack(2)
+
+#include <Pilot.h>
+#include "globals.h"
+#include "prefs.h"
+#include "callback.h"
+#include "editmenu.h"
+#include "utils.h"
+#include "notify.h"
+
+void ReadPrefs() {
+  SWord size;
+  void * prefs;
+  Word prefSize = 20;
+  Word proxySize = 64;
+
+  prefs = MemPtrNew(prefSize);
+  /* read proxy port and addr */
+  size = PrefGetAppPreferences(APPTYPE, PROXY_PORT_PREF, prefs,
+			       &prefSize, true);
+  if (size != noPreferenceFound) {
+    proxyPort = *((int *)prefs);
+    size = PrefGetAppPreferences(APPTYPE, PROXY_ADDR_PREF, proxyServer,
+				 &proxySize, true);
+    if (size != noPreferenceFound) {
+      /* NULL */
+    }
+  }
+  /* read fallback proxy port and addr */
+  size = PrefGetAppPreferences(APPTYPE, FALLBACK_PORT_PREF, prefs,
+			       &prefSize, true);
+  if (size != noPreferenceFound) {
+    fallbackPort = *((int *)prefs);
+    size = PrefGetAppPreferences(APPTYPE, FALLBACK_ADDR_PREF, fallbackServer,
+				 &proxySize, true);
+    if (size != noPreferenceFound) {
+      /* NULL */
+    } else {
+      fallbackServer[0] = 0;
+    }
+  } else {
+    fallbackPort = 0;
+  }
+  size = PrefGetAppPreferences(APPTYPE, HIST_PREF, prefs, &prefSize, true);
+  if (size != noPreferenceFound) {    
+    histSize = *((UInt *) prefs);
+  }
+  size = PrefGetAppPreferences(APPTYPE, CACHE_PREF, prefs, &prefSize, true);
+  if (size != noPreferenceFound) {
+    cacheSize = *((UInt *) prefs);
+    cacheSize *= 1024;
+  }
+  size = PrefGetAppPreferences(APPTYPE, SCROLL_PREF, prefs, &prefSize, true);
+  if (size != noPreferenceFound) { 
+    scrollSize = *((UInt *) prefs);
+  }
+  size = PrefGetAppPreferences(APPTYPE, REMAP_PREF, prefs, &prefSize, true);
+  if (size != noPreferenceFound) {    
+    remap = *((Boolean *) prefs);
+  }
+
+  MemPtrFree(prefs);
+}
+
+void SetPrefs() {
+
+  ULong t = cacheSize / (ULong) 1024;
+  UInt tc = (UInt) t;
+
+  PrefSetAppPreferences(APPTYPE, REMAP_PREF, 1, &remap, sizeof(Boolean), true);
+  PrefSetAppPreferences(APPTYPE, PROXY_PORT_PREF, 1, &proxyPort,
+			sizeof(int), true);
+  PrefSetAppPreferences(APPTYPE, PROXY_ADDR_PREF, 1, &proxyServer,
+			64, true);
+  PrefSetAppPreferences(APPTYPE, FALLBACK_PORT_PREF, 1, &fallbackPort,
+			sizeof(int), true);
+  PrefSetAppPreferences(APPTYPE, FALLBACK_ADDR_PREF, 1, &fallbackServer,
+			64, true);
+  PrefSetAppPreferences(APPTYPE, HIST_PREF, 1, &histSize, sizeof(UInt), true);
+  PrefSetAppPreferences(APPTYPE, CACHE_PREF, 1, &tc, sizeof(UInt), true);
+  PrefSetAppPreferences(APPTYPE, SCROLL_PREF, 1, &scrollSize,
+			sizeof(UInt), true);
+}
+
+Boolean PrefsFormHandleEvent (EventPtr e) {
+  Boolean handled = false;
+  FormPtr frm;
+  FieldPtr fld, fld2;
+  Char buf[10];
+  ControlPtr ctl;
+
+  CALLBACK_PROLOGUE
+
+  switch (e->eType) {
+  case frmOpenEvent:    
+    frm = FrmGetActiveForm();
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsHistFld));    
+    StrIToA(buf, histSize);
+    SetFld(fld, buf, 4);
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsCacheFld));
+    StrIToA(buf, (cacheSize/1024));
+    SetFld(fld, buf, 4);
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsScrollFld));    
+    StrIToA(buf, scrollSize);
+    SetFld(fld, buf, 4);
+    ctl = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsRemapBox));    
+    CtlSetValue(ctl, remap);
+
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyAddrFld));
+    SetFld(fld, proxyServer, 64);
+
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyPortFld));
+    StrIToA(buf, proxyPort);
+    SetFld(fld, buf, 5);
+
+    if (fallbackServer[0]) {
+      fld = FrmGetObjectPtr (frm,
+			     FrmGetObjectIndex 
+			     (frm, PrefsFallbackAddrFld));    
+      SetFld(fld, fallbackServer, 64);
+    }
+
+    if (fallbackPort) {
+      fld = FrmGetObjectPtr (frm, 
+			     FrmGetObjectIndex 
+			     (frm, PrefsFallbackPortFld));    
+      StrIToA(buf, fallbackPort);
+      SetFld(fld, buf, 5);
+    }
+
+    FrmDrawForm(frm);
+    handled = true;
+    break;
+  
+  case menuEvent:
+    MenuEraseStatus(NULL);
+    if (EditMenuHandleEvent(e->data.menu.itemID, FrmGetActiveForm())) {
+	handled = true;
+    } else {
+	switch(e->data.menu.itemID) {
+	}
+    }
+    handled = true;
+    break;
+
+  case ctlSelectEvent:
+    switch(e->data.ctlEnter.controlID) {
+    case PrefsSave:
+      frm = FrmGetActiveForm();
+      ctl = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsRemapBox));    
+      remap = false;
+       if (CtlGetValue(ctl)) remap = true;
+       fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsScrollFld));
+      scrollSize = StrAToI(FldGetTextPtr(fld));
+      if (scrollSize > MAIN_DISPLAY_HEIGHT) {
+	scrollSize = MAIN_DISPLAY_HEIGHT;
+      }
+      if (scrollSize < 1) {
+	scrollSize = 1;
+      }
+      fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsHistFld));
+      histSize = StrAToI(FldGetTextPtr(fld));
+      if (histSize > 100) {
+	histSize = 100;
+      }
+      if (histSize < 1) {
+	histSize = 1;
+      }
+      fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsCacheFld));
+      cacheSize = 1024 *  StrAToI(FldGetTextPtr(fld));
+      fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyPortFld));
+      proxyPort = StrAToI(FldGetTextPtr(fld));
+      fld2 = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyAddrFld));
+      StrCopy(proxyServer, FldGetTextPtr(fld2));
+
+      fld = FrmGetObjectPtr (frm, FrmGetObjectIndex 
+			     (frm, PrefsFallbackPortFld));
+      if (FldGetTextPtr(fld)) {
+	fallbackPort = StrAToI(FldGetTextPtr(fld));
+      } else {
+	fallbackPort = 0;
+      }
+      fld2 = FrmGetObjectPtr (frm, FrmGetObjectIndex 
+			      (frm, PrefsFallbackAddrFld));
+      if (FldGetTextPtr(fld2)) {
+	StrCopy(fallbackServer, FldGetTextPtr(fld2));
+      } else {
+	fallbackServer[0] = 0;
+      }
+      SetPrefs();
+
+      if (conID != -1) {
+	CloseConnection(conID, true);
+	conID = -1;
+	conID = OpenConnection(proxyServer, proxyPort, storageDB);
+	if ((conID == -1) && fallbackServer[0] && fallbackPort) {
+	  conID = OpenConnection(fallbackServer, fallbackPort, storageDB);
+	}
+	if (conID != -1) {
+	  RegisterNotify(conID);
+	}
+      }
+  
+
+      /* FALLTHROUGH */
+
+    case PrefsCancel:
+      if (firstOpen == 1) {
+	  FrmGotoForm(SplashForm); 
+      } else {
+	  FrmGotoForm(MainForm); 
+      }
+      handled = true;
+    break;
+    }
+
+  default:
+    break;
+  }
+
+  CALLBACK_EPILOGUE
+
+  return handled;
+}
+@
+
+
+1.13
+log
+@out of memory handled gracefully.  Fallback proxies added
+@
+text
+@d9 1
+d198 3
+@
+
+
+1.12
+log
+@Recover from CVS repository crash.  Changes include:
+o Editing of entries in hotlist and storage
+o Server-side imagemaps
+o Recognition of ImageViewer .pdb files
+@
+text
+@d14 1
+a14 1
+  Word proxySize = 32;
+d17 3
+a19 2
+    
+  size = PrefGetAppPreferences(APPTYPE, PROXY_PORT_PREF, prefs, &prefSize, true);
+d22 9
+a30 2
+  size = PrefGetAppPreferences(APPTYPE, PROXY_ADDR_PREF, proxyServer,
+			       &proxySize, true);
+d32 10
+a41 2
+    /* NULL */
+  }
+d73 5
+a77 1
+			32, true);
+d108 2
+a109 2
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyAddrFld));    
+    SetFld(fld, proxyServer, 32);
+d111 1
+a111 1
+    fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyPortFld));    
+d115 15
+d175 17
+a191 1
+      if ((FldDirty(fld) || FldDirty(fld2)) && conID != -1) {
+d195 3
+d199 1
+a200 1
+      SetPrefs();
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d8 1
+a61 16
+}
+
+void SetFld(FieldPtr fld, void * val, ULong len) {
+
+  VoidHand txthand = MemHandleNew(len+1);
+  if (txthand) {
+    CharPtr txtptr = MemHandleLock(txthand);
+    if (txtptr) {
+      txtptr[0] = '\0';
+      if (val) MemMove(txtptr, val, len);
+      txtptr[len] = '\0';
+    }
+    MemHandleUnlock(txthand);
+    FldFreeMemory(fld);
+    FldSetTextHandle(fld, (Handle)txthand);    
+  }
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d156 1
+a156 1
+	CloseConnection(conID);
+@
+
+
+1.9
+log
+@Added some missing "handled = true;"s
+@
+text
+@a8 12
+#define REMAP_PREF 1
+#define SCROLL_PREF 2
+#define HIST_PREF 3
+#define CACHE_PREF 4
+#define PROXY_ADDR_PREF 5
+#define PROXY_PORT_PREF 6
+
+/* notice: some preference numbers are used by aggregators for it's prefs.
+   see aggform.h */
+
+static void SetFld(FieldPtr fld, void * val, ULong len);
+
+d63 1
+a63 1
+static void SetFld(FieldPtr fld, void * val, ULong len) {
+@
+
+
+1.8
+log
+@Adding in aggfrom support for a popup list of aggregators. The list
+will not work yet since loading the list of aggs into the preferences
+area does not exist yet.
+@
+text
+@d128 3
+a130 1
+    if (!EditMenuHandler(e->data.menu.itemID, FrmGetActiveForm())) {
+@
+
+
+1.7
+log
+@o Fixed display of URL that are both too wide for the display and don't
+  contain a '/'
+o Changed max scroll rate from 160 to MAIN_DISPLAY_HEIGHT
+@
+text
+@d16 3
+@
+
+
+1.6
+log
+@o Added menu to Splash screen with Open and Prefs items
+o Added CALLBACK_{PRO,EPI}LOGUE to the Prefs event handler
+@
+text
+@d141 2
+a142 2
+      if (scrollSize > 160) {
+	scrollSize = 160;
+@
+
+
+1.5
+log
+@lots.  I dont remember
+@
+text
+@d95 2
+d169 2
+d172 5
+a176 1
+      FrmGotoForm(MainForm); 
+d184 3
+@
+
+
+1.4
+log
+@edit menu for prefs form
+@
+text
+@d22 1
+a22 1
+  Word proxySize = 30;
+d26 9
+a51 9
+  size = PrefGetAppPreferences(APPTYPE, PROXY_ADDR_PREF, proxyServer,
+			       &proxySize, true);
+  if (size != noPreferenceFound) {
+    /* NULL */
+  }
+  size = PrefGetAppPreferences(APPTYPE, PROXY_PORT_PREF, prefs, &prefSize, true);
+  if (size != noPreferenceFound) {
+    proxyPort = *((int *)prefs);
+  }
+d62 4
+a69 4
+  PrefSetAppPreferences(APPTYPE, PROXY_ADDR_PREF, 1, &proxyServer,
+			30, true);
+  PrefSetAppPreferences(APPTYPE, PROXY_PORT_PREF, 1, &proxyPort,
+			sizeof(int), true);
+d91 1
+a91 1
+  FieldPtr fld;
+d111 1
+a111 1
+    SetFld(fld, proxyServer, 30);
+d157 9
+a165 2
+      fld = FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, PrefsProxyAddrFld));
+      StrCopy(proxyServer, FldGetTextPtr(fld));
+@
+
+
+1.3
+log
+@splash screen
+pick your proxy host
+reload changed to refresh
+@
+text
+@d7 1
+d121 9
+@
+
+
+1.2
+log
+@OFFLINE MODE WORKS
+@
+text
+@d12 2
+d21 2
+a22 1
+  
+a24 1
+
+d42 10
+d63 6
+a68 1
+  PrefSetAppPreferences(APPTYPE, SCROLL_PREF, 1, &scrollSize, sizeof(UInt), true);
+d108 8
+d145 4
+@
+
+
+1.1
+log
+@Code massivly split
+@
+text
+@a121 1
+      ignoreUp = true;
+@

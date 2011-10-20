@@ -1,0 +1,101 @@
+#
+# THe Bay Area culture aggregator
+#
+
+use TACCutils;
+use clib;
+use Date::Manip;
+
+sub DistillerInit {
+    %urls = ("SF MOMA" => "http://www.sfmoma.org/CAL.HTM",
+             "Best of Broadway" =>
+             "http://www.bestofbroadway-sf.com/calendar/index.html",
+             );
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @_;
+    my ($s,$h,$d);
+    my(%h,%d);
+    my @err = ();
+    my $errs = 0;
+    my $k;
+    my %evts = ();
+
+    my $url = &get_my_url($headers);
+
+    if ($url =~ /PREFS/) {
+        return(&htmlify(&make_prefs_form("Events from date",
+                                         "s9001",
+                                         "text",
+                                         "",
+                                         "Events until date",
+                                         "s9002",
+                                         "text",
+                                         "")),
+               "", "text/html", 0);
+    }
+                                        
+
+    my $mindate = &ParseDate($args{"9001"} || "today");
+    my $maxdate= &ParseDate($args{"9002"} || "today + 1 year");
+
+    $mindate = &ParseDate($mindate) if $mindate;
+
+    # fetch all pages to be aggregated
+    foreach $k (keys(%urls)) {
+        ($s,$h,$d) = &Clib_Fetch($urls{$k}, "");
+        $d =~ s/\r/\n/g;
+        if ($s == 0  &&  &status_ok($h)) {
+            $h{$k} = $h;
+            $d{$k} = $d;
+        } else {
+            push(@err, $urls{$_});
+            $errs++;
+        }
+    }
+    # bail out if errors
+    if ($errs) {
+        $" = ',';       #"
+        $data = &TACCutils::htmlify("<h1>Errors</h1> $err errors fetching one".
+                                    " or more of @err: ",
+                                    "Aggregator error");
+        return ($data,"","text/html",0);
+    }
+    
+    my %res;
+    foreach $k (keys(%urls)) {
+        %res = &TACCutils::match_all_dates($d{$k}, 1);
+        foreach $i (keys (%res)) {
+            $evts{$i}->{name} = $res{$i};
+            $evts{$i}->{where} = qq!<A HREF="$urls{$k}">$k</A>!;
+        }
+    }
+
+    my $content = '';
+    my ($x,$y,$where);
+    $content .= join('', "<h1>Events between ",
+                     &UnixDate($mindate,"%e %b %Y"),
+                     " and ",
+                     &UnixDate($maxdate,"%e %b %Y"),
+                     "</h1>\n");
+    $content .= "<ul>\n";
+    # $today = &ParseDate("today");
+    foreach $x (sort(keys (%evts))) {
+        next if $x lt $mindate;
+        next if $x gt $maxdate;
+        $y = $evts{$x}->{name};
+        $where = $evts{$x}->{where};
+        $y = &TACCutils::striphtml($y);
+        $content .= sprintf("<li> <B>%s</B> <BR>\n %s\n <BR> at %s\n",
+                            &UnixDate($x,"%e %b %Y"),
+                            $y, $where);
+    }
+    $content .= "</ul>\n";
+    $content = &TACCutils::htmlify($content,"Culture Listing",
+                                   'BGCOLOR="#ffffff"');
+    return($content, '', 'text/html', 0);
+}
+
+1;
+

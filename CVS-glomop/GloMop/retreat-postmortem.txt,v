@@ -1,0 +1,222 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     98.01.29.19.46.24;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.01.29.19.46.24;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@                       GloMop Retreat Postmortem
+                  (hilights of comments & suggestions
+                 and their impact on current direction)
+
+                     FOR INTERNAL CONSUMPTION ONLY
+
+
+Contents (search for :: to browse sections)
+
+0:: Armando's observations about retreatgoers
+1:: GloMop API Issues
+2:: Meta-issues (research direction)
+3:: Daedalus/Infopad convergence
+4:: Some action items
+
+---------------------------------------------------------------------------
+
+0:: Armando's observations about retreatgoers
+
+Most InfoPad retreat visitors are hardware folks, whose perspective
+seems to be "we have solved the reliable packet radio problem and we
+have solved the Infonet cell-handoff problem, therefore we are done".
+
+Most Daedalus retreat visitors are network folks, whose perspectives
+were very useful from the network angle but less focused with respect to
+the application level angle.  Nonetheless some valuable suggestions were
+made, which I've tried to distill below.
+
+I found most Daedalus visitors to be interested and proactive in giving
+feedback, despite the fact that they don't have to pay >$100K per year
+to be our Official Olympic Sponsors.  My impression, perhaps naive, is
+that our industry partners appear to believe that they are receiving a
+good value from the money and effort invested with us and that we are
+genuinely interested in technology transfer and impacting users of
+already-deployed (commercial) infrastructures.  Only Barry Leiner seemed
+concerned that this focus might jeopardize our "ten-year research
+horizon."  Frankly I don't plan to even *be* at Berkeley in ten years,
+so I took his comment with a grain of salt.
+
+---------------------------------------------------------------------------
+
+1:: GloMop API Issues
+
+Srini: Document-exchange model may be too restrictive; have you
+considered something like scripted RPC?
+
+There are 2 other pieces of the API that weren't really discussed:
+streams (because we have no story for it yet) and agents (remote
+execution of well-connected programs at the proxy).  When these are
+combined with the document API, it does look a lot like RPC.  The
+difference is that we have strongly defined the data types and calling
+conventions up front and designated the proxy as a "well-known" entry
+point for these services, which circumvents the RPC binding issue.  I
+still need to talk to Steve McCanne to get his reactions.
+
+Bruce, Steve McC: How do collaborative apps fit in (WB, etc), e.g. what
+if user tries to modify & upload a distilled image?  (Barry Leiner asked
+a similar question)
+
+For such apps there needs to be a consistency model, which I claim is
+orthogonal to the distillation/document-exchange model.  Given that apps
+like WB implement such a model internally already, it shouldn't be hard
+to grow a "proxied WB" by making a proxy SSM become a "client" of stock
+WB.  That is, WB sends updates to the proxy (which it believes is a
+regular client); proxy distills resulting deltas for the end user app;
+end user changes to WB are propagated to the proxy, which blows it up to
+full size/resoln (e.g.) and presents it to "stock WB".  Thus from WB's
+point of view the proxy SSM is just a regular client.  Of course, we
+still have to write the end-user code (for the PDA, e.g.) but that code
+does not have to deal explicitly with consistency and does not require
+direct MBONE access.
+
+Bruce: What's the QoS policy for admission control; related question -
+should you include a "CPU bound" in your constraints structure?
+
+There is no admission control in the classic sense because static
+documents don't require a long-lived guaranteed level of service.  Maybe
+we should use a different term for our constraints structure other than
+"QoS" since that term has evolved a well-defined meaning in the
+continuous-media world.  The user specifies weighted *constraints* but
+these do not translate into any *guarantees* (even latency guarantees).
+It is strictly best-effort, and if the user sets the bounds too tightly
+for the current network, they simply will not be satisfied, although the
+proxy will use the weights to determine which constraints it should try
+hardest to satisfy.
+
+Bruce: How does user know the difference between a slow proxy link and a
+slow Internet (i.e. the web page lives in France on a heavily loaded
+server)?
+
+The user can't tell, since the proxy can exert no control outside its
+admin. domain.  When the wired part of the net is slow enough to be a
+significant contributor to the overall latency, the proxy could try to
+satisfy the user's latency bound end-to-end (e.g. "compensate" for slowness
+in wired net by doing heavier than usual distillation).  This is a
+policy decision since either behavior is easy to implement.
+
+(Srini) any way to use a single proxy to exploit the locality between
+actions of "nearby" users? (i.e. many CS students reading Dilbert page)
+
+There probably is; the proxy is postulated to have a caching component
+that is logically distinct from the rest of the proxy.  I.e. the proxy
+can use the cache to satisfy client requests, but the setting of cache
+policy is independent of the rest of the operation of the proxy.  I
+suggest we defer this discussion till later, since Mark and I and others
+have also been tossing around ideas for distributed caching in the Web
+generally. 
+
+2:: Meta-issues (research direction)
+
+The biggest meta-issue was how close to stick with HTTP.  I agree with
+all who said there were good reasons not to (Mike o'Connor: HTTP is a
+moving target anyway; Bruce: HTTP doesn't support streams or
+collaborative apps; other similar comments).
+
+Mike O'Connor (Intel) suggested the right answer to this:
+
+
+       MOBILE DEVICE
+
+        +----------+
+        | Netscape |               WELL-CONNECTED
+        +----------+                    SERVER
+             |
+             |HTTP
+             |
+        +----------+
+        | WebProxy |
+        +----------+ <-- GloMop     +----------+
+        |  GloMop  |      API       | GloMop   |
+        |  library |                |  proxy   |
+        +----------+   wireless     +----------+
+        | NW Stack |----------------| NW Stack |-----> wired Internet
+        +----------+                +----------+
+                                                  
+Related comments resulted from my "hop on the WWW bandwagon" slide.  I
+think some people misinterpreted this as meaning: "Let's change our
+research direction to be WWW-centric", which is NOT what I meant.  I
+just meant that web browsing is a suitable driving app for the next 6
+months, a good vehicle for sanity-checking the initial GloMop
+implementation.  I think if I had been more careful about separating the
+research goals (flexible API for network-adaptive document exchange;
+validation that this API fits a variety of mobile apps) from the
+vehicles for demonstrating the impact of the research (adaptive mobile
+web browser, standalone web proxy), much confusion might have been avoided.
+
+
+3:: Daedalus/Infopad convergence
+
+I think the most promising convergence opportunity "above the network
+level" is the Medley substream architecture for continuous streams.
+Medley has a notion of QoS and bit-rate limited streams, and it has a
+standardized API for writing Medley-aware apps.  Dave Messerschmitt
+thinks that static documents are a degenerate case of a single
+substream; while true, I think this view is overly restrictive for our
+purposes, because one of the proxy's goals is to mediate a world of
+varying data formats and transports (i.e. the Internet) and present to
+the application a *uniform* interface for dealing with the multimedia
+objects.  Nonetheless, a Medley-API SSM for the proxy might be a useful
+starting point for doing streams over wireless.
+
+Steve Gribble and I will become familiar with Medley's substream-based
+QoS paradigm, and I'll explain our view of the world to William Lee
+(Dave Messerschmitt's student, author of Medley API) so we can determine
+how to leverage each other's efforts (and, ideally, code).
+
+4:: Some action items
+
+- (Srini) make explicit that the API has *orthogonal* goals that
+  are met by its various features:
+  - bandwidth management by distillation & other means
+  - accommodating constrained computing environment
+  - provide uniform interface to various datatypes from app's perspective
+
+- (Mike O.) Provide mechanism in API for "tickle execute": i.e. tell
+  user  how long something will take (or how much it will cost) withou
+  actually doing it. ("make -n")
+
+- (Srini) Provide mechanism in API for cancelling outstanding requests
+
+- (Srini) is end-to-end encryption enough or do we also have to
+  authenticate each RPC?
+
+@
+
+
+1.1.1.1
+log
+@GloMOp bibliographies, meetings, etc, re-imported into GloMop CVS
+archive on full-sail
+@
+text
+@@

@@ -1,0 +1,476 @@
+head	1.10;
+access;
+symbols
+	Yatin-final:1.9.6.1
+	Yatin:1.9.0.6
+	pre-yatin-merge:1.9
+	transend-beta2:1.9
+	fox-dev:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.9;
+locks; strict;
+comment	@# @;
+
+
+1.10
+date	98.01.16.22.15.59;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.03.03.19.46.34;	author yatin;	state Exp;
+branches
+	1.9.6.1;
+next	1.8;
+
+1.8
+date	97.02.16.05.51.09;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.16.05.41.05;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.05.03.48.58;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.29.23.50.57;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.01.29.23.26.08;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.01.29.22.15.03;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.01.08.03.39.17;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.01.06.06.39.04;	author fox;	state Exp;
+branches;
+next	;
+
+1.9.6.1
+date	97.11.17.22.06.52;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#
+#  Support procedures for monitor: make a new unit or new field definition
+#
+
+# Create a new unit in its own toplevel window
+
+proc make_newunit {unit hostName pid}  {
+    global toplevel_counter fields units hosts pids
+
+    # in the top level window, each unit has a frame called .frame-X
+    # (where X is a counter), and gets a new toplevel called .top-X.
+    # .frame-X
+    # .frame-X.button (the control button to show/hide unit's main window)
+    # .frame-X.label (name of unit)
+    # .frame-X.kill  (button that sends this unit a death packet)
+    # Note that
+    # the procedure "unitnumber" returns the counter number X of a unit
+    # given the unit's frame, toplevel, etc.
+
+    set toplevel [toplevel .top-$toplevel_counter -class Monitor]
+    wm title $toplevel $unit
+    wm resizable $toplevel true true
+    do_withdraw $toplevel   ;#default to invisible window.
+
+    set unit_frame [frame .frame.frame-$toplevel_counter -class Top]
+    set hostLabel  [label $unit_frame.host -text "$hostName ($pid)" -borderwidth 2 \
+	    -relief sunken -anchor w]
+    set label [label  $unit_frame.label  -text $unit -borderwidth 2 \
+	    -relief sunken -anchor w]
+    set show [button $unit_frame.button -text "Show" -width 8 -pady 0]
+    $show configure -command "restore_unit $toplevel $show"
+    set kill [button $unit_frame.kill -text "Kill" -width 6 -pady 0]
+    $kill configure -command "kill_command \{$unit\}"
+    bind $toplevel <Unmap> "$show configure -text Show \
+            -command \"restore_unit $toplevel $show\""
+    bind $toplevel <Map> "$show configure -text Hide \
+            -command \"withdraw_unit $toplevel $show\""
+    bind $toplevel <Destroy> "destroy_unit $toplevel %W $unit_frame"
+
+    pack $hostLabel -side left -fill x -expand 1 -anchor w
+    pack $label -side left -fill x -expand 1 -anchor w
+    pack $kill $show -side right -anchor e
+    pack $unit_frame -fill x -expand 1
+
+    set units($unit) $toplevel
+    set hosts($unit) $hostName
+    set pids($unit)  $pid
+    incr toplevel_counter
+    
+    # if a "custom" newunit proc was supplied, call it; otherwise call
+    #  the default one.
+
+    if {[info procs new_unit] != ""} {
+        new_unit $toplevel $unit
+    } else {
+        default_new_unit $toplevel $unit
+    }
+}
+
+proc unitnumber { thing } {
+    if [regexp -nocase -- {[^-]+-+([0-9]+)$} $thing dummy num] {
+        return $num
+    } else {
+        return 0
+    }
+}
+
+#  Create a new field for an existing unit
+
+proc make_newfield {unit field} {
+    # this is a new field
+    global frame_counter fields units
+
+    set frame [frame $units($unit).frame$frame_counter]
+    set fields($unit--$field) $frame
+    incr frame_counter
+    
+    # if a "custom" new_field proc was specified, call it; otherwise
+    # call the default one.
+
+    if {[info procs new_field] != ""} {
+        new_field $frame $unit $field
+    } else {
+        default_new_field $frame $unit $field
+    } 
+}
+
+
+# this is the procedure that is called if no new_unit procedure is defined
+# in the script accompanying the body of the message
+proc default_new_unit { toplevel unit } {
+    frame $toplevel.bar
+    set dismiss [button $toplevel.bar.button -text "Destroy" -pady 0 \
+	    -highlightthickness 0 -borderwidth 2 -command "destroy $toplevel"]
+    set withdraw [button $toplevel.bar.button2 -text "Hide" -pady 0 \
+            -highlightthickness 0 -borderwidth 2 -command "do_withdraw $toplevel"]
+    pack $dismiss $withdraw -side right
+    pack $toplevel.bar -side bottom -expand 1 -fill x
+}
+
+# this is the procedure that is called if no new_field procedure is defined
+# in the script accompanying the body of the message
+proc default_new_field { frame unit field } {
+    label $frame.id     -width 24 -text $field
+    label $frame.sender -width 16
+    label $frame.value  -width 15 -fg red
+
+    $frame configure -borderwidth 2 -relief sunken
+
+    pack $frame.id $frame.sender $frame.value \
+            -side left -fill none -expand 1
+    pack $frame -side bottom -fill x -expand 1
+}
+
+# this is the procedure that is called if no update_field procedure is defined
+# in the script accompanying the body of the message
+proc default_update_field { frame unit field value sender } {
+    set time [clock format [clock seconds] -format %H:%M:%S]
+    $frame.sender configure -text $time
+    $frame.value  configure -text $value
+}
+
+
+proc Death_new_field { frame unit field } {
+    label $frame.text -relief sunken -borderwidth 2 -text "Unit died" \
+	    -anchor w
+    pack  $frame.text -fill x -expand 1 -padx 1
+    pack  $frame -side bottom -fill x -expand 1
+}
+
+
+proc Death_update_field { frame unit field value sender } {
+    if { $value == "0" } {
+	$frame.text configure -text "Unit exited normally"
+    } else {
+	$frame.text configure -text "Unit died on signal $value"
+    }
+}
+
+
+proc Death { } {
+    proc new_field { frame unit field } {
+	Death_new_field $frame $unit $field
+    }
+
+    proc update_field { frame unit field value sender } {
+	Death_update_field $frame $unit $field $value $sender
+    }
+}
+
+
+proc do_withdraw { toplevel } {
+    if { [option get .frame noicons {}] == "yes" } {
+	wm withdraw $toplevel
+    } else {
+	wm iconify $toplevel
+    }
+}
+
+proc withdraw_unit { toplevel button } {
+    do_withdraw $toplevel
+    $button configure -text "Show" -command "restore_unit $toplevel $button"
+}
+
+
+proc restore_unit { toplevel button } {
+    wm deiconify $toplevel
+    $button configure -text "Hide" \
+	    -command "withdraw_unit $toplevel $button"
+}
+
+
+proc destroy_unit { toplevel widget unit_frame } {
+    if { $widget == $toplevel } { destroy $unit_frame }
+}
+@
+
+
+1.9
+log
+@Changed the sender field in the monitor to display the time the last
+update occurred
+@
+text
+@d20 1
+a20 1
+    set toplevel [toplevel .top-$toplevel_counter]
+@
+
+
+1.9.6.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d20 1
+a20 1
+    set toplevel [toplevel .top-$toplevel_counter -class Monitor]
+@
+
+
+1.8
+log
+@Oops! Forgot to make a change before the previous commit
+@
+text
+@d118 2
+a119 1
+    $frame.sender configure -text $sender
+@
+
+
+1.7
+log
+@Modified the monitor to allow iconified windows to be totally removed from
+the display. Also created individual monitor.options files
+@
+text
+@d96 1
+a96 1
+            -highlightthickness 0 -borderwidth 2 -command "wm iconify $toplevel"]
+@
+
+
+1.6
+log
+@Found the PTM bug that was causing new to fail in libdist.a
+(hopefully!)
+@
+text
+@d23 1
+a23 1
+    wm iconify $toplevel   ;#default to invisible window.
+d151 8
+d160 1
+a160 1
+    wm iconify $toplevel
+@
+
+
+1.5
+log
+@Still more changes to the monitor to make kill work
+@
+text
+@d26 1
+a26 1
+    set hostLabel  [label $unit_frame.host -text $hostName -borderwidth 2 \
+@
+
+
+1.4
+log
+@More changes for killing processes via the monitor
+@
+text
+@d36 2
+@
+
+
+1.3
+log
+@Changes to the monitor for killing
+@
+text
+@d33 1
+a33 1
+    $kill configure -command "kill_command \{$unit\} \{$kill\}"
+d40 1
+a40 1
+    pack $kill $show  -side right -anchor e
+d59 1
+a59 1
+    if [regexp -nocase -- "[^-]+-+([0-9]+)$" $thing num] {
+d119 29
+@
+
+
+1.2
+log
+@Added "dying gasp" functionality to MonitorClient class: whenever a new
+monitor is created, globals are set to record its socket id and unit
+name, so that the program can respond to signals by jumping to a signal
+handler that announces the program's death by sending a death packet.
+New functions in monitor.cc: DyingGasp (class method), GaspOnSignals
+(instance method), extern "C" void MonitorClientSigHandler (C signal
+handler), CurrentMonitorSock and CurrentUnitId (static variables in
+monitor.h).  If you can think of a better way to do this, please change
+it.
+
+Fixed bug in frontend HTTP request parsing that caused multi-packet
+requests not to be read correctly.
+
+Many changes to the monitor, mostly cosmetic, some functional, including
+addition of "kill" button (there is now a "death protocol") and more
+sane show/hide behavior that is integrated with iconifying.
+@
+text
+@d7 2
+a8 2
+proc make_newunit {unit}  {
+    global toplevel_counter fields units
+d26 4
+a29 1
+    set label  [label  $unit_frame.label  -text $unit]
+d32 2
+a33 2
+    set kill [button $unit_frame.kill -text "Kill" -width 6 -pady 0 \
+            -command "death_packet {$unit}"]
+d38 1
+d44 2
+@
+
+
+1.1
+log
+@Broke up monitor functionality into various files for
+maintainability. Made default state of new windows hidden rather than
+exposed.  New procedures (for different logging types) can now be added
+by simply adding a file whose name matches the glob "*_procs.tcl"; it
+will be loaded automatically.
+@
+text
+@d10 11
+a20 1
+    set toplevel [toplevel .top$toplevel_counter]
+d22 2
+a23 1
+    wm withdraw $toplevel   ;#default to invisible window.
+d25 1
+a25 1
+    set unit_frame [frame .frame.frame$toplevel_counter]
+d27 6
+a32 3
+    set button [button $unit_frame.button -text "Show" -width 8 \
+            -pady 0]
+    $button configure -command "restore_unit $toplevel $button"
+d36 1
+a36 1
+    pack $button -side right -anchor e
+d52 8
+d81 49
+@

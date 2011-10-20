@@ -1,0 +1,259 @@
+head	1.7;
+access;
+symbols
+	Yatin-final:1.7
+	Yatin:1.7.0.2
+	pre-yatin-merge:1.7
+	transend-beta2:1.6
+	fox-dev:1.6
+	ptm-ng:1.5
+	transend-beta-latest:1.5
+	Aggregators:1.5
+	NoAggregators:1.5
+	iang:1.5.0.4
+	transend-beta:1.5.0.2
+	SOSP:1.4
+	stable_ptm:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.7
+date	97.09.11.00.25.55;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.14.05.05.44;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.04.18.19.26.42;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.27.01.13.56;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.02.26.04.14.55;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.17.03.01.10;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.07.21.54.48;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@bug fix
+@
+text
+@#ifndef __REXEC_H__
+#define __REXEC_H__
+
+#include "defines.h"
+#define MAX_HOSTNAME 256
+
+class RExec {
+public:
+  RExec() : rsh(0), rshArgs(0), hosts(0), numberOfHosts(0), minLoadLevel(0), 
+    currentHost(-1) { };
+  ~RExec() { 
+    if (rsh!=0) delete [] rsh;
+    if (rshArgs!=0) delete [] rshArgs;
+    if (hosts!=0) delete [] hosts;
+  }
+  gm_Bool Initialize(const char *rsh_="", const char *rshArgs_="", 
+		     const char *hosts_="");
+  gm_Bool Update(const char *rsh_="", const char *rshArgs_="", 
+		 const char *hosts_="");
+  void UpLevel(char *ipAddress) {
+    Host *host = FindByIP(ipAddress);
+    if (host!=0) {
+      host->UpLevel();
+      RecomputeMinLoadLevel();
+    }
+  }
+  void DownLevel(char *ipAddress) {
+    Host *host = FindByIP(ipAddress);
+    if (host!=0) {
+      host->DownLevel();
+      RecomputeMinLoadLevel();
+    }
+  }
+
+  gm_Bool Exec(const char *executable, char **argv);
+  gm_Bool IsRemoteExecution() { return ((rsh==NULL) ? gm_False : gm_True); }
+
+  static gm_Bool getAbsolutePath(const char *relativePath, 
+				 char *absolutePath, UINT32 length);
+  static const char *getFilenameOnly(const char* filePath);
+
+  
+protected:
+  class Host {
+  public:
+    Host() : loadLevel(0) { *name = '\0'; *ipAddress = '\0'; };
+    void Initialize(char *hostName_, int priority_);
+    void Exec(const char *rsh, const char *rshArgs, char **argv);
+    
+    void UpLevel()   { loadLevel++; };
+    void DownLevel() { if (loadLevel > 0) loadLevel--; };
+    char *getName() { return name; };
+    char *getIPAddress() { return ipAddress; };
+    int  getLoadLevel()  { return loadLevel; };
+    int  getPriority()   { return priority;  };
+    void SetLoadLevel(int loadLevel_)  { loadLevel = loadLevel_; }
+  protected:
+    char name[MAX_HOSTNAME];
+    char ipAddress[MAXIP];
+    int  priority;
+    int  loadLevel;		// # of processes currently started up by the 
+				// Proxy system on this host
+  };
+
+  Host *FindByIP(char *ipAddress);
+  Host *FindLeastLoadedHost();
+  void RecomputeMinLoadLevel();
+private:
+  char    *rsh, *rshArgs;
+  Host    *hosts;
+  int     numberOfHosts;
+  int     minLoadLevel;
+  int     currentHost;
+};
+
+
+#endif // __REXEC_H__
+@
+
+
+1.6
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d36 1
+a36 1
+
+@
+
+
+1.5
+log
+@Added rexec.args, so now you can pass arguments to rsh
+Cleaned up the ptm to always read options from the options file
+@
+text
+@d13 1
+d18 2
+a19 1
+
+d56 1
+@
+
+
+1.4
+log
+@Added priorities to remote execution
+Added FE_getDistillerStatusString to cacheman.cc
+Modified PTM invocation from the frontend to use the gm_options file rather
+than pass all options via the command line
+@
+text
+@d9 1
+a9 1
+  RExec() : rsh(0), hosts(0), numberOfHosts(0), minLoadLevel(0), 
+d15 2
+a16 1
+  gm_Bool Initialize(const char *rsh_="", const char *hosts_="");
+d46 1
+a46 1
+    void Exec(const char *rsh, char **argv);
+d66 1
+a66 1
+  char    *rsh;
+@
+
+
+1.3
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d44 1
+a44 1
+    void Initialize(char *hostName_);
+d51 2
+a52 1
+    int  getLoadLevel() { return loadLevel; };
+d56 1
+@
+
+
+1.2
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d18 5
+a22 2
+    Host *host = Find(ipAddress);
+    if (host!=0) host->UpLevel(); 
+d25 5
+a29 2
+    Host *host = Find(ipAddress);
+    if (host!=0) host->DownLevel();
+d43 2
+a44 2
+    Host() : loadLevel(0) { *name = '\0'; };
+    void Initialize(char *hostName_) { strcpy(name, hostName_); }
+d50 2
+d54 1
+d59 1
+a59 1
+  Host *Find(char *ipAddress);
+d61 1
+a61 1
+
+@
+
+
+1.1
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@a49 1
+
+d53 1
+a57 1
+
+@

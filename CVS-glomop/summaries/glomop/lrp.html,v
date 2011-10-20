@@ -1,0 +1,152 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.11.14.07.51.58;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.11.14.07.51.58;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@<html>
+<title>
+Lazy Receiver Processing
+</title>
+<body>
+<a href=index.html><i>Back to index</i></a>
+<h1>
+Lazy Receiver Processing (LRP): A Network Subsystem Architecture for
+Server Systems
+</h1>
+<strong>
+Peter Druschel and Gaurav Banga, Rice Univ.
+</strong>
+
+<p><b>One-line summary:</b>
+Goal: alleviate receiver livelock and increase receiver-process throughput
+and scheduling fairness
+under high network load.  Strategy: replace single IP queue with per-socket
+queues, demux packets as early as possible (in NI if possible), and do
+protocol processing lazily (when possible) and always at receiver's (not
+interrupt's) priority.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+Receiver livelock: OS spends all its time receiving/delivering packets
+(this code runs at interrupt level with high priority, regardless of
+receiver process).  No cycles left over for receiver processes, so
+packets get dropped on the floor <i>after</i> resources have been
+expended on them.
+<br>How to fix:
+<ul>
+  <li> Replace IP queue with per-socket queue<br>
+       Once a socket's queue fills, discard further packets for that
+       process.  E.g. TCP listening socket discards incoming SYN's when
+       its listen queue is full.
+  <li> Demultiplex early (at NI if possible, else in software close to
+       NI)<br>
+       Author's demux function doesn't do dynamic alloc, has no timers,
+       doesn't block, so relatively safe to run at interrupt level.
+  <li> Perform remaining protocol processing at <i>receiver's</i> priority.<br>
+       Functions such as ARP, ICMP, IP forwarding, etc. are charged to
+       daemon processes whose priorities are adjustable.
+  <li> Do lazy protocol processing (i.e. wait for <i>recv()</i> call)
+       when protocol semantics allow it.  (can't do it in TCP because of
+       flow control semantics.)
+</ul>
+
+Implementation:
+
+<ul>
+  <li>Sparc 20/61, Fore SBA-200 ATM (155 Mbit) using U-Net software
+       from Cornell (von Eicken et al.) for NI demux, new <tt>PF_LRP</tt>
+       protocol for socket calls.
+  <li> Dedicated local ATM network.
+  <li> Results: LRP doesn't add overhead when congestion is low, but has
+       fairer performance and more per-process throughput
+       under extreme congestion: as offered load is increased to 20K
+       pkts/sec, all techniques show linear increase in
+       rate of packets delivered to application up to about 9K
+       packets/sec, but after that, 4.4BSD and early-demux fall off
+       rapidly to zero while
+       Software demux and NI demux level off at 8K and 12K pkts/sec
+       respectively.
+  <li> LRP combination of early demux and receiver-priority scheduling
+       is significantly better than early demux alone, even when no
+       packets are being early-discarded.  Authors speculate this gain
+       is due to fewer context switches and improved system-memory
+       locality (i.e. reduced stress on OS services) resulting from the
+       architecture of their technique.
+  <li> Effect on roundtrip latency for ping-pong test, as "background
+       offered load" is increased from zero to 18K pkts/sec: with
+       4.4BSD, ping-pong latency rises sort of linearly from 500 to 2500
+       usec (at 15K pkts/sec), but for LRP it stays nearly constant
+       around 600us.
+  <li> Partially due to Unix scheduling artifact: when ping-pong server
+       is interrupted to allow OS to receive background traffic packet,
+       the interrupt is charged to the ping-pong server even though it
+       is not the receiver, which depletes its priority.  Eventually we
+       get priority inversion.
+  <li> <b>RPC experiment:</b> RPC server performs a memory-bound task in
+       response to RPC call; experiment arranged so RPC server is never
+       blocked on network.  With LRP, RPC server spends more of its time
+       in the RPC and less time receiving other RPC calls.  Since
+       servers are not being overloaded in this test, improved LRP
+       performance must be due to locality, reduced cxt switching, etc.
+</ul>
+
+<h2>Relevance</h2>
+
+A generalization of some Active Message-like techniques (early demux,
+receiver-based message extraction) for IP-like servers under high load.
+Prevents receiver process thrashing and can help insure fairness of
+priority scheduling, by improving accounting (of NI interrupts) and
+limiting resources spent on receiving according to receiver's priority.
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Local ATM doesn't convince me that this will scale to the wide
+       area. In particular, everyone (including, e.g., routers) has to
+       use it, and early demux/priority scheduling requires knowledge of
+       the receiving process's priority.  Currently this knowledge can't
+       be deduced by a router looking at the packet.
+  <li> Experiments concentrate on short packets (e.g. HTTP, RPC).  This
+       is not a flaw but it is not explicitly mentioned.  Not clear how
+       this would fare with large packets, where  additional steps
+       (e.g. IP
+       reassembly) may be necessary.
+</ul>
+<hr>
+<a href=index.html><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

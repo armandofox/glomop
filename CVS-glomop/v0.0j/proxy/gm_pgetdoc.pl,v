@@ -1,0 +1,512 @@
+head	1.15;
+access;
+symbols
+	release:1.15
+	Release:1.11;
+locks; strict;
+comment	@# @;
+
+
+1.15
+date	95.10.25.04.41.17;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.10.25.03.00.11;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.10.20.03.58.52;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.10.18.22.12.41;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.10.18.03.08.56;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.10.17.01.14.13;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.10.16.23.12.03;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.10.13.03.20.40;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.13.03.19.28;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.08.18.23.01.42;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.08.18.08.12.36;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.08.18.00.08.11;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.08.17.22.28.40;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.17.08.58.11;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.17.06.59.35;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@in gm_mail.pl, where it checks for empty inbox: moving the "return"
+*outside* the scope of the 'if' block makes it work correctly; inside
+the scope of the 'if', it mysteriously returns "6" to the caller, even
+tho the value about to be returned is correct!  perl bug?
+@
+text
+@#
+#  gm_pgetdoc.pl
+#
+#  Implement the handler for CGetDocument.  When getdoc is called, the proxy
+#  has received a document locator line (not yet parsed).
+#
+
+
+package gm_proxy;
+
+sub pgetdoc {
+    my($self,$docpath) =  @@_;
+    local($proto,$path) = ();               # protocol & doc name
+    local(@@typelist) = ();                  # list of accepted types
+    local($pkg);                            # TSM package name for req
+    local($leftover, $cmd);                 # dummy vars, really
+    local($docloc, $types, $max, $id);
+    
+    ($docloc, $types, $max, $id) =   $self->getdocloc($docpath);
+    
+    if (!defined $docloc) {
+        # bad request
+        &aux'log("Bad request");
+        $self->send_error(0,"Bad request");
+        return 0;
+    }
+
+    # Got a valid request.  Log it and prepare to fetch.
+
+    ($leftover, $cmd, $path, $proto) = &aux'pick_strings($docloc);
+    $proto =~ tr/A-Z/a-z/;
+    ($leftover,$leftover,@@typelist) = &aux'pick_strings($types);
+    &aux'log("New request id=$id proto:path=$proto:$path " .
+             "types=@@typelist max=${max}");
+
+    # make sure that the TSM for this protocol type exists, and try to load it.
+
+    unless (defined ($pkg = $self->{Config}->{$proto})) {
+        &aux'log("No TSM defined for type '$proto'");
+        $self->send_error($id,"No TSM defined for $proto");
+        return 0;
+    }
+
+    # create a new object of this type (loads the code if necessary) and
+    # initialize it.  This object will be used to handle this document request.
+    # When the document is closed, the object will go away.
+
+    unless ($self->Require($pkg, $id)) {
+        &aux'log("TSM '$proto' (package '$pkg') defined but not loaded: " .
+                 $self->last_error());
+        $self->send_error($id,"TSM $pkg not loaded: " . $self->last_error());
+        return 0;
+    }
+
+    # TSM is loaded.  Go fetch, distill, & xmit.
+
+    &aux'log("fetching $pkg:$path ($id) with max=$max");
+    return $self->fetch ($pkg, $path, ${max}, ${id}, @@typelist);
+}
+    
+########################################################################
+#  fetch:
+#
+#  Given package name, doc path, max chunks, req id, and typelist: fetch &
+#  distill document, and return it to client.
+######################################################################
+
+sub fetch {
+    my($self) = shift;
+    my($sock) = $self->{Sock};
+    local($pkg, $path, $max, $id, @@types) = @@_;
+    local($obj) = $self->{Modules}->{$id};
+    my(@@tocdata);
+    local(@@chunkdata);
+    local($totalchunks);
+    local($i);
+    
+    # FetchTOC takes a req ID and a document name, and returns a list whose
+    # first element is the number of chunks in the document and whose remaining
+    # elements constitute the stuff to blast back to the client as the actual
+    # TOC data (including all necessary headers, as defined in
+    # stream_defs.txt). 
+
+    # FetchChunk takes a reqID and a chunk index and returns a ready-to-send
+    # array contaioning chunk data, or empty string if no such chunk.
+
+    #
+    #  Get the TOC and send it over.
+
+    @@tocdata =   $obj->FetchTOC($self,$id, $path);
+    
+    unless (@@tocdata) {
+        &aux'log("No TOC returned for reqid $id!");
+        $self->send_error($id, "No TOC");
+    }
+
+    #  First element is number of chunks.
+    
+    $totalchunks = shift @@tocdata;
+    &aux'log("Sending ${id}[TOC], $totalchunks to follow");
+    $sock->writesock(@@tocdata);
+
+    #  Send the minimum of either MAXCHUNKS or the total number of chunks in
+    #  the document.
+
+    for ($i = 1; $i <= ($max < $totalchunks? $max: $totalchunks); $i++) {
+        if (@@chunkdata = $obj->FetchChunk($self,$id, $i)) {
+            &aux'log("Sending ${id}[$i]");
+            shift @@chunkdata;               # get rid of chunkstogo index
+            $sock->writesock (@@chunkdata);
+        } else {
+            &aux'log("No chunk $i for reqid $id");
+            $self->send_error ("No chunk $i");
+        }
+    }
+    &aux'log("Send id $id completed successfully.");
+    return 1;
+}
+
+######################################################################
+# Return a value for 'require'
+1;
+@
+
+
+1.14
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d73 2
+a74 1
+    local(@@tocdata, @@chunkdata);
+d90 3
+a92 1
+    unless (@@tocdata = $obj->FetchTOC($self,$id, $path)) {
+a96 1
+    
+@
+
+
+1.13
+log
+@foo
+@
+text
+@d43 6
+a48 1
+    unless ($self->Require($pkg)) {
+d72 1
+a72 2
+    local($gettoc);
+    local($getchunk);
+a82 3
+    $gettoc = "${pkg}::${pkg}FetchTOC";
+    $gettoc = \&$gettoc;
+
+a85 3
+    $getchunk = "${pkg}::${pkg}FetchChunk";
+    $getchunk = \&$getchunk;
+
+d89 1
+a89 1
+    unless (@@tocdata = &$gettoc($self,$id, $path)) {
+d105 1
+a105 1
+        if (@@chunkdata = &$getchunk($self,$id, $i)) {
+@
+
+
+1.12
+log
+@gm_mail only reports new mail now
+@
+text
+@d44 3
+a46 2
+        &aux'log("TSM '$proto' (package '$pkg') defined but not loaded: $!");
+        $self->send_error($id,"TSM package $pkg not loaded: $!");
+@
+
+
+1.11
+log
+@auth and proxy now totally separate.
+@
+text
+@d43 1
+a43 1
+    unless (require "${pkg}.pl") {
+@
+
+
+1.10
+log
+@foo bar
+@
+text
+@d38 1
+a38 1
+    unless (defined ($pkg = $main'Config{$proto})) {
+@
+
+
+1.9
+log
+@foo
+@
+text
+@a94 1
+    &aux'log("Sending ${id}[TOC]");
+d99 1
+@
+
+
+1.8
+log
+@whoops forgot to save it.
+@
+text
+@d66 2
+a67 2
+    local(*gettoc);
+    local(*getchunk);
+d78 2
+a79 1
+    eval "\*gettoc = \*${pkg}'${pkg}FetchTOC";
+d84 2
+a85 1
+    eval "\*getchunk = \*${pkg}'${pkg}FetchChunk";
+d90 1
+a90 1
+    unless (@@tocdata = &gettoc($self,$id, $path)) {
+d106 1
+a106 1
+        if (@@chunkdata = &getchunk($self,$id, $i)) {
+@
+
+
+1.7
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@a27 1
+    &aux'log("got $docloc $types $max $id");
+@
+
+
+1.6
+log
+@stuff
+@
+text
+@d9 1
+a9 1
+package gm_pgetdoc;
+d12 1
+d19 1
+a19 1
+    ($docloc, $types, $max, $id) = &aux'getdocloc(shift @@_);
+d23 2
+d28 1
+d41 2
+a42 1
+        &gm_pconnect'send_error(${id},"No TSM defined for $proto");
+d46 1
+a46 1
+        &gm_pconnect'send_error(${id},"TSM package $pkg not loaded: $!");
+d52 2
+a53 1
+    return &fetch($pkg, $path, ${max}, ${id}, @@typelist);
+d64 2
+d89 1
+a89 1
+    unless (@@tocdata = &gettoc($id, $path)) {
+d91 1
+a91 1
+        &gm_pconnect'send_error($id, "No TOC");
+d99 1
+a99 1
+    &gm_pconnect'writesock(@@tocdata);
+d105 1
+a105 1
+        if (@@chunkdata = &getchunk($id, $i)) {
+d108 1
+a108 1
+            &gm_pconnect'writesock(@@chunkdata);
+d111 1
+a111 1
+            &gm_pconnect'send_error("No chunk $i");
+@
+
+
+1.5
+log
+@Uplink works! woo hoo!
+@
+text
+@d30 1
+a30 1
+    &aux'log("New request id=$id proto:path=$proto:$path ",
+d106 1
+@
+
+
+1.4
+log
+@added structs.pl package
+@
+text
+@a11 1
+    local(%req) =();                        # request parameters
+a17 2
+    $req{docloc} = shift;
+
+@
+
+
+1.3
+log
+@downlink works
+@
+text
+@d2 1
+a2 1
+#  gm_getdoc.pl
+d17 3
+d21 1
+a21 1
+    $req{docloc} = shift;
+d23 2
+a24 22
+    # According to bytestream protocol, format of DocLocator is a multiline
+    # request:
+    #   GET #docpath##protocol#
+    #   TYPES #t1#t2# ...
+    #   MAX max
+    #   ID id
+    #   END
+    #
+    #  Start by picking up all request lines, until END line.
+
+    $req{$1} = $2 while (($_ = &gm_pconnect'readsock()) =~ m/^(\S+)\s+(.*)$/);
+    &aux'log("WARNING: No END line for request, continuing: %req")
+        unless ($_ =~ /^end/i);
+
+    if (!defined $req{docloc}
+        || !defined $req{types}
+        || !defined $req{max}
+        || !defined $req{id}) {
+
+        local($", $,) = (',',',');
+        &aux'log("Bad request: %req");
+        &gm_pconnect'send_error($req{id}, "Malformed request");
+d30 1
+a30 1
+    ($leftover, $cmd, $path, $proto) = &aux'pick_strings($req{docloc});
+d32 3
+a34 3
+    ($leftover,$leftover,@@typelist) = &aux'pick_strings($req{types});
+    &aux'log("New request id=$req{id} proto:path=$proto:$path ",
+             "types=@@typelist max=$req{max}");
+d40 1
+a40 1
+        &gm_pconnect'send_error($req{id},"No TSM defined for $proto");
+d44 1
+a44 1
+        &gm_pconnect'send_error($req{id},"TSM package $pkg not loaded: $!");
+d50 1
+a50 1
+    return &fetch($pkg, $path, $req{max}, $req{id}, @@typelist);
+d102 1
+@
+
+
+1.2
+log
+@appears to work for sending TOC and incoming mail
+@
+text
+@a106 1
+    &gm_pconnect'writesock(@@tocdata);
+d111 1
+d116 1
+a116 1
+    for ($i = 1; $i < ($max < $totalchunks? $max: $totalchunks); $i++) {
+@
+
+
+1.1
+log
+@added pgetdoc
+@
+text
+@d30 1
+a30 1
+    $req{$1} = $2 while (($_ = &main'readsock()) =~ m/^(\S)+\s+(.*)$/);
+d34 1
+a34 1
+    if (!defined $req{get}
+d47 1
+a47 1
+    ($leftover, $cmd, $proto, $path) = &aux'pick_strings($req{docloc});
+d55 2
+a56 2
+    unless (defined ($pkg = $Config{proto})) {
+        &log("No TSM defined for type '$proto'");
+d106 3
+d117 4
+a120 1
+        unless (@@chunkdata = &getchunk($id, $i)) {
+@

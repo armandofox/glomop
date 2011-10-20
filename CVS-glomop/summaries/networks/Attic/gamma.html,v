@@ -1,0 +1,140 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.04.10.15.38.44;	author gribble;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	97.04.10.07.23.35;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Moved gamma to the right spot, added it to database index.
+@
+text
+@<html>
+<title>
+Gamma
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+The Gamma Database Machine Project
+</h1>
+<strong>
+David J. De Witt, Shahram, Ghandeharizadeh, Donovan A. Schneider, Allan
+Bricker, Hui-I Hsao, Rick Rasmussen, Univ. Wisconsin-Madison.
+</strong>
+
+<i>Summary by Armando Fox and Steve Gribble</i>
+
+<p><b>One-line summary:</b>
+Distributed DB on top of a NOW, to exploit incremental scalability,
+commodity parts, and high aggregate disk bandwidth.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Shared-nothing architecture (i.e. a NOW), for today's NOW reasons
+       (in 1988!): commodity parts, high aggregate I/O BW to
+       disks. First version: Vax
+       11/750's; too little memory per node (2MB) and I/O bottleneck.
+       Second version: Intel iPSC hypercube, DMA-supported interconnect.
+  <li> Horizontal partitioning of relations across nodes
+       (<i>declustering</i>) on 
+       user-selected index.   In retrospect, this was a big
+       mistake--should use "heat" of a relation (hot spot patterns?) to
+       determine how to decluster it.
+  <li> Processes: catalog mgr (schema info), scheduler (for multisite
+       queries), operator (per-node controllers).
+  <li> Use hashes (specifically, a <i>split table</i>) to partition
+       execution of query plan steps across nodes.  Hash is applied
+       (e.g.) to join attribute of tuples entering a join operation.
+  <li> Similarly, scheduler process can pipeline different phases of an
+       operation by initiating them on different processors and
+       rendezvousing the results.  Example: to do a simple hash join of
+       relation B 
+       with A, simultaneously initiate the <i>build phase</i> (in which
+       tuples from inner relation A are inserted into a hash table;
+       preparation for the probing phase, in which tuples from B are
+       looked up in the hash table for matches) and the  selection
+       operator on A.  When both complete, move on to the probing phase.
+  <li> Underlying OS: <i>NOSE</i> (lightweight processes, shared memory,
+       nonpreemptive scheduling, message passing between processes or
+       processors on the hypercube)
+  <li> Operator implementations:
+       <ul>
+         <li> Select: collect relation rows from across several nodes.
+         <li> Join: Partition original relations into disjoint subsets
+              (<i>buckets</i>) using hash fn.  E.g. parallel hybrid hash join:
+              partition inner relation into N buckets; distribute
+              buckets to different nodes, each of which does a
+              sub-join.  (In traditional HHJ, only the first bucket
+              would participate in sub-join, while remaining N-1 buckets
+              stored in temp files.)
+         <li> Scalar Aggregates: each processor computes its piece of
+              result in parallel.
+         <li> Update: modified tuple is passed thru split table, since
+              it may now live on a different partition.
+       </ul>
+  <li> <b>Concurrency control:</b> traditional intentional locking at file and
+       page level; centralized deadlock detector; ARIES WAL and
+       recovery.
+  <li> <b>Chained declustering</b> for availability: each disk holds the
+       primary copy of tuple bucket <i>k</i> and the backup copy of
+       bucket <i>k<i>+1 (mod the number of buckets).
+  <li> <b>Performance:</b> Close to linear (but not perfectly linear)
+       speedup and response latencies as processors are added for the
+       measured workload.  Disk and network overheads prevent
+       performance from being perfectly linear.  Also, for selections
+       that end up selecting a small number of tuples, overhead to set
+       up the selection dominates execution time and results in
+       sublinear speedup.
+</ul>
+
+<h2>Relevance</h2>
+
+Early scalable distributed system on a NOW, with a lot of the same
+motivations and impementation choices and similar results.  Today's fast
+networks might alleviate some of the scaling problems the authors saw
+(and to a lesser extent, improved disk performance would help as well).
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Not surprising that a balanced system would require accounting
+       for the high startup costs of disk operations.  Aggregate disk
+       <i>bandwidth</i> is not the problem: initiation and similar
+       <i>latencies</i> are the problem.  Surprising that the authors
+       didn't deal with this up front.
+  <li> As authors acknowledge, it's not necessarily always a good idea
+       to horizontally split relations across disks (pessimal
+       for some transactions).
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@added gamma summary
+@
+text
+@@

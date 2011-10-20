@@ -1,0 +1,199 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.06.00.31.18;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@/*
+ * A simple program to allow users to edit the Usenet news configuration,
+ * to update the list of newsgroup moderators.
+ * This program is intended to be installed setuid root.
+ */
+
+#include <pwd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#include <grp.h>
+#include <stdio.h>
+#include <time.h>
+#include <string.h>
+
+#define DEBUGF  "/tmp/debug.vi_moderators"
+#define LOCKF  "/tmp/vi_moderators.lock"
+#define MODF  "/usr/lib/news/moderators"
+
+char *progname;
+int done = 0; /* where or not we're done editing */
+int debugging = 0; /* whether or not debugging is enabled */
+
+/* open a file with the specified uid/gid pair */
+FILE *secure_open_as_user(char *fname, uid_t uid, gid_t gid) {
+    FILE *f;
+    gid_t glist[20];
+    int glen;
+
+    /* reduce privileges */
+    glen = getgroups(20, glist);
+    seteuid(uid);
+    setegid(gid);
+    setgroups(0, NULL);
+
+    f = fopen(fname, "a");
+    if (f == NULL) {
+	perror("secure_open"); exit(1);
+    }
+
+    /* regain root privileges */
+    seteuid(0);
+    setegid(0);
+    setgroups(glen, glist);
+
+    return f;
+}
+
+/* add a debugging message to the debugginglogfile
+ * (if the user requests the debugging option),
+ * but do it with the user's privileges so he can't cause any harm */
+void debug(char *msg) {
+    FILE *f;
+    char line[1024];
+    time_t tm;
+    char *ctm, *p;
+
+    if (!debugging)
+	return;
+
+    tm = time(NULL);
+    ctm = ctime(&tm);
+    p = strchr(ctm, '\n');
+    if (p != NULL)
+	*p = '\0';
+    sprintf(line, "%s[%d] %s: %s\n", progname, (int)getpid(), ctm, msg);
+    f = secure_open_as_user(DEBUGF, getuid(), getgid());
+    fputs(line, f);
+    fclose(f);
+}
+
+/* so we can tell when the user has finished editing the moderators file */
+void sigchld_handler(int ignored) {
+   debug("vi exited successfully");
+   done = 1;
+}
+
+/* very simple locking & unlocking privileges */
+void grablock(void) {
+    int lockfd;
+
+    lockfd = open(LOCKF, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (lockfd < 0) {
+	perror("grablock"); exit(1);
+    }
+    close(lockfd);
+}
+void releaselock(void) {
+    unlink(LOCKF);
+}
+
+void copyfile(char *src, char *dst) {
+    char line[1024];
+    FILE *srcf, *dstf;
+
+    srcf = fopen(src, "r");
+    dstf = fopen(dst, "w");
+    while (fgets(line, 1024, srcf) != NULL)
+    	fputs(line, dstf);
+    fclose(srcf);
+    fclose(dstf);
+}
+
+/* allow the user to edit the specified file */
+void vi(char *fname) {
+    int pid;
+
+    signal(SIGCHLD, sigchld_handler);
+    debug("running vi");
+    pid = fork();
+    if (pid < 0) {
+	perror("fork"); exit(1);
+    }
+    if (pid == 0) {
+    	execl("/usr/bin/vi", "vi", fname, NULL);
+    } else {
+	while (!done)
+	    sleep(1);
+    }
+    signal(SIGCHLD, SIG_DFL);
+}
+
+/* checks to make sure the candidate moderators file doesn't
+ * include any shell escapes.
+ * clever-er variants of this program could do something more
+ * sophisticated if there was the desire; this is here primarily
+ * as a simple example */
+int looksok(char *fname) {
+    FILE *f;
+    int ch;
+
+    f = fopen(fname, "r");
+    if (f == NULL)
+	return 0;
+    while ((ch = fgetc(f)) != EOF)
+	if (ch == '!')
+	    return 0;
+    fclose(f);
+    return 1;
+}
+
+int main(int argc, char **argv) {
+    char msg[512];
+    char *tmpf;
+
+    progname = argv[0];
+
+    if (argc == 2 && strcmp(argv[1], "-d") == 0) {
+	debugging = 1;
+	debug("debugging enabled");
+    }
+
+    grablock();
+
+    sprintf(msg, "invoked by %s", getpwuid(getuid())->pw_name);
+    debug(msg);
+
+    /* copy the moderators list to a temporary file /tmp,
+     * so the user can edit it there */
+    tmpf = tmpnam(NULL);
+    copyfile(MODF, tmpf);
+
+    vi(tmpf);
+
+    /* now move the newly edited file to its proper location, if allowed */
+    if (looksok(tmpf))
+	rename(tmpf, MODF);
+    else
+	fprintf(stderr, "permission denied.\n");
+
+    releaselock();
+
+    exit(0);
+}
+@

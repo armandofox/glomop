@@ -1,0 +1,1505 @@
+head	1.17;
+access;
+symbols
+	Yatin-final:1.17
+	Yatin:1.17.0.2
+	pre-yatin-merge:1.17
+	transend-beta2:1.15
+	fox-dev:1.15;
+locks; strict;
+comment	@# @;
+
+
+1.17
+date	97.10.28.02.30.17;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.10.16.02.58.18;	author iang;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.07.24.03.19.06;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.07.22.02.15.47;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.07.16.03.59.54;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.07.15.02.43.20;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.07.10.23.52.01;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.07.10.06.14.46;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.09.03.59.46;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.09.02.46.17;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.03.18.07.18;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.28.03.36.59;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.06.28.01.43.22;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.06.23.08.48.56;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.23.04.06.05;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.23.01.59.00;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.22.18.31.06;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@#
+# layout.pl - simple layout packer
+# $Id: Layout.pm,v 1.16 1997/10/16 02:58:18 iang Exp $
+#
+
+package Layout;
+require "util.pl";
+use Para;
+@@ISA = qw(Exporter);
+
+=head1 NAME
+
+Layout.pm - simple layout packer
+
+=head1 SYNOPSIS
+
+ $ly = new Layout ($x0,$y0,$x1,$y1[,$grid]);
+
+ ($x0,$y0,$x1,$y1) = $ly->pack_static($para,$halign,$valign);
+ $leftover_para = $ly->pack_dynamic($textpara,$measproc,$halign,$valign);
+
+ $ly->clear();
+ $ly->clearleft();
+ $ly->clearright();
+ $ly->clearboth();
+
+=head1 DESCRIPTION
+
+The layout manager takes an initial bounding box upper left and lower right
+corner  (x0,y0,x1,y1) and packs flowable (e.g. text) and non-flowable
+(e.g. images) objects into it.
+
+To pack an object, you call one of two packing functions with the
+Para
+containing the object.  The packing information for the Para -- its
+bounding box coordinates relative to the initial layout coordinates -- 
+is filled in the Para's x, y, width, and height fields.
+
+=cut
+
+=head1 CONSTRUCTOR
+
+=over 3
+
+=item $ly = new Layout $x0,$y0,$x1,$y1[,$hgrid,$vgrid]
+
+Create new layout object with initial bounding box $x0,$y0 (upper left), ,$x1,$y1
+(lower right).  If $hgrid and $vgrid are given, statically-packed
+objects' bounding boxes are rounded up to the nearest multiple of these
+sizes in the horizontal and vertical dimensions; they default to 1.
+
+=back
+
+=cut
+
+&util::instvars('Layout',
+                qw(thresh left right top bottom stack hgrid vgrid)
+                );
+
+sub new {
+    my $class= shift;
+    my ($x0,$y0,$x1,$y1,$hgrid,$vgrid) = @@_;
+
+    bless {
+        "left" => $x0,
+        "right" => $x1,
+        "top" => $y0,
+        "bottom" => $y1,
+        "hgrid" => $hgrid || 1,
+        "vgrid" => $vgrid || 1,
+        # "stack" => [[$x0,$y0,$x1,$y1],[$x0-1,$y0-1,$x1+1,$y1+1]],
+        "stack" => [[$x0,$y0,$x1,$y1], [$x0,$y0,$x1,$y1]],
+    };
+}
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $ly->pack_static($para,$halign,$valign[,$thresh])
+
+Packs the specified para according to constraints $halign and $valign, each of
+which may be "left", "top", "right", "bottom", or -1, 0, 1 respectively.  Note
+that "left" means "top" if given as the $valign argument; similarly
+"right"; and vice versa.  The object will not be "flowed" around other
+objects.
+
+The object's para metadata should be of the form "NxM" where N and M are
+integers giving the pixel dimensions (width,height) of the para's bounding box.
+
+Returns: a list of coordinates (left,top,right,bottom) if success;
+-1, if the available space will not accommodate the object; a string
+describing an error, otherwise.  The para's x, y, width,and height fields
+will be set if the object was packed successfully.
+
+=cut
+
+sub pack_static {
+    my ($self,$para,$halign,$valign,$thresh) = @@_;
+    $halign = -1 unless defined $halign;
+    $valign = -1 unless defined $valign;
+    $thresh = $self->thresh unless defined $thresh;
+    
+    &util::debug('layout', "pack_static `" , $para->otext,
+                 "' halign=$halign valign=$valign");
+    &util::debug('layout', ">>> ", $self->print_stack);
+
+    #$self->print_stack;
+
+    my ($x,$y);
+
+    $x = $para->width;
+    $y = $para->height;
+
+    # enforce gridding if necessary
+    $x++ while ($x % $self->hgrid);
+    $y++ while ($y % $self->vgrid);
+
+    my($cl,$ct,$cr,$cb) = @@{$self->spop()};
+    # try merging frames
+    if ($self->stacksize > 0) {
+        my($pl,$pt,$pr,$pb) = $self->tos();
+        if (($pl == $cr || $pr == $cl)
+            && ($pt == $ct)) {
+            &util::debug('layout', "Merging frames");
+            $self->spop();                  # get rid of old pushframe
+            $cl = &util::min($cl,$pl);
+            $cr = &util::max($cr,$pr);
+            $cb = &util::max($cb,$pb);
+        }
+    }
+        
+    &util::debug('layout', "Currentframe is $cl $ct $cr $cb");
+
+    # make sure it's not too wide.
+    if ($x > ($cr-$cl)) {
+        $self->spush( [$cl,$ct,$cr,$cb] );
+        &util::debug('layout', "pack_static returns: out of room!");
+        return -1;
+    }
+
+    # but what if it was too tall?
+    if (0 && $y > ($cb-$ct)) {
+        my($pl,$pt,$pr,$pb) = $self->tos();
+        if ($cb == $pt && $pl <= $cl && $cr <= $pr) {
+	    ## We can steal some vertical space from the box below us
+            &util::debug('layout', "Stealing vspace");
+            $self->spop();                  # get rid of old pushframe
+	    $self->spush( [$pl,$ct+$y,$pr,$pb] );
+            $cb = $ct + $y;
+        }
+    }
+
+    # invariants:
+    # 1. top of stack is the bounding box to use.
+    # 2. next elt on stack is the push frame.
+
+    # pack the object.
+
+
+    # if it's not the same width as the current bounding box, compute the new
+    # coords.
+    my($fl,$fr,$ft,$fb);                    # left right top bottom
+    if ($halign == -1) {                    # left
+        $fl = $cl;
+        $fr = $cl+$x;
+    } elsif ($halign == 0) {
+        $fl = ($cl+$cr-$x) >> 1;
+        $fr = $fl+$x;
+    } else {
+        $fr = $cr;
+        $fl = $cr-$x;
+    }
+    # BUG::no valign for now; assume top
+    if (1 || $valign == -1) {                    # top
+        $ft = $ct;
+        $fb = $ct+$y;
+    }
+
+    if ($fb > $cb  &&  ($cr-$fr > $thresh)) {
+        # problem! the item being packed is taller than the cavity (and 
+        # is not the rightmost item on the line).
+        # stretch the cavity vertically, stretch the neighbor cavity (next
+        # guy on stack) to the same spot vertically.  Note that this will
+        # still give the desired behavior for flush-right items.
+        $cb = $fb;
+        my($nl,$nt,$nr,$nb) = @@{$self->spop()};
+        $self->spush([$nl,&util::max($nt,$fb),$nr,&util::max($nb,$fb)]);
+    }
+      
+    
+    # calculate new top and bottom.
+    # if we're too close to  edges, it's time to start a new "row".
+
+    if ($halign == 0 || ($cr-$fr <= $thresh) && ($fl-$cl <= $thresh)) {
+        #if ($self->stacksize == 0) {
+        #   $self->spush( [$cl,$ct,$cr,$cb] );
+         #   return -1;
+        #}
+        #my($pl,$pt,$pr,$pb) = @@{$self->spop()};
+        my($pl,$pt,$pr,$pb) = ($cl,$ct,$cr,$cb);
+        if ($fb < $pt) {
+            $self->spush( [$pl,$pt,$pr,$pb] );
+            $self->spush( [$fl,$fb,$fr,$pt] );
+        } else {
+            $self->spush( [$pl,$fb,$pr,$pb] );
+            if ($fl != $pl || $fr != $pr) {
+                $self->spush( $halign == -1
+                             ? [$fr,$pt,$pr,$fb]
+                             : [$pl,$pt,$fl,$fb] );
+            }
+        }
+    } else {
+        # not all of the horiz. space will be used up.  If this is the first
+        # item laid out in this packing cavity, we must push a new pushframe.
+        # Update nextframe to reflect the horizontal space this packing
+        # operation used up.
+        if (($halign == -1 && $fl == ($self->tos)[0])
+            || ($halign == 1 && $fr == ($self->tos)[2])) {
+            #$self->spop();
+            $self->spush([$cl,$fb,$cr,$cb]);    # new pushframe
+            # BUG::do we want to check here for degenerate case of zero height
+            # or zero width frame being pushed?  (they'll just get discarded
+            # anyway when nothing fits in them)
+        }
+        $self->spush(($halign == -1)
+                     ? [$fr,$ct,$cr,$fb]
+                     : [$cl,$ct,$fl,$fb]);  # new nextframe
+        #unshift(@@{$self->{"lastbottom"}}, $fb);
+    }
+
+    &util::debug('layout', "<<< ", $self->print_stack);
+    $self->{"top"} = $fb if $self->{"top"} < $fb;
+    $para->width($fr-$fl);
+    $para->height($fb-$ft);
+    $para->x($fl);
+    $para->y($ft);
+    &util::debug('layout', "pack_static returns $fl,$ft,$fr,$fb");
+    return ($fl,$ft,$fr,$fb);
+}
+
+=item  *
+
+ ($status,$leftover) = $ly->pack_dynamic($text,$halign,$valign[,$hthresh,$vthresh]])
+
+Dynamically packs the text to fill as much vertical space as corresponds
+to the bottom boundary of the pushframe.
+$text should be a Para.  Returns the text that was
+left over (as another Para), which is not necessarily a
+substring of the original text, since tags that are open at the time the text
+is cut off need to be closed and reopened across text chunks.
+
+$hthresh and $vthresh are threshold: if the remaining horizontal (verticlal)
+space in the packing cavity 
+is narrower (shorter) than this amount, no attempt should be made to pack the
+text.  If $vthresh and $hthresh are
+not given, the current threshold value for the layout is used.
+
+@@restargs, if supplied, will be passed to the text measurement function as
+described below.
+
+The Para passed in ($text) will have its width, height, x, and y fields
+modified to 
+reflect where it was laid out.    
+
+pack_dynamic returns a status code and possibly also a Para.  If the status
+code is 1, all of the text was successfully packed.  If the status
+code is 0, part of the text was successfully packed; the Para
+returned contains the remaining text (that did not fit).  You can
+then call pack_dynamic again with this leftover text, and so on.
+
+If the status code is -1 (-2), packing was not attempted because there
+wasn't enough room in the next available packing cell given the specified
+horizontal (vertical) thresholds.  If this happens, you could (for example)
+call L<clearleft> to open some room, and try again.
+
+=cut
+
+sub pack_dynamic {
+    my($self,$text,$halign,$valign,$hthresh,$vthresh) = @@_;
+
+    $hthresh = 0 unless defined $hthresh;
+    $vthresh = 0 unless defined $vthresh;
+    
+    my $newpara = undef;
+
+    # invariants:
+    # 1. top elt of "lastbottom" stack is the cutoff point we're aiming for
+
+    my $packregion = $self->{"stack"}->[0];
+
+    
+    # determine how much text is left over if we pack a box of that height and
+    # the width of the packing cavity.
+
+    my $boxwidth = $packregion->[2] - $packregion->[0];
+    #my $boxht = $bottom - $packregion->[1];
+    my $boxht = $packregion->[3] - $packregion->[1];
+
+    if ($boxwidth < $hthresh) {
+        &util::debug('layout', "packregion width $boxwidth less than $hthresh");
+        return (-1, undef);
+    }
+    if ($boxht < $vthresh) {
+        &util::debug('layout', "packregion height $boxht less than $vthresh");
+        return (-2, undef);
+    }
+
+    &util::debug('layout', "pack_dynamic `" . $text->otext .
+                 "' halign=$halign valign=$valign");
+
+    my $lht = $text->font->height;
+    my @@lines = $text->font->split_string($text->otext, $boxwidth, " ");
+    $text->{'lines'} = \@@lines;
+    my $fitlines = &util::min(int($boxht/$lht), ($#lines+1));
+    
+    $boxht = $fitlines * $lht;
+
+    if ($fitlines < ($#lines+1)) {
+        #  Return "didn't fit" if the text overflows this line and there is no
+        #  place to word-break before the overflow.
+        if ($lines[0] !~ /\s$/) {
+            &util::debug('layout', "Punting on " . $text->otext);
+            return (-1,undef);
+        }
+        $newpara = $text->clone();
+        $newpara->otext(join('', @@lines[$fitlines..$#lines]));
+        $text->otext(join('', @@lines[0..$fitlines-1]));
+        &util::debug('layout', "Splitting: " . $text->otext . "//" .
+                     $newpara->otext);
+    } else {
+        # all lines were packed successfully.  If the last line is an "orphan"
+        # line (ie not wide enough to fill the packing cavity, return it as a
+        # leftover so it wil be packed separately.  If this is the *only* line
+        # and it is an orphan, reduce the width of the packing box.
+
+        my $lastlinewidth = $text->font->string_width($lines[$#lines]);
+        if ($boxwidth - $lastlinewidth  > $hthresh) {
+            if ($#lines == 0) {
+                # this is the only line, reduce packing cavity
+                &util::debug('layout', "Single orphan line `"
+                             . $text->otext . "'");
+                $boxwidth = $lastlinewidth;
+            } else {
+                &util::debug('layout', "Chopping orphan line `$lines[$#lines]'");
+                $newpara = $text->clone();
+                $newpara->otext($lines[$#lines]);
+                $text->otext(join('', @@lines[0..$#lines-1]));
+                $boxht -= $lht;
+            }
+        } else {
+            $newpara = undef;
+        }
+    }
+
+    # actually pack the thing.
+    $text->width($boxwidth);
+    $text->height($boxht);
+    &util::debug('layout', "Calling pack_static for $boxwidth x $boxht");
+    my($l,$t,$r,$b) = $self->pack_static($text,$halign,$valign);
+    &util::debug('layout', $self->print_stack);
+    return (-1,undef) if $l == -1;                  # out of space!
+    $text->width($r-$l);
+    $text->height($b-$t);
+    $text->x($l);
+    $text->y($t);
+    return (defined ($newpara) ? (0,$newpara) : (1,undef));
+}
+
+=item $ly->grow_frame_to_atleast($hpixels)
+
+Grow the topmost stack frame to be at least $hpixels pixels wide.  If
+it's already wide enough, it's not changed.  Either of these means success
+(true return value).  Failure means the frame couldn't be grown.
+
+=cut
+
+sub grow_frame_to_atleast {
+    my $self = shift;
+    my $hpixels = shift;
+
+    my @@stktop = $self->tos();
+    my ($width,$stktop);
+    return undef if $stktop[0] == -1;
+    if (($width = $stktop[2]-$stktop[0]) < $hpixels) {
+        $stktop = $self->spop();
+        $stktop->[2] += $hpixels-$width;
+        $self->spush($stktop);
+    }
+    return 1;
+}
+
+sub spush { unshift(@@{$_[0]->{"stack"}}, $_[1]) }
+sub spop { shift(@@{$_[0]->{"stack"}}) }
+sub stacksize { scalar @@{$_[0]->{"stack"}} }
+sub tos { $#{$_[0]->{"stack"}} >= 0
+              ? @@{$_[0]->{"stack"}->[0]}
+          : (-1,-1,-1,-1) }
+
+=item $ly->skip($vpixels)
+
+Insert a conceptual line break after the last object packed, by skipping
+$vpixels pixels in the vertical direction.  Useful if
+you just packed an object flush left (or right) which was not the full
+width of the available packing area, and then you want to pack another
+object below it.  Gives the effect (roughyl) of <BR> in HTML.  Returns
+true iff success. 
+
+=cut
+
+sub skip {
+    my $self = shift;
+    my $skip = shift || return 1;
+    my @@packregion = $self->tos;
+
+    # create "fake" paragraph that will fill out the horizontal space in the
+    # packregion and consume as much vertical space as specified
+
+    my $p = new Para;
+    $p->width($packregion[2]-$packregion[0]);
+    $p->height($skip);
+
+    if ($self->pack_static($p,-1,0) != -1) {
+        return 1;
+    }
+    if ($self->stacksize > 2) {
+        $self->spop();
+        return 1;
+    } else {
+        return undef;
+    }
+}
+
+=item $ly->clearleft
+
+=item $ly->clearright
+
+=item $ly->clearboth
+
+Arrange for the next object to be packed flush against the page
+left, right, or both margins.  Gives you the functionality of <BR CLEAR=LEFT>,
+for example.  Returns true iff success.
+
+=cut
+
+sub clearleft {
+    return &cleartoleft(@@_,0);
+}
+
+sub cleartoleft {
+    my $self = shift;
+    my $left = shift;
+    my $height = shift;
+    my $right = $self->right;
+
+    if (($self->tos)[0] == $left) {
+        # skip instead
+        $self->skip($height);
+    } else {
+        $self->spop() while ($self->stacksize > 0
+                             && (($self->tos)[0] != $left));
+        if ($self->stacksize == 0) {
+            $self->spush( [$self->left,$self->top,$self->right,$self->bottom] );
+        }
+    }
+    &util::debug('layout', "Clearleft, next frame is " .
+                 join(',',$self->tos));
+    return 1;
+}
+
+sub clearright {
+    my $self = shift;
+    my $right = $self->right;
+    my $left = $self->left;
+
+    $self->spop() while ($self->stacksize > 0
+                         && (($self->tos)[2] != $right));
+    if ($self->stacksize == 0) {
+        $self->spush( [$self->left,$self->top,$self->right,$self->bottom] );
+    }
+    &util::debug('layout', "Clearright, next frame is " .
+                 join(',',$self->tos));
+    return 1;
+}
+
+sub clearboth {
+    my $self = shift;
+    my $thresh = $self->thresh;
+    my $right = $self->right;
+    my $left = $self->left;
+
+    $self->spop() while ($self->stacksize > 0
+                         && ($self->tos)[2] != $right
+                         && ($self->tos)[0] != $left);
+    if ($self->stacksize == 0) {
+        $self->spush( [$self->left,$self->top,$self->right,$self->bottom] );
+    }
+    &util::debug('layout', "Clearboth, next frame is " .
+                 join(',',$self->tos));
+    return (abs(($self->tos)[2] - $right) <= $thresh
+            && abs(($self->tos)[0] - $left) <= $thresh);
+}
+
+sub print_stack {
+    my $self = shift;
+    my $s = '';
+    my $st = $self->{'stack'};
+    local($,) = ",";
+    for (@@$st) {
+        $s .= "[" . join(",", @@{$_}) . "] ";
+        #print STDERR "[", @@{$_}, "]\n";
+    }
+    return $s;
+}
+
+
+=back
+
+=head1 IMPLEMENTATION
+
+The packer implements the following basic algorithm.  The state consists of
+a I<stack> S, a I<current frame> CF, and a I<push frame> PF.  CF
+represents the rectangular subregion of the "full page" that is
+currently available for packing.  PF represents (approximately) the
+region in which packing will continue after CF's area is exhausted.   An
+invariant is that CF is always at
+the top of the stack, followed by PF if there is one.
+
+Initially, S contains two copies of the frame corresponding to the full
+screen.
+
+To pack an object O whose dimensions can be represented by the frame
+OF:
+
+=over 4
+
+=item 1.
+
+If the object will not fit in CF, return -1 immediately.
+
+=item 2.
+
+Pack the object against the left or right of CF, as specified.  For
+centering, extend the object to full width of CF.
+
+=item 3.
+
+If the object is not as wide as CF, partition up the space and set CF
+and PF as shown in the before-and-after figure below.  (Recall that CF
+is always made the topmost stack element, followed by PF.)
+
+ +---------------+     +-------+-------+
+ |     CF        |     |   O   |new CF |
+ |               |     +-------+-------+
+ |               |     |     new PF    |
+ |               |     |               | 
+
+=item 4.
+
+If the object is as wide as CF, there are three cases, depending on
+whether the bottom of the object's frame is above, below, or in line
+with the top of PF.  In all of the following diagrams, "P" represents an
+area already packed (filled), PF represents the push frame,  CF the
+current frame, and O the object being packed.
+
+=item 4a.
+
+Case (a): Bottom of OF is above top of PF.  Corresponds to the
+before-and-after figures
+below: we have not used up all of the packing area available in CF.  In
+this case, leave PF unchanged, and set CF to the new smaller frame.
+
+ +------+--------+        +------+--------+
+ |  P   | old CF |        |  P   |   O    |
+ |      |        |        |      +--------+
+ +------+        |        +------+ new CF |
+ | PF   |        |        | PF   +--------+
+ |      |        |        |      |        |
+
+=item 4b.
+
+Case (b): Bottom of OF is below top of PF.  Packing should continue in
+the area adjoining PF, rather than in CF.  So we interchange CF and PF
+on the stack.
+
+ +------+--------+        +------+--------+
+ |  P   | old CF |        |  P   |   O    |
+ |      |        |        |      |        |
+ +------+        |        +------+        |
+ | PF   |        |        | new  +--------+
+ |      |        |        | CF   | new PF |
+ |      |        |        |      |        |
+
+=item 4c.
+
+Case (c): Bottom of OF is exactly in line with top of PF.  In this case
+we discard the old PF, since we can merge it into the remaining
+space in the CF.  The new PF will be whatever was on the stack below PF,
+so that when the packing algorithm is run recursively, everything will
+work.
+
+ +------+--------+        +------+--------+
+ |  P   | old CF |        |  P   |   O    |
+ |      |        |        |      |        |
+ +------+        |        +------+--------+
+ | PF   |        |        |    new        |
+ |      |        |        |     CF        |
+ |      |        |        |               |
+
+=back
+
+Packing of flowable objects such as text is handled by calling a
+measurement routine 
+to determine how much of the object will fit in a "static" chunk that
+fills the width of CF, and continuing to pack until there is no more of
+the flowable object left.
+
+Clear is implemented by popping a single frame.
+Clearleft, clearright, and clearboth are implemented by popping stack
+frames until CF's left, right, or both edges correspond to the actual
+screen bounds.
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+This software is distributed under the terms of the GNU General Public
+License, version 1.0 or greater.
+
+=cut    
+
+1;
+@
+
+
+1.16
+log
+@various bugfixes, etc.
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.15 1997/07/24 03:19:06 fox Exp $
+d368 23
+@
+
+
+1.15
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.14 1997/07/22 02:15:47 fox Exp $
+d112 7
+a134 7
+    $x = $para->width;
+    $y = $para->height;
+
+    # enforce gridding if necessary
+    $x++ while ($x % $self->hgrid);
+    $y++ while ($y % $self->vgrid);
+
+d136 1
+a136 2
+    if ($x > ($cr-$cl)
+        || $y > ($cb-$ct)) {
+d140 12
+@
+
+
+1.14
+log
+@fixed makefile bugs to compile under both linux and solaris
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.13 1997/07/16 03:59:54 fox Exp $
+d379 1
+a379 1
+    my $skip = shift || $self->font->height || return 1;
+@
+
+
+1.13
+log
+@various fixes to layout.  still not perfect:  <BR> is always treated as <BR CLEAR=LEFT> but fixing this requires giving the layout engine some notion of the current left margin.  this could probably be done by detecting when the current packing region is split, as is done in Layout.pm line 209.
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.12 1997/07/15 02:43:20 fox Exp $
+d7 1
+d379 1
+a379 1
+    my $skip = shift || return 1;
+d382 3
+d413 4
+d418 2
+a420 1
+    my $left = $self->left;
+d422 9
+a430 4
+    $self->spop() while ($self->stacksize > 0
+                         && (($self->tos)[0] != $left));
+    if ($self->stacksize == 0) {
+        $self->spush( [$self->left,$self->top,$self->right,$self->bottom] );
+@
+
+
+1.12
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.11 1997/07/10 23:52:01 fox Exp $
+d7 1
+d103 3
+a105 2
+    &util::debug('layout', ("pack_static `" . $para->otext .
+                            "' halign=$halign valign=$valign thresh=$thresh"));
+a126 6
+    my %pack = ("right"=>1,"bottom"=>1,"left"=>-1,"top"=>-1);
+
+    # canonicalize alignment
+    $valign += $pack{$valign} if exists $pack{$valign};
+    $halign += $pack{$halign} if exists $pack{$halign};
+
+d135 2
+a136 1
+    if ($x > ($cr-$cl)) {
+d202 12
+a213 3
+        # not all of the horiz. space will be used up, so we must push both a
+        # new pushframe and a new nextframe.
+        $self->spush([$cl,$fb,$cr,$cb]);    # new pushframe
+d219 2
+a220 1
+    #$self->print_stack;
+a279 3
+    &util::debug('layout', ("pack_dynamic `" . $text->otext .
+                            "' halign=$halign " .
+                            "valign=$valign thresh=$thresh"));
+d297 2
+a298 1
+    &util::debug('layout', "Packregion: " . join(' ', @@$packregion));
+d349 1
+d365 1
+a365 1
+=item $ly->clear
+d367 2
+a368 1
+Insert a conceptual line break after the last object packed.  Useful if
+d371 2
+a372 1
+object below it.  Gives the effect of <BR> in HTML.  Returns true iff success.
+d376 1
+a376 1
+sub clear {
+d378 10
+d392 1
+a392 1
+        return 0;
+d458 1
+d462 2
+a463 1
+        print STDERR "[", @@{$_}, "]\n";
+d465 1
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.10 1997/07/10 06:14:46 fox Exp $
+a552 52
+
+=cut
+
+
+sub main {
+    $ly = new Layout 0,0,250,250;
+
+    open(TCL,"| /usr/local/bin/wish -f") or die $!;
+    select TCL; $| =1;select STDOUT;
+    print TCL "frame .f -width 250 -height 250 ; place .f -x 0 -y 0\n";
+    while (++$num) {
+        print "$num: ";
+        chop($x=<STDIN>);
+        ($typ,$x,$y,$align,$thing)=split(/\s+/,$x);
+        if ($typ eq 't') {
+            $res=$ly->pack_static($c=&chk("text/plain",
+                                          "*" x ($thing/2),
+                                          $x,$y),$align);
+            ($w,$h,$t,$l)=($1,$2,$3,$4)
+                if $c->metadata =~ /(\d+)x(\d+)\+(\d+)\+(\d+)/;
+        } elsif ($typ eq 'i') {
+            $res=$ly->pack_static($c=&chk("image/gif",$thing,$x,$y),$align);
+            ($w,$h,$l,$t)=($1,$2,$3,$4)
+                if $c->metadata =~ /(\d+)x(\d+)\+(\d+)\+(\d+)/;
+        } elsif ($typ eq 'd') {
+            $leftover = $ly->pack_dynamic($c = &chk("text/plain",
+                                                    "* "x  ($thing/2),
+                                                    $x,$y),
+                                          \&layout::meas,
+                                          $align);
+            ($w,$h,$l,$t)=($1,$2,$3,$4)
+                if $c->metadata =~ /(\d+)x(\d+)\+(\d+)\+(\d+)/;
+            warn "Leftover text: " . $leftover->data
+                if defined $leftover;
+        } elsif ($typ eq 'l') {
+            $leftover = $ly->pack_dynamic($c=$leftover, \&layout::meas, $align);
+            ($w,$h,$l,$t)=($1,$2,$3,$4)
+                if $c->metadata =~ /(\d+)x(\d+)\+(\d+)\+(\d+)/;
+        } else {
+            $ly->clearboth;
+        }
+        my $str = sprintf ("place .f.b$num -x $l -y $t -width $w -height $h\n");
+        warn "-- $str";
+        print TCL "button .f.b$num -text {$x} -relief sunken\n";
+        print TCL $str;
+        local($,)=',';
+        @@z0 = @@{$ly->{"stack"}->[0]};
+        @@z1 = @@{$ly->{"stack"}->[1]};
+        @@z2 = @@{$ly->{"stack"}->[2]};
+        &util::debug("layout", "Stack top: @@z0 -- @@z1 -- @@z2");
+    }
+}
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.9 1997/07/09 03:59:46 fox Exp $
+d105 1
+a105 1
+    $self->print_stack;
+d213 1
+a213 1
+    $self->print_stack;
+d225 1
+a225 1
+ ($status,$leftover) = $ly->pack_dynamic($text,$measproc,$halign,$valign[,$hthresh,$vthresh,@@restargs]])
+d243 2
+a244 1
+The Para passed in will have its width, height, x, and y fields modified to
+a246 21
+$text should be a Para.  $measproc should reference a subroutine
+that can be called as follows:
+
+
+    $boxheight = &$measproc("height",$fixedwidth,$text,@@restargs)
+    ($fits,$leftover,$ht) = &$measproc("lastchar",$fixedwidth,$fixedheight,$text,@@restargs)
+
+(In both cases, @@restargs are passed verbatim from the call to pack_dynamic.)
+The first form returns an integer saying how tall (in layout units)
+a box of $fixedwidth width
+would have to be to accommodate the string $text.  The second form
+returns $fits as the substring that will fit into a box of the specified
+dimensions $fixedwidth and $fixedheight (accounting for word wrapping),
+and $leftover as the remainder of the string that will not fit.  Note
+that concatenating $fits and $leftover does not necessarily give the
+original string, since $fits may have had some spaces or other break
+characters deleted from it. If $leftover is the empty string, this
+routine assumes that the entire string (as returned in $fits) can be packed.
+The measure routine should also return in $realheight the actual height of
+the part of the box that got filled.  
+
+d261 1
+a261 1
+    my($self,$text,$measureproc,$halign,$valign,$hthresh,$vthresh,@@rest) = @@_;
+a264 1
+    @@rest = () unless defined @@rest;
+@
+
+
+1.9
+log
+@layout works, fixed bugs in transend.text.piml
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.8 1997/07/09 02:46:17 fox Exp $
+d15 1
+a15 1
+ $ly = new Layout ($x0,$y0,$x1,$y1[,$thresh]);
+d32 2
+a33 2
+para
+containing the object.  The packing information for the para -- its
+d35 1
+a35 9
+is filled in the para metadata field, as a subset of X11-style geometry
+specification (e.g. "250x200+100+0").  It's a subset
+because all four components (width, height, horizontal, vertical) are
+guaranteed to be 
+given and the left and top components are guaranteed to be positive,
+i.e. measured from the left and top respectively of the original layout window.
+Note that the "+" coordinates are in the coordinate system of the layout
+itself, i.e. if the original layout was (10, 20, 100, 100), then a
+specification "+10+20" is the upper left corner.
+d43 1
+a43 1
+=item $ly = new Layout $x0,$y0,$x1,$y1[,$thresh]
+d46 3
+a48 3
+(lower right). $thresh, if given, is the smallest "useful" packing cavity
+width, i.e. if the current packing cavity is fewer than $thresh pixels wide, no
+attempt will be made to fit a flowable object into it.  Defaults to zero.
+d54 3
+a56 1
+&util::instvars('Layout', qw(thresh left right top bottom stack lastbottom));
+d60 1
+a60 1
+    my ($x0,$y0,$x1,$y1,$thresh) = @@_;
+a62 1
+        "thresh" => $thresh || 5,
+d67 2
+d104 3
+a106 1
+    
+a109 1
+
+d134 4
+a150 4
+    my($fl,$fr,$ft,$fb);                    # left right top bottom
+    my $pushframe;
+    my $nextframe;
+    my $old_pushframe;
+d154 1
+a154 1
+
+d171 12
+d213 1
+d225 1
+a225 1
+ $leftover = $ly->pack_dynamic($text,$measproc,$halign,$valign[,$thresh[,@@restargs]])
+d234 5
+a238 3
+$thresh is a threshold: if the remaining horizontal space in the packing cavity
+is narrower than this amount, no attempt should be made to pack the text.  If
+negative or not given, the current threshold value for the layout is used.
+d243 1
+a243 1
+The para passed in will have its width, height, x, and y fields modified to
+d246 1
+a246 1
+$text should be a para.  $measproc should reference a subroutine
+d267 10
+a276 7
+
+Return values: If $leftover is undef, all the text was packed
+successfully.   If $leftover is -1, there was not enough room to pack any of
+it.   If $leftover is a chunk, the chunk data contains what should be passed
+the next time this function is called.  In any case, you
+probably want to call L<clearleft> after this.
+
+d281 1
+a281 1
+    my($self,$text,$measureproc,$halign,$valign,$thresh,@@rest) = @@_;
+d283 4
+a286 1
+    $thresh = 0 unless $thresh;
+d305 3
+a307 3
+    if ($boxwidth < $thresh) {
+        &util::debug('layout', "packregion width $boxwidth less than $thresh");
+        return -1;
+d309 3
+a311 3
+    if ($boxht < $thresh) {
+        &util::debug('layout', "packregion height $boxht less than $thresh");
+        return -1;
+d316 14
+a329 11
+    my ($fits,$stuff,$realheight)
+        = &$measureproc('lastchar',$boxwidth, $boxht, $text, @@rest);
+    &util::debug('layout', "Packing in $boxwidth x $boxht" .
+                 " gives fits=`$fits', leftover=`$stuff', height=$realheight");
+
+    if ($stuff ne '') {
+        #&& $realheight > $boxht) {
+        &util::debug('layout', "Will break into 2 chunks");
+        # there wasn't enough room for all of it, so we should pop the
+        # lastbottom since we will now start flowing future text around other
+        # stuff
+d331 4
+a334 8
+        #shift (@@{$self->{"lastbottom"}})
+        #unless (scalar @@{$self->{"lastbottom"}}) == 1;
+        # truncate the data we're about to pack statically.
+        #$newchunk->data($stuff . substr($text->data, $index));
+        $newpara->otext($stuff);
+        #$newpara->otext(substr($text->otext, $index));
+        $text->otext($fits);
+        #$text->otext(substr($text->otext, 0, $index+1));
+d336 22
+a357 4
+        # there was leftover vertical space.
+        # only use as much as is needed.
+        $boxht = $realheight;
+        $newpara = undef;
+d365 1
+a365 1
+    return -1 if $l == -1;                  # out of space!
+d370 1
+a370 1
+    return $newpara;
+@
+
+
+1.8
+log
+@minor changes to Layout to fix line break problems - still significant breakage in flowing text aroudn images.  HTML regexp is more robust now
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.7 1997/07/03 18:07:18 fox Exp $
+d107 2
+a108 2
+    &util::debug('layout', ("pack_static " . substr($para->otext, 0, 10) .
+                            "... halign=$halign valign=$valign thresh=$thresh"));
+d302 1
+a302 1
+                 " gives fits=$fits, leftover=$stuff, height=$realheight");
+d304 1
+a304 1
+    if ($stuff != '') {
+d315 1
+a315 1
+        $newpara->otext($fits);
+d317 1
+a317 1
+        $text->otext($stuff);
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.6 1997/06/28 03:36:59 fox Exp $
+d240 1
+a240 1
+    ($index,$leftover,$ht) = &$measproc("lastchar",$fixedwidth,$fixedheight,$text,@@restargs)
+d245 10
+a254 8
+would have to be to accommodate the string $text; the second form
+returns the index of the last text character that will fit
+into a box of dimensions $fixedwidth by $fixedheight (first char is index 0),
+along with any stuff that should be prepended to the next text chunk
+(e.g. tags that were open when the text chunk ended) and the actual height of
+the part of the box that got filled.  The
+function should use argument count (not calling context) to determine how
+it is being called.
+d299 1
+a299 1
+    my ($index,$stuff,$realheight)
+d302 1
+a302 1
+                 " gives index=$index, stack=$stuff, height=$realheight");
+d304 2
+a305 2
+    if ($index < $text->len
+        && $realheight > $boxht) {
+d315 4
+a318 2
+        $newpara->otext(substr($text->otext, $index));
+        $text->otext(substr($text->otext, 0, $index));
+@
+
+
+1.6
+log
+@layout works!
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.5 1997/06/28 01:43:22 fox Exp $
+a272 1
+    #my $bottom = $self->{"lastbottom"}->[0];
+d276 1
+a276 1
+                            "' bottom=$bottom halign=$halign " .
+d295 1
+a295 5
+    &util::debug('layout', "Packregion: " . join(' ', @@$packregion),
+                 " bottom=$bottom");
+
+    #  HACK::
+    # $boxht = int($boxht * 3/4);
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.4 1997/06/23 08:48:56 fox Exp $
+d75 1
+a75 1
+        "stack" => [[$x0,$y0,$x1,$y1]],
+a110 1
+    my $have_pushframe;
+a112 1
+    my($ol,$ot,$or,$ob) = $self->tos();
+d114 13
+a127 2
+    &util::debug('layout', "Pushframe is $ol $ot $or $ob");
+
+d139 5
+a143 2
+    &util::debug('layout', "pack_static returns: out of room!"), return -1
+        if $x > ($cr-$cl);
+a151 1
+    my($nt,$nb,$nl,$nr);
+d161 1
+a161 2
+        $fr = $nl = $cl+$x;
+        $nr = $cr;
+a164 2
+        $nl = $cl;
+        $nr = $cr;
+d167 1
+a167 2
+        $fl = $nr = $cr-$x;
+        $nl = $cl;
+d179 16
+a194 34
+        # we used up all the horizontal space in the current cavity.  Now we
+        # must see if the bottom of this frame is above, in line with, or below
+        # the top of the pushframe.
+        if (($fb < $ot) || ($ot == $self->top)) {
+            # bottom of this frame is above the top of the pushframe.  Leave
+            # pushframe as is, and set nextframe to be the same as the current
+            # frame except that its top edge should be the packed object's
+            # bottom edge (we used up some space).
+            # BUG::if valign is bottom instead of top, we need to do the
+            # reverse.  Maybe we just won't support valign packing.
+            $nt = $fb;
+            $nl = $cl;
+            $nr = $cr;
+            $nb = $cb;
+            &util::debug('layout', "New nextframe: $nl $nt $nr $nb");
+            # ... no change to old pushframe, but push new frame
+            $self->spush( [$nl,$nt,$nr,$nb] );
+        } elsif ($fb > $ot) {
+            # bottom of this frame is below the top of the pushframe.  Make
+            # the pushframe be the nextframe and vice versa.
+            $old_pushframe = $self->spop();
+            $self->spush([$cl, $fb, $cr, $cb]); # new pushframe
+            $self->spush($old_pushframe);   # new nextframe
+        } elsif ($fb != $self->bottom) {
+            # boundary case! need to do a clearboth.  Pop the pushframe
+            # (leaving the previous pushframe as the pushframe), and set the
+            # newframe to combine the old pushframe with the remaining space in
+            # the current frame.
+            # BUG::should probably do this recursively, in case we can pop
+            # multiple old pushframes.
+            &util::debug('layout', "Combining frames");
+            $self->spop();                  # get rid of old pushframe
+            $self->spush([&util::min($ol,$cl),$ot,
+                          &util::max($or,$cr),$cb]);
+d199 1
+a199 1
+        $self->spush([$fl,$fb,$fr,$cb]);    # new pushframe
+d201 2
+a202 2
+                     ? [$fr,$ct,$cr,$cb]
+                     : [$cl,$ct,$fl,$cb]);  # new nextframe
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.3 1997/06/23 04:06:05 fox Exp $
+d66 1
+a66 1
+    my ($x0,$y0,$x1,$y1,$textsizefunc) = @@_;
+d69 1
+a69 1
+        "thresh" => 5,
+d75 1
+a75 2
+        "stack" => [[$x0,$y0,$x1,$y1],[$x0,$y0,$x1,$y1]],
+        "lastbottom" => [$y1],
+d83 1
+a83 1
+=item $ly->pack_static($para,$halign,$valign)
+d96 2
+a97 3
+describing an error, otherwise.  The para's metadata field will be set to
+"NNxNN+xx+yy", i.e. an X11-style geometry specification describing how the
+object was packed.
+d107 3
+d214 1
+a214 1
+        unshift(@@{$self->{"lastbottom"}}, $fb);
+d216 1
+d278 1
+a278 1
+    $thresh = $self->thresh if (!defined($thresh) || ($thresh < 0));
+d284 1
+a284 1
+    my $bottom = $self->{"lastbottom"}->[0];
+d287 4
+d295 2
+a296 1
+    my $boxht = $bottom - $packregion->[1];
+d299 1
+a299 1
+        &util::debug('layout', "Zero width packregion; exiting");
+d303 1
+a303 1
+        &util::debug('layout', "Zero height packregion; exiting");
+d325 2
+a326 2
+        shift (@@{$self->{"lastbottom"}})
+            unless (scalar @@{$self->{"lastbottom"}}) == 1;
+a390 1
+    my $thresh = $self->thresh;
+d394 8
+a401 3
+    $self->spop() while ($self->stacksize > 2
+                         && abs($self->tos->[0] - $left) > $thresh);
+    return (abs($self->tos->[0] - $left) <= $thresh);
+a405 1
+    my $thresh = $self->thresh;
+d409 8
+a416 3
+    $self->spop() while ($self->stacksize > 2
+                         && abs($self->tos->[2] - $right) > $thresh);
+    return (abs($self->tos->[2] - $right) <= $thresh);
+d425 10
+a434 5
+    $self->spop() while ($self->stacksize > 2
+                         && abs($self->tos->[2] - $right) > $thresh
+                         && abs($self->tos->[0] - $left) > $thresh);
+    return (abs($self->tos->[2] - $right) <= $thresh
+            && abs($self->tos->[0] - $left) <= $thresh);
+d437 8
+a445 9
+
+sub chk {
+    my $x;
+
+    $x = new chunk $_[0], undef,
+                       1, 1, $_[1],
+                       undef, undef, undef, "$_[2]x$_[3]";
+    $x;
+}
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: Layout.pm,v 1.1 1997/06/22 18:31:06 fox Exp $
+d228 3
+a230 2
+to the bottom boundary of the pushframe.  Returns the text that was
+left over, which is not necessarily a
+d304 1
+a304 1
+    $boxht = int($boxht * 3/4);
+d307 1
+a307 1
+        = &$measureproc($boxwidth, $boxht, $text, @@rest);
+d311 2
+a312 1
+    if ($index < $text->len - 1) {
+d334 1
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d15 1
+a15 1
+ $ly = new layout ($x0,$y0,$x1,$y1[,$thresh]);
+a424 35
+=item @@lines = &Layout::split_string_fixedfont($string, $width, $fontwidth)
+
+Word-wraps $string such that each line would entirely fit in a box of
+width $width, assuming a fixed-width font where each character is
+$fontwidth wide.  $width and $fontwidth are assumed to be in the same
+units.  Returns an array of non-newline-terminated lines after splitting.
+Newlines originally embedded in the string are honored.
+
+=cut
+
+sub split_string_fixedfont {
+    my ($str,$boxwidth,$width) = @@_;
+
+    my @@lines = ();
+    
+    my $nchars = int($boxwidth/$width) - 1 - length($LINEBEGIN);
+    if ($nchars < 1) {
+        return ();
+    }
+    my $regex1 = ".{1,$nchars}";
+    my $regex2 = ".{1,$nchars}[-\\s]+";
+    my $match;
+    my $newstr = '';
+    
+    while(length($str) > $nchars
+          && (($str =~ s/$regex2//s)
+              || ($str =~ s/$regex1//s))) {
+        push(@@lines, $LINEBEGIN . $&);
+    }
+    push(@@lines, split(/\n/s, $LINEBEGIN . $str))
+        if (length($str) > 0);
+    grep(chomp, @@lines);
+    return @@lines;
+}
+
+d535 1
+a535 1
+    $ly = new layout 0,0,250,250;
+d586 2
+a587 4
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d3 1
+a3 1
+# $Id: layout.pl,v 1.2 1996/08/23 19:36:06 gribble Exp $
+d240 2
+a241 3
+The chunk passed in will have its metadata field modified to have the form
+"NNxNN+xx+yy", an X11-style geometry specification that can be used downstream
+by the actual GUI.
+d243 1
+a243 1
+$text should be a text chunk.  $measproc should reference a subroutine
+d247 2
+a248 2
+    $boxheight = &$measproc($fixedwidth,$text,@@restargs)
+    ($index,$leftover,$ht) = &$measproc($fixedwidth,$fixedheight,$text,@@restargs)
+d250 3
+a252 2
+In both cases, @@restargs are passed verbatim from the call to pack_dynamic.
+The first form returns an integer saying how tall a box of $fixedwidth width
+d306 1
+a306 1
+        = &$measureproc($boxwidth, $boxht, $text->otext, @@rest);
+d423 35
+@

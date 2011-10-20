@@ -1,0 +1,241 @@
+head	1.6;
+access;
+symbols
+	Yatin-final:1.5
+	Yatin:1.5.0.2
+	pre-yatin-merge:1.5
+	transend-beta2:1.4
+	fox-dev:1.4
+	transend-beta-latest:1.2
+	perl_dir-ng:1.2
+	Aggregators:1.2
+	NoAggregators:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	98.07.11.00.40.32;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.09.06.01.08.48;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.24.03.18.57;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.26.19.13.18;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.21.19.41.14;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.15.06.09.06;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@#
+# THe Bay Area culture aggregator
+#
+
+use TACCutils;
+use clib;
+use Date::Manip;
+
+sub DistillerInit {
+    %urls = ("SF MOMA" => "http://www.sfmoma.org/CAL.HTM",
+             "Best of Broadway" =>
+             "http://www.bestofbroadway-sf.com/calendar/index.html",
+             );
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @@_;
+    my ($s,$h,$d);
+    my(%h,%d);
+    my @@err = ();
+    my $errs = 0;
+    my $k;
+    my %evts = ();
+
+    my $url = &get_my_url($headers);
+
+    if ($url =~ /PREFS/) {
+        return(&htmlify(&make_prefs_form("Events from date",
+                                         "s9001",
+                                         "text",
+                                         "",
+                                         "Events until date",
+                                         "s9002",
+                                         "text",
+                                         "")),
+               "", "text/html", 0);
+    }
+                                        
+
+    my $mindate = &ParseDate($args{"9001"} || "today");
+    my $maxdate= &ParseDate($args{"9002"} || "today + 1 year");
+
+    $mindate = &ParseDate($mindate) if $mindate;
+
+    # fetch all pages to be aggregated
+    foreach $k (keys(%urls)) {
+        ($s,$h,$d) = &Clib_Fetch($urls{$k}, "");
+        $d =~ s/\r/\n/g;
+        if ($s == 0  &&  &status_ok($h)) {
+            $h{$k} = $h;
+            $d{$k} = $d;
+        } else {
+            push(@@err, $urls{$_});
+            $errs++;
+        }
+    }
+    # bail out if errors
+    if ($errs) {
+        $" = ',';       #"
+        $data = &TACCutils::htmlify("<h1>Errors</h1> $err errors fetching one".
+                                    " or more of @@err: ",
+                                    "Aggregator error");
+        return ($data,"","text/html",0);
+    }
+    
+    my %res;
+    foreach $k (keys(%urls)) {
+        %res = &TACCutils::match_all_dates($d{$k}, 1);
+        foreach $i (keys (%res)) {
+            $evts{$i}->{name} = $res{$i};
+            $evts{$i}->{where} = qq!<A HREF="$urls{$k}">$k</A>!;
+        }
+    }
+
+    my $content = '';
+    my ($x,$y,$where);
+    $content .= join('', "<h1>Events between ",
+                     &UnixDate($mindate,"%e %b %Y"),
+                     " and ",
+                     &UnixDate($maxdate,"%e %b %Y"),
+                     "</h1>\n");
+    $content .= "<ul>\n";
+    # $today = &ParseDate("today");
+    foreach $x (sort(keys (%evts))) {
+        next if $x lt $mindate;
+        next if $x gt $maxdate;
+        $y = $evts{$x}->{name};
+        $where = $evts{$x}->{where};
+        $y = &TACCutils::striphtml($y);
+        $content .= sprintf("<li> <B>%s</B> <BR>\n %s\n <BR> at %s\n",
+                            &UnixDate($x,"%e %b %Y"),
+                            $y, $where);
+    }
+    $content .= "</ul>\n";
+    $content = &TACCutils::htmlify($content,"Culture Listing",
+                                   'BGCOLOR="#ffffff"');
+    return($content, '', 'text/html', 0);
+}
+
+1;
+
+@
+
+
+1.5
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@d11 2
+a12 2
+             "Cal Performances" =>
+             "http://www.calperfs.berkeley.edu/9697/evntlist.html",
+@
+
+
+1.4
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@a4 7
+BEGIN {
+    push(@@INC, qw(
+                  /home/fox/tcsproxy/xs/lib
+                  /opt1/perl-5.003/lib/site_perl
+                  ));
+}
+
+@
+
+
+1.3
+log
+@Added SQUID!
+@
+text
+@d7 2
+a8 3
+                  /home/tomorrow/b/grad/fox/286proj/tcsproxy/xs/lib/perl-5.002
+                  /disks/barad-dur/now/pythia/release/lib/perl-5.002
+                  /home/tomorrow/b/grad/gribble/working/tcsproxy/xs/lib/perl-5.002
+@
+
+
+1.2
+log
+@Changes, including some HACKS in dispatch.c, to support aggregator behavior.  New doc file explaining how to write them, but its out of date.  sample aggregators and new stuff in TACCutils.pm.  different syntax for specifying distillers/aggregators.
+@
+text
+@d9 1
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d84 5
+a88 1
+    $content .= "<h1>Events after " . &UnixDate($mindate,"%e %b %Y") . "</h1>\n";
+d93 1
+d102 2
+a103 1
+    $content = &TACCutils::htmlify($content);
+@

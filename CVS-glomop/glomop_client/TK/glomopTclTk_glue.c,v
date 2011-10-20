@@ -1,0 +1,1395 @@
+head	1.13;
+access;
+symbols
+	stable:1.10
+	current:1.10
+	release:1.10;
+locks; strict;
+comment	@ * @;
+
+
+1.13
+date	96.08.23.19.57.34;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.07.25.22.12.19;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.07.25.17.31.33;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.14.21.10.18;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.11.02.18.44;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.07.05.08.34;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.07.01.54.25;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.04.02.58.09;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.01.00.04.32;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.05.31.17.23.17;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.05.24.21.30.46;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.02.20.23.52.30;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.20.23.45.12;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTclTk_glue.c --
+ *
+ * This file provides glue routines for exporting glomop library procedures
+ * as TCL commands.  The glomopTclTk_init procedure in this file should
+ * be called from within the application's Tcl_AppInit procedure.  The
+ * glomopTclTk_init procedure will define all of the Tcl commands
+ * exported to applications, which are thin glue routines on top of the
+ * core glomopTk routines.
+ *
+ * $Id: glomopTclTk_glue.c,v 1.1 96/08/19 14:39:21 glomop Exp $
+ * 
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "tk.h"
+#include "tcl.h"
+#include "glomopTk.h"
+ 
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.1 96/08/19 14:39:21 glomop Exp $";
+
+/*
+ * The following declarations are for the TCL commands exported by the
+ * glomopTclTk glue.  Each corresponds to a core function defined
+ * in glomopTk_pub.h.
+ */
+
+/* strictly GloMop equivalents */
+int GMTcl_ConnectProxy(ClientData clientData, Tcl_Interp *interp,
+		       int argc, char **argv);
+int GMTcl_ConnectProxy_Unauth(ClientData clientData, Tcl_Interp *interp,
+			      int argc, char **argv);
+int GMTcl_DisconnectProxy(ClientData clientData, Tcl_Interp *interp,
+			  int argc, char **argv);
+int GMTcl_GetDoc(ClientData clientData, Tcl_Interp *interp,
+		 int argc, char **argv);
+int GMTcl_GetChunk(ClientData clientData, Tcl_Interp *interp,
+		   int argc, char **argv);
+int GMTcl_CloseDoc(ClientData clientData, Tcl_Interp *interp,
+		   int argc, char **argv);
+int GMTcl_SetCallback(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char **argv);
+int GMTcl_SetQosPrefs(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char **argv);
+
+/* Tcl glue to access chunks */
+int GMTcl_GetChunkType(ClientData clientData, Tcl_Interp *interp,
+		       int argc, char **argv);
+int GMTcl_GetChunkRefDL(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv);
+int GMTcl_GetImageChunk(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv);
+int GMTcl_GetImageToc(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv);
+void gmglue_callback(GM_ConnectId connId, GM_DocChunk theChunk);
+
+Tcl_Interp *glomopInterp = NULL;  /* Needed for GloMop callback context */
+
+int glomopTclTk_Init(Tcl_Interp *interp)
+{
+  /* Initialize the core library routines */
+  if (glomopTk_init() != 0)
+    return TCL_ERROR;
+
+  /* Bad hack, but I need to access interp in GloMop callbacks */
+  glomopInterp = interp;
+
+  /* Now create the glue commands */
+  Tcl_CreateCommand(interp, "gm_connectproxy", GMTcl_ConnectProxy,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "gm_connectproxy_unauth", 
+		    GMTcl_ConnectProxy_Unauth,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "gm_disconnectproxy", GMTcl_DisconnectProxy,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_getdoc", GMTcl_GetDoc,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_getchunk", GMTcl_GetChunk,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_closedoc", GMTcl_CloseDoc,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_setcallback", GMTcl_SetCallback,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "gm_setqosprefs", GMTcl_SetQosPrefs,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "gm_getchunktype", GMTcl_GetChunkType,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_getchunkrefdl", GMTcl_GetChunkRefDL,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+  Tcl_CreateCommand(interp, "gm_getimagechunk", GMTcl_GetImageChunk,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+  Tcl_CreateCommand(interp, "gm_getimagetoc", GMTcl_GetImageToc,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);
+
+  return TCL_OK;
+}
+
+/*** The command glue routines ***/
+
+int GMTcl_ConnectProxy(ClientData clientData, Tcl_Interp *interp,
+		       int argc, char **argv)
+{
+  GM_ConnectId retId;
+  byte tgt_byte;
+
+#ifdef DEBUG
+  printf("in ConnectProxy glue.\n");
+#endif
+
+  if (argc != 7) {
+    interp->result = "Usage: gm_connectproxy hostname portnum username \
+passwd realm tgt_life";
+    return TCL_ERROR;
+  }
+  
+  if (sscanf(argv[6], "%c", &tgt_byte) != 1) {
+    interp->result = "Bogus tgt lifetime: gm_connectproxy failed";
+    return TCL_ERROR;
+  }
+
+  retId = GM_ConnectProxy(argv[1], argv[2], argv[3], argv[4], argv[5],
+			  tgt_byte, 1);  /* asynch */
+  if (retId == (GM_ConnectId) 0) {
+    interp->result = "gm_connectproxy failed";
+    return TCL_ERROR;
+  }
+
+  sprintf(interp->result, "%lu", retId);
+  return TCL_OK;
+}
+
+int GMTcl_ConnectProxy_Unauth(ClientData clientData, Tcl_Interp *interp,
+			      int argc, char **argv)
+{
+  GM_ConnectId retId;
+
+#ifdef DEBUG
+  printf("in ConnectProxy_Unauth glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_connectproxy_unauth hostname portnum username";
+    return TCL_ERROR;
+  }
+  
+  retId = GM_ConnectProxy_Unauth(argv[1], argv[2], argv[3], 1); /* asynch */
+  if (retId == (GM_ConnectId) 0) {
+    interp->result = "gm_connectproxy_unauth failed";
+    return TCL_ERROR;
+  }
+
+  sprintf(interp->result, "%lu", retId);
+  return TCL_OK;
+}
+
+int GMTcl_DisconnectProxy(ClientData clientData, Tcl_Interp *interp,
+			  int argc, char **argv)
+{
+  GM_ConnectId theId;
+
+#ifdef DEBUG
+  printf("In DisconnectProxy glue\n");
+#endif
+
+  if (argc != 2) {
+    interp->result = "Usage: gm_disconnectproxy connectId";
+    return TCL_ERROR;
+  }
+  sscanf(argv[1], "%lu", &theId);
+  
+  if (GM_DisconnectProxy(theId) == -1) {
+    interp->result = "gm_disconnectproxy failed";
+    return TCL_ERROR;
+  }
+
+  return TCL_OK;
+}
+
+int GMTcl_GetDoc(ClientData clientData, Tcl_Interp *interp,
+		 int argc, char **argv)
+{
+  GM_DocId      retId;
+  GM_ConnectId  connId;
+  GM_DocLocator loc;
+  unsigned      thresh, max;
+
+#ifdef DEBUG
+  printf("In GetDoc glue.\n");
+#endif
+
+  if (argc != 6) {
+    interp->result = "Usage: gm_getdoc connId doclocator callbackname callbackthresh maxchunks";
+    return TCL_ERROR;
+  }
+
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &connId) != 1) {
+    interp->result = "Bogus connection id: gm_getdoc failed";
+    return TCL_ERROR;
+  }
+  strcpy(loc.doc_url, argv[2]);
+  /** callbackname is saved in "extra" field - see GM_GetDoc call **/
+  if (sscanf(argv[4], "%u", &thresh) != 1) {
+    interp->result = "Bogus threshold: gm_getdoc failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[5], "%u", &max) != 1) {
+    interp->result = "Bogus max: gm_getdoc failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("connId %lu, doc_url %s, thresh %u, max %u, extra %s\n",
+	 connId, loc.doc_url, thresh, max, argv[3]);
+#endif
+
+  /* Call core function */
+  retId = GM_GetDoc(connId, loc, gmglue_callback, thresh, max, argv[3]);
+  if (retId == 0) {
+    interp->result = "GM_GetDoc failed in GMTcl_GetDoc glue";
+    return TCL_ERROR;
+  }
+
+  sprintf(interp->result, "%lu", retId);
+  return TCL_OK;
+}
+
+int GMTcl_GetChunk(ClientData clientData, Tcl_Interp *interp,
+		   int argc, char **argv)
+{
+  GM_DocId     docId;
+  GM_ConnectId conId;
+  GM_ChunkId   chkId;
+
+#ifdef DEBUG
+  printf("In GetChunk glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_getchunk connId docId chunkId";
+    return TCL_ERROR;
+  }
+
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getchunk failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getchunk failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[3], "%lu", &chkId) != 1) {
+    interp->result = "Bogus chunk id: gm_getchunk failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("connId %lu, docId %lu, chunkId %lu\n", conId, docId, chkId);
+#endif DEBUG
+
+  /* Call core function */
+  if (GM_GetChunk(conId, docId, chkId) != 0) {
+    interp->result = "GM_GetChunk failed";
+    return TCL_ERROR;
+  }
+
+  return TCL_OK;
+}
+
+int GMTcl_CloseDoc(ClientData clientData, Tcl_Interp *interp,
+		   int argc, char **argv)
+{
+  GM_DocId     docId;
+  GM_ConnectId conId;
+
+#ifdef DEBUG
+  printf("In CloseDoc glue.\n");
+#endif
+
+  if (argc != 3) {
+    interp->result = "Usage: gm_closedoc connId docId";
+    return TCL_ERROR;
+  }
+
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getchunk failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getchunk failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("connId %lu, docId %lu\n", conId, docId);
+#endif DEBUG
+
+  /* Call core function */
+  if (GM_CloseDoc(conId, docId) != 0) {
+    interp->result = "GM_CloseDoc failed";
+    return TCL_ERROR;
+  }
+
+  return TCL_OK;
+}
+
+int GMTcl_SetCallback(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char **argv)
+{
+  GM_ConnectId connId;
+  GM_DocId     docId;
+  unsigned     thresh, max;
+
+#ifdef DEBUG
+  printf("In SetCallback glue.\n");
+#endif
+
+  if (argc != 6) {
+    interp->result = "Usage: gm_setcallback connId docId callbackname callbackthresh maxchunks";
+    return TCL_ERROR;
+  }
+
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &connId) != 1) {
+    interp->result = "Bogus connection id: gm_setcallback failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_setcallback failed";
+    return TCL_ERROR;
+  }
+
+  /******CALLBACK NAME - into extra field in document structure - look
+    at how GM_SetCallback is called ******/
+
+  if (sscanf(argv[4], "%u", &thresh) != 1) {
+    interp->result = "Bogus threshold: gm_setcallback failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[5], "%u", &max) != 1) {
+    interp->result = "Bogus max: gm_setcallback failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("connId %lu, docId %lu, thresh %u, max %u, extra %s\n",
+	 connId, docId, thresh, max, argv[3]);
+#endif
+
+  /* Call core function */
+  if (GM_SetCallback(connId, docId, gmglue_callback, thresh, max,
+		     argv[3]) == NULL) {
+    interp->result = "GM_SetCallback failed";
+    return TCL_ERROR;
+  }
+  return TCL_OK;
+}
+
+int GMTcl_SetQosPrefs(ClientData clientData, Tcl_Interp *interp,
+		      int argc, char **argv)
+{
+  GM_ConnectId  connId;
+  int           numprefs, i;
+  GM_QosPrefs  *prefArray;
+
+#ifdef DEBUG
+  printf("In SetQosPrefs glue.\n");
+#endif
+
+  if (argc < 5) {
+    interp->result = "Usage: gm_setqosprefs connId htype preflist";
+    return TCL_ERROR;
+  }
+
+  if (sscanf(argv[1], "%lu", &connId) != 1) {
+    interp->result = "bogus connection id";
+    return TCL_ERROR;
+  }
+
+  /* format of preflist:
+     -name value[:weight] -name value:[weight] */
+  numprefs = argc - 3;
+  if (2*(numprefs/2) != numprefs) {
+    interp->result = "gm_setqosprefs: not even number of preference entries";
+    return TCL_ERROR;
+  }
+  numprefs /= 2;
+
+  prefArray = (GM_QosPrefs *) malloc(sizeof(GM_QosPrefs) * numprefs);
+  if (prefArray == NULL) {
+    fprintf(stderr, "Out of memory in GMTcl_SetQosPrefs.\n");
+    exit(-1);
+  }
+  
+  for (i=0; i<numprefs; i++) {
+    GM_QosPrefs *qPtr = &(prefArray[i]);
+    char *nextTok;
+    
+    /* get name value out */
+    if (*(argv[3 + 2*i]) != '-') {
+      interp->result = "gm_setqosprefs: name component missing dash";
+      free(prefArray);
+      return TCL_ERROR;
+    }
+    strncpy(qPtr->prefname, argv[3+2*i] + (long int) 1, 31);
+#ifdef DEBUG
+    printf("in qos glue: name %d is %s\n", i, qPtr->prefname);
+#endif
+
+    /* get the prefval out */
+    nextTok = strtok(argv[3 + 2*i + 1], ":");
+    if (nextTok == NULL) {
+      interp->result = "gm_setqosprefs: couldn't extract value component";
+      free(prefArray);
+      return TCL_ERROR;
+    }
+    if (sscanf(nextTok, "%d", &(qPtr->prefval)) != 1 ) {
+      interp->result = "gm_setqosprefs: (2)couldn't extract value component";
+      free(prefArray);
+      return TCL_ERROR;
+    }
+#ifdef DEBUG
+    printf("in qos glue: val %d is %d\n", i, qPtr->prefval);
+#endif
+   
+    /* get the prefweight out */
+    nextTok = strtok(NULL, ":");
+    if (nextTok == NULL)
+      qPtr->prefweight = -1;
+    else {
+      if (sscanf(nextTok, "%d", &(qPtr->prefweight)) != 1) {
+	interp->result = "gm_setqosprefs: couldn't extract weight component";
+	free(prefArray);
+	return TCL_ERROR;
+      }
+    }
+#ifdef DEBUG
+    printf("in qos glue: weight %d is %d\n", i, qPtr->prefweight);
+#endif
+  }
+
+  /* OK - built array.  Now send into core glomop */
+  if (GM_SetQosPrefs(connId, argv[2], numprefs, prefArray) == -1) {
+    interp->result = "gm_setqosprefs: SetQosPrefs failed";
+    free(prefArray);
+    return TCL_ERROR;
+  }
+
+  free(prefArray);
+  return TCL_OK;
+}
+
+int GMTcl_GetChunkType(ClientData clientData, Tcl_Interp *interp,
+		       int argc, char **argv)
+{
+  GM_DocId      docId;
+  GM_ConnectId  conId;
+  GM_ChunkId    chunkId;
+  GM_DocChunk  *theChunk;
+
+#ifdef DEBUG
+  printf("in GetChunkType glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_getchunktype connId docId chunkId";
+    return TCL_ERROR;
+  }
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getchunktype failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getchunktype failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[3], "%lu", &chunkId) != 1) {
+    interp->result = "Bogus chunk id: gm_getchunktype failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("about to get chunk with conId %lu, docId %lu, chunkId %lu\n",
+	 conId, docId, chunkId);
+#endif
+
+  /* Get the chunk */
+  theChunk = CS_getChunk(conId, docId, chunkId);
+  if (theChunk == NULL) {
+    interp->result = "Chunk not found: gm_getchunktype failed";
+    return TCL_ERROR;
+  }
+
+  sprintf(interp->result, "%s", (theChunk->mime_type).mimetype);
+  return TCL_OK;
+}
+
+int GMTcl_GetChunkRefDL(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv)
+{
+  GM_DocId      docId;
+  GM_ConnectId  conId;
+  GM_ChunkId    chunkId;
+  GM_DocChunk  *theChunk;
+
+#ifdef DEBUG
+  printf("in GetChunkRefDL glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_getchunkrefdl connId docId chunkId";
+    return TCL_ERROR;
+  }
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getchunkrefdl failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getchunkrefdl failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[3], "%lu", &chunkId) != 1) {
+    interp->result = "Bogus chunk id: gm_getchunkrefdl failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("about to get chunk with conId %lu, docId %lu, chunkId %lu\n",
+	 conId, docId, chunkId);
+#endif
+
+  /* Get the chunk */
+  theChunk = CS_getChunk(conId, docId, chunkId);
+  if (theChunk == NULL) {
+    interp->result = "Chunk not found: gm_getchunkrefdl failed";
+    return TCL_ERROR;
+  }
+
+  sprintf(interp->result, "%s", (theChunk->refine_dl).doc_url);
+  return TCL_OK;
+}
+
+/***
+  These image-specific functions should eventually go in their
+  own source file, but until we figure out how document classes
+  are going to work, they live here.
+  ***/
+
+
+/* 
+   This function will return an image widget from the chunk
+   stored in the core GloMop.  It does so by first verifying the
+   chunk type, and then writing out the binary data to a file and
+   calling the "image create photo" Tk command.
+*/
+int GMTcl_GetImageChunk(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv)
+{
+  GM_DocId      docId;
+  GM_ConnectId  conId;
+  GM_ChunkId    chunkId;
+  GM_DocChunk  *theChunk;
+
+#ifdef DEBUG
+  printf("in GetImageChunk glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_getimagechunk connId docId chunkId";
+    return TCL_ERROR;
+  }
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getimagechunk failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getimagechunk failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[3], "%lu", &chunkId) != 1) {
+    interp->result = "Bogus chunk id: gm_getimagechunk failed";
+    return TCL_ERROR;
+  }
+
+  /* Get the chunk */
+  theChunk = CS_getChunk(conId, docId, chunkId);
+  if (theChunk == NULL) {
+    interp->result = "Chunk not found: gm_getimagechunk failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("About to figure out mime type %s in gm_getimagechunk\n",
+	 (theChunk->mime_type).mimetype);
+#endif
+
+  /* Figure out the mime type */
+  if (strcmp( (theChunk->mime_type).mimetype, "image/gif") == 0) {
+
+    /** create the gif photo image **/
+
+    char  fname[128], rmCom[140], tclCom[140];
+    FILE *tmpFile;
+
+    /* create a file with the image in it */
+    sprintf(fname, "/tmp/gmwish%lu_%lu_%lu_%lu.gif", getpid(), docId, 
+	    conId, chunkId);
+
+#ifdef DEBUG
+    sprintf(rmCom, "echo /bin/rm -f %s", fname);
+#else
+    sprintf(rmCom, "/bin/rm -f %s", fname);
+#endif
+
+    tmpFile = fopen(fname, "w");
+    if (tmpFile == NULL) {
+      interp->result = "Couldn't open tmp file: gm_getimagechunk failed";
+      return TCL_ERROR;
+    }
+
+#ifdef DEBUG
+    printf("chunk len: %u\n", (unsigned) theChunk->blob_len);
+#endif
+    if (fwrite(theChunk->chunk_obj, theChunk->blob_len, 1, 
+	       tmpFile) != 1) {
+      interp->result = "Couldn't write out to tmp file";
+      system(rmCom);
+      return TCL_ERROR;
+    }
+    fclose(tmpFile);
+
+    /* Now run the Tk command to create the file */
+    sprintf(tclCom, "image create photo -file %s", fname);
+    if (Tcl_Eval(interp, tclCom) != TCL_OK) {
+      system(rmCom);
+      return TCL_ERROR;
+    }
+    system(rmCom);
+    return TCL_OK;
+  } else if (strcmp( (theChunk->mime_type).mimetype, "image/jpeg") == 0) {
+
+    /* create the jpeg photo image */
+
+    char  fname[128], rmCom[140], tclCom[140];
+    FILE *tmpFile;
+
+    /* create a file with the image in it */
+    sprintf(fname, "/tmp/%lu%lu%lu.jpg", docId, conId, chunkId);
+    sprintf(rmCom, "/bin/rm -f %s", fname);
+    tmpFile = fopen(fname, "w");
+    if (tmpFile == NULL) {
+      interp->result = "Couldn't open tmp file: gm_getimagechunk failed";
+      return TCL_ERROR;
+    }
+    if (fwrite(theChunk->chunk_obj, theChunk->blob_len, 1, tmpFile) != 1) {
+      interp->result = "Couldn't write out to tmp file";
+      system(rmCom);
+      return TCL_ERROR;
+    }
+
+    /* Now run the Tk command to create the file */
+    sprintf(tclCom, "image create photo -file %s", fname);
+    if (Tcl_Eval(interp, tclCom) != TCL_OK) {
+      system(rmCom);
+      return TCL_ERROR;
+    }
+    system(rmCom);
+    return TCL_OK;
+  } else {
+    sprintf(interp->result, "Unknown mime type %s: getchunkimage failed",
+	    (theChunk->mime_type).mimetype);
+    return TCL_ERROR;
+  }
+  return TCL_OK;
+}
+
+
+/* 
+   This function will return the image TOC data in a parseable format,
+   namely:
+      X Y NUMCHUNKS
+*/
+
+int GMTcl_GetImageToc(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv)
+{
+  GM_DocId      docId;
+  GM_ConnectId  conId;
+  GM_ChunkId    chunkId;
+  GM_DocChunk  *theChunk;
+  GM_TocChunk   parsed_toc;
+  char          ncbuf[16];
+  int           i;
+
+#ifdef DEBUG
+  printf("in GetImageChunk glue.\n");
+#endif
+
+  if (argc != 4) {
+    interp->result = "Usage: gm_getimagetoc connId docId chunkId";
+    return TCL_ERROR;
+  }
+  /** Collect arguments **/
+  if (sscanf(argv[1], "%lu", &conId) != 1) {
+    interp->result = "Bogus connection id: gm_getimagetoc failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[2], "%lu", &docId) != 1) {
+    interp->result = "Bogus document id: gm_getimagetoc failed";
+    return TCL_ERROR;
+  }
+  if (sscanf(argv[3], "%lu", &chunkId) != 1) {
+    interp->result = "Bogus chunk id: gm_getimagetoc failed";
+    return TCL_ERROR;
+  }
+
+  /* Get the chunk */
+  theChunk = CS_getChunk(conId, docId, chunkId);
+  if (theChunk == NULL) {
+    interp->result = "Chunk not found: gm_getimagetoc failed";
+    return TCL_ERROR;
+  }
+
+#ifdef DEBUG
+  printf("About to figure out mime type %s in gm_getimagetoc\n",
+	 (theChunk->mime_type).mimetype);
+#endif
+
+  /* Figure out the mime type */
+  if (strcmp( (theChunk->mime_type).mimetype, "glomop/toc") != 0) {
+    sprintf(interp->result, "Bogus mimetype for toc: found %s, needed %s\n",
+	    (theChunk->mime_type).mimetype, "glomop/toc");
+    return TCL_ERROR;
+  }
+
+  /* OK, it's a TOC.  Now parse that puppy */
+  if (GM_ParseTocChunk(theChunk, &parsed_toc) != 0) {
+    sprintf(interp->result, "GM_ParsedTocChunk failed.\n");
+    return TCL_ERROR;
+  }
+  
+  strncat(interp->result, (char *) parsed_toc.metadata, 
+	  parsed_toc.metadatalen);
+#ifdef DEBUG
+  printf("added metadata: result now is %s\n", interp->result);
+#endif
+
+  /* Add number of chunks */
+  sprintf(ncbuf, "%u", (unsigned) parsed_toc.num_descriptors);
+  strcat(interp->result, " ");
+  strcat(interp->result, ncbuf);
+#ifdef DEBUG
+  printf("added number of chunks: result is now %s\n", interp->result);
+#endif
+
+  for (i=0; i<parsed_toc.num_descriptors; i++) {
+    /* This is where we will pull out the mimetype and annotation
+       from the TOC */
+    
+  }
+
+  return TCL_OK;
+}
+
+
+/***
+  This (private) function is the only callback that the glomop core
+  knows about.  It's job is to look up the Tcl proc name given a
+  chunk and its corresponding document, and call that proc.
+
+  Evil hack #1:  I need a Tcl_Interp variable for the Tcl_Eval
+     command.  I had to keep one in a global variable from the
+     glomopTclTk_Init function.
+
+  Evil hack #2:  I had to keep track of the association between
+     documents and Tcl callback proc names.  I created an
+     "extra" field in the core GloMop document state structure,
+     and stuffed it there.  (ick.)
+  ***/
+
+void gmglue_callback(GM_ConnectId connId, GM_DocChunk theChunk)
+{
+  documentInfo   *newD;
+  Tcl_CmdInfo     info;
+  char            callbackComm[256];
+
+#ifdef DEBUG
+  printf("In gmglue_callback - getting document %ld for connectid %ld!\n",
+	 connId, theChunk.doc_id);
+#endif
+
+  newD = CS_getDocument(connId, theChunk.doc_id);
+  if (newD == NULL) {
+    fprintf(stderr, "Warning: NULL document in gmglue_callback\n");
+    return;
+  }
+
+  /* Get the command name out of the extra field of the documentInfo,
+     and make sure that command exists */
+  
+  if (!Tcl_GetCommandInfo(glomopInterp, newD->extra, &info)) {
+    fprintf(stderr, "Warning: unknown command %s in gmglue_callback.\n",
+	    newD->extra);
+    return;
+  }
+
+  /* Build the callback command */
+  sprintf(callbackComm, "%s %lu %lu %lu", newD->extra, connId, 
+	  theChunk.doc_id, theChunk.chunk_id);
+
+#ifdef DEBUG
+  printf("gmglue_callback: About to do callback %s\n", callbackComm);
+#endif
+
+  if (Tcl_Eval(glomopInterp, callbackComm) != TCL_OK) {
+    fprintf(stderr, "Warning: Tcl_Eval of command %s resulted in error \
+string %s\n", callbackComm, glomopInterp->result);
+    return;
+  }
+
+  /* done */
+  return;
+}
+
+
+@
+
+
+1.12
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d2 8
+d19 1
+a19 1
+ * $Id: glomopTclTk_glue.c,v 1.11 1996/07/25 17:31:33 gribble Exp $
+a20 49
+ * $Log: glomopTclTk_glue.c,v $
+ * Revision 1.11  1996/07/25 17:31:33  gribble
+ * Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+ * function to glomopTk_pub.{c|h}.
+ *
+ * Revision 1.10  1996/06/14 21:10:18  gribble
+ * Whoohoo!  Created image browser application, added unauthenticated
+ * connection, TOC parsing.
+ *
+ * Revision 1.9  1996/06/11 02:18:44  gribble
+ * Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+ * and bugfixes to get it working correctly.
+ *
+ * Revision 1.8  1996/06/07 05:08:34  gribble
+ * Threw in "extra" field into document structure to store callback
+ * command name for Tcl (yes, a hack), and added a BlobPtr length field
+ * to keep track of how big chunks are.  Built straw-man GetImageChunk
+ * and GetChunkType procedures and Tcl commands to actually retrieve
+ * chunks.  Built Tcl callback functionality (I think).
+ *
+ * Revision 1.7  1996/06/07 01:54:25  gribble
+ * Added core of glue.  Still to add:  hash tables for mapping names and
+ * connectId's to Tcl callback procs, and hash tables for mapping Chunks
+ * into Tcl tags into Tk image types etc.  (ick)
+ *
+ * Revision 1.6  1996/06/04 02:58:09  gribble
+ * Threw some #ifdef DEBUG's in there, and tidied up ConnectProxy a bit.
+ *
+ * Revision 1.5  1996/06/01 00:04:32  gribble
+ * Fixed up so that the gm_connectproxy command successfully uses the
+ * Charon authentication module.
+ *
+ * Revision 1.4  1996/05/31 17:23:17  gribble
+ * Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+ *
+ * Revision 1.3  1996/05/24 21:30:46  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+ * Revision 1.2  1996/02/20 23:52:30  gribble
+ * Fixed quote problem.
+ *
+ * Revision 1.1  1996/02/20 23:45:12  gribble
+ * Preliminary skeletons for the core library files and TCL glue, as well
+ * as the Makefile needed to generate libraries and demo executables.
+ *
+ *
+d32 1
+a32 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.11 1996/07/25 17:31:33 gribble Exp $";
+@
+
+
+1.11
+log
+@Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+function to glomopTk_pub.{c|h}.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.10 1996/06/14 21:10:18 gribble Exp $
+d14 4
+d73 1
+a73 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.10 1996/06/14 21:10:18 gribble Exp $";
+d175 1
+a175 1
+			  tgt_byte);
+d199 1
+a199 1
+  retId = GM_ConnectProxy_Unauth(argv[1], argv[2], argv[3]);
+@
+
+
+1.10
+log
+@Whoohoo!  Created image browser application, added unauthenticated
+connection, TOC parsing.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.9 1996/06/11 02:18:44 gribble Exp $
+d14 4
+d69 1
+a69 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.9 1996/06/11 02:18:44 gribble Exp $";
+d745 3
+d791 7
+a797 18
+  {
+    GMMessage tmpMessage = GMMessage_newMessage();
+    GMStr2    metadata;
+    i16       numchunks, i;
+    char      ncbuf[16];
+
+    *(interp->result) = '\0';  /* empty string to start out */
+
+      /* note that anything inside the chunk is still in network order,
+         so this works correctly */
+    tmpMessage.data = theChunk->chunk_obj;
+    tmpMessage.length = (i16) theChunk->blob_len;
+
+    /* Add metadata */
+    metadata = GMMessage_getNextStr2(&tmpMessage);
+    if (metadata.length != 0) {
+      /* Add metadata to result string */
+      strncat(interp->result, metadata.data, metadata.length);
+d799 1
+a799 1
+      printf("added metadata: result now is %s\n", interp->result);
+a800 2
+    }
+    GMStr2_destroy(metadata);
+d802 4
+a805 5
+    /* Add number of chunks */
+    numchunks = GMMessage_getNexti16(&tmpMessage);
+    sprintf(ncbuf, "%u", (unsigned) numchunks);
+    strcat(interp->result, " ");
+    strcat(interp->result, ncbuf);
+d807 1
+a807 1
+    printf("added number of chunks: result is now %s\n", interp->result);
+d810 4
+a813 5
+    for (i=0; i<numchunks; i++) {
+      /* This is where we will pull out the mimetype and annotation
+	 from the TOC */
+      
+    }
+@
+
+
+1.9
+log
+@Woohoo!  First document fetch by GloMop in history.  Many little tweaks
+and bugfixes to get it working correctly.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.8 1996/06/07 05:08:34 gribble Exp $
+d14 4
+d65 1
+a65 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.8 1996/06/07 05:08:34 gribble Exp $";
+d76 2
+d88 2
+d94 2
+d98 2
+a99 1
+
+d116 3
+d128 3
+a130 1
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+d133 2
+d137 2
+a138 1
+
+d177 24
+d406 94
+d546 59
+d656 3
+a658 1
+    sprintf(fname, "/tmp/%lu%lu%lu.gif", docId, conId, chunkId);
+d664 1
+d672 1
+a672 1
+    printf("chunk len: %u\n", theChunk->blob_len);
+d726 116
+@
+
+
+1.8
+log
+@Threw in "extra" field into document structure to store callback
+command name for Tcl (yes, a hack), and added a BlobPtr length field
+to keep track of how big chunks are.  Built straw-man GetImageChunk
+and GetChunkType procedures and Tcl commands to actually retrieve
+chunks.  Built Tcl callback functionality (I think).
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.7 1996/06/07 01:54:25 gribble Exp $
+d14 7
+d61 1
+a61 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.7 1996/06/07 01:54:25 gribble Exp $";
+d393 5
+d461 3
+d465 1
+d471 4
+d481 1
+d535 2
+a536 1
+  printf("In gmglue_callback!\n");
+@
+
+
+1.7
+log
+@Added core of glue.  Still to add:  hash tables for mapping names and
+connectId's to Tcl callback procs, and hash tables for mapping Chunks
+into Tcl tags into Tk image types etc.  (ick)
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.6 1996/06/04 02:58:09 gribble Exp $
+d14 5
+d54 1
+a54 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.6 1996/06/04 02:58:09 gribble Exp $";
+d62 1
+d76 6
+d84 2
+d92 3
+d108 6
+d127 1
+a127 1
+#endif DEBUG
+d197 1
+a197 1
+  /******CALLBACK NAME - into glue hash table******/
+d208 2
+a209 2
+  printf("connId %lu, doc_url %s, thresh %u, max %u\n",
+	 connId, loc.doc_url, thresh, max);
+d213 1
+a213 1
+  retId = GM_GetDoc(connId, loc, gmglue_callback, thresh, max);
+d329 4
+a332 1
+  /******CALLBACK NAME - into glue hash table******/
+d343 2
+a344 2
+  printf("connId %lu, docId %lu, thresh %u, max %u\n",
+	 connId, docId, thresh, max);
+d348 2
+a349 1
+  if (GM_SetCallback(connId, docId, gmglue_callback, thresh, max) == NULL) {
+d356 151
+d509 4
+d516 32
+d549 2
+@
+
+
+1.6
+log
+@Threw some #ifdef DEBUG's in there, and tidied up ConnectProxy a bit.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.5 1996/06/01 00:04:32 gribble Exp $
+d14 3
+d49 1
+a49 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.5 1996/06/01 00:04:32 gribble Exp $";
+a60 2
+int GMTcl_RegisterTypes(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv);
+d70 1
+a82 2
+  Tcl_CreateCommand(interp, "gm_registertypes", GMTcl_RegisterTypes,
+		    (ClientData) NULL, (Tcl_CmdDeleteProc *) NULL);  
+d102 4
+d133 4
+d151 2
+a152 2
+int GMTcl_RegisterTypes(ClientData clientData, Tcl_Interp *interp,
+			int argc, char **argv)
+d154 5
+d160 1
+a160 1
+  printf("In RegisterTypes glue.\n");
+a161 2
+  return TCL_OK;
+}
+d163 21
+a183 3
+int GMTcl_GetDoc(ClientData clientData, Tcl_Interp *interp,
+		 int argc, char **argv)
+{
+d185 2
+a186 1
+  printf("In GetDoc glue.\n");
+d189 4
+a192 2
+  if (argc != 7) {
+    interp->result = "Usage: gm_getdoc connId doclocator typelist callbackname callbackthresh maxchunks";
+d195 2
+d203 4
+d210 30
+d246 3
+d252 26
+d284 4
+d291 35
+d327 7
+@
+
+
+1.5
+log
+@Fixed up so that the gm_connectproxy command successfully uses the
+Charon authentication module.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.4 1996/05/31 17:23:17 gribble Exp $
+d14 4
+a36 3
+#include "tk.h"
+#include "tcl.h"
+#include "glomopTk.h"
+d41 4
+d46 1
+a46 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.4 1996/05/31 17:23:17 gribble Exp $";
+a128 1
+  printf("In DisconnectProxy glue.\n");
+a133 2
+  printf("Passed id %lu\n", theId);
+  printf("About to call GM_DisconnectProxy\n");
+d146 1
+d148 1
+d155 1
+d157 1
+d169 1
+d171 1
+d178 1
+d180 1
+d187 1
+d189 1
+a191 1
+
+@
+
+
+1.4
+log
+@Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.3 1996/05/24 21:30:46 gribble Exp $
+d14 3
+d41 1
+a41 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.3 1996/05/24 21:30:46 gribble Exp $";
+a93 1
+  char concatString[256];
+d95 1
+d97 5
+a101 1
+  printf("In ConnectProxy glue.\n");
+d103 2
+a104 2
+  if (argc != 3) {
+    interp->result = "Usage: connectproxy hostname portnum";
+d107 3
+a109 6
+  strncpy(concatString, argv[1], 254);
+  strcat(concatString, " ");
+  strncat(concatString, argv[2], 255 - strlen(concatString));
+  printf("Doing %s.\n", concatString);
+  
+  retId = GM_ConnectProxy(concatString);
+d111 1
+a111 1
+    interp->result = "connectproxy failed";
+d126 1
+a126 1
+    interp->result = "Usage: disconnectproxy connectId";
+d134 1
+a134 1
+    interp->result = "disconnectproxy failed";
+d144 1
+a144 1
+  printf("In RegisterTypers glue.\n");
+d154 1
+a154 1
+    interp->result = "Usage: getdoc connId doclocator typelist callbackname callbackthresh maxchunks";
+@
+
+
+1.3
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.2 1996/02/20 23:52:30 gribble Exp $
+d14 6
+d38 1
+a38 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.2 1996/02/20 23:52:30 gribble Exp $";
+d111 1
+a111 1
+  sprintf(interp->result, "%hu", retId);
+d125 2
+a126 2
+  sscanf(argv[1], "%hu", &theId);
+  printf("Passed id %hu\n", theId);
+@
+
+
+1.2
+log
+@Fixed quote problem.
+@
+text
+@d11 1
+a11 1
+ * $Id: glomopTclTk_glue.c,v 1.1 1996/02/20 23:45:12 gribble Exp $
+d14 3
+d24 2
+d27 4
+d32 138
+a169 1
+static char gm_rcsid[] = "$Id: glomopTclTk_glue.c,v 1.1 1996/02/20 23:45:12 gribble Exp $";
+@
+
+
+1.1
+log
+@Preliminary skeletons for the core library files and TCL glue, as well
+as the Makefile needed to generate libraries and demo executables.
+@
+text
+@d11 1
+a11 1
+ * $Id$
+d13 5
+a17 1
+ * $Log$
+d23 1
+a23 1
+static char gm_rcsid[] = $Id$";
+@

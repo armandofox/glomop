@@ -1,0 +1,319 @@
+head	1.2;
+access;
+symbols
+	current:1.2;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.08.23.19.36.12;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.07.07.00.03.24;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@#
+# proxy.pl - proxy main event loop, fake threads
+# $Id: proxy.pl,v 1.1 96/08/19 14:38:01 glomop Exp $
+#
+
+=head1 NAME
+
+proxy - implements the proxy object's main event loop and fake multithreading
+
+=head1 SYNOPSIS
+
+ require "proxy.pl";
+ $proxy = new proxy $authrec,$globals;
+ $proxy->mainloop();
+
+=head1 DESCRIPTION
+
+The proxy object waits in an event loop for interesting things to happen, and
+dispatches to function handlers in the L<commands(3)> package to handle the
+interesting things.
+
+=head1 CONSTRUCTORS/CLASS METHODS
+
+=item $proxy = new proxy $authrec,$globals;
+
+Construct a new proxy object (normally only done once per session) with the
+given authentication record (an object returned by the L<accept(3)> module) and
+global variable object (returned by L<globals(3)>).  The new proxy has a single
+active connection, corresponding to the connected client, and zero open
+documents. 
+
+=item &proxy::client_serve
+
+This is the function defined as the service function for the connection
+corresponding to the GloMop client.  See L<gm_conn(3)> for details of the
+connection object.  
+
+=head1 INSTANCE VARIABLES
+
+=over 3
+
+=item $g = $proxy->Globals;
+
+The global variables associated with this instance of the proxy.  See 
+L<globals(3)>.
+
+=item $auth = $proxy->Auth;
+
+An authentication record obtained at client connection time.  Any state
+associated with client authentication lives here.  The L<accept(3)> module
+exports 
+this object.  This object should be treated as read-only.
+
+=item @@conns = $proxy->Connections;
+
+An array containing the currently active connections, one of which is the
+client.  The connection object is exported by the L<gm_conn(3)> module.  When a
+connection wakes up, its service function is called and the connection is
+re-queued.
+This variable should be treated as read only; but see L</"add_doc">
+below.
+
+=item @@docs = $proxy->Docs;
+
+Returns the array of document objects currently known to be open.  Note that
+this is not one-to-one-correspondent with the array of open connections, since
+documents will outlive the connections originally used to fetch them, and there
+are some connections to which no document corresponds (e.g. the client is a
+connection).
+This variable should be treated as read only; but see L</"add_doc">
+below.
+
+=item $client = $proxy->client;
+
+Returns a reference to the proxy's L<client(3)> object (actually that object is
+embedded in the L<auth(3)> object and just copied to the proxy object when the
+client is accepted, so both references point to the same client object).
+
+=back
+
+=head1 INSTANCE METHODS
+
+=open
+
+=item $proxy->add_doc($doc,$conn)
+
+Adds a new connection $conn to be associated with document object $doc.  These
+should be a L<doc(3)> object and a L<gm_conn(3)> object respectively.  The
+connection will now be queued and whenever it wakes up, the connection's
+service function will be called, and passed the document object as its first
+argument.
+
+=item $proxy->delete_doc($doc_id)
+
+Delete document with ID $doc_id, which includes closing its connection if any
+and discarding all document state, cached chunks, cached files corresponding to
+the document, etc.  Returns undef iff the proxy doesn't know about such a
+document. 
+
+=item $proxy->doc_from_id($id)
+
+Returns the document object corresponding to doc ID $id, if the proxy knows
+about such a document; otherwise undef.
+
+=item $proxy->set_c_device($device_type)
+
+Re-registers the client device type for the current connection with the
+proxy.
+
+=back
+
+=head1 BUGS
+
+delete_doc doesn't really explicitly discard any state; it just removes the
+document from the active list.  Currently it doesn't even close the document's
+associated connection, which is really bad.
+
+=cut
+
+
+package proxy;
+require "gm_conn.pl";
+
+sub new {
+    my $class = shift;
+    my $authrec = shift;
+    my $globals = shift;
+    my $self = bless ({
+        Auth => $authrec,
+        Connections => [makeconn gm_conn ("client",STDIN,STDOUT,
+                                          \&client_serve,\&client_exception)],
+        Globals => $globals,
+    });
+    return $self;
+}
+
+sub Auth { shift->{"Auth"} }
+sub Connections { @@{shift->{"Connections"}}}
+sub Docs { @@{shift->{"Docs"}}}
+sub Globals { shift->{"Globals"}}
+sub client { shift->{"Auth"}->{"Device"}}
+
+sub mainloop {
+    my $self = shift;
+
+    my @@ready = ();
+    while (1) {
+        #
+        #  Wait for an active connection to wake up.  Note that the client is
+        #  itself an active connection.
+        #  BUG::should check client at higher priority.
+        #
+        @@conns = @@{$self->{"Connections"}}; 
+        @@ready = &gm_sock::selectsock (-1, @@conns);
+        warn( "Selectsock returned, but nothing is ready!"), next
+            unless defined @@ready;
+        
+        # Serve the requests one at a time
+        
+        my $cond;
+        while ($conn = shift @@ready) {
+            $cond = $conn->conditions;
+            &{$conn->readfunc}($self);
+        }
+    }
+    exit 0;
+}
+
+sub set_c_device {
+    my $self = shift;
+    my $cd = shift;
+
+    $self->{"Auth"}->{"Device"} = client::new("client", $cd);
+
+}
+
+sub add_doc {
+    my $self = shift;
+    my $doc = shift;
+    my $conn = shift;
+    push(@@{$self->{"Docs"}}, $doc);
+    if (ref($conn) eq 'gm_conn') {
+        push(@@{$self->{"Connections"}}, $conn);
+    } else {
+        warn("Null connection object for doc id " . $doc->id);
+    }
+}
+
+sub doc_from_id {
+    my $self = shift;
+    my $docid = shift;
+    my @@docs = @@{$self->{"Docs"}};
+    my $ndx = $self->doc_index_from_id($docid);
+    return $ndx && $docs[$ndx];
+}
+
+sub doc_index_from_id {
+    # this is a private function!
+    my $self = shift;
+    my $docid = shift;
+    my @@docs = @@{$self->{"Docs"}};
+    my $ndx = 0;
+    for (@@docs) {
+        last if ($_->id == $docid);
+        $ndx++;
+    }
+    return ($ndx > $#docs) ? undef : $ndx;
+}
+
+sub delete_doc {
+    my $self = shift;
+    my $docid = shift;
+    my $ndx = $self->doc_index_from_id($docid);
+
+    if (defined $ndx) {
+        # delete it
+        splice(@@{$self->{"Docs"}}, $ndx, 1);
+        return 1;
+    } else {
+        return undef;
+    }
+}
+
+#
+#  Exceptional condition on client socket: shut down proxy
+#
+
+#
+#  Serve request from client
+#
+
+sub client_serve {
+    my $proxy = shift;
+    my $handler;
+    my @@args;
+    
+    # Read pending message, and peek at first token.
+
+    my $msgtype = &Msg::read_generic;
+
+    # Dispatch on message type.
+
+    if ($handler = $MsgHandlers{$msgtype}) {
+        @@args = &{"Msg::receive_$handler"};
+        if ($@@) {
+            &Msg::send_op_failed(&Msg::FLAG_MSG_ERROR,
+                                 &MSG::OP_FAIL, $msgtype,
+                                 "Malformed $msgtype msg");
+        } else {
+            &{"proxy::" . "handle_$handler"}($proxy, @@args);
+        }
+    } else {
+        &Mon::status("Unknown client request token '$msgtype'");
+        &Msg::send_auth_error(&Msg::FLAG_MSG_ERROR,
+                              &Msg::ERR_STR, "Bad request: $msgtype");
+    }
+    return;
+}
+
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+
+1;
+@
+
+
+1.1
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@d1 5
+d105 5
+d169 8
+d259 11
+@

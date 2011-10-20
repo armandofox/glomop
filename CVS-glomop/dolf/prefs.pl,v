@@ -1,0 +1,492 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.12.03.20.22.51;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.27.21.34.54;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.27.21.34.54;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@#
+#  User prefs maintenance for http proxy. Maintains a large associative array
+#  for user prefs, keyed by IP address; allows periodic checkpointing of the
+#  array to a file.
+#
+# $Id: prefs.pl,v 1.1.1.1 1996/11/27 21:34:54 fox Exp $
+#
+
+package prefs;
+
+sub init {
+    #
+    #  Private globals for this file
+    #
+    %Prefs = ();
+    $Dirty = 0;
+    $NumRegistrations = 0;                      # number of registrations since
+    # last checkpoint
+    $NumRegistrationsThisSession = 0;           # num new this session
+    %PrefsCodes = ();                           # default profile for new users
+
+    #
+    # Read default prefs info from config file.  There is no place in the code that
+    # is required to know about the format of the default prefs entries.
+    #
+    for (@@main::Config) {
+        $PrefsCodes{$1} = $2 if /^\s*prefs\s+(\S+)\s+(.*)$/;
+    }
+    
+    $Const{Expire} = 14;                        # days after which a prefs entry
+    # will expire if not used
+    $Const{Userfile} = "./dolf.users";        # user info database
+
+    $Const{RegisterOK} = <<EndHtml;
+<HTML><TITLE>Registration OK</TITLE><BODY>
+<H1>Prefs Change OK</H1>
+Prefs change for %s (at %s) succeeded...click "Back" to resume browsing
+</BODY></HTML>
+EndHtml
+
+    $Const{LoginOK} = <<End2Html;
+<HTML><TITLE>Remap OK</TITLE><BODY><H1>Login OK</H1>
+<h2>Welcome</h2>
+<b><p>Hello %s at %s....welcome to Dolf.</p></b>
+<a href="http://DolfPrefs">View Your User Prefs</a>
+</BODY></HTML>
+End2Html
+
+    $Const{LoginFailed} = <<End3Html;
+<HTML><TITLE>Login Failed</TITLE><BODY><H1>Login Failed</H1>
+Couldn't log you in: %s
+<BR><A HREF="http://DolfLogin">Try again</A></BODY></HTML>
+End3Html
+    
+    $Const{CheckpointInterval} = 1;        # checkpoint interval: after every N
+                                       # registrations, checkpoint to disk
+
+    #
+    # Initialization: read users file
+    #
+
+    if (open(PREFS, $Const{Userfile})) {
+        $LastModPrefs = (stat($Const{Userfile}))[9];
+        while ($_ = <PREFS>) {
+            $Prefs{$1} = $2 if /([^&]+)&(.*)/;
+        }
+        close PREFS;
+    } else {
+        &main::log("Warning: couldn't open user db $Const{Userfile}: $!");
+    }
+}
+#######################################################################
+#   Translates an IP address to an appropriate set of prefs, returns empty if
+#   none found.  Returns an associative array of prefs info.  Array keys have
+#   the names used in the URL encoding (see comments for "register" function).
+#   If the IP address is the string "default", return a set of default browsing
+#   prefs for unregistered users.
+#
+#   Assumptions:
+#     This function is intimately familiar with the encoding of the
+#       prefs file.
+#     Prefs info in file (and therefore in prefs array) must be well-formed:
+#     this function does no sanity checks.
+######################################################################
+
+sub main::get_prefs
+{
+    local($id) = shift;
+    local(%result);
+
+    # Start off with some default defaults...
+
+    %result = %PrefsCodes;
+    return %result if ($id =~ /^default$/);
+    
+    # Fill in prefs from this user, if we know about him....
+
+    return undef unless $_ = $prefs::Prefs{$id};
+    
+    my @@prefs = split(/&/,$_);
+    for (@@prefs) {
+        $result{$1} = $2 if /(\w)=(.+)/;
+    }
+    return %result;
+}
+
+###########################################################################
+#  Set a particular prefs value for a particular client IP address.
+#  This works even if no prefs have been seen for this client before,
+#  because it can call get_prefs to create a default set of prefs.
+###########################################################################
+
+sub main::set_one_pref 
+{
+    my ($client, $prefkey, $prefval) = @@_;
+
+    my $found_prefs = 1;
+    my %prefs = &main::get_prefs($client);
+
+    unless (defined %prefs) {
+        &main::register(undef, $client, "nobody");
+        %prefs = &main::get_prefs($client);
+    }
+
+    $prefs{$prefkey} = $prefval;
+    &set_prefs($client, %prefs);
+}
+     
+
+###########################################################################
+#  Set prefs: set the prefs for a profile by copying the prefs from another
+#  (existing) profile.  If the source profile doesn't exist, create the new
+#  prefs as default, and return undef.
+###########################################################################
+
+sub main::copy_prefs
+{
+    my($to, $from) = @@_;
+    my $prefs;
+    
+    if (defined $prefs::Prefs{$from}) {
+        $prefs::Prefs{$to} = $prefs::Prefs{$from};
+        return $to;
+    } else {
+        &set_prefs($to, (&main::get_prefs("default")));
+        return undef;
+    }
+}
+
+sub split_url {
+    my $url = shift;
+    my (@@fields, %fields);
+
+    $url =~ s/^\?//;
+    @@fields = split(/&/, $url);
+    for (@@fields) { $fields{$1} = $2 if /([^=]+)=(.*)/ };
+
+    return( %fields );
+}
+
+######################################################################
+#  Register a new user.
+#
+#  Arguments:
+#     URL encoding the registration info (from form submission); if null, a
+#       default registration profile is used instead.  The initial
+#       URL path has been stripped off, leaving a set of "(\w)=(.+)" fields
+#       separated by "&".
+#     User's IP address as printable string.
+#
+#  Side effects:
+#     Replace the entry corresponding to the given IP address
+#     in the prefs array if it already exists, and indicate the array is dirty.
+#     Also create an entry for the user in the user database, making sure it
+#     includes info about his IP address.  The user database is intended to be
+#     human readable.  Checkpoint prefs array if necessary.
+#
+#  Returns: a text/html string encoding a response to the registration
+#     request.  Any errors are indicated in the string.
+#
+#  Assumptions: This function is intimately familiar with the format of a prefs
+#    file entry.  It converts the info embedded in the URL (form submission) into
+#    an appropriate entry.
+#
+######################################################################
+
+sub main::register
+{
+    local($url, $ipaddr, $user) = @@_;
+    local($old_ipaddr);
+    local(%fields);
+    local($newentry, %newentry);
+    local($x);
+    
+
+    %fields = ($url? &split_url($url) : &main::get_prefs("default"));
+    
+    # Start off with a template of default values....
+
+    %newentry = %PrefsCodes;
+
+    # Fill in each value from the user-provided fields that are defined.  Only
+    # use the first letter (lowercased) of each prefs entry.
+
+    for (keys %fields) {
+        if (exists $newentry{$_}) {
+            $newentry{$_} = (length($fields{$_}) > 3
+                             ? lc(substr($fields{$_},0,1))
+                             : $fields{$_});
+        }
+    }
+
+    $newentry{'u'} = $user || 'nobody';
+    
+    &main::debug('register', "New prefs for $ipaddr: " . join(',', %newentry));
+
+    # Remove spurious '&'s from entry fields.
+
+    while (($x, $_) = each %fields) {
+        s/&/_/g;
+    }
+
+    # tally a new registration
+    $NumRegistrationsThisSession++;
+
+    # Create or modify the new entry
+
+    &set_prefs($ipaddr, %newentry);
+    #
+    #  If number of new registrations since last checkpoint exceeds threshold,
+    #  checkpoint to disk now.
+    #
+
+    if ($NumRegistrations++ >= $Const{CheckpointInterval}) {
+        $NumRegistrations = 0;          # reset counter
+        &main::checkpoint || &main::log("Warning: checkpoint failed");
+    }
+
+    return sprintf($Const{RegisterOK}, $newentry{'u'}, $ipaddr);
+}    
+
+# NAME:  main::login - log in a new user
+# DESCRIPTION: maps username to current IP address for the purposes of this
+#   "session".  Obsoletes the "remap" functionality in the old Prefs page.
+# ARGS: URL as printable string encoding the form submission; IP address as
+#   printable string.
+# RETURNS: Message to user indicating login OK
+# ASSUMPTIONS: none
+
+sub main::login {
+    my $con = shift;
+    my $url = $con->{"URL"};
+    my $ipaddr = $con->{"IPaddr"};
+
+    %fields = &split_url($url);
+
+    # there will only be one field we care about: 'u', the text field
+    # containing the username.  we canonicalize the username before looking it
+    # up.
+
+    my $username = lc $fields{'u'};
+
+    unless ($username) {
+        return sprintf($Const{LoginFailed}, "Empty username");
+    }
+    
+    # try to do the remap...it will return the appropriate result text.
+
+    &remap($con, $username, $ipaddr);
+}
+
+# NAME: remap - login a user by associating the name and IP address
+# DESCRIPTION: finds the prefs entry corresponding to this user by searching
+#    for username in the hash table %Prefs, which is keyed by IP address.  If
+#    found, deletes the entry and creates a new entry with the user's new IP
+#    address as its key.  If not found, creates a default prefs profile for
+#    this user and associates it with the new IP address.
+# ARGS: connection object; canonicalized username;
+#    new IP address as string (optional)
+# RETURNS: HTML text giving result of the operation.
+# SIDE EFFECTS: May cause prefs array to be checkpointed, if a checkpoint
+#    interval is reached.
+# ASSUMPTIONS: none, except of course the prefs scheme itself will only work if
+#    there is at most one user associated with an IP address.
+# NOTES: this function only runs at the parent, never in a forked child.
+    
+
+sub remap {
+    my $con = shift;
+    my $user = shift;
+    my $newaddr = shift || ($con->{"IPaddr"});
+    # try to find entry for this user
+    my $old_ipaddr = undef;
+    my $prefs = undef;
+    for (keys %Prefs) {
+        $old_ipaddr = $_, $prefs = $Prefs{$_}, last
+            if ($Prefs{$_} =~ /\bu=$user\b/ );
+    }
+
+    if ($old_ipaddr eq $newaddr) {
+        # same user logging in twice in a row: do nothing.
+        &main::debug('register',"Same user ($user) as last login from $newaddr");
+        return sprintf($Const{LoginOK}, $user,$newaddr);
+    }
+    unless (defined $prefs) {
+        # New user: create a default prefs profile, and allow the user to
+        # edit.
+        &main::debug('register',
+                     sprintf("Adding entry for user %s (now at %s)",
+                             $user,$newaddr));
+        # create a default profile for this user....
+        &main::register("", $newaddr, $user);
+        # ...and take them straight to the prefs-change page.
+        return &main::do_register($con);
+    }
+    #
+    #  If the user's new IPaddr was previously in use by a different user, save
+    # that user's prefs in an "inactive" entry, keyed with "!xxxx" where xxxx
+    # is the MD5 hash of the old user's username.
+    #
+    if ($Prefs{$newaddr}) {
+        my $olduser;
+        my %fields = &split_url($Prefs{$newaddr});
+        my $key = "!" . substr(MD5->hexhash($fields{'u'}), 0, 16);
+        $Prefs{$key} = $Prefs{$newaddr};
+        &main::debug('register',
+               "Hibernating prefs for user '$fields{u}' at $newaddr");
+    }
+    #
+    # If we got the user's prefs from a previous IP addr registration
+    # or "out of hibernation" (i.e. if the old IP
+    # address keyed to the user's prefs is an MD5 hash), delete the old
+    # (hibernated) prefs for efficiency.
+    #
+    if (defined $old_ipaddr) {
+        &main::debug('register', "Deleted entry " .
+               $Prefs{$oldipaddr} . " for $old_ipaddr");
+        delete $Prefs{$old_ipaddr};
+    }
+    #
+    #  Got the user's prefs: set them to the new IP addr
+    #
+    &main::debug('register', "Setting prefs $newaddr to $prefs");
+    $Prefs{$newaddr} = $prefs;
+    return sprintf($Const{LoginOK}, $user, $newaddr);
+}
+    
+sub set_prefs
+{
+    my $ipaddr = shift;
+    my %newentry = @@_;
+    my @@newentry = ();
+    for (keys %newentry) {
+        push(@@newentry, join('', $_, '=', $newentry{$_}));
+    }
+    $Prefs{$ipaddr} = join('&', @@newentry);
+}
+
+
+###########################################################################
+#  Return number of total registered users and number registered this session.
+############################################################################
+
+sub register_info
+{
+    return (0+%Prefs, $NumRegistrationsThisSession);
+}
+
+######################################################################
+#  Checkpoint prefs array to disk - very naive for now
+#
+#  Returns: 1 if checkpointed successfully
+#
+#  Side effects: User Prefs array is streamed to $Const{Userfile}, which is first
+#  backed up in .bak.  CheckpointTime is set to the time
+#  of this checkpoint.
+######################################################################
+
+sub main::checkpoint
+{
+    local($res) = 1;
+    local($key,$val);
+
+    #
+    #  If the prefs file has been written by someone else since the last time
+    #  we touched it, slurp it first to merge changes, then write out the
+    #  checkpoint.
+    #
+    if ((stat($Const{Userfile}))[9] != $LastModPrefs) {
+        &main::log("Warning: $Const{Userfile} changed since last read; " .
+                   "merging changes before checkpointing");
+        if (open(PREFS, $Const{Userfile})) {
+            while ($_ = <PREFS>) {
+                $prefs::Prefs{$1} = $2 if /([^&]+)&(.*)/
+                    && !exists $prefs::Prefs{$1};
+            }
+            close PREFS;
+        } else {
+            &main::log("Warning: couldn't merge changes from " .
+                       "$Const{Userfile}: $!");
+        }
+    }
+    #
+    # checkpoint user info db
+    #
+    &main::log("*** Checkpointing user db $Const{Userfile}");
+    rename($Const{Userfile}, "$Const{Userfile}.bak")
+        || &main::log("Warning: renaming $Const{Userfile} to " .
+                     "$Const{Userfile}.bak: $!");
+    if (! (open(PREFS, ">$Const{Userfile}"))) {
+        &main::log("Writing users file: $!");
+        $res = 0;
+    } else {
+        while (($key,$val) = each %Prefs) {
+            print PREFS "$key&$val\n";
+        }
+        close PREFS;
+    }
+
+    $LastModPrefs = (stat($Const{Userfile}))[9];
+    $CheckpointTime = time;
+    return $res;
+}
+
+
+######################################################################
+
+1;                  
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+a6 1
+# $Id: prefs.pl,v 1.8 1996/10/23 02:15:25 fox Exp $
+d32 1
+a32 1
+    $Const{Userfile} = "./pythia.users";        # user info database
+d43 3
+a45 1
+Hello %s at %s....welcome to Pythia.
+d52 1
+a52 1
+<BR><A HREF="http://PythiaLogin">Try again</A></BODY></HTML>
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

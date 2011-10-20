@@ -1,0 +1,55 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+
+INCLUDEPATH = @INCLUDEPATH@ include .
+INCLUDE = $(patsubst %,-I%,$(INCLUDEPATH))
+CFLAGS = @CFLAGS@ @CPPFLAGS@ $(INCLUDE)
+LDFLAGS = -L. @LDFLAGS@
+DISTLIB = -L../lib -ldist -lclib -lmon
+
+LIBS = @LIBS@ -ljpeg @LIBTHREAD@
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef DEBUGGING
+	CFLAGS += -DDEBUGGING
+endif
+
+TARGETS = giftojpg_munger
+
+all: $(TARGETS)
+
+install: ../sbin/giftojpg_munger
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+giftojpg_munger: gifjpg_munge.o gj_mem_src_dst_mgr.o ../lib/libdist.a
+	$(LD) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) $(DISTLIB) -lm
+
+test: gifjpg_munge.o gj_mem_src_dst_mgr.o test_main.o
+	-$(CC) -O2 -o $@ $^ $(LDFLAGS) $(LIBS) -lm
+
+../lib/libdist.a:
+	cd ../ptm && $(MAKE) install
+
+%.o: src/%.c include/gifjpg_munge.h include/gj_mem_src_dst_mgr.h \
+     ../config_tr.h include/ARGS.h
+	$(CC) $(CFLAGS) -o $@ -c $< 
+
+tags:
+	etags src/*.[ch]
+
+clean:
+	rm -f *.o *~ giftojpg_munger test out.jpg
+
+distclean: clean
+	rm -f Makefile

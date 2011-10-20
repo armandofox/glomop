@@ -1,0 +1,249 @@
+head	1.3;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.3
+date	98.11.20.22.00.04;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.20.21.35.16;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.20.20.29.33;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@o  Exact security results for the Unix password hash.
+   (No asymptotics!)
+   Part of a growing body of work on ``concrete security'';
+   it's a body of work even us systems types get excited about.
+
+   Example: HMAC is a big success story for concrete security.
+   For maybe a decade before the HMAC analysis,
+   people used ad-hoc MAC constructions.  Then systems guys started
+   finding subtle attacks, and everyone started squirming.
+   The big coup was when theory guys gave proofs of security
+   (under a reasonable model) for a new and highly-practical
+   construction called HMAC.  Boom!  All the respectable standards
+   changed overnight to use HMAC; it was an instant de facto
+   standard for practitioners.
+
+o  The Unix password hash function, g -- picture.
+   DES 25 times, password k, plaintext 0, output is hash.
+   Label with bit lengths.  DES has been around for 20 years,
+   and is probably the best-understood of all the modern
+   encryption algorithms, so it's a good starting point.
+
+   So has the Unix password hash; but so far the question of
+   its security has remained open.
+   
+   (There were some results
+   from Luby/Rackoff which gave evidence that the construction
+   is basically sound.  They show asymptotic results on the
+   security of the the construction: as the bit lengths go to
+   infinity, the scheme is secure against all polytime adversaries,
+   assuming that DES^25 is a PRF.  But this says nothing useful
+   about the particular parameters used in the Unix password
+   hash function, and till noone had managed to relate the
+   security of DES^25 to the security of DES.)
+
+o  So what does a ``proof'' of security mean?
+   Obviously it has to mean under some model, and for some
+   theoretical definition of security for the password hash.
+   But as is often the case, getting the definitions right is
+   half the battle.
+
+   In Unix, the hash g(k) of the user's password k is stored
+   in a (world-readable) file.
+   When you try to log on with password y, the system hashes
+   y to get g(y), and compares g(y) to the stored hash; it allows
+   in only if the two hashes match.
+   So we should insist that g be one-way: given a hash h, it be
+   hard to find some inverse y such that g(y) = h.
+
+   Note that we're going to have to assume that P != NP; for if
+   P = NP, clearly no poly-time one-way g can exist.
+   In fact, it's pretty clear the simplicity of the construction
+   is going to make it hard to get anywhere unless we make some
+   assumption on the cryptographic strength of DES.
+
+   There are some tricky bits when formalizing these notions:
+   +  For OWF, we want to model probabilistic adversaries; we hope that
+      no adversary will have a non-negligible probability of success.
+      Let's insist that Prob[g(B(h)) = h] < e for all adversaries B.
+   +  But what distribution do we take on the r.v. h?
+      Suppose g:K -> R.  The obvious answer is to let h be
+      uniformly distributed over R; but it turns out that his
+      answer is wrong.  If h(K) is too small, this will undercount
+      the success probability, and we might erroneously conclude that
+      g is secure -- very very bad!
+      A bit of thought shows that the right approach is to let k be
+      a uniformly-distributed r.v. on K, and take h = g(k).
+      i.e. Prob[g(B(g(k))) = g(k)]
+      For simplicity, let's say that adversaries have signature
+      R -> K \cup {\bot} where \bot means ``I couldn't find a
+      suitable inverse'', and restrict attention to ``correct''
+      adversaries, i.e. B such that B(h) \ne \bot implies g(B(h)) = h.
+      Then we want
+      Prob[B(g(k)) \ne \bot].
+      
+      Note-- we've just assumed that passwords are well-chosen, i.e.
+      uniformly from the space of all possible passwords.  In practice,
+      often passwords are poorly chosen (i.e. ``bob'', ``fido'', ``fuck'');
+      but clearly when passwords are poorly chosen, the system is already
+      insecure, so let's run with this.
+   +  So we say that g is a (t,e)-secure OWF if Prob[B(g(k)) \ne \bot] < e
+      for all correct adversaries B taking time at most t.
+   +  We model DES as a pseudo-random permutation.
+      We say that E is a (t,q,e)-secure PRP if no adversary A (taking time at
+      most t and using at most q queries) can distinguish E from a random
+      permutation with advantage at least e.
+      This is the ``random-or-not'' game: A gets given a black box, which
+      is either a random permutation, or else DES with a random key, and gets
+      to play with it for a while; then A has to guess which type of black
+      box he was given.  Clearly A can guess correctly with probability 1/2
+      (flip a coin); so we measure his power by the Advantage
+      Adv A = | Prob[A^E = 1] - Prob[A^{E'} = 1] |.
+   +  Similarly for a PRF.
+   
+
+o  Main theorem:  Suppose DES is a (t',25,e')-secure PRP.
+   Then the Unix password hash is a (t,e)-secure OWF, where
+   t = t' - a little and e = (1 + 1/255) e' + a little.
+
+   Corollary:  Imagine there are no shortcut attacks on DES
+   which can work with at most 25 chosen plaintexts.  (This is
+   very reasonable.)  Then DES is a (t',25,t'/2^55)-secure PRP,
+   and therefore the Unix password hash is a
+   (t' - a little, (1 + 1/255) t' / 2^55 + a little)-secure OWF.
+
+   Note that there is an obvious attack on the Unix password
+   hash which shows that it cannot be better than
+   (t,t/2^56)-secure: just guess passwords.
+
+   So our lower bound is within a factor of 2 (1 + 1/255) of optimal !!!
+
+   (Actually it's within a factor of 50, because the cost of evaluating
+   a single hash is the cost of 25 DES operations.)
+
+o  Proof of theorem:
+      E a PRP  ->  E a PRF  ->  E^25 a PRF  ->  g a OWF
+                                / F a PRF   -> k \mapsto F_k(0) a OWF
+      if F_k(a) = E^25_k(a)
+   Corollary: given a PRF F, can easily construct a OWF which preserves
+   all of the underlying security of F (up to a very very tight bound).
+
+o  Proof of PRP -> PRF: a standard result
+
+o  Proof of PRF -> PRF: light-bulb flash!  can just invoke a
+   prior result on the security of DES-CBC-MAC.  wow.
+
+o  Proof of PRF -> OWF part:
+
+g(k) = F_k(0)
+Suppose there is an adversary B which (t,e)-breaks g.
+We construct an adversary A against F as
+
+A^f  = {  1 if B(f(0)) \ne \bot,    0 otherwise
+
+We want to prove that A (t',1,e')-breaks F.
+We just need to show that Adv A \ge e' = (1 - 1/256) e.
+                     _
+                       \
+      W  <-----B--------   Y
++-+----+            +--+----+
+| |    |            |  |    |
+| |____|            |  |____|
+|      |            |       |
++------+            +-------+
+ K  ------g------->  R
+   
+g : K \to R
+Y = {h : B(h) \ne \bot}  ``set of outputs of F where B succeeds''
+W = {k in K : g(k) in Y} ``set of inputs to g which are not secure against B''
+
+Big observation: B can be viewed as an injective function Y->W
+Corollary: |Y| \le |W|
+Proof:
+B is a function R -> K \union \bot
+Look at the restriction of B to Y
+Of course B(Y) \subset K (since it can't be \bot)
+More interestingly, if h in Y, g(B(h)) in Y (by correctness of B), so B:Y->W
+Finally, B is one-to-one.
+
+Calculating probabilities makes things work out:
+Prob[A^F_k = 1] = e
+Prob[A^random = 1] = |Y| / |R| <= |W| / |R|
+and e = |W| / |K|
+so Prob[A^random = 1] = e |K| / |R|
+So
+Adv A = | e -  e |K| / |R| |  = e (1 - |K|/|R|)
+
+
+o  What we're missing: a proof of security in the case that the
+   password k is non-uniformly distributed.  Clearly this will require
+   an assumption on the security of DES when its key is non-uniformly
+   distributed.  Along the way, we might need to develop a whole theory
+   of security of cryptographic primitives when their keys are non-uniformly
+   distributed; so far as I know, this has never been attemptd before.
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d17 1
+a17 1
+   DES 25 times, password x, plaintext 0, output is hash.
+d41 1
+a41 1
+   In Unix, the hash g(x) of the user's password x is stored
+d60 3
+a62 3
+      Suppose g:D -> Z_2^v.  The obvious answer is to let h be
+      uniformly distributed over Z_2^v; but it turns out that his
+      answer is wrong.  If h(D) is too small, this will undercount
+d65 3
+a67 3
+      A bit of thought shows that the right approach is to let x be
+      a uniformly-distributed r.v. on D, and take h = g(x).
+      i.e. Prob[g(B(g(x))) = g(x)]
+d69 1
+a69 1
+      Z_2^v -> D \cup {\bot} where \bot means ``I couldn't find a
+d73 1
+a73 1
+      Prob[B(g(x)) \ne \bot].
+d80 1
+a80 1
+   +  So we say that g is a (t,e)-secure OWF if Prob[B(g(x)) \ne \bot] < e
+d95 79
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 94
+@

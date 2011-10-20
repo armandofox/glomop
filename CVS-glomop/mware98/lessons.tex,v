@@ -1,0 +1,1246 @@
+head	1.18;
+access;
+symbols;
+locks; strict;
+comment	@% @;
+
+
+1.18
+date	98.06.04.20.46.57;	author gribble;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	98.06.04.00.32.43;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	98.06.03.20.51.03;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	98.06.03.19.22.34;	author gribble;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	98.06.03.00.57.28;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	98.05.26.19.37.08;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	98.03.21.00.38.17;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.03.20.21.52.59;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.03.19.19.21.23;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.03.19.06.47.43;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.03.19.03.09.58;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.03.18.23.08.53;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.03.18.22.33.27;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.03.17.09.35.57;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.03.17.02.47.29;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.03.15.00.59.13;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.03.11.22.28.08;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.03.11.00.36.20;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.18
+log
+@Armando's mods.
+@
+text
+@\section{LESSONS AND EXPERIENCE}
+\label{lessons}
+
+% Lessons/Experience with Wingman [SG] - 2.5 pgs
+
+Top Gun Wingman has been deployed and in use by the general Internet
+population since October of 1997.  Since then, we have processed tens of
+millions of requests from over 11,000 users.\footnote{At its peak, the
+service was processing several requests per second, and was seeing requests
+from more than a thousand unique IP addresses per day.  We estimate that
+there have been more than 11,000 downloads of the Wingman client software
+to date.}  In this section we share the insights into design,
+implementation, and operational issues that we have gained from running
+such a well-used middleware service.
+
+\subsection{Moving Complexity to the Proxy}
+
+%          Put stuff at the proxy whenever you can:
+%               Prog env major limitations
+
+A graphical Web browser is a complex application.  The Web consists of many
+intricate and verbose data formats, hastily designed protocols, and
+pervasive malformed HTML and image formats that the browser must robustly
+handle.  Even page layout is difficult, given the complex elements such as
+nested tables, frames, and forms that exist in modern HTML.  Implementing a
+browser is daunting even on a desktop platform with strong operating system
+support and abundant computation and storage; porting one to a device such
+as the PalmPilot is difficult to imagine.  With only 1-2MB of SRAM, such a
+device can't even hold all the code.  The small heap size (32KB), limited
+code segment size
+%%% is 16KB the right number?
+(32KB relative jump maximum), and lack of native OS support for shared
+libraries further complicate development.
+
+However, all that the PalmPilot really needs to do is render primitive data
+types such as images, formatted text, and links.  By offloading all of the
+complex Web browsing functionality (such as HTML parsing, GIF
+decompression, JPEG rendering, HTTP processing, etc.) to our middleware
+proxy, we have successfully avoided dealing with all of the PDA resource
+limitations.  Our resulting implementation efforts were concentrated on the
+Unix TACC server implementation, which was rapid and robust
+because of the rich and mature Unix development environment.
+
+The partitioning of complexity away from the client has had a number of
+powerful benefits:
+
+\begin{itemize}
+
+%               Why ADU/ALF; app structure designed to make porting
+%                       easy, with minimal assumptions about new clients
+
+\item {\bf Client independent back end:}  The implementation of the
+Wingman back end is
+structured as a pipeline of transformations, only the last of which makes
+any assumptions about client-specific data formats.  This means that
+porting Wingman to a new PDA platform requires two development efforts:
+writing the rendering shell on the PDA itself, and creating a new final
+back end pipeline stage corresponding to that shell.  We have made the job
+of application porting simpler through a well designed application
+partitioning.
+
+%               Image muncher upgrade & other upgrades
+%               Ability to extend/support new datatypes; examples
+
+\item {\bf Transparent functionality upgrades:}  Because most of the
+complex components of the Wingman implementation reside in the proxy back
+end rather than the client, it became possible for us to extend the
+browser's functionality without changing any of the code running at the
+client.  The first example of this was when we improved the graphics
+transformer \cite{haeberli_personal} that converts GIF and JPEG images into
+PalmPilot images (and which also performs lossy compression through
+resolution and color depth reduction).  The improved converter performs
+edge enhancement, giving users the impression of greater contrast and
+better image clarity.  By simply dropping the new transformer into our
+proxy, every Wingman user instantly began seeing improved quality images.
+The zip archive processor and AportisDoc processor are further examples of
+this mechanism: we have been able to extend the browser to understand new
+data types without modifying the client implementation.  We can extend this
+strategy in the future to support new technologies such as XML, again
+without browser changes.
+
+%               Version number hack for backward compat
+
+\item {\bf Backward compatibility:}  During our initial deployment, we
+rapidly released new versions of the client-side implementation containing
+bug fixes, UI enhancements, and new features such as a client-side cache
+and imagemap support.  The proxy uses the client version number (embedded
+in the initial handshake from the client) to determine what objects the
+client can handle.  For example, this mechanism ensures that image maps are
+only sent to clients whose version number indicates they are capable of
+handling this feature.  The mechanism is similar in spirit to HTTP feature
+negotiation, but the version-to-feature binding is done late (at the proxy)
+and can be easily changed.  By putting this capability in our middleware,
+we shielded end servers from having to deal with this additional client
+heterogeneity.
+%As an additional service, we also modified the proxy's HTML
+%parser to insert a message at the top of each page that points users to
+%updated software if the user's browser appears to be significantly out of
+%date.
+
+\end{itemize}
+
+
+%\subsection{Aggregation}
+%%          the power of aggregators
+%%               as a backup for no forms support
+
+%Although Wingman's aggregator mechanism partially compensates for the lack
+%of HTML forms support, the general mechanism is far more powerful than just
+%a forms substitute.  Aggregators have become our general mechanism for
+%retrieving information from multiple content sources and filtering that
+%information to best suit the needs of the PalmPilot user.  For example, our
+%aggregator interface to popular search engines allows users to enter search
+%terms without ever downloading the search engines' Web interfaces (which
+%are typically advertisement-laden, cumbersome, and inappropriate for small
+%displays), and the search results are automatically formatted just as
+%regular Web pages are.
+
+%%               Aggregator mechanism: ``shoot down and restart'' to add new
+
+%% Another powerful feature of our aggregator implementation is the client's
+%% aggreagtor discovery mechanism, as described in section \ref{impl}, in
+%% which clients keep a lazily refreshed cache of known aggregators.  Simply
+%% by adding a new aggregator implementation to the proxy and restarting the
+%% aggregator registry, all active clients soon are made aware of the new
+%% aggregator.
+
+%%               appearing soon in Spyglass Prism [those dicks]
+
+%Aggregators have already had a visible commercial impact.  For example, in
+%the Spyglass Prism \cite{spyglass} transformational proxy, there is a
+%mechanism for selectively filtering content from specific Web pages, and
+%retargeting that content for improverished devices such as smartphones with
+%alphanumeric displays or PDA's.\footnote{There is no formal connection
+%between Spyglass Prism and Top Gun Wingman.}
+
+\subsection{Middleware Availablility}
+%          back end performance; what is needed to run the backend of a
+%               upness (describe overloaded process table phenomenon)
+%               split app; synergy with clusters?  (distinguish from
+%               naive method of replicated monolithic backends or
+%               replicated backend context-per-user; how TACC enables;
+
+
+%The scalability- and availability-centric design of the cluster-based TACC
+%server was deliberately chosen to simplify the task of building AMWP-style
+%infrastructural services.  By offering a programming model that structures
+%services as independent task pipelines to be run in parallel, TACC is able
+%to scale services to meet growing user population demands by exploiting
+%parallelism; the parallel tasks and task pipeline stages are automatically
+%launched on demand, scheduled, and load balanced as parallel contexts
+%across nodes in a cluster of workstations.  Availability is achieved in
+%TACC through redundancy and automatic fault detection and process failover
+%across the cluster nodes.
+
+As any designer of highly available services will attest, the
+devil is often in the implementation details.  In our AMWP architecture,
+it is the responsibility of the TACC server to provide availability and
+robustness mechanisms that are independent of any worker; the mechanisms
+employed in our cluster-based TACC server give rise to the requirement
+that each TACC worker be restartable and atomic (alluded to in section
+\ref{taccmodel}). We have found that despite this programming restriction,
+the orthogonal separation of availability/robustness from worker code has
+made the overall system simpler to engineer and more robust, and allows new
+workers to be prototyped more quickly since they inherit these behaviors
+for free.
+
+The 11,000 real users stressing our proxy implementation revealed a number
+of interesting corner cases in the TACC server design and Wingman
+implementation that caused service delays and even interruptions.  For
+example, our initial design of the Wingman transformation pipeline included
+a ``dispatch'' worker that would route data to subordinates based on the
+type of the data it receives (HTML, Zip files, etc.), and then block until
+the subordinate(s) finished.  The long blocking latency made it appear to
+the TACC server that the dispatcher worker was overloaded, causing more of
+them to be spawned until there was almost one dispatcher per outstanding
+outstanding user request.  This resulted in hundreds of processes being
+spawned across our cluster, filling the cluster nodes' process tables and
+causing the service to become unavailable.
+
+Except for failures due to such rare but interesting cases, all Wingman
+outages have been due to factors beyond our control, such as disrupted
+service from our campus ISP and power failures that weren't caught by
+the departmental UPS.
+
+%We have successfully scaled our
+%middleware proxy to serve the demands of a rapidly growing user population:
+%Wingman has grown from four Sparcstation-10's to several UltraSPARC
+%servers.\footnote{The graphical administration facility of our
+%cluster-based TACC server allows us to monitor how many machines are in use
+%and what TACC elements they are hosting.  We have observed that during the
+%heaviest load periods, 7--9 UltraSPARC servers are harnessed on demand as
+%``overflow nodes''.}  Because the Wingman pipeline is not balanced (due to
+%the varying latencies of the different workers), scaling Wingman by
+%replicating a single monolithic server would be more difficult.
+%
+%               distinguish from Spyglass-like approaches; mention
+%               Spyglass numbers)
+%%% ARMANDO:  where can I find the Spyglass numbers?  I saw the figure of
+%%% 200,000 users supported by a prism installation, but I also saw a
+%%% vague reference to prism ``growing with the user population''.  How
+%%% do we know that they are not clustered?  I see no evidence either way.
+%
+%\subsection{``Build It and They Will Come''}
+%%          ``Build it and they will come'': strong grass-roots support
+%%               from Pilot user community; keeping it running is really
+%%               important  (TACC server technology helps w/this)
+%
+%Top Gun Wingman is a rare example of high impact, complex middleware
+%services in active use on the Internet.  We were initially uncertain what
+%users' reactions would be to relying on middleware rather than having
+%sufficiently intelligent clients.  Almost uniformly, the reaction has been
+%positive.  The only complaints we have received were related to the few
+%occurrences of service interruption mentioned above, and to the fact that
+%no other proxy installations are yet available in strategic locations
+%around the Internet.\footnote{The optimal deployment of middleware services
+%in a large network such as the Internet is a complex and difficult problem.
+%However, some obvious steps can be taken, such as ensuring that users are
+%not forced to cross high-latency or highly congested network links.  For
+%example, deploying a Wingman proxy in Europe will greatly improve the
+%performance for all of our European users.}
+%
+%Even more surprising, and perhaps in part because the users are aware that
+%they are directly sharing resources, a strong sense of community has sprung
+%up around our Wingman implementation.  As long as the service is highly
+%available, users appear quite willing to accept middleware as a central
+%part of their computing experience.  In fact, many users are unaware that
+%they are even relying on our middleware until the middleware becomes
+%unavailable.  Overall, the added benefits that middleware provide more than
+%make up for the risks that are imposed by adding an extra component to
+%their critical path.  This observation, combined with the performance
+%comparison between Netscape and Wingman, suggests that ``full-featured but
+%thin'' clients such as Windows CE palmtops would benefit from running a
+%Wingman-like browser (perhaps implemented as a plug-in for Pocket Internet
+%Explorer) rather than a reduced port of a desktop browser.
+%
+% On the other hand, the principle of client competence makes
+% Wingman's architecture subtly different from pure client/server systems
+% such as the X Window System
+% \ref{xwindows}.  Rather than accepting only low-level drawing primitives
+% as an X server does, 
+% the Wingman client exploits the PalmPilot's native GUI toolkit and
+% styled-text support, as well as the device's limited processor and
+% memory (a local cache is provided, allowing limited disconnected operation).
+% In contrast to X applications, therefore,
+% Wingman is a true split application.
+%
+% could talk about protocol philosophy differences between X and Wingman,
+% but I think that's in the noise.
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@d66 2
+a67 2
+complex components of the Wingman implementation reside in the proxy
+back end rather than the client, it became possible for us to extend the
+d76 5
+a80 5
+The zip archive munger and AportisDoc munger are further examples of this
+mechanism: we have been able to extend the browser to understand new data
+types without modifying the client implementation.  We can extend this
+strategy in the future to support new formats such as XML, again without
+browser changes.
+d85 7
+a91 7
+rapidly released new version of the client-side implementation with
+bug fixes, UI enhancements, and new features such as a client-side cache and
+imagemap support.  The proxy uses the client version number (embedded in
+the initial handshake from the client) to determine what objects the client
+can handle.  For example, this mechanism ensures that image maps are only
+sent to clients whose version number indicates they are capable of handling
+this feature.  The mechanism is similar in spirit to HTTP feature
+d95 1
+a95 1
+heterogeneity.  
+d156 1
+a156 1
+As any designed of highly available services will attest, the
+d162 18
+a179 21
+\ref{taccmodel}). 
+We have found that despite this programming restriction, 
+the orthogonal separation of 
+availability/robustness from  worker code has
+made the overall system simpler to engineer and more robust, and allows
+new workers to be prototyped more quickly since they inherit these
+behaviors for free.  
+
+The 11,000 real users
+stressing our proxy implementation revealed a number of interesting corner
+cases in the TACC server design and Wingman implementation that caused
+service delays and even interruptions.  For example, our initial design of
+the Wingman transformation pipeline included a ``dispatch'' worker that
+would route data to subordinates based on the type of the data it receives
+(HTML, Zip files, etc.), and then block until the subordinate(s) finished.
+The long blocking latency made it appear to the TACC server that the
+dispatcher worker was overloaded, causing more of them to be spawned until
+there was almost one dispatcher per outstanding outstanding user request.
+This resulted in hundreds of processes being spawned across our cluster,
+filling the cluster nodes' process tables and causing the service to become
+unavailable.
+@
+
+
+1.16
+log
+@OK, we're there.
+@
+text
+@d156 15
+a170 2
+As any highly available service designer will readily attest, though, the
+devil is in the implementation details.  Having more than 11,000 real users
+d184 4
+a187 4
+Except for failures due to such rare but interesting cases, all outages
+that Wingman has suffered were due to factors beyond our control, such as
+disrupted service from our campus ISP and power failures that weren't
+caught by the departmental UPS.
+@
+
+
+1.15
+log
+@Hacking away
+@
+text
+@d95 5
+a99 4
+heterogeneity.  As an additional service, we also modified the proxy's HTML
+parser to insert a message at the top of each page that points users to
+updated software if the user's browser appears to be significantly out of
+date.
+d137 1
+a137 1
+\subsection{Middleware Performance and Resource Requirements}
+d171 16
+a186 14
+Except for failures due to these rare but interesting corner cases, all
+outages that Wingman has suffered were due to factors beyond our control,
+such as disrupted service from our campus ISP and power failures that
+weren't caught by the departmental UPS.  We have successfully scaled our
+middleware proxy to serve the demands of a rapidly growing user population:
+Wingman has grown from four Sparcstation-10's to several UltraSPARC
+servers.\footnote{The graphical administration facility of our
+cluster-based TACC server allows us to monitor how many machines are in use
+and what TACC elements they are hosting.  We have observed that during the
+heaviest load periods, 7--9 UltraSPARC servers are harnessed on demand as
+``overflow nodes''.}  Because the Wingman pipeline is not balanced (due to
+the varying latencies of the different workers), scaling Wingman by
+replicating a single monolithic server would be more difficult.
+
+d193 1
+a193 1
+
+d198 1
+a198 1
+
+d212 1
+a212 1
+
+d226 1
+a226 1
+
+d237 1
+a237 1
+
+@
+
+
+1.14
+log
+@Much changes
+@
+text
+@d103 32
+a134 32
+\subsection{Aggregation}
+%          the power of aggregators
+%               as a backup for no forms support
+
+Although Wingman's aggregator mechanism partially compensates for the lack
+of HTML forms support, the general mechanism is far more powerful than just
+a forms substitute.  Aggregators have become our general mechanism for
+retrieving information from multiple content sources and filtering that
+information to best suit the needs of the PalmPilot user.  For example, our
+aggregator interface to popular search engines allows users to enter search
+terms without ever downloading the search engines' Web interfaces (which
+are typically advertisement-laden, cumbersome, and inappropriate for small
+displays), and the search results are automatically formatted just as
+regular Web pages are.
+
+%               Aggregator mechanism: ``shoot down and restart'' to add new
+
+% Another powerful feature of our aggregator implementation is the client's
+% aggreagtor discovery mechanism, as described in section \ref{impl}, in
+% which clients keep a lazily refreshed cache of known aggregators.  Simply
+% by adding a new aggregator implementation to the proxy and restarting the
+% aggregator registry, all active clients soon are made aware of the new
+% aggregator.
+
+%               appearing soon in Spyglass Prism [those dicks]
+
+Aggregators have already had a visible commercial impact.  For example, in
+the Spyglass Prism \cite{spyglass} transformational proxy, there is a
+mechanism for selectively filtering content from specific Web pages, and
+retargeting that content for improverished devices such as smartphones with
+alphanumeric displays or PDA's.\footnote{There is no formal connection
+between Spyglass Prism and Top Gun Wingman.}
+d144 10
+a153 10
+The scalability- and availability-centric design of the cluster-based TACC
+server was deliberately chosen to simplify the task of building AMWP-style
+infrastructural services.  By offering a programming model that structures
+services as independent task pipelines to be run in parallel, TACC is able
+to scale services to meet growing user population demands by exploiting
+parallelism; the parallel tasks and task pipeline stages are automatically
+launched on demand, scheduled, and load balanced as parallel contexts
+across nodes in a cluster of workstations.  Availability is achieved in
+TACC through redundancy and automatic fault detection and process failover
+across the cluster nodes.
+d191 32
+a222 32
+\subsection{``Build It and They Will Come''}
+%          ``Build it and they will come'': strong grass-roots support
+%               from Pilot user community; keeping it running is really
+%               important  (TACC server technology helps w/this)
+
+Top Gun Wingman is a rare example of high impact, complex middleware
+services in active use on the Internet.  We were initially uncertain what
+users' reactions would be to relying on middleware rather than having
+sufficiently intelligent clients.  Almost uniformly, the reaction has been
+positive.  The only complaints we have received were related to the few
+occurrences of service interruption mentioned above, and to the fact that
+no other proxy installations are yet available in strategic locations
+around the Internet.\footnote{The optimal deployment of middleware services
+in a large network such as the Internet is a complex and difficult problem.
+However, some obvious steps can be taken, such as ensuring that users are
+not forced to cross high-latency or highly congested network links.  For
+example, deploying a Wingman proxy in Europe will greatly improve the
+performance for all of our European users.}
+
+Even more surprising, and perhaps in part because the users are aware that
+they are directly sharing resources, a strong sense of community has sprung
+up around our Wingman implementation.  As long as the service is highly
+available, users appear quite willing to accept middleware as a central
+part of their computing experience.  In fact, many users are unaware that
+they are even relying on our middleware until the middleware becomes
+unavailable.  Overall, the added benefits that middleware provide more than
+make up for the risks that are imposed by adding an extra component to
+their critical path.  This observation, combined with the performance
+comparison between Netscape and Wingman, suggests that ``full-featured but
+thin'' clients such as Windows CE palmtops would benefit from running a
+Wingman-like browser (perhaps implemented as a plug-in for Pocket Internet
+Explorer) rather than a reduced port of a desktop browser.
+@
+
+
+1.13
+log
+@Many changes, related to the style the conference demands.  Much work on the bibliography will be necessary.
+@
+text
+@d7 6
+a12 3
+population since October of 1997.  Since then, we have processed  tens
+of millions of requests from over
+11,000 users.  In this section we share the insights into design,
+d45 1
+a45 1
+other surprisingly powerful benefits:
+a81 1
+
+d107 10
+a116 11
+Although Wingman's aggregator mechanism partially compensates for the
+lack of HTML forms support,
+the general mechanism is far more powerful than just a forms
+substitute.  Aggregators have become our general mechanism for retrieving
+information from multiple content sources and filtering that information to
+best suit the needs of the PalmPilot user.  For example, our
+aggregator interface to popular search engines allows users
+to enter search terms without ever downloading the search
+engines' Web interfaces (which are typically advertisement-laden, cumbersome,
+and inappropriate for small displays), and the search results are automatically
+formatted just as regular Web pages are.
+d130 5
+a134 5
+the Spyglass Prism \cite{spyglass} transformational proxy, there
+is a mechanism for selectively filtering content from specific Web pages,
+and retargeting that content for improverished devices such as smartphones
+with alphanumeric displays or PDA's.\footnote{There is no formal connection between
+Spyglass Prism and Top Gun Wingman.}
+d144 25
+a168 29
+The scalability- and availability-centric design of the cluster-based
+TACC server was deliberately
+chosen to simplify the task of building AMWP-style infrastructural services.
+By offering a programming model that structures services as
+independent task pipelines to be run in parallel, TACC is able to scale
+services to meet growing user population demands by exploiting parallelism;
+the parallel tasks and task pipeline stages are automatically launched on
+demand, scheduled, and load balanced as parallel contexts across nodes in a
+cluster of workstations.  Availability is achieved in TACC through
+redundancy and automatic fault detection and process failover across the
+cluster nodes.
+
+As any highly available service designer will readily attest, though, the devil is
+in the implementation details.  Having more than 11,000 real users
+stressing our proxy implementation revealed a number of interesting
+corner cases in the TACC server design and Wingman implementation that caused
+service delays and even interruptions.  
+For example, our initial design of the Wingman transformation pipeline
+included a ``dispatch''  worker that would route data to
+subordinates based on the type of the data it receives (HTML, Zip files,
+etc.), and then block until the subordinate(s) finished.  The long
+blocking latency made it appear to the TACC
+server
+that the dispatcher worker was overloaded, causing
+more of them to be spawned until there was almost one dispatcher per outstanding
+outstanding user request.  This resulted in 
+hundreds of processes being spawned across our cluster, filling the
+cluster nodes'
+process tables and causing the service to become unavailable.
+d173 10
+a182 12
+weren't caught by the departmental UPS.  We have successfully 
+scaled our middleware proxy to serve the demands of a rapidly growing user
+population:  Wingman has grown from four Sparcstation-10's
+to several  UltraSPARC servers.\footnote{The graphical administration
+facility of our cluster-based TACC server allows us to monitor how many
+machines are in use and what TACC elements they are hosting.  We have
+observed that during the heaviest load periods, 7--9 UltraSPARC servers
+are harnessed on demand as
+``overflow nodes''.}  Because the Wingman pipeline is not balanced (due
+to the varying latencies of the different
+workers), scaling Wingman by replicating a single monolithic
+server would be more difficult.
+d196 13
+a208 13
+Top Gun Wingman is a rare example of high impact, complex
+middleware services  in active use on the Internet.  We were
+initially uncertain what users' reactions would be to relying on middleware
+rather than having sufficiently intelligent clients.  Almost uniformly, the
+reaction has been excellent.  The only complaints we have received were
+related to the few occurrences of service interruption mentioned above, and to
+the fact that no other proxy installations are yet available in strategic
+locations around the Internet.\footnote{The optimal deployment of
+middleware services in a large network such as the Internet is a complex
+and difficult problem.  However, some obvious steps can be taken, such as
+ensuring that users are not forced to cross high-latency or highly
+congested network links.  For example, deploying a Wingman proxy in
+Europe will greatly improve the performance for all of our European users.}
+d213 3
+a215 3
+available, users appear quite willing to accept middleware as a central part
+of their computing experience.  In fact, most users are unaware that they
+are even relying on our middleware until the middleware becomes
+d218 5
+a222 7
+their critical path.
+This observation, combined with the performance comparison between
+Netscape and Wingman, suggests that 
+``full-featured but thin'' clients such as Windows CE
+palmtops would benefit from running a Wingman-like browser (perhaps
+implemented as a plug-in for Pocket Internet Explorer) rather than a
+reduced port of a desktop browser.
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+\section{Lessons and Experience}
+@
+
+
+1.11
+log
+@All there.  Complete draft.  woohoo.
+@
+text
+@d18 1
+a18 1
+A graphical web browser is a complex application.  The Web consists of many
+d34 1
+a34 1
+complex web browsing functionality (such as HTML parsing, GIF
+d38 2
+a39 3
+UNIX middleware service backend implementation, which was rapid and robust
+because of the rich and mature development environment that we had
+available to us.
+d49 2
+a50 1
+\item {\bf Backend design:}  The implementation of the Wingman backend is
+d55 1
+a55 1
+backend pipeline stage corresponding to that shell.  We have made the job
+d64 1
+a64 1
+backend rather than the client, it became possible for us to extend the
+d84 1
+a84 1
+bugfixes, UI enhancements, and new features such as a client-side cache and
+d130 1
+a130 1
+is a mechanism for selectively filtering content from specific web pages,
+d132 2
+a133 1
+with alphanumeric displays or PDA's.
+d143 1
+a143 1
+The scalability and availability centric design of the cluster-based
+d212 1
+a212 1
+contended for network links.  For example, deploying a Wingman proxy in
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d20 8
+a27 11
+pervasive malformed HTML and image formats that the
+browser must robustly handle.  Even  page layout
+is difficult, given the complex elements such as nested tables, frames,
+and forms that 
+exist in modern HTML.  Implementing a browser is daunting even on
+a desktop platform with strong operating system support and abundant
+computation and storage; porting one to a device such as
+the PalmPilot is difficult to imagine.
+With only 2~MB of NVRAM, such a device can't even hold all the code.
+The  small heap size (32KB), limited
+code segment size 
+d29 1
+a29 1
+(64KB relative jump maximum), and lack of native OS support for shared
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d18 13
+a30 11
+A graphical web browser is a complex application.  The web consists of many
+intricate and verbose data formats and poorly designed protocols that the
+browser must robustly handle.  Even the job of performing web page layout
+is difficult, given the complex elements suchs as tables and forms that
+exist in modern HTML.  Implementing a browser is a daunting enough task on
+a desktop system that has strong operating system support and is rich in
+computation and storage.  To directly port such a browser to a device like
+the Palm Pilot is unimaginable.  For example, the Palm Pilot ships with 2
+MB of NVRAM: there simply isn't enough stable storage available to hold all
+of the code that would be necessary.  Developers must also contend with a
+very small stack (16KB shared across all applications), limited code size
+d32 2
+a33 2
+(64KB relative jump maximum), and a lack of native OS support for shared
+libraries.
+d35 1
+a35 1
+However, all that the Palm Pilot really needs to do is render primitive data
+d53 1
+a53 1
+\item {\bf Backend design:}  The implementation of the wingman backend is
+d71 1
+a71 1
+Palm Pilot images (and which also performs lossy compression through
+d108 3
+a110 25
+Originally, we implemented aggregators as an implementationally cheap
+substitute for HTML forms support in the client.  The user interacts with
+aggregators using a simple fixed interface (two type-in boxes and several
+buttons, as shown in figure \ref{agg_interface}).  The proxy uses the
+content of the first box to determine which aggregator the user is using,
+and the content of the second box as parameters to the aggregator.
+
+\begin{figure}[tbh]
+\epsfxsize 0.65\hsize
+\begin{center}
+\makebox{
+\epsfbox[224 314 386 477]{./figures/aggregator_interface.epsi}
+}
+\end{center}
+\caption{{\bf The Wingman aggregator user interface:}  the example
+aggregator shown is for the HotBot search engine.  The search terms in the
+``Aggregator commands:'' text field will be passed to the HotBot aggregator
+when the OK button is pressed, and the aggregator's results will be
+transformed and sent back to the Wingman client.}
+\label{agg_interface}
+\end{figure}
+
+%               as customized aggregational services
+
+Of course, this mechanism is far more powerful than just a forms
+d113 6
+a118 6
+best suit the needs of the Palm Pilot.  For example, we have implemented
+simple interfaces to popular search engines as aggregators.  Users are able
+to type in their search terms without ever needing to download the search
+engines' interfaces (which are typically advertisement-laden, cumbersome,
+and inappropriate for small displays), and the results are automatically
+transformed just as regular Web pages are.
+d180 7
+a186 3
+population:  Wingman has grown from four Sparcstation 10's
+to 9 additional UltraSparcs recruited on demand as
+``overflow nodes''.  Because the Wingman pipeline is not balanced (due
+d188 2
+a189 3
+workers), scaling the system by replicating a single monolithic
+server would have been more difficult.
+
+d233 10
+a242 10
+On the other hand, the principle of client competence makes
+Wingman's architecture subtly different from pure client/server systems
+such as the X Window System
+\ref{xwindows}.  Rather than accepting only low-level drawing primitives
+as an X server does, 
+the Wingman client exploits the PalmPilot's native GUI toolkit and
+styled-text support, as well as the device's limited processor and
+memory (a local cache is provided, allowing limited disconnected operation).
+In contrast to X applications, therefore,
+Wingman is a true split application.
+@
+
+
+1.8
+log
+@blorg hack
+@
+text
+@d13 1
+a13 1
+\subsection{Walk Softly and Carry a Big Proxy: Taming Complexity}
+d33 1
+a33 1
+However, all that the Palm Pilot truly must to do is render primitive data
+d142 6
+a147 6
+Another powerful feature of our aggregator implementation is the client's
+aggreagtor discovery mechanism, as described in section \ref{impl}, in
+which clients keep a lazily refreshed cache of known aggregators.  Simply
+by adding a new aggregator implementation to the proxy and restarting the
+aggregator registry, all active clients soon are made aware of the new
+aggregator.
+d152 1
+a152 1
+the Spyglass Prism \ref{spyglass_jerkfaces} transformational proxy, there
+d154 1
+a154 1
+and retargetting that content for improverished devices such as smartphones
+d165 4
+a168 3
+The scalability and availability centric design of TACC was deliberately
+chosen to simplify the task of building infrastructural services such as
+AMWP's.  By offering a programming model that structures services as
+d177 1
+a177 1
+As any highly available service designer will readily attest, the devil is
+d179 14
+a192 18
+hammering on our proxy implementation revealed a number of interesting
+corner cases in our TACC design and Wingman implementation that caused
+service delays and even interruptions.  The most notable of these is a
+side effect of how we designed our Wingman transformation pipeline.
+
+The first stage in the Wingman pipeline is a worker that routes data to
+subsequent workers based on the type of the data it receives; HTML goes to
+the HTML worker, ``zip'' archives to the ZIP worker, etc.  Cross-worker
+communications is done in an RPC-like fashion, as blocking subroutine
+calls.  Thus, the initial routing stage spends most of its time blocked
+waiting for subsequent pipeline stages to complete.  However, the load
+balancing entity in the TACC implementation simply sees that the routing
+worker is spending a long time completing a task, and because it mistakenly
+assumes that the routing worker is therefore overloaded, the it
+automatically spawns new routing workers on unloaded cluster nodes.  The
+inevitable consequence of this behaviour is that a single routing process
+eventually exists for each outstanding user request.  This resulted in many
+hundreds of processes being spawned across our cluster, filling the nodes'
+d198 9
+a206 9
+weren't caught by the departmental UPS.  We have successfully been able to
+scale our middleware proxy to serve the demands of a rapidly growing user
+population.  The original Wingman proxy ran on four Sparcstation 10
+workstations; the current proxy harnesses 9 additional UltraSparcs as
+``overflow nodes''.  Such scalability could not have been achieved with a
+more naive approach, such as using replicated monolithic servers.  It is by
+decomposing the service into naturally parallelizable tasks that share
+resources well and implementing the service using the TACC model that we
+have been able to expand the service so easily and quickly.
+d220 2
+a221 2
+Top Gun Wingman is one of the first examples of high impact, complex
+middleware services that are in active use on the Internet.  We were
+d224 3
+a226 3
+reaction has been excellent.  The only complaints we have received are for
+the few occurences of service interruption that we mentioned above, and for
+the fact that more proxy installations are not yet available in strategic
+d237 1
+a237 1
+available, users are quite willing to accept middleware as a central part
+d243 17
+a259 20
+
+% extrapolate from Netscape comparison that if we did a plug-in for NS
+% (or Pocket MSIE on WinCE) we would improve browser performance a lot.
+
+\subsection{Wingman is not an X-terminal}
+
+% then explain why this is NOT the same as running an X terminal!!
+
+The Wingman architecture is close in spirit to the Xwindows client/server
+protocol \ref{xwindows}.  An Xterminal is merely a rendering engine; it
+only understands drawing primitives, and the application that generates
+those primitives completely resides on a remote Xwindows client in the
+infrastructure.  Similarly, the Wingman client understands nothing about
+Web protocols and object formats---all of that complexity resides in the
+Wingman proxy.  However, the client does have more intelligence than merely
+the ability to render: for example, it understands how to cache local
+pages, and therefore can run even while disconnected from the Wingman
+proxy.  The Wingman application is therefore split between the client and
+the proxy, as opposed to Xwindows applications, which run entirely at the
+Xwindows client. 
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d52 6
+a57 7
+structured as a pipeline of transformations, only the last of which
+makes any assumptions about client-specific data formats.
+This means that porting
+Wingman to a new PDA platform requires two development efforts: writing the
+rendering shell on the PDA itself, and creating a new final backend
+pipeline stage corresponding to that shell.  We have made the job of
+application porting simpler through a well designed application
+d68 11
+a78 12
+transformer \cite{haeberli_personal} that converts GIF and JPEG images
+into Palm Pilot images (and which also performs lossy compression
+through resolution and color depth reduction).  The improved converter
+performs edge enhancement, giving users the impression of greater
+contrast and better image clarity.  By simply dropping the new
+transformer into our proxy, every Wingman user instantly began seeing
+improved quality images.  The zip archive munger and AportisDoc munger
+are further examples of this mechanism:
+we have been able to extend the browser to understand  new data types
+without modifying the client implementation.
+We can extend this strategy in the future to support
+new formats such as XML, again without browser changes.
+d85 13
+a97 16
+bugfixes, UI enhancements, and new features such as a client-side cache 
+and imagemap support. 
+The proxy uses the client version number (embedded in the initial
+handshake from the client)
+to determine what objects the client can handle.  For example,
+this mechanism ensures that image maps are only sent to clients whose
+version number indicates they are capable of handling this feature. 
+The mechanism is similar in spirit to HTTP feature negotiation, but the
+version-to-feature binding is done late (at the proxy) and can be easily
+changed.
+By putting this
+capability in our middleware, we shielded end servers from having to deal
+with this additional client heterogeneity.  As an additional service, we
+also modified the proxy's HTML parser to insert a message at the top of
+each page that points users to updated software if the user's
+browser appears to be significantly out of date.
+d106 6
+a111 7
+Originally, we implemented aggregators as a implementationally cheap
+substitute for HTML forms support in the client.  The user interacts
+with aggregators using a simple fixed interface (two type-in boxes and
+several buttons, as shown in figure \ref{agg_interface}).  The proxy
+uses the content of the first box to determine which aggregator the user
+is using, and the content of the second box as parameters to the
+aggregator.
+d117 1
+a117 1
+\epsfbox[228 303 383 460]{./figures/aggregator_interface.epsi}
+d131 8
+a138 8
+substitute.  Aggregators have become our general mechanism for
+retrieving information from multiple content sources and filtering that
+information to best suit the needs of the pilot.  For example, we have
+implemented simple interfaces to popular search engines as aggregators.
+Users are able to type in their search terms without ever needing to
+download the search engines' interfaces (which are typically
+advertisement-laden, cumbersome, and inappropriate for small displays),
+and the results are automatically transformed just as regular Web pages are.
+d145 1
+a145 1
+by adding a new aggregator implementation to the proxy, and restarting the
+d155 1
+a155 1
+with alphanumeric displays or PDAs.
+d164 11
+a174 10
+One of the most important qualities of the TACC approach to building
+infrastructural services such as AMWPs is TACC's scalability and
+availability centric design.  By offering a programming model that
+structures services as independent task pipelines to be run in parallel,
+TACC is able to scale services to meet growing user population demands by
+exploiting parallelism; the parallel tasks and task pipeline stages are
+automatically launched on demand, scheduled, and load balanced as parallel
+contexts across nodes in a cluster of workstations.  Availability is
+achieved in TACC through redundancy and automatic fault detection and
+process failover across the cluster nodes.
+d180 2
+a181 2
+service delays or even interruptions.  The most notable of these is a side
+effect of how we designed our Wingman transformation pipeline.  
+d203 7
+a209 6
+population.  The original Wingman proxy ran on four Sparcstation 5
+workstations; the current proxy harnesses 9 Ultrasparcs.  Such scalability
+could not have been achieved with a more naive approach, such as using
+replicated monolithic servers.  It is by decomposing the service into
+naturally parallelizable tasks and implementing the service using the TACC
+model that we have been able to expand the service so easily and quickly.
+d218 1
+a218 1
+\subsection{``Build It and They Will Come'': a Strong Sense of Community}
+d223 2
+a224 2
+Top Gun Wingman is one of the first examples of a high impact, complex
+middleware service that is in active use on the Internet.  We were
+d240 6
+a245 4
+available, users seem to be quite willing to accept middleware as a central
+part of their computing experience.  The added benefits that middleware
+provide more than make up for the risks that are imposed by adding an extra
+component to their critical path.
+d250 2
+d254 15
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d9 1
+a9 1
+10,000 users.  In this section we share the insights into design,
+d25 1
+a25 1
+the Palm Pilot is unimaginable.  For example, the Palm Pilot ships with 1
+d52 3
+a54 3
+structured as a pipeline of transformations.  All of the pipeline stages
+except for the very last make no assumptions about the final
+representations into which the data is cast.  This means that porting
+d69 12
+a80 17
+transformer that converts GIF and JPEG images into Palm Pilot images (and
+which also performs lossy compression through resolution and colour depth
+reduction).  The improved converter performs edge enhancement, giving users
+the impression of greater contrast and better image clarity.  By simply
+dropping the new transformer into our proxy, every Wingman user instantly
+began seeing improved quality images.  The second example of this was when
+we added a transformer that could understand ``zip'' archives; this
+transformer would generate an HTML list of items in the archive.  Users
+could then select individual items from the archive for download to the
+pilot.  We were thus able to extend the browser to understand a new data
+type without modifying the client implementation---the same technique has
+been applied to other data types as well, such as with a worker that
+converts HTML or plain text into an electronic book format that the Palm
+Pilot supports.
+We can extend this strategy in the future 
+to support new formats such as XML, without
+requiring any changes to the browser.
+d85 1
+a85 1
+\item {\bf Backwards compatibility:}  During our initial deployment, we
+d87 5
+a91 4
+bugfixes, UI enhancements, and new features such as a client-side cache.
+By embedding the client version number in the initial handshake with the
+proxy, we allowed the proxy to alter what gets delivered to the client
+based on the exact capabilities of the client software.  For example,
+d93 1
+a93 1
+version number indicates they are capable of handling the feature. 
+d101 1
+a101 1
+each page that points users to updated software if the users'
+d112 6
+a117 5
+substitute for HTML forms support in the client.  The user perceives all
+aggregators as simple forms with a fixed interface (two type-in boxes and
+several buttons).  The proxy uses the content of the first box to determine
+which aggregator the user is using, and the content of the second box as
+parameters to the aggregator.
+d136 2
+a137 2
+We quickly discovered that this mechanism is far more powerful than just a
+forms substitute.  Aggregators have become our general mechanism for
+d142 3
+a144 2
+download the search engines' interfaces, and the results are automatically
+transformed to suit the client devices' impoverished displays.
+d182 1
+a182 1
+in the implementation details.  Having more than 10,000 real users
+@
+
+
+1.5
+log
+@La la la.
+@
+text
+@d7 5
+a11 5
+population since October of 1997.  Since then, we have processed many tens
+of millions of requests generated by a population size of approximately
+10,000 human users.  Running such a well-used middleware service has given
+us significant insight into design, implementation, and operational
+issues---we share these insights in this section of the paper.
+d79 1
+a79 1
+type without modifying the client implementation - the same technique has
+d83 4
+d95 7
+a101 1
+based on the exact capabilities of the client software.  By putting this
+d105 2
+a106 2
+each page that points users to updated software in the case that the users'
+browser is significantly out of date.
+d251 5
+a255 5
+%  armando wrote the following.... you can take it or leave it
+%
+% \subsection{The Big Picture: Other AMWP Applications}
+%
+%Although we chose to impem
+@
+
+
+1.4
+log
+@Working on it.
+@
+text
+@d43 2
+a44 2
+Partitioning complexity across the client and proxy have had a number of
+other benefits, some of them surprisingly powerful:
+d50 2
+a51 1
+\item {\bf Backend design:}  the implementation of the wingman backend is
+d55 5
+a59 4
+Wingman to a new PDA platform requires two development efforts:  writing
+the rendering shell on the PDA itself, and creating a new final backend
+pipeline stage corresponding to that shell.  Application partitioning has
+thus made the job of application porting simpler.
+d63 20
+a82 1
+\item {\bf Transparent functionality upgrades:}  
+d85 12
+a96 1
+\item
+d104 23
+d128 10
+d139 8
+d149 6
+d161 46
+d209 4
+d219 21
+d242 4
+a245 4
+
+\subsection{The Big Picture: Other AMWP Applications}
+
+Although we chose to impem
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d5 10
+d17 31
+d50 9
+d61 2
+a62 1
+%               Aggregator mechanism: ``shoot down and restart'' to add new
+d64 6
+d73 1
+d75 2
+d84 2
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d27 7
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 26
+@

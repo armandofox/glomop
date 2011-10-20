@@ -1,0 +1,544 @@
+head	1.10;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.10
+date	99.08.05.23.53.47;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.08.03.00.45.12;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.11.16.11.14.36;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.11.16.05.23.13;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.11.16.01.30.04;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.11.16.00.48.51;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.11.14.12.38.26;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.14.12.04.41;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.14.10.34.45;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@\chapter{Introduction}
+
+% "Ooh, spooky."  (scare stories)
+Over the past several years the Internet environment has
+changed drastically.
+This network, which was once populated almost exclusively
+by cooperating researchers who shared trusted software and data,
+is now inhabited by a much larger and
+more diverse group that includes pranksters, crackers,
+and business competitors.
+This increases the risk of serious attacks on critical systems.
+At the same time, the stakes are higher than ever before: corporate entities
+want to engage in electronic commerce over the net, and
+the value of the data carried over these networks is increasing
+constantly.
+
+We can identify one common theme underlying many of the vulnerabilities
+found in today's network.
+The software and data exchanged on the Internet
+is very often unauthenticated, so it could easily
+have been constructed by an adversary.
+At the same time, much of the software we run is not very
+good at handling adversarial inputs, and our operating
+systems are not very good at confining any intrusions
+that may result.
+
+We propose to address this problem by providing a first cut
+at a tool that can reduce the harmful effects of security compromises.
+Our approach is to confine the untrusted software in a limited
+sandbox by monitoring and restricting the system calls it performs.
+As an example of this approach,
+we built Janus\footnote{
+        Janus is the Roman god of entrances and exits,
+        who had two heads and eternally kept watch over
+        doorways and gateways to keep out intruders.
+},
+a secure environment for untrusted
+applications; a crucial implementation technique is
+to take advantage of the Solaris process
+tracing facility to enforce the desired restrictions on system calls.
+
+%\marginpar{Add a list of claims.}
+%\marginpar{Introduce concepts of confinement vs. compartmentalization.}
+
+\section{Motivation}
+
+% Why confinement?
+% Why our particular approach to confinement?
+
+We see two important reasons one may classify an application as untrusted.
+First, the application may have come from an untrusted source---either
+downloaded over an insecure link, or written by an uncertified programmer.
+This first scenario
+represents the case of an application with potentially malicious intent.
+Alternatively, the application may be untrusted if it is
+exposed to outside attack yet not trusted to protect
+itself against adversarial inputs.
+This second scenario represents the case of a programmer with good intentions
+but insufficient coding skills to prevent catastrophic failure.
+In either case, we will want to protect ourselves against the
+potential agent of disaster.
+
+One simple solution is to avoid running such untrusted programs.
+But in practice this is insufficient; many of these programs are too useful
+to abandon, and secure alternatives with comparable functionality often do
+not exist.
+Therefore, for some software, we must find a way to manage the risk.
+
+This thesis develops a more realistic approach: confinement.
+We propose to confine untrustworthy and dangerous programs inside an
+environment that restricts the actions they can perform, thus managing
+the risk by limiting the harm that a potential security compromise
+could cause.
+We argue that a powerful technique for confining
+untrusted applications is to interpose a user-level reference monitor
+on the interface the OS presents to untrusted applications.
+We implement this abstract model by intercepting system calls
+invoked by the untrusted application and filtering potentially harmful
+requests before they are executed.
+This has a number of powerful advantages:
+\begin{itemize}
+\item We retain significant flexibility to transparently enforce
+	per-application security policies from user-level code.
+\item We can secure legacy code, such as {\tt sendmail} or Netscape.
+\item We can safely execute mobile code inside our restricted sandbox.
+\item We can attain much higher assurance than the existing
+	OS mechanisms can provide.
+\end{itemize}
+
+\section{The challenges}
+
+What security requirements are demanded from a successful
+protection mechanism?
+Simply put, an outsider who has control over the untrusted application
+must not be able to compromise the confidentiality, integrity,
+or availability of the rest of the system, including the
+user's files or account.
+Any damage must be limited to the application's
+display window, temporary files and storage, and
+associated short-lived objects.
+In other words, we insist on the Principle of Least Privilege:
+the application should be granted the most restrictive
+collection of capabilities required to perform its legitimate duties,
+and no more.
+This ensures that the damage a compromised application can cause
+is limited by the restricted environment in which it executes.
+In contrast, an unprotected Unix application that is compromised
+will have all the privileges of the account
+from which it is running, which is unacceptable.
+
+Imposing a restricted execution environment on untrusted
+applications is more difficult than it might seem.
+Many traditional paradigms such as
+the reference monitor and network firewall
+are insufficient on their own, as discussed below.
+In order to demonstrate the
+difficulty of this problem and appreciate the need
+for a novel solution,
+we explore five possible approaches.
+
+{\sc 1. Building security directly into each untrusted application:\,\,}
+Taking things to the extreme, we could insist all untrusted
+applications be rewritten in a simple, secure form.
+We reject this as completely impractical;
+it is simply too much work to re-implement them, at least
+in the short term.
+More realistically, we could adopt a reactive philosophy,
+recognizing individual weaknesses as each appears
+and engineering security patches one at a time.
+Historically, this has been a losing battle,
+at least for large applications:
+for instance, explore
+the sad tale of the {\tt sendmail} ``bug of the month''
+\cite{%
+8lgm-sendmail-1,8lgm-sendmail-2,8lgm-sendmail-4,8lgm-sendmail-3,%
+cert-sendmail-1,cert-sendmail-2,cert-sendmail-3,cert-sendmail-4,%
+cert-sendmail-5,cert-sendmail-6,cert-sendmail-7,cert-sendmail-8%
+}.
+In any event, attempts to build security directly into
+untrusted applications would require each program to
+be considered separately---not an easy approach to get right
+on short notice.
+For now, we are stuck with many useful programs
+that offer only minimal assurances of security;
+therefore what we require is a general, external protection mechanism.
+
+{\sc 2. Adding new protection features into the OS:\,\,}
+We reject this design approach for several reasons.
+First, it is inconvenient.
+Development and installation both require modifications
+to the kernel.
+This approach, therefore, has little chance of
+becoming widely used in practice.
+Second, wary users may wish to protect themselves
+without needing the assistance of a system administrator
+to patch and recompile the operating system.
+Third, security-critical kernel modifications
+are very risky: a bug could end up allowing
+new remote attacks or allow a compromised
+application to subvert the entire system.
+The chances of exacerbating the current situation are high.
+It is better to find a user-level mechanism
+that lets users protect themselves and lets
+pre-existing access controls serve as a backup;
+then even in the worst case, introducing the mechanism
+cannot reduce system security.
+
+{\sc 3. The pre-existing reference monitor:\,\,}
+The traditional operating system's monolithic reference monitor
+cannot protect against attacks on untrusted applications directly.
+At most, it could prevent a penetration from spreading to
+new accounts once a user's account has been compromised,
+but by then serious damage has often already been done.
+In practice, even that goal is unattainable.
+Against a motivated attacker,
+most operating systems fail to prevent the spread of penetration;
+once one account has been subverted,
+the whole system typically falls soon thereafter.
+
+{\sc 4. The conventional network firewall:\,\,}
+Packet filters cannot distinguish between different types
+of HTTP traffic, let alone analyze the data or mobile code contained therein
+for security threats.
+In theory, a proxy could, but it would be extremely hard-pressed
+to understand all possible file formats, interpret the often-complex
+application languages, and squelch all dangerous data.
+This would make for a very complex
+and thus untrustworthy proxy.
+
+{\sc 5. Java:\,\,}
+Java has two significant limitations.
+First, legacy systems have little to gain from Java:
+legacy code cannot run inside a protected Java environment, and
+rewriting an entire application in Java is often too much work.
+In contrast, because it is orthogonal to application code, Janus can help
+protect legacy code as easily as new code.
+Second, many security researchers have concerns over Java's ability
+to contain mobile code reliably with high assurance.
+In this regard, we can help.
+One can use Janus as a wrapper around Java as a form of
+``belt-and-suspenders'' security---an adversary would have to
+penetrate both Java {\em and} Janus to compromise security---so
+this approach offers strictly better security for mobile code than
+Java can provide on its own.
+
+{\sc 6. Proof-carrying code:\,\,}
+Proof-carrying code \cite{pcc,pcc-compiler} and its ancestor,
+software fault isolation \cite{sfi}, provide a way for a compiler
+to prove to a runtime verifier that the code it generates satisfies
+some security policy; this is typically done by embedding extra checks
+at any operation that cannot statically be proven safe.
+This provides a powerful and flexible framework for executing mobile code,
+and it allows us to specify very fine-grained security policies (so long
+as we can formalize them in the appropriate formal logic)
+such as memory safety.
+However, proof-carrying code systems force us to specify the security
+policy at compile time, instead of at run time, and existing
+proof-carrying code systems cannot handle pre-compiled legacy code.
+Therefore, Janus seems preferable when the policy might change
+or when we need to handle legacy code.
+
+
+This overview shows that
+the traditional paradigms are either impractical or insufficient.
+Application re-writes are too much work; kernel modifications
+are too difficult and too risky to deploy.
+At the same time, standard host security and firewall mechanisms
+are inadequate for the task at hand.
+Finally, the need to protect legacy applications rules out Java.
+A new approach is needed.
+
+\section{An overview of this thesis}
+
+We have organized this thesis around four high-level topics:
+implementation approaches, applications, lessons, and other work.
+
+In Chapter~\ref{implementation},
+we describe the design and implementation of the Janus prototype.
+Section~\ref{design} addresses design issues, Section~\ref{implement}
+touches on a few interesting features of our implementation,
+Section~\ref{assurance} briefly examines assurance issues in our tool, and
+Section~\ref{policy} outlines the core security policy that we have
+converged on.
+
+Next, Chapter~\ref{applications}
+discuss a number of interesting applications for Janus.
+It covers protection for mobile code, web browser
+helper applications, web browsers, {\tt sendmail}, other security-critical
+system daemons, and a few other possibilities.
+This shows that Janus is a powerful tool with broad applicability.
+
+Third, we analyze the implications for OS designers
+in Chapter~\ref{lessons}.
+We examine various interfaces for system-call
+interposition in depth, conclude that Janus requires only
+minimal support, and argue that OS designers ought to include
+this support.
+
+Fourth, Chapter~\ref{otherwork} addresses other work relevant to Janus.
+Section~\ref{related} surveys some related work,
+Section~\ref{limit} discusses some limitations of our approach,
+Section~\ref{futurework} proposes some areas for future work,
+
+Finally, Chapter~\ref{conc} concludes the thesis.
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d206 16
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d11 2
+a12 2
+This increases our vulnerability to attack.
+At the same time, the stakes are higher: corporate entities
+d162 3
+a164 3
+Better to find a user-level mechanism
+so that users can protect themselves, and so that
+pre-existing access controls can serve as a backup;
+d172 1
+a172 1
+new accounts once the browser user's account has been compromised,
+d176 1
+a176 1
+most operating systems will fail to prevent the spread of penetration;
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d12 1
+a12 1
+At the same time, the stakes are higher---corporate entities
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+\section{Introduction}
+d90 1
+a90 1
+\subsection{The difficulties}
+d148 1
+a148 1
+We reject this design for several reasons.
+d216 1
+a216 1
+\section{Overview}
+d219 1
+a219 1
+implementation approaches, applications, lessons, and conclusions.
+d221 2
+a222 1
+First, we describe the design and implementation of the Janus prototype.
+d229 3
+a231 2
+Next, we discuss a number of interesting applications for Janus.
+Section~\ref{apps} covers protection for mobile code, web browser
+d236 5
+a240 4
+Third, we analyze the implications for OS designers.
+Section~\ref{ossupport} examines various interfaces for system-call
+interposition in depth, concludes that Janus requires only
+minimal support, and argues that OS designers ought to include
+d243 1
+a243 1
+Finally, we end with a few concluding remarks.
+d247 2
+a248 1
+and Section~\ref{conc} concludes the thesis.
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d31 2
+a32 1
+We built Janus\footnote{
+d38 2
+a39 1
+applications, by taking advantage of the Solaris process
+d53 4
+a56 3
+This represents the case of an application with potentially malicious intent.
+Alternatively, the application will be untrusted because it may
+be exposed to outside attack, and we do not trust it to protect
+d58 1
+a58 1
+This represents the case of a programmer with good intentions
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d60 1
+a60 1
+One simple solution is to simply avoid running such untrusted programs.
+d80 1
+a80 1
+	per-application security policies from user-land.
+d195 1
+a195 1
+to reliably contain mobile code with high assurance.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d75 1
+a75 1
+invoked by the untrusted application and filtering potentially-harmful
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d116 1
+a116 1
+we explore several possible approaches.
+d118 1
+a118 1
+{\sc Building security directly into each untrusted application:\,\,}
+d144 1
+a144 1
+{\sc Adding new protection features into the OS:\,\,}
+d158 1
+a158 1
+The chances of exacerbating the current situation are too high.
+d165 1
+a165 1
+{\sc The pre-existing reference monitor:\,\,}
+d175 1
+a175 1
+the whole system typically falls in rapid succession.
+d177 1
+a177 1
+{\sc The conventional network firewall:\,\,}
+d187 1
+a187 1
+{\sc Java:\,\,}
+d189 3
+a191 3
+First, legacy code cannot run inside a protected Java environment, and
+rewriting an entire application in Java is far too much work, so legacy
+systems have little to gain from Java.
+d203 10
+d215 2
+a216 1
+This thesis is organized as follows.
+d232 1
+a232 1
+Section~\ref{ossupport} examines various interfaces for system call
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d68 2
+a69 2
+environment which restricts the actions they can perform, thus managing
+the risk by limiting the harm which a potential security compromise
+d141 1
+a141 1
+which offer only minimal assurances of security;
+@
+
+
+1.1.1.1
+log
+@Adding in my master's to CVS control.
+This version reflects the draft that I gave to Eric (I think).
+
+@
+text
+@@

@@ -1,0 +1,1211 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.6
+date	97.12.15.11.59.36;	author randit;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.12.15.00.56.13;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.12.15.00.36.33;	author randit;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.12.13.01.41.57;	author abrown;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.12.10.04.43.10;	author abrown;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.12.09.06.36.31;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Corrected the command est_submit. The API said we would return the JOBURL along with a successful acceptance of the job by the executor. We forgot to return the JOBURL, so this version now returns not only OUTCOME=will accept job, but also returns the JOBURL as well.
+@
+text
+@/* 
+ * commands.c 
+ * 
+ * This file contains the implementation of each individual command that 
+ * the client or economic agent can send us. 
+ */ 
+
+#include <stdio.h> 
+#include <stdlib.h> 
+#include <ctype.h> 
+#include <errno.h> 
+#include <sys/wait.h> 
+#include "config_cs294.h" 
+#include "http_html_parse.h" 
+#include "utils.h" 
+#include "pid_cookie_table.h" 
+#include "backend.h" 
+#include "commands.h" 
+
+command_binding bindings[] = {
+
+{"stdout", &command_stdout}, 
+{"stderr", &command_stderr}, 
+{"cputime", &command_cputime}, 
+{"filespace", &command_filespace}, 
+{"status", &command_status}, 
+{"memusage", &command_memusage}, 
+{"suspend", &command_suspend}, 
+{"kill", &command_kill}, 
+{"resume", &command_resume}, 
+{"checkpoint", &command_checkpoint}, 
+{"user-defined", &command_user_defined}, 
+{"submit", &command_submit}, 
+{"node_status", &command_node_status}, 
+{"job_list", &command_job_list}, 
+{"est_submit", &command_est_submit}, 
+{"revoke", &command_revoke}, 
+{"reap", &command_reap}, 
+
+{"NOMORE", NULL} 
+}; 
+
+extern int executor_port;  /* executor port number */
+
+void generate_error_with_string(char **buffer, int *buf_len, 
+			       char *error_string); 
+void gen_and_send_error(int socket, char *http_resp, char *content_type, 
+		       char *error_msg); 
+void gen_and_send_retval(int socket, char *ret_msg); 
+
+int check_econ_cookie(int socket, char *cookie); 
+
+void command_stdout(int socket, char *cookie,  
+		    char *leftover, int leftover_len) 
+{ 
+char stdout_name[128]; 
+char read_block[4096]; 
+int  st_fd, res, res2; 
+
+sprintf(stdout_name, "/tmp/executor_%s.stdout", cookie); 
+st_fd = open(stdout_name, O_RDONLY); 
+if (st_fd == -1) { 
+  gen_and_send_retval(socket, 
+	"OUTCOME=error" 
+	"EXPLANATION=couldn't open the stdout file"); 
+  goto TERMINATE; 
+} 
+
+res = correct_write(socket,  
+		      "HTTP/1.0 200 OK\r\n" 
+		      "Content-type: text/plain\r\n\r\n", 
+		      strlen("HTTP/1.0 200 OK\r\n"
+		      "Content-type: text/plain\r\n\r\n"));
+  if (res <= 0) {
+    close(st_fd);
+    DEBUG_LOG("Couldn't write to client - something happened to socket in command_stdout()\n",
+	      NULL, NULL, NULL, NULL);
+    goto TERMINATE;
+  }
+
+  while(1) {
+    res = read(st_fd, &(read_block[0]), 4096);
+    if (res == -1) {
+      if ((errno == EAGAIN) || (errno == EINTR))
+	continue;
+      close(st_fd);
+      DEBUG_LOG("read error that we can't handle in command_stdout(), file %s\n", stdout_name, NULL, NULL, NULL);
+      goto TERMINATE;
+    }
+    if (res == 0)
+      break;
+
+    res2 = correct_write(socket, &(read_block[0]), res);
+    if (res2 != res) {
+      close(st_fd);
+      DEBUG_LOG("Couldn't write to client - something happened to socket in command_stdout()\n",
+		NULL, NULL, NULL, NULL);
+      goto TERMINATE;
+    }
+  }
+
+  close(st_fd);
+TERMINATE:
+  return;
+}
+
+void command_stderr(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  char stderr_name[128];
+  char read_block[4096];
+  int  st_fd, res, res2;
+
+  sprintf(stderr_name, "/tmp/executor_%s.stderr", cookie);
+  st_fd = open(stderr_name, O_RDONLY);
+  if (st_fd == -1) {
+    gen_and_send_retval(socket,
+	"OUTCOME=error"
+	"EXPLANATION=couldn't open the stderr file");
+    goto TERMINATE;
+  }
+
+  res = correct_write(socket, 
+		      "HTTP/1.0 200 OK\r\n"
+		      "Content-type: text/plain\r\n\r\n",
+		      strlen("HTTP/1.0 200 OK\r\n"
+		      "Content-type: text/plain\r\n\r\n"));
+  if (res <= 0) {
+    close(st_fd);
+    DEBUG_LOG("Couldn't write to client - something happened to socket in command_stderr()\n",
+	      NULL, NULL, NULL, NULL);
+    goto TERMINATE;
+  }
+
+  while(1) {
+    res = read(st_fd, read_block, 4096);
+    if (res == -1) {
+      if ((errno == EAGAIN) || (errno == EINTR))
+	continue;
+      close(st_fd);
+      DEBUG_LOG("read error that we can't handle in command_stderr()\n",
+		NULL, NULL, NULL, NULL);
+      goto TERMINATE;
+    }
+    if (res == 0)
+      break;
+    res2 = correct_write(socket, read_block, res);
+    if (res2 != res) {
+      close(st_fd);
+      DEBUG_LOG("Couldn't write to client - something happened to socket in command_stderr()\n",
+		NULL, NULL, NULL, NULL);
+      goto TERMINATE;
+    }
+  }
+
+  close(st_fd);
+TERMINATE:
+  return;
+}
+
+void command_cputime(int socket, char *cookie, 
+		     char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  float user=0.0, sys=0.0, wall=0.0;
+  uint64_t ucycles, scycles;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cputime refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+
+  DEBUG_LOG("Using pid %d\n", pid, NULL, NULL, NULL);
+
+  retval = backend_query_cputime(pid, &user, &sys, &wall,
+				 &ucycles, &scycles);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=cputime refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "USER=%f\r\nSYSTEM=%f\r\nREAL=%f\r\nCYCLES=%llu\r\n",
+	  user, sys, wall, (unsigned long long) ucycles);
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_filespace(int socket, char *cookie, 
+		       char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  uint64_t bytes;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=filespace refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  retval = backend_query_filespace(pid, &bytes);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=filespace refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "MBYTES=%f\r\n",
+	  ((float) bytes) / 1024.0*1024.0);
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_status(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  int state, waitstat;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=status refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  if (pid == MAGIC_PID_VALUE){
+    sprintf(ret_buffer, "STATE=unborn\r\n");
+    gen_and_send_retval(socket, ret_buffer);
+    goto TERMINATE;
+  }
+  retval = backend_query_status(pid, &state, &waitstat);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=status refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  if (state == BACKEND_STATE_RUNNING) {
+    sprintf(ret_buffer, "STATE=running\r\n");
+  } else if (state == BACKEND_STATE_SUSPENDED) {
+    sprintf(ret_buffer, "STATE=sleeping\r\n");
+  } else if (state == BACKEND_STATE_ZOMBIE) {
+
+    if (WIFEXITED(waitstat)) {
+      sprintf(ret_buffer, "STATE=exited\r\nEXIT_VALUE=%d\r\n", 
+	      WEXITSTATUS(waitstat));
+    } else if (WIFSIGNALED(waitstat)) {
+      sprintf(ret_buffer, "STATE=dead\r\nSIGNAL_VALUE=%d\r\n",
+	      WTERMSIG(waitstat));
+    } else if (WIFSTOPPED(waitstat)) {
+      sprintf(ret_buffer, "STATE=sleeping\r\n");
+    } else if (WCOREDUMP(waitstat)) {
+      sprintf(ret_buffer, "STATE=dead\r\n");
+    }
+  }
+
+  gen_and_send_retval(socket, ret_buffer);
+
+  TERMINATE:
+  return;
+}
+
+void command_memusage(int socket, char *cookie, 
+		      char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  int totalkb, reskb;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=memusage refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  retval = backend_query_memusage(pid, &totalkb, &reskb);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=memusage refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "TOTALKB=%d\r\nRESIDENTKB=%d\r\n",
+	  totalkb, reskb);
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_suspend(int socket, char *cookie, 
+		     char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=suspend refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  /* XXX - should query the status of the pid before we send
+     the suspend */
+  retval = backend_suspend(pid);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=suspend refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "OUTCOME=suspended\r\n");
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_kill(int socket, char *cookie, 
+		  char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=kill refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  /* XXX - should query the status of the pid before we send
+     the kill */
+  retval = backend_kill(pid);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=kill refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+  if (retval == BACKEND_FAIL) {
+    gen_and_send_retval(socket,
+			"OUTCOME=kill failed\r\n"
+			"EXPLANATION=pid won't die\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "OUTCOME=killed\r\n");
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_resume(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=resume refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  /* XXX - should query the status of the pid before we send
+     the resume */
+  /* XXX - should test form data for CONTROL-COOKIE, and verify
+           that it is right. */
+  retval = backend_resume(pid);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=resume refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "OUTCOME=resumed\r\n");
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_checkpoint(int socket, char *cookie, 
+			char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=checkpoint refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  /* XXX - should query the status of the pid before we send
+     the checkpoint */
+  retval = backend_checkpoint(pid);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=checkpoint refused\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "OUTCOME=checkpoint signaled\r\n");
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_user_defined(int socket, char *cookie, 
+			  char *leftover, int leftover_len)
+{
+  pid_t pid;
+  int retval;
+  char ret_buffer[1024];
+
+    /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=signal not sent\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  
+  /* XXX - should query the status of the pid before we send
+     the checkpoint */
+  retval = backend_usersignal(pid);
+  if (retval == BACKEND_NOTFOUND) {
+    remove_pair_from_db(cookie);
+    gen_and_send_retval(socket,
+			"OUTCOME=signal not sent\r\n"
+			"EXPLANATION=pid doesn't exist anymore\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "OUTCOME=signal sentr\n");
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+}
+
+void command_submit(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  char  *nm, *vl, *nxt;
+  char  *cmd_line;
+  pid_t pid;
+  int   stdout_fd, stderr_fd, retval;
+  char  stdout_name[128], stderr_name[128];
+
+  if ((leftover == NULL) || (leftover_len == 0)) {
+    gen_and_send_error(socket, "500 Missing input", "text/html",
+		       "Missing input: COMMAND_LINE\n");
+    goto TERMINATE;
+  }
+
+  /* Parse out the input NAME/VALUE pairs */
+  nxt = leftover;
+  while (1) {
+    if (scan_name_value(nxt, &nm, &vl, &nxt) == PARSE_FAIL)
+      break;
+
+    /* Compare name against needed arguments */
+    if (strcmp(nm, "COMMAND_LINE") == 0) {
+      cmd_line = vl;
+      free(nm);
+    } else {
+      free(nm);
+      free(vl);
+    }
+  }
+
+  /* Make sure we have all the inputs we want */
+  if (cmd_line == NULL) {
+    gen_and_send_error(socket, "500 Missing input", "text/html",
+		       "Missing input: COMMAND_LINE\n");
+    goto TERMINATE;
+  }
+
+  DEBUG_LOG("Got inputs. COMMAND_LINE = '%s'\n", cmd_line, NULL, NULL, NULL);
+  
+  /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie, &pid) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=job doesn't exist\r\n");
+    goto TERMINATE;
+  }
+  if (pid != MAGIC_PID_VALUE) {
+    gen_and_send_retval(socket,
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=job already running\r\n");
+    goto TERMINATE;
+  }
+  
+  /* Prepare name */
+  sprintf(stdout_name, "/tmp/executor_%s.stdout", cookie);
+  sprintf(stderr_name, "/tmp/executor_%s.stderr", cookie);
+  stdout_fd = open(stdout_name, O_RDWR | O_CREAT | O_TRUNC, 0644);
+  if (stdout_fd == -1) {
+    gen_and_send_retval(socket,
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=couldn't open job's stdout\r\n");
+    goto TERMINATE;
+  }
+  stderr_fd = open(stderr_name, O_RDWR | O_CREAT | O_TRUNC, 0644);
+  if (stderr_fd == -1) {
+    close(stdout_fd);
+    gen_and_send_retval(socket,
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=couldn't open job's stderr\r\n");
+    goto TERMINATE;
+  }
+  retval = backend_exec(cmd_line, &pid, stdout_fd, stderr_fd);
+
+  DEBUG_LOG("running with pid %d\n", (pid_t) pid, NULL, NULL, NULL);
+
+  if (retval != BACKEND_SUCCESS) {
+    close(stdout_fd);
+    close(stderr_fd);
+    gen_and_send_retval(socket,
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=couldn't exec job\r\n");
+    goto TERMINATE;
+  }
+  if (write_pair_to_db(cookie, pid) != PCT_OK) {
+    /* Generate failure message */
+    gen_and_send_retval(socket, 
+			"OUTCOME=running refused\r\n"
+			"EXPLANATION=internal error - db write failed\r\n");
+    goto TERMINATE;
+  }
+
+  gen_and_send_retval(socket,
+		      "OUTCOME=running\r\n");
+
+TERMINATE:
+  if (cmd_line != NULL)
+    free(cmd_line);
+
+  return;
+  
+}
+
+void command_node_status(int socket, char *cookie, 
+			 char *leftover, int leftover_len)
+{
+  int retval;
+  char ret_buffer[1024];
+  float loadavg[3], cpu_pct, mem_pct, swap_pct;
+
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+  if (! check_econ_cookie(socket, cookie))
+    return;
+
+  /* Go ahead and do our magic */
+  
+  retval = backend_query_nodestatus(&loadavg[0],
+				    &cpu_pct,
+				    &mem_pct,
+				    &swap_pct);
+  if (retval == BACKEND_FAIL) {
+    gen_and_send_retval(socket,
+			"OUTCOME=nodestatus refused\r\n"
+			"EXPLANATION=we suck\r\n");
+    goto TERMINATE;
+  }
+
+  sprintf(ret_buffer, "CPU=%f\r\nMEMORY=%f\r\nSWAP=%f\r\nLOAD1=%f\r\nLOAD5=%f\r\nLOAD15=%f\r\n",
+	  cpu_pct, mem_pct, swap_pct,
+	  loadavg[0], loadavg[1], loadavg[2]);
+  gen_and_send_retval(socket, ret_buffer);
+
+TERMINATE:
+  return;
+
+}
+
+void command_job_list(int socket, char *econ_cookie,
+		      char *leftover, int leftover_len)
+{
+  char ret_buffer[8096];  /* XXX - SHOULD BE DYNAMIC */
+  char ourname[1024]; /* XXX - SHOULD BE DYNAMIC */
+  cookie c, nextc;
+  int res;
+
+  ret_buffer[0] = '\0';
+  gethostname(ourname, 1023);
+
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+  if (! check_econ_cookie(socket, econ_cookie))
+    return;
+
+  /* Scan through database, recovering COOKIES and building
+     the JOBURLs for those */
+  res = get_firstkey(&nextc);
+  if (res != PCT_OK) {
+    DEBUG_LOG("get_firstkey failed in command_job_list\n",
+	      NULL, NULL, NULL, NULL);
+    gen_and_send_retval(socket, "OUTCOME=fail\r\n"
+			"EXPLANATION=db internal error\r\n");
+    return;
+  }
+
+  /* Loop through, appending JOBURLs */
+  while ((res == PCT_OK) && (strlen(ret_buffer) < 7900)) { /*XXX*/
+    char portnum_string[128];
+
+    sprintf(portnum_string, ":%d/", executor_port);
+    strcat(ret_buffer, "http://");
+    strcat(ret_buffer, ourname);
+    strcat(ret_buffer, portnum_string);
+    ret_buffer[strlen(ret_buffer)+NUM_COOKIE_ELS*sizeof(char)]
+      = '\0';
+    memcpy(ret_buffer+strlen(ret_buffer), nextc,
+	   NUM_COOKIE_ELS*sizeof(char));
+    strcat(ret_buffer, "\r\n");
+
+    memcpy(&c[0], &nextc[0], NUM_COOKIE_ELS*sizeof(char));
+    res = get_nextkey(c, &nextc);
+  }
+  gen_and_send_retval(socket, ret_buffer);
+}
+
+void command_est_submit(int socket, char *cookie, 
+			char *leftover, int leftover_len)
+{
+  char *nm, *vl, *nxt;
+  char *cookie_val = NULL;
+  pid_t p;
+  int i;
+  char portnum_string[128];
+  char ret_buffer[1024];  
+  
+  char ourname[1024]; /* XXX - SHOULD BE DYNAMIC */
+
+  /*  ret_buffer[0] = '\0'; */
+  gethostname(ourname, 1023);
+  
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+  if (! check_econ_cookie(socket, cookie))
+    return;
+
+  if ((leftover == NULL) || (leftover_len == 0)) {
+    gen_and_send_error(socket, "500 Missing input", "text/html",
+		       "Missing input: COOKIE\n");
+    goto TERMINATE;
+  }
+
+  /* Parse out the input NAME/VALUE pairs */
+  nxt = leftover;
+  while (1) {
+    if (scan_name_value(nxt, &nm, &vl, &nxt) == PARSE_FAIL)
+      break;
+
+    /* Compare name against needed arguments */
+    if (strcmp(nm, "COOKIE") == 0) {
+      cookie_val = vl;
+      free(nm);
+    } else {
+      free(nm);
+      free(vl);
+    }
+  }
+
+  /* Make sure we have all the inputs we want */
+  if (cookie_val == NULL) {
+    gen_and_send_error(socket, 
+		       "500 Missing input",
+		       "text/html",
+		       "Missing input: COOKIE\n");
+    goto TERMINATE;
+  }
+
+  /* Check for valid cookie. First check the length */
+  if (strlen(cookie_val) != (size_t)NUM_COOKIE_ELS) {
+    gen_and_send_retval(socket, 
+			"OUTCOME=will refuse job\r\n"
+			"EXPLANATION=COOKIE not 16 valid hex characters\r\n");
+    goto TERMINATE;
+  } else {                                 /* Check for valid hex character */
+    for (i = 0; i < NUM_COOKIE_ELS; i++) {
+      if ( !((cookie_val[i] >= '0' && cookie_val[i] <= '9') || 
+	     (cookie_val[i] >= 'A' && cookie_val[i] <= 'F')) ) {
+	gen_and_send_retval(socket, 
+			"OUTCOME=will refuse job\r\n"
+			"EXPLANATION=COOKIE not 16 valid hex characters\r\n");
+	goto TERMINATE;
+      }
+    }
+  }
+  
+  DEBUG_LOG("Got inputs.  Cookie = '%s'\n", cookie_val, NULL, NULL, NULL);
+  
+  if (read_pair_from_db(cookie_val, &p) != PCT_READ_NOSUCHCOOKIE) {
+    /* Generate failure message */
+    gen_and_send_retval(socket, 
+			"OUTCOME=will refuse job\r\n"
+			"EXPLANATION=COOKIE already exists\r\n");
+    goto TERMINATE;
+  }
+  if (write_pair_to_db(cookie_val, MAGIC_PID_VALUE) != PCT_OK) {
+    /* Generate failure message */
+    gen_and_send_retval(socket, 
+			"OUTCOME=will refuse job\r\n"
+			"EXPLANATION=internal error - db write failed\r\n");
+    goto TERMINATE;
+  }
+  /* Generate success message */
+  /*  gen_and_send_retval(socket, "OUTCOME=will accept job\r\n");*/
+  strcat(ret_buffer, "OUTCOME=will accept job\r\n");
+
+  /* Build the JOBURL to send back */
+  sprintf(portnum_string, ":%d/", executor_port);
+  strcat(ret_buffer, "JOBURL=");
+  strcat(ret_buffer, "http://");
+  strcat(ret_buffer, ourname);
+  strcat(ret_buffer, portnum_string);
+  ret_buffer[strlen(ret_buffer)+NUM_COOKIE_ELS*sizeof(char)]
+    = '\0';
+  memcpy(ret_buffer+strlen(ret_buffer), cookie_val ,
+	   NUM_COOKIE_ELS*sizeof(char));
+  strcat(ret_buffer, "\r\n");
+
+  /* Send the JOBURL */
+  gen_and_send_retval(socket, ret_buffer);  
+  
+TERMINATE:
+  if (cookie_val != NULL)
+    free(cookie_val);
+
+  return;
+}
+
+void command_revoke(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  char *nm, *vl, *nxt;
+  char *cookie_val = NULL;
+  pid_t p;
+
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+  if (! check_econ_cookie(socket, cookie))
+    return;
+
+  if ((leftover == NULL) || (leftover_len == 0)) {
+    gen_and_send_error(socket, "500 Missing input", "text/html",
+		       "Missing input: COOKIE\n");
+    goto TERMINATE;
+  }
+
+  /* Parse out the input NAME/VALUE pairs */
+  nxt = leftover;
+  while (1) {
+    if (scan_name_value(nxt, &nm, &vl, &nxt) == PARSE_FAIL)
+      break;
+
+    /* Compare name against needed arguments */
+    if (strcmp(nm, "COOKIE") == 0) {
+      cookie_val = vl;
+      free(nm);
+    } else {
+      free(nm);
+      free(vl);
+    }
+  }
+
+  /* Make sure we have all the inputs we want */
+  if (cookie_val == NULL) {
+    gen_and_send_error(socket,
+		       "500 Missing input",
+		       "text/html",
+		       "Missing input: COOKIE\n");
+    goto TERMINATE;
+  }
+
+  DEBUG_LOG("Got inputs.  Cookie = '%s'\n", cookie_val, NULL, NULL, NULL);
+
+  /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie_val, &p) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot revoke job\r\n"
+			"EXPLANATION=COOKIE not found\r\n");
+    goto TERMINATE;
+  }
+  if (p != MAGIC_PID_VALUE) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot revoke job\r\n"
+			"EXPLANATION=job already running\r\n");
+    goto TERMINATE;
+  }
+  remove_pair_from_db(cookie_val);
+  gen_and_send_retval(socket,
+		      "OUTCOME=revoked job\r\n");
+		      
+TERMINATE:
+  if (cookie_val != NULL)
+    free(cookie_val);
+
+  return;
+}
+
+void command_reap(int socket, char *cookie, 
+		  char *leftover, int leftover_len)
+{
+  char *nm, *vl, *nxt;
+  char *cookie_val = NULL;
+  pid_t p;
+  int res;
+
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+  if (! check_econ_cookie(socket, cookie))
+    return;
+
+  if ((leftover == NULL) || (leftover_len == 0)) {
+    gen_and_send_error(socket, "500 Missing input", "text/html",
+		       "Missing input: COOOKIE\n");
+    goto TERMINATE;
+  }
+
+  /* Parse out the input NAME/VALUE pairs */
+  nxt = leftover;
+  while (1) {
+    if (scan_name_value(nxt, &nm, &vl, &nxt) == PARSE_FAIL)
+      break;
+
+    /* Compare name against needed arguments */
+    if (strcmp(nm, "COOKIE") == 0) {
+      cookie_val = vl;
+      free(nm);
+    } else {
+      free(nm);
+      free(vl);
+    }
+  }
+
+  /* Make sure we have all the inputs we want */
+  if (cookie_val == NULL) {
+    gen_and_send_error(socket,
+		       "500 Missing input",
+		       "text/html",
+		       "Missing input: COOKIE\n");
+    goto TERMINATE;
+  }
+
+  DEBUG_LOG("Got inputs.  Cookie = '%s'\n", cookie_val, NULL, NULL, NULL);
+  /* Go ahead and do our magic */
+  if (read_pair_from_db(cookie_val, &p) != PCT_OK) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot reap job\r\n"
+			"EXPLANATION=COOKIE not found\r\n");
+    goto TERMINATE;
+  }
+  if (p == MAGIC_PID_VALUE) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot reap job\r\n"
+			"EXPLANATION=job hasn't run yet\r\n");
+    goto TERMINATE;
+  }
+
+  res = backend_reap(p);
+  if (res == BACKEND_SUCCESS) {
+    remove_pair_from_db(cookie_val);
+    gen_and_send_retval(socket,
+			"OUTCOME=reaped job\r\n");
+    goto TERMINATE;
+  } else if (res == BACKEND_NOTZOMBIE) {
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot reap job\r\n"
+			"EXPLANATION=job not terminated\r\n");
+    goto TERMINATE;
+  } else { /* BACKEND_NOTFOUND */
+    remove_pair_from_db(cookie_val);
+    gen_and_send_retval(socket,
+			"OUTCOME=cannot reap job\r\n"
+			"EXPLANATION=job no longer exists\r\n");
+    goto TERMINATE;
+  }
+
+TERMINATE:
+  if (cookie_val != NULL)
+    free(cookie_val);
+
+  return;
+}
+
+void command_unknown_function(int socket, char *command)
+{
+  char error_tmp[1024];
+
+  sprintf(error_tmp, "You passed the unknown function \"%s\" to "
+          "the executor.  What on earth were you thinking?!?\n", command);
+
+  gen_and_send_error(socket,
+		     "500 Unknown command",
+		     "text/html",
+		     error_tmp);
+
+}
+
+void generate_error_with_string(char **buffer, int *buf_len,
+			       char *error_string)
+{
+  add_string_to_buffer(buffer, buf_len,
+			 "<HTML>"
+			 "<HEAD><TITLE>Executor Error</TITLE></HEAD>\n"
+			 "<BODY bgcolor=\"#ffffff\">\n"
+			 "<H2>Executor Error</H2>\n");
+  add_string_to_buffer(buffer, buf_len, error_string);
+  add_string_to_buffer(buffer, buf_len,
+			 "</BODY>\n"
+			 "</HTML>\n");
+}
+
+void gen_and_send_error(int socket, char *http_resp, char *content_type,
+		       char *error_msg)
+{
+  char *error_data = NULL;
+  int   error_len = 0;
+
+  generate_error_with_string(&error_data, &error_len,
+			     error_msg);
+  prepend_response_header(&error_data, &error_len,
+			    http_resp, content_type);
+  correct_write(socket, error_data, error_len);
+  free(error_data);
+}
+
+void gen_and_send_retval(int socket, char *ret_msg)
+{
+  char *error_data = NULL;
+  int   error_len = 0;
+
+  add_string_to_buffer(&error_data, &error_len, ret_msg);
+  prepend_response_header(&error_data, &error_len,
+			    "200 Success", "text/plain");
+  correct_write(socket, error_data, error_len);
+  free(error_data);
+}
+
+int check_econ_cookie(int socket, char *cookie)
+{
+  /* Test to see if the cookie passed in is the magic economic agent cookie.
+     If not, generate an error and return that. */
+
+  if (strcmp(cookie, ECON_AGENT_COOKIE) != 0) {
+    /* Generate error and return */
+    char *error_data = NULL;
+    int error_data_len = 0;
+
+    generate_error_with_string(&error_data, &error_data_len,
+			 "Invalid economic agent cookie passed in as "
+			 "credentials to the &quot;est_submit&quot; "
+			 "command.  Sorry!\n");
+			       
+    prepend_response_header(&error_data, &error_data_len,
+			    "500 Bad cookie",
+			    "text/html");
+
+    correct_write(socket, error_data, error_data_len);
+    free(error_data);
+    return 0;
+  }
+  return 1;
+}
+@
+
+
+1.5
+log
+@fixed up port number bug on job_list
+@
+text
+@d683 4
+d688 3
+d762 2
+a763 1
+  gen_and_send_retval(socket, "OUTCOME=will accept job\r\n");
+d765 15
+@
+
+
+1.4
+log
+@Cookie now must be a 16 byte Hexadecimal ASCII encoded string.
+Port number is a command line argument: ./executor -p 5004
+Will truncate stderr and stdout if use same COOKIE for a subsequent job.
+@
+text
+@d43 2
+d658 3
+d663 1
+a663 1
+    strcat(ret_buffer, "/");
+@
+
+
+1.3
+log
+@Handle BACKEND_FAIL return value from kill (outcome "kill failed")
+@
+text
+@d1 18
+a18 19
+/*
+ * commands.c
+ *
+ * This file contains the implementation of each individual command that
+ * the client or economic agent can send us.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include "config_cs294.h"
+#include "http_html_parse.h"
+#include "utils.h"
+#include "pid_cookie_table.h"
+#include "backend.h"
+
+#include "commands.h"
+d22 48
+a69 48
+  {"stdout", &command_stdout},
+  {"stderr", &command_stderr},
+  {"cputime", &command_cputime},
+  {"filespace", &command_filespace},
+  {"status", &command_status},
+  {"memusage", &command_memusage},
+  {"suspend", &command_suspend},
+  {"kill", &command_kill},
+  {"resume", &command_resume},
+  {"checkpoint", &command_checkpoint},
+  {"user-defined", &command_user_defined},
+  {"submit", &command_submit},
+  {"node_status", &command_node_status},
+  {"job_list", &command_job_list},
+  {"est_submit", &command_est_submit},
+  {"revoke", &command_revoke},
+  {"reap", &command_reap},
+
+  {"NOMORE", NULL}
+};
+
+void generate_error_with_string(char **buffer, int *buf_len,
+			       char *error_string);
+void gen_and_send_error(int socket, char *http_resp, char *content_type,
+		       char *error_msg);
+void gen_and_send_retval(int socket, char *ret_msg);
+
+int check_econ_cookie(int socket, char *cookie);
+
+void command_stdout(int socket, char *cookie, 
+		    char *leftover, int leftover_len)
+{
+  char stdout_name[128];
+  char read_block[4096];
+  int  st_fd, res, res2;
+
+  sprintf(stdout_name, "/tmp/executor_%s.stdout", cookie);
+  st_fd = open(stdout_name, O_RDONLY);
+  if (st_fd == -1) {
+    gen_and_send_retval(socket,
+	"OUTCOME=error"
+	"EXPLANATION=couldn't open the stdout file");
+    goto TERMINATE;
+  }
+
+  res = correct_write(socket, 
+		      "HTTP/1.0 200 OK\r\n"
+		      "Content-type: text/plain\r\n\r\n",
+d546 1
+a546 1
+  stdout_fd = open(stdout_name, O_RDWR | O_CREAT, 0644);
+d553 1
+a553 1
+  stderr_fd = open(stderr_name, O_RDWR | O_CREAT, 0644);
+d677 1
+d715 18
+d734 1
+a734 1
+
+@
+
+
+1.2
+log
+@Make backend ignore negative pids, since otherwise we end up
+suspending/killing/etc the whole executor.
+@
+text
+@d375 6
+@
+
+
+1.1
+log
+@Added some files that implement the command parser and helper
+functions.
+@
+text
+@d245 5
+a249 1
+  
+d280 1
+a280 1
+TERMINATE:
+@

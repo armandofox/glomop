@@ -1,0 +1,344 @@
+head	1.8;
+access;
+symbols
+	v1_2:1.7
+	v1_1:1.4
+	v1_0:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	98.07.24.02.55.43;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.07.02.27.36;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.07.06.00.27.22;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.07.05.23.10.52;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.02.09.27.58;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.07.02.06.26.49;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.07.02.01.15.01;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.07.01.07.48.42;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@took out duplicate #include <sys/types.h> so it wouldnt break with new gcc
+@
+text
+@#include <Pilot.h>
+// #include <sys/types.h>
+#include <sys/socket.h>
+#include "TGpostman.h"
+#include "pop.h"
+#include "popquery.h"
+#include "TGpostmanRsc.h"
+
+static struct popdata *Gpdata = NULL;
+static enum popquery_ans popquery_done = POPQUERY_NONE;
+
+enum popquery_ans popquery_doquery(struct popdata *pdata)
+{
+    Word err;
+    EventType e;
+
+    Gpdata = pdata;
+    FrmPopupForm(POPQueryForm);
+
+    /* Our own little event loop */
+    popquery_done = POPQUERY_NONE;
+    do {
+        EvtGetEvent(&e, evtWaitForever);
+        if (! SysHandleEvent (&e))
+            if (! MenuHandleEvent (NULL, &e, &err))
+                if (! ApplicationHandleEvent (&e))
+                    FrmDispatchEvent (&e);
+    } while (popquery_done == POPQUERY_NONE);
+
+    FrmReturnToForm(progressForm);
+
+    return popquery_done;
+}
+
+Boolean POPQueryFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    FieldPtr fld;
+    ControlPtr ctl;
+    ListPtr lst;
+    VoidHand headH = NULL;
+    CharPtr headP = NULL;
+
+    switch(e->eType) {
+    case frmOpenEvent:
+        frm = FrmGetActiveForm();
+	fld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, POPQueryHeaderFld));
+
+	/* Write information into the headers field */
+	if (Gpdata->msg.headerlen) {
+	    /* We have headers to show */
+	    headH = MemHandleNew(60 +
+		     (Gpdata->msg.from ? StrLen(Gpdata->msg.from) : 6) +
+		     (Gpdata->msg.subject ? StrLen(Gpdata->msg.subject) : 6) +
+		     (Gpdata->msg.to ? StrLen(Gpdata->msg.to) : 6) +
+		     (Gpdata->msg.cc ? StrLen(Gpdata->msg.cc) : 6));
+	    if (headH) {
+		headP = MemHandleLock(headH);
+		if (headP) {
+		    StrPrintF(headP,
+			"Message size: %ld%s\nFrom: %s\nSubject: %s\nTo: %s\n"
+			"%s%s\n",
+			(Gpdata->bytesinmsg > 2048) ?
+			(Gpdata->bytesinmsg + 512) / 1024 : Gpdata->bytesinmsg,
+			(Gpdata->bytesinmsg > 2048) ? " KB" : " bytes",
+			Gpdata->msg.from ? Gpdata->msg.from : "(none)",
+			Gpdata->msg.subject ? Gpdata->msg.subject : "(none)",
+			Gpdata->msg.to ? Gpdata->msg.to : "(none)",
+			Gpdata->msg.cc ? "Cc: " : "",
+			Gpdata->msg.cc ? Gpdata->msg.cc : "");
+		    MemHandleUnlock(headH);
+		}
+	    }
+	} else {
+	    /* We just have a length */
+	    headH = MemHandleNew(100);
+	    if (headH) {
+		headP = MemHandleLock(headH);
+		if (headP) {
+		    StrPrintF(headP, "Message size: %ld%s\n\n"
+				     "No headers available, as POP server "
+				     "does not support TOP command.\n",
+			(Gpdata->bytesinmsg > 2048) ?
+			(Gpdata->bytesinmsg + 512) / 1024 : Gpdata->bytesinmsg,
+			(Gpdata->bytesinmsg > 2048) ? " KB" : " bytes");
+		    MemHandleUnlock(headH);
+		}
+	    }
+	}
+	if (headH) {
+	    FldFreeMemory(fld);
+	    FldSetTextHandle(fld, (Handle)headH);
+	}
+
+	/* Phew.  Now set the initial state of the "delete" list. */
+	lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, POPQueryDeleteList));
+	LstSetSelection(lst, (Gpdata->prefflags & POPPrefsDeleteFlag) ?
+	    ((Gpdata->prefflags & POPPrefsDeleteNotTruncFlag) ? 2 : 1) : 0);
+	ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, POPQueryDeleteCtl));
+	CtlSetLabel(ctl, LstGetSelectionText(lst, LstGetSelection(lst)));
+
+	/* Draw the form */
+        FrmDrawForm(frm);
+        handled = true;
+        break;
+
+    case menuEvent:
+        MenuEraseStatus(NULL);
+
+        switch(e->data.menu.itemID) {
+        }
+
+        handled = true;
+        break;
+
+    case ctlSelectEvent:
+        switch(e->data.ctlSelect.controlID) {
+	case POPQueryGetBtn:
+	    frm = FrmGetActiveForm();
+	    lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		    POPQueryDeleteList));
+	    switch(LstGetSelection(lst)) {
+		case 0: popquery_done = POPQUERY_WANTS_ALL; break;
+		case 1: popquery_done = POPQUERY_WANTS_ALL_DELE; break;
+		case 2: popquery_done = POPQUERY_WANTS_ALL_DELC; break;
+	    }
+	    handled = true;
+	    break;
+
+	case POPQuerySkipBtn:
+	    frm = FrmGetActiveForm();
+	    lst = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		    POPQueryDeleteList));
+	    switch(LstGetSelection(lst)) {
+		case 0: popquery_done = POPQUERY_WANTS_NONE; break;
+		case 1: popquery_done = POPQUERY_WANTS_NONE_DELE; break;
+		case 2: popquery_done = POPQUERY_WANTS_NONE_DELC; break;
+	    }
+	    handled = true;
+	    break;
+
+	default:
+	    break;
+	}
+
+	break;
+
+    default:
+	break;
+    }
+
+    return handled;
+}
+@
+
+
+1.7
+log
+@o Added message truncation size selection to POP options
+@
+text
+@d2 1
+a2 1
+#include <sys/types.h>
+@
+
+
+1.6
+log
+@o Added option for deleting meesages from the server only if the message
+  was completely downloaded
+@
+text
+@d66 1
+a66 1
+			(Gpdata->bytesinmsg > 2048) ? "K" : " bytes",
+d86 1
+a86 1
+			(Gpdata->bytesinmsg > 2048) ? "K" : " bytes");
+d96 1
+a96 5
+	/* Phew.  Now set the initial state of the "delete" checkbox. */
+	ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, POPQueryDeleteCtl));
+	CtlSetLabel(ctl, (Gpdata->prefflags & POPPrefsDeleteFlag) ?
+	    ((Gpdata->prefflags & POPPrefsDeleteNotTruncFlag) ? "If complete" :
+	    "Yes") : "No");
+d100 2
+@
+
+
+1.5
+log
+@o Edit menu in Prefs screens
+o To: and Cc: displayed in query form
+o Ability to paste headers at bottom of message
+@
+text
+@d41 1
+d97 7
+a103 3
+	ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		POPQueryDeleteBtn));
+	CtlSetValue(ctl, Gpdata->prefflags & POPPrefsDeleteFlag);
+d123 7
+a129 4
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		    POPQueryDeleteBtn));
+	    popquery_done = CtlGetValue(ctl) ? POPQUERY_WANTS_ALL_DELE :
+				POPQUERY_WANTS_ALL;
+d135 7
+a141 4
+	    ctl = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm,
+		    POPQueryDeleteBtn));
+	    popquery_done = CtlGetValue(ctl) ? POPQUERY_WANTS_NONE_DELE :
+				POPQUERY_WANTS_NONE;
+@
+
+
+1.4
+log
+@Added "Both" button
+@
+text
+@d52 1
+a52 1
+	    headH = MemHandleNew(50 +
+d54 3
+a56 1
+		     (Gpdata->msg.subject ? StrLen(Gpdata->msg.subject) : 6));
+d61 2
+a62 1
+			"Message size: %ld%s\nFrom: %s\nSubject: %s\n",
+d67 4
+a70 1
+			Gpdata->msg.subject ? Gpdata->msg.subject : "(none)");
+@
+
+
+1.3
+log
+@Save only unread option
+@
+text
+@d109 1
+a109 1
+        switch(e->data.ctlEnter.controlID) {
+@
+
+
+1.2
+log
+@bug fixes?
+@
+text
+@d59 4
+a62 2
+			"Message size: %ldK\nFrom: %s\nSubject: %s\n",
+			(Gpdata->bytesinmsg + 512) / 1024,
+d74 1
+a74 1
+		    StrPrintF(headP, "Message size: %ldK\n\n"
+d77 3
+a79 1
+				     (Gpdata->bytesinmsg + 512) / 1024);
+@
+
+
+1.1
+log
+@Whoa momma
+@
+text
+@d59 2
+a60 2
+			"Message size: %ld bytes\nFrom: %s\nSubject: %s\n",
+			Gpdata->bytesinmsg,
+d72 1
+a72 1
+		    StrPrintF(headP, "Message size: %ld bytes\n\n"
+d75 1
+a75 1
+				     Gpdata->bytesinmsg);
+@

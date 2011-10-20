@@ -1,0 +1,491 @@
+head	1.11;
+access;
+symbols
+	release:1.11
+	Release:1.8;
+locks; strict;
+comment	@# @;
+
+
+1.11
+date	95.10.25.05.25.53;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.10.25.03.00.12;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.10.18.22.12.43;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.10.18.05.20.15;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.18.03.08.57;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.17.01.14.15;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.10.16.23.12.04;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.13.03.19.30;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.08.18.23.01.43;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.18.21.45.28;	author dgourley;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.18.08.12.37;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.11
+log
+@mail is fixed now, finally
+@
+text
+@#
+#  gm_pputdoc.pl
+#
+#  Implement the handler for CPutDocument.  When putdoc is called, the proxy
+#  has received  document locator line (not yet parsed).
+#
+
+package gm_proxy;
+
+sub pputdoc {
+    my($self,$docpath) =  @@_;
+    local(@@typelist) = ();                  # list of accepted types
+    local($pkg);                            # TSM package name for req
+    local($leftover, $cmd);                 # dummy vars, really
+    local($docloc, $types, $max, $id);
+
+    ($docloc, $types, $max, $id) =   $self->getdocloc( $docpath) ;
+    if (!defined $docloc) {
+        #bad request
+        return 0;
+    }
+
+    # Got a valid request.  Log it and prepare to receive.
+
+    ($leftover, $cmd, $path, $proto) = &aux'pick_strings($docloc);
+    $proto =~ tr/A-Z/a-z/;
+    ($leftover,$leftover,@@typelist) = &aux'pick_strings($types);
+    &aux'log("New uplink id=$id proto:path=$proto:$path ",
+             "types=@@typelist max=${max}");
+
+    # make sure that the TSM for this protocol type exists, and try to load it.
+
+    unless (defined ($pkg = $self->{Config}->{$proto})) {
+        &aux'log("No TSM defined for type '$proto'"); #' 
+        $self->send_error ($id, "No TSM defined for $proto");
+    }
+    unless ($self->Require($pkg, $id)) {
+        &aux'log("TSM '$proto' (package '$pkg') defined but not loaded: $!");
+        $self->send_error  (${id},"TSM package $pkg not loaded: $!");
+        return 0;
+    }
+
+    # TSM is loaded.  Go fetch, distill, & xmit.
+
+    return $self->receive($pkg, $path, ${max}, ${id}, @@typelist);
+}
+
+#
+#  Receive a document.  Given packagename, doc path, max chunks, req id, and
+#  typeslist, receive document TOC (optional) and chunks from client, and pass
+#  it to TSM to actually put the document somewhere.
+#
+
+sub receive {
+    my($self) = shift;
+    local($pkg, $path, $max, $id, @@types) = @@_;
+    local($obj) = $self->{Modules}->{$id};
+    local(@@tocdata, @@chunkdata);
+    local($totalchunks);
+    local($i);
+    local($stat);
+    local($errs) = '';
+    local($dummy);
+    #
+    # Receive a chunk from client, and process it.
+    #
+
+
+    #  BUG: the TOC is not mandatory, but the way this is now set up, it always
+    #  expects a TOC.
+
+    @@tocdata = $self->receive_chunk($id);
+    grep(s/$/\n/, @@tocdata);                # add newlines
+
+    if (($_) = grep(/^here\s+/i, @@tocdata)) {
+        /^here\s+(\d+)\s+(\d+)\s+(\d+)/i;
+        $totalchunks = $2;
+        if ($1 != $id) {
+            &aux'log("Incoming chunk $2 has id $1, expected $id");
+            $self->send_error ("Expecting data for id $id, not $1");
+            return 0;
+        }
+        if ($3 != 0) {
+            &aux'log("WARNING: TOC not seen, chunk $3 appears to be first",
+                     "(continuing anyway)");
+        }
+    } else {
+        &aux'log("Malformed chunk, can't find HERE line: @@tocdata");
+        $self->send_error ("Bad chunk, no HERE");
+    }
+    
+    #
+    #  Receive each chunk....guh...
+    #
+
+    &aux'debug("Receiving $totalchunks chunks.");
+    for ($i=1; $i <= $totalchunks; $i++) {
+        local($aname) = "chunkdata$i";
+        @@$aname = $self->receive_chunk($id);
+    }
+    &aux'log("Warning: $@@") if $@@;
+    #
+    # Now send them to TSM.
+    #
+
+    &aux'debug("Calling ${pkg}PutTOC");
+    ($stat, $err) = $obj->PutTOC($self,$id, $path, $totalchunks, @@tocdata);
+    unless ($stat) {
+        &aux'log("Error putting TOC: $err");
+        $errs .= $err;
+    }
+
+    for ($i=1; $i<=$totalchunks; $i++) {
+        &aux'log("${pkg}PutChunk ${id}[$i]"); 
+        local($chunkdata) = "chunkdata$i";
+        ($stat, $err) = $obj->PutChunk($self, $id, $i, @@$chunkdata);
+        unless ($stat) {
+            &aux'log("Error putting chunk $i: $err");
+            $errs .= $err;
+        }
+    }
+
+    # BUG: For now, just call alldone; no checking for incomplete.
+
+    &aux'log("Cleaning up $id");
+    ($stat, $err) = $obj->AllDone($self,$id);
+    unless ($stat) {
+        &aux'log("Error cleaning up $id: $err");
+        $errs .= $err;
+    }
+
+    # If there were errors, notify the client.
+
+    if ($errs)  {
+        $self->send_error ($id, $errs);
+        return 0;
+    } else {
+        &aux'log("Put id $id completed successfully");
+        return 1;
+    }
+}
+
+###########################################################################
+#  receive_chunk:
+#
+#  receive a chunk in following format, and return an array, one line per
+#  element: 
+#
+#  HERE reqid totalchunks thischunk
+#  NDOCS drtsize
+#  DRT entry....
+#  DSIZE bytes
+#  ...data...
+#  END
+#
+#  Return a list whose first element is the number of remaining chunks, 
+###########################################################################
+
+sub receive_chunk {
+    my($self) = shift;
+    local($id) = shift;
+    local($line) = '';
+    local(@@chunk) = ();
+    local($dsize);
+    local($data) = '';
+    local($sock) = $self->{Sock};
+    
+    &aux'debug("Awaiting chunk...");
+    push(@@chunk, ($_ =  $sock->readsock())) until /^dsize\s+(\S+)/i;
+    $dsize = $1;
+    
+    # read data chunk.
+    # BUG: The "+2" reflects the fact that each incoming line has CR+LF
+    # appended, but those chars are removed by readsock before it returns the
+    # line.  
+
+    $data .= ($_ =  $sock->readsock()) . "\n", $dsize -= length($_)+1,
+    &aux'debug("$dsize bytes to go")
+        while $dsize > 0;
+    push(@@chunk, $data);
+    
+    # the next line had better be 'END'.
+    push(@@chunk, ($_ =  $sock->readsock()));
+    unless ( /^end/i ) {
+        &aux'log("Warning: no END seen for data chunk: ",
+                 "underflow by $dsize bytes? Continuing anyway");
+    }
+    &aux'debug("Got chunk");
+    return @@chunk;
+}
+
+######################################################################
+# Return a value for 'require'
+1;
+@
+
+
+1.10
+log
+@made gm_mail  object oriented, sort of.  (not gm_imageGif, yet.)  hacked
+gm_mail to bound max # of bytes sent to ML.  gm_mail code REALLY needs
+to be cleaned up, it's a mess.
+@
+text
+@d116 1
+a116 1
+        ($stat, $err) = $self->PutChunk($self, $id, $i, @@$chunkdata);
+@
+
+
+1.9
+log
+@gm_mail only reports new mail now
+@
+text
+@d37 1
+a37 1
+    unless ($self->Require($pkg)) {
+d57 1
+a57 1
+    local($puttoc, $putchunk, $alldone, $incomplete);
+a67 1
+    print STDERR "$self $pkg $path $max $id\n";
+a68 1
+    #
+a105 9
+    $puttoc = "${pkg}::${pkg}PutTOC";
+    $puttoc = \&$puttoc;
+    $putchunk = "${pkg}::${pkg}PutChunk";
+    $putchunk = \&$putchunk;
+    $alldone = "${pkg}::${pkg}AllDone";
+    $alldone = \&$alldone;
+    $incomplete = "${pkg}::${pkg}Incomplete";
+    $incomplete = \&$incomplete;
+
+d107 1
+a107 1
+    ($stat, $err) = &$puttoc($self,$id, $path, $totalchunks, @@tocdata);
+d116 1
+a116 1
+        ($stat, $err) = &$putchunk($self, $id, $i, @@$chunkdata);
+d126 1
+a126 1
+    ($stat, $err) = &$alldone($self,$id);
+@
+
+
+1.8
+log
+@Mail works again!
+@
+text
+@d34 2
+a35 2
+        &aux'log("No TSM defined for type '$proto'");
+        $self->send_error (${id},"No TSM defined for $proto");
+d37 1
+a37 1
+    unless (require "${pkg}.pl") {
+@
+
+
+1.7
+log
+@auth and proxy now totally separate.
+@
+text
+@d98 1
+d117 1
+d125 1
+a125 1
+        &aux'log("PutChunk ${id}[$i]"); 
+d179 1
+d188 2
+a189 1
+    $data .= ($_ =  $sock->readsock()) . "\n", $dsize -= length($_)+1
+d199 1
+@
+
+
+1.6
+log
+@foo bar
+@
+text
+@d33 1
+a33 1
+    unless (defined ($pkg = $main'Config{$proto})) {
+@
+
+
+1.5
+log
+@foo
+@
+text
+@d45 1
+a45 1
+    return &receive($self,$pkg, $path, ${max}, ${id}, @@typelist);
+d68 2
+d107 1
+a107 1
+    $puttoc = "$pkg::${pkg}PutTOC";
+@
+
+
+1.4
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@d45 1
+a45 1
+    return &receive($pkg, $path, ${max}, ${id}, @@typelist);
+d57 1
+a57 1
+    local(*puttoc, *putchunk, *alldone, *incomplete);
+d72 1
+a72 1
+    @@tocdata = receive_chunk $self ($id);
+d97 2
+a98 1
+        eval "\@@chunkdata$i =  \$self->receive_chunk ($id)";
+d100 1
+a100 1
+    &log("Warning: $@@") if $@@;
+d105 8
+a112 4
+    eval "\*puttoc = \*${pkg}'${pkg}PutTOC";
+    eval "\*putchunk = \*${pkg}'${pkg}PutChunk";
+    eval "\*alldone = \*${pkg}'${pkg}AllDone";
+    eval "\*incomplete = \*${pkg}'${pkg}Incomplete";
+d114 1
+a114 1
+    ($stat, $err) = &puttoc($id, $path, $totalchunks, @@tocdata);
+d122 2
+a123 1
+        eval "(\$stat, \$err) = &putchunk($id, $i, \@@chunkdata$i);";
+d133 1
+a133 1
+    ($stat, $err) = &alldone($id);
+@
+
+
+1.3
+log
+@stuff
+@
+text
+@d8 1
+a8 1
+package gm_pputdoc;
+d11 1
+d17 1
+a17 1
+    ($docloc, $types, $max, $id) = &aux'getdocloc(shift @@_);
+d35 1
+a35 1
+        &gm_pconnect'send_error(${id},"No TSM defined for $proto");
+d39 1
+a39 1
+        &gm_pconnect'send_error(${id},"TSM package $pkg not loaded: $!");
+d55 1
+d72 1
+a72 1
+    @@tocdata = &receive_chunk($id);
+d80 1
+a80 1
+            &gm_pconnect'send_error("Expecting data for id $id, not $1");
+d89 1
+a89 1
+        &gm_pconnect'send_error("Bad chunk, no HERE");
+d97 1
+a97 1
+        eval "\@@chunkdata$i = &receive_chunk($id)";
+d136 1
+a136 1
+        &gm_pconnect'send_error($id, $errs);
+d161 1
+d167 1
+d169 1
+a169 1
+    push(@@chunk, ($_ = &gm_pconnect'readsock())) until /^dsize\s+(\S+)/i;
+d177 1
+a177 1
+    $data .= ($_ = &gm_pconnect'readsock()) . "\n", $dsize -= length($_)+1
+d182 1
+a182 1
+    push(@@chunk, ($_ = &gm_pconnect'readsock()));
+@
+
+
+1.2
+log
+@stupid emtry
+@
+text
+@d114 1
+d124 1
+d127 1
+a127 1
+        &aux'log("Error cleaning up: $err");
+@
+
+
+1.1
+log
+@Uplink works! woo hoo!
+@
+text
+@d171 1
+a171 1
+    $data .= ($_ = &gm_pconnect'readsock()) . "\n", $dsize -= length($_)+2
+d178 1
+a178 1
+        &aux'log("Warning: no END seen for data chunk; ",
+@

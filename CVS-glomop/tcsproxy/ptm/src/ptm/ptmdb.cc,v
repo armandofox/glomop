@@ -1,0 +1,628 @@
+head	1.13;
+access;
+symbols
+	Yatin-final:1.12.2.1
+	Yatin:1.12.0.2
+	pre-yatin-merge:1.12
+	transend-beta2:1.11
+	fox-dev:1.11
+	ptm-ng:1.9
+	transend-beta-latest:1.9
+	Aggregators:1.9
+	NoAggregators:1.9
+	iang:1.9.0.4
+	transend-beta:1.9.0.2
+	SOSP:1.9
+	stable_ptm:1.3
+	merged_preintegrate:1.3
+	heisenbug:1.3
+	PRE_INTEGRATION:1.3;
+locks; strict;
+comment	@// @;
+
+
+1.13
+date	98.01.16.22.16.28;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.18.22.45.28;	author yatin;	state Exp;
+branches
+	1.12.2.1;
+next	1.11;
+
+1.11
+date	97.06.14.05.05.51;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.06.06.01.09.12;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.03.09.05.51.07;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.03.07.20.36.56;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.03.06.02.49.25;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.27.01.14.00;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.26.04.15.12;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.17.03.01.28;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.05.01.27.29;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.28.01;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.43.02;	author yatin;	state Exp;
+branches;
+next	;
+
+1.12.2.1
+date	97.11.17.22.07.10;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.13
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#include "ptmdb.h"
+#include "packet.h"
+#include "ptm.h"
+#include "distlaunch.h"
+
+
+//#define __INSTRUMENT__
+#ifdef __INSTRUMENT__
+FILE *instFile=NULL;
+#endif
+
+
+DistillerRecord::DistillerRecord(PrivateConnection *privateConnection_,
+				 RemoteID& _rid, DistillerType& _type,
+				 DistillerSleepStatus status_,
+				 gm_Bool mustRestartOnDeath_)
+  : BasicDistiller(_rid, _type), privateConnection(privateConnection_), 
+    sleepStatus(status_), history(NULL), historySize(0), currentPos(0),
+    launchRecord(NULL), mustRestartOnDeath(mustRestartOnDeath_)
+{
+#ifdef __INSTRUMENT__
+  if (instFile==NULL) {
+    instFile = fopen("ptm/ptm.log", "w");
+  }
+#endif
+  /*launchRecord = PTM::getInstance()->getDistillerLauncher()
+    ->getLaunchRecord(&_type);*/
+  launchRecord = PTM::getInstance()->getDistillerLauncher()
+    ->getLaunchRecord(&_type, gm_True);
+  if (launchRecord!=NULL) {
+    if (sleepStatus==distWakeUp) launchRecord->EvRegisterDistiller(this);
+    load.ignoreThreshold_ms = launchRecord->autoLaunchLimit * 2;
+    historySize = launchRecord->loadHistorySize;
+  }
+
+  if (historySize==0) historySize = DefaultLoadHistorySize;
+  history = new Load [historySize];
+  if (history==NULL) VoidReturn(errOutOfMemory);
+}
+
+
+DistillerRecord::~DistillerRecord()
+{
+  if (launchRecord!=NULL && sleepStatus==distWakeUp) 
+    launchRecord->EvDeregisterDistiller(this);
+  if (history!=NULL) {
+    delete [] history;
+    history = NULL;
+  }
+}
+
+
+void
+DistillerRecord::EvUnnaturalDeath()
+{
+  if (mustRestartOnDeath==gm_True && launchRecord!=NULL) {
+    launchRecord->Relaunch();
+  }
+}
+
+
+void 
+DistillerRecord::Update(Load &newLoad)
+{
+  Load prevLoad = load;
+  loadOverHistory -= history[currentPos];
+  loadOverHistory += newLoad;
+
+  load.Average(loadOverHistory, historySize);
+  history[currentPos] = newLoad;
+  currentPos = (currentPos+1) % historySize;
+
+#ifdef __INSTRUMENT__
+  if (instFile!=NULL) {
+    char buf[512], *bufPtr=buf;
+    time_t now;
+    tm *tm_;
+    time(&now);
+    tm_ = localtime(&now);
+    sprintf(bufPtr, "%02d:%02d:%02d(%p): ", tm_->tm_hour, tm_->tm_min, 
+	    tm_->tm_sec, this);
+    bufPtr += strlen(bufPtr);
+    for (int i=0; i<historySize; i++) {
+      sprintf(bufPtr, "%lu, ",
+	      history[(i+currentPos)%historySize].totalLatency_ms);
+      bufPtr += strlen(bufPtr);
+    }
+
+    Load avg, totalLoad;
+    int totalDist=0;
+    if (launchRecord!=NULL && launchRecord->numberOfActiveDistillers > 0) {
+      totalLoad = launchRecord->totalLoad;
+      totalDist = launchRecord->numberOfActiveDistillers;
+      avg.Average(totalLoad, totalDist);
+    }
+
+    sprintf(bufPtr, "Avg = %lu, Global avg (%lu/%d) = %lu\n", 
+	    load.totalLatency_ms, totalLoad.totalLatency_ms, 
+	    totalDist, avg.totalLatency_ms); 
+    bufPtr += strlen(bufPtr);
+    fwrite(buf, sizeof(char), bufPtr-buf, instFile);
+  }
+#endif
+  if (launchRecord!=NULL) launchRecord->UpdateLoad(load, prevLoad);
+}
+
+
+gm_Bool
+DistillerRecord::WakeUp()
+{
+  if (sleepStatus==distWakeUp) return gm_True;
+  if (privateConnection==NULL) {
+    // this shouldn't happen!
+    Return(gm_False,errNULLPointer);
+  }
+  OStream stream;
+  stream << Binary(gm_True) << UINT32(distWakeUp) << Binary(gm_False);
+  if (stream.IsGood()==gm_False) return gm_False;
+  gm_Packet packet(pktDistillerSleep, stream.getLength(), stream.getData());
+  if (privateConnection->Write(&packet)==gm_False) {
+    // could not write the packet
+    privateConnection->EvConnectionBroken(PTM::getInstance()->
+					  getEventSystem());
+    Return(gm_False, errSocketWriteError);
+  }
+  else {
+    sleepStatus = distWakeUp;
+    if (launchRecord!=NULL) launchRecord->EvRegisterDistiller(this);
+    return gm_True;
+  }
+}
+
+
+gm_Bool
+DistillerDatabase::FindMatchingDistillers(DistillerType *type, 
+					  List<DatabaseRecord> *list)
+{
+  MatchingDistillerFinder finder(type, list);
+  return ForEach(MatchEachDistiller, (void*) &finder);
+}
+
+
+gm_Bool
+DistillerDatabase::MatchEachDistiller(Database */*db*/, DatabaseRecord *record,
+				      void *args)
+{
+  MatchingDistillerFinder *finder = (MatchingDistillerFinder*) args;
+  DistillerRecord *dist = (DistillerRecord*)record;
+  if(dist->type.CanSatisfy(finder->distillerType)==gm_True 
+     && dist->sleepStatus==distWakeUp){
+    if (finder->distillerList->InsertAtHead(record)==gm_False) return gm_False;
+  }
+
+  return gm_True;
+}
+
+
+struct SleepingDistillerFinder {
+  SleepingDistillerFinder(DistillerType *type_) : dist(NULL), type(type_) { };
+  DistillerRecord *dist;
+  DistillerType   *type;
+};
+
+
+DistillerRecord *
+DistillerDatabase::WakeSleepingDistiller(DistillerType *type)
+{
+  SleepingDistillerFinder finder(type);
+
+  while (gm_True) {
+    ForEach(MatchSleepingDistiller, (void*) &finder);
+    if (finder.dist==NULL) return NULL;
+    if (finder.dist->WakeUp()==gm_False) {
+      if (Error::getStatus()!=errSocketWriteError) return NULL;
+      // could not wake up the distiller; try again...
+      Error::SetStatus(success);
+    }
+    else return finder.dist;
+  }
+}
+
+
+gm_Bool
+DistillerDatabase::MatchSleepingDistiller(Database */*db*/, 
+					  DatabaseRecord *record, void *args)
+{
+  SleepingDistillerFinder *finder = (SleepingDistillerFinder*) args;
+  DistillerRecord *dist = (DistillerRecord*)record;
+  if (dist->type.CanSatisfy(finder->type)==gm_True
+      && dist->sleepStatus==distSleep) {
+    finder->dist = dist;
+    return gm_False; // we found something, so quit the loop
+  }
+
+  return gm_True;
+}
+
+@
+
+
+1.12
+log
+@added mash_stub
+mash_stub is compiled only if --with-mashdir flag is set
+added a --enable/disable-mkdep flag to configure
+configure can read default arguments from a special file .configure in
+the toplevel tcsproxy directory
+@
+text
+@d15 2
+a16 1
+				 DistillerSleepStatus status_)
+d19 1
+a19 1
+    launchRecord(NULL)
+d26 2
+d29 1
+a29 1
+    ->getLaunchRecord(&_type);
+d49 9
+@
+
+
+1.12.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@d15 1
+a15 2
+				 DistillerSleepStatus status_,
+				 gm_Bool mustRestartOnDeath_)
+d18 1
+a18 1
+    launchRecord(NULL), mustRestartOnDeath(mustRestartOnDeath_)
+a24 2
+  /*launchRecord = PTM::getInstance()->getDistillerLauncher()
+    ->getLaunchRecord(&_type);*/
+d26 1
+a26 1
+    ->getLaunchRecord(&_type, gm_True);
+a45 9
+  }
+}
+
+
+void
+DistillerRecord::EvUnnaturalDeath()
+{
+  if (mustRestartOnDeath==gm_True && launchRecord!=NULL) {
+    launchRecord->Relaunch();
+@
+
+
+1.11
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d107 1
+a107 1
+  Packet packet(pktDistillerSleep, stream.getLength(), stream.getData());
+@
+
+
+1.10
+log
+@Fixed up so that both Armando and I are happy...
+@
+text
+@a30 3
+    if (historySize==0) historySize = DefaultLoadHistorySize;
+    history = new Load [historySize];
+    if (history==NULL) VoidReturn(errOutOfMemory);
+d33 3
+a35 2
+  /*gm_Log("Created dist " << (char*)_type << ": " << load.ignoreThreshold_ms 
+	 << ", " << historySize << "\n");*/
+@
+
+
+1.9
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d22 1
+a22 1
+    instFile = fopen("../ptm/ptm.log", "w");
+@
+
+
+1.8
+log
+@Added sleep mechanism to the distillers
+@
+text
+@d7 6
+d20 5
+d28 1
+a28 1
+    launchRecord->EvRegisterDistiller(this);
+d43 2
+a44 1
+  if (launchRecord!=NULL) launchRecord->EvDeregisterDistiller(this);
+d63 31
+d118 1
+@
+
+
+1.7
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d7 6
+a12 3
+DistillerRecord::DistillerRecord(RemoteID& _rid, DistillerType& _type)
+  : BasicDistiller(_rid, _type), privateConnection(NULL), 
+    history(NULL), historySize(0), currentPos(0), launchRecord(NULL)
+d56 25
+d94 3
+a96 2
+  if(((DistillerRecord*)record)->type.
+     CanSatisfy(finder->distillerType)==gm_True){
+d102 42
+@
+
+
+1.6
+log
+@Added priorities to remote execution
+Added FE_getDistillerStatusString to cacheman.cc
+Modified PTM invocation from the frontend to use the gm_options file rather
+than pass all options via the command line
+@
+text
+@d9 1
+a9 1
+    currentPos(0), launchRecord(NULL)
+d13 7
+a19 4
+  if (launchRecord!=NULL) launchRecord->EvRegisterDistiller(this);
+  /*if (launchRecord==NULL || launchRecord->autoLaunchLimit==0) {
+    gm_Log("Distiller " << (char*)_type << 
+	   " has no auto-launch capabilities\n");
+d21 3
+a23 4
+  else {
+    gm_Log("Distiller " << (char*)_type << " has auto-launch limit set to "
+	   << launchRecord->autoLaunchLimit << '\n');
+  }*/
+d30 4
+d44 1
+a44 1
+  load.Average(loadOverHistory, LoadHistorySize);
+d46 1
+a46 1
+  currentPos = (currentPos+1) % LoadHistorySize;
+d50 1
+@
+
+
+1.5
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d14 1
+a14 1
+  if (launchRecord==NULL || launchRecord->autoLaunchLimit==0) {
+d21 1
+a21 1
+  }
+@
+
+
+1.4
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d3 2
+d6 38
+@
+
+
+1.3
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@a4 26
+/*UINT32
+DistillerRecord::getMarshalledLength()
+{
+  char string[10];
+  int  portLen, loadLen;
+
+  sprintf(string, "%d", rid.port);
+  portLen = strlen(string);
+
+  sprintf(string, "%d", load.value);
+  loadLen = strlen(string);
+
+  // rid.ipAddress/rid.port|distiller-type|load-value
+  return strlen(rid.ipAddress) + 1 + portLen + 1 + strlen(type.c_struct.string)
+    + 1 + loadLen + 1;
+}
+
+
+void
+DistillerRecord::Marshall(
+{
+  sprintf(marshalledString, "%s/%d|%s|%d", rid.ipAddress, rid.port, 
+	  type.c_struct.string, load.value);
+}*/
+
+
+d7 1
+a7 1
+					  LinkedList<DatabaseRecord> *list)
+d19 2
+a20 1
+  if(((DistillerRecord*)record)->type.CanSatisfy(finder->distillerType)==gm_True){
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d31 1
+a31 1
+Bool
+d40 1
+a40 1
+Bool
+d45 2
+a46 2
+  if(((DistillerRecord*)record)->type.CanSatisfy(finder->distillerType)==TRUE){
+    if (finder->distillerList->InsertAtHead(record)==FALSE) return FALSE;
+d49 1
+a49 1
+  return TRUE;
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d41 2
+a42 1
+DistillerDatabase::MatchEachDistiller(DatabaseRecord *record, void *args)
+@

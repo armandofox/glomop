@@ -1,0 +1,413 @@
+head	1.19;
+access;
+symbols
+	transend-beta2:1.18
+	frontend-ng:1.18
+	transend-beta-latest:1.18
+	Aggregators:1.18
+	NoAggregators:1.18
+	iang:1.18.0.4
+	transend-beta:1.18.0.2
+	SOSP:1.16
+	merged_preintegrate:1.8
+	heisenbug:1.8
+	PRE_INTEGRATION:1.8
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.19
+date	97.08.30.21.34.03;	author fox;	state dead;
+branches;
+next	1.18;
+
+1.18
+date	97.04.17.21.44.52;	author aspolito;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.04.09.01.31.12;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.05.00.30.55;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.02.27.03.10.49;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.07.22.47.50;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.05.00.32.57;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.04.05.37.21;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.29.21.59.18;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.28.23.49.27;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.28.03.57.41;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.12.12.02.16.48;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.09.02.38.12;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.11.24.08.21.44;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.11.22.21.33.10;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.08.01.50.41;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.06.07.48.52;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.28.02.05.58;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.28.43;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.28.43;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.19
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  Master include file 
+ */
+
+#ifndef _PROXY_H
+#define _PROXY_H
+
+#include <pthread.h>
+#include "config_tr.h"
+
+/*
+ *  Declarations for commonly used functions
+ */
+
+void upref_shutdown(void);      /* shut down user prefs socket(s) */
+void proxy_shutdown(int sig);      /* shut down main socket(s) */
+void proxy_blocked(int sig);
+
+#endif /* ifndef _PROXY_H */
+@
+
+
+1.18
+log
+@config.h is now config_tr.h
+@
+text
+@@
+
+
+1.17
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d9 1
+a9 1
+#include "config.h"
+@
+
+
+1.16
+log
+@Added "loadavg" instrumentation in thr_mon.c, though it doesn't really
+work yet.  Broke out instrumentation into separate funcs for
+readability.  minor bug fix (malloc -> alloca) in httpgo.c.  moved
+monitor debugging macros from proxy.h into debug.h.  frontend now
+bypasses original if size is below default threshold, or if distiller
+cannot be launched.
+@
+text
+@a9 2
+#include "debug.h"
+#include "thr_cntl.h"
+@
+
+
+1.15
+log
+@added frontend reqs/sec meter, retries for distConnectionBroken
+@
+text
+@a11 35
+#include "libmon.h"
+
+extern Monitor *gMon;
+
+#define MON_LOG_MSG(x) \
+    MonitorClient_Send(gMon,"Messages",(x),MON_LOG)
+#define MON_LOG_MSG_2(x,y) \
+    { char __msg[80]; \
+      sprintf(__msg,(x),(y)); \
+      MonitorClient_Send(gMon,"Messages",__msg,MON_LOG); \
+    }
+#define MON_LOG_ERR(x) \
+    MonitorClient_Send(gMon,"Errors",(x),MON_LOG)
+#define MON_LOG_ERR_2(x,y) \
+    { char __msg[80]; \
+      sprintf(__msg,(x),(y)); \
+      MonitorClient_Send(gMon,"Errors",__msg,MON_LOG); \
+    }
+#define MON_STATS(f,v) \
+    { char __msg[80]; \
+      sprintf(__msg, "%d", (v)); \
+      MonitorClient_Send(gMon, (f), __msg, MON_SIMPLE); \
+    }    
+#define MON_LOAD(msg,f,v) \
+    { sprintf((msg),"diff=%d,red",(v)); \
+      MonitorClient_Send(gMon, (f), (msg), MON_TIMECHART); \
+    }                                                           
+#define MON_INDICATORS(msg,f,n,v) \
+    { int i,ndx=0; \
+      for (i=0; i<(n); i++) { \
+        ndx+=sprintf((msg)+ndx,"%d,",*(((int*)v)+i)); \
+      } \
+      msg[strlen(msg)-1] = 0; \
+      MonitorClient_Send(gMon, (f), (msg), MON_ARRAY); \
+    }
+@
+
+
+1.14
+log
+@User prefs skeleton working
+@
+text
+@d30 4
+a33 3
+#define MON_STATS(msg,f,v) \
+    { sprintf((msg), "%d", (v)); \
+      MonitorClient_Send(gMon, (f), (msg), MON_SIMPLE); \
+@
+
+
+1.13
+log
+@added thread-monitoring stuff to frontend, fixed thread-monitoring procs in GUI, added proxy autoconfig file target to toplevel Makefile
+@
+text
+@d18 5
+d25 5
+d51 2
+a52 1
+void proxy_shutdown(int sig);      /* panic exit */
+@
+
+
+1.12
+log
+@thread state logging added to frontend
+@
+text
+@d28 2
+a29 4
+#define MON_ARRAY(msg,f,n,v) \
+    { int i; \
+      char __tmp[15];  \
+      msg[0] = 0; \
+d31 1
+a31 2
+        sprintf(__tmp,"%d,",*((int*)v+i)); \
+        strcat((msg),__tmp); \
+d34 1
+@
+
+
+1.11
+log
+@renamed mon.h to libmon.h - clientlib was not compiling correctly
+(though it would have if its includepath had been right) since solaris
+has a /usr/include/mon.h file.  minor monitor interface changes in
+monitor.c.
+@
+text
+@d28 10
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d12 1
+a12 1
+#include "mon.h"
+@
+
+
+1.9
+log
+@frontend now uses monitor for logging
+@
+text
+@d20 8
+a27 2
+#define MON_STATS(f,v) \
+    MonitorClient_Send(gMon, (f), (v), MON_SIMPLE)
+d34 1
+@
+
+
+1.8
+log
+@End to end path works via dispatch.c, some error reporting still broken and some things still hardcoded that shouldn't be
+@
+text
+@d12 10
+@
+
+
+1.7
+log
+@http parsing is breathing
+@
+text
+@d17 1
+a17 1
+void proxy_shutdown(void);      /* panic exit */
+@
+
+
+1.6
+log
+@Caught up to the ptm stuff again.  (Steve)
+@
+text
+@d9 1
+a9 1
+#include <config.h>
+@
+
+
+1.5
+log
+@Now includes c_defines.h instead of monitor.h
+@
+text
+@a9 1
+#include <c_defines.h>
+@
+
+
+1.4
+log
+@configure script now generates include path automatically
+@
+text
+@d10 1
+a10 1
+#include <monitor.h>
+@
+
+
+1.3
+log
+@structs.h is now redundant, most of that stuff is in config.h
+@
+text
+@d10 1
+a12 6
+
+/*
+ *  HTTPd front end declarations
+ */
+
+int httpreq_init(int port);
+@
+
+
+1.2
+log
+@HTTPd thread can accept socket connections, queue them to be handled,
+and have them successfully picked up, done and deallocated.
+@
+text
+@a9 1
+#include "structs.h"
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@a7 1
+#include "config.h"
+d9 1
+a9 2
+#include <assert.h>
+#include "params.h"
+d13 6
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

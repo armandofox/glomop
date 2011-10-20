@@ -1,0 +1,534 @@
+head	1.12;
+access;
+symbols
+	prewink:1.11
+	stable:1.6
+	release:1.1
+	current:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.12
+date	96.07.07.00.03.22;	author fox;	state dead;
+branches;
+next	1.11;
+
+1.11
+date	96.06.23.01.33.09;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.16.01.41.30;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.15.02.39.04;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.15.01.49.17;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.14.07.39.57;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.13.09.15.32;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.12.22.16.28;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.11.02.17.27;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.10.22.50.23;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.07.00.33.53;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.04.01.25.59;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@=head1 NAME
+
+proxy - implements the proxy object's main event loop and fake multithreading
+
+=head1 SYNOPSIS
+
+ require "mainloop.pl";
+ $proxy = new proxy $authrec,$globals;
+ $proxy->mainloop();
+
+=head1 DESCRIPTION
+
+The proxy object waits in an event loop for interesting things to happen, and
+dispatches to function handlers in the L<commands(3)> package to handle the
+interesting things.
+
+=head1 CONSTRUCTORS/CLASS METHODS
+
+=item $proxy = new proxy $authrec,$globals;
+
+Construct a new proxy object (normally only done once per session) with the
+given authentication record (an object returned by the L<accept(3)> module) and
+global variable object (returned by L<globals(3)>).  The new proxy has a single
+active connection, corresponding to the connected client, and zero open
+documents. 
+
+=item &proxy::client_serve
+
+This is the function defined as the service function for the connection
+corresponding to the GloMop client.  See L<gm_conn(3)> for details of the
+connection object.  
+
+=head1 INSTANCE VARIABLES
+
+=over 3
+
+=item $g = $proxy->Globals;
+
+The global variables associated with this instance of the proxy.  See 
+L<globals(3)>.
+
+=item $auth = $proxy->Auth;
+
+An authentication record obtained at client connection time.  Any state
+associated with client authentication lives here.  The L<accept(3)> module
+exports 
+this object.  This object should be treated as read-only.
+
+=item @@conns = $proxy->Connections;
+
+An array containing the currently active connections, one of which is the
+client.  The connection object is exported by the L<gm_conn(3)> module.  When a
+connection wakes up, its service function is called and the connection is
+re-queued.
+This variable should be treated as read only; but see L</"add_doc">
+below.
+
+=item @@docs = $proxy->Docs;
+
+Returns the array of document objects currently known to be open.  Note that
+this is not one-to-one-correspondent with the array of open connections, since
+documents will outlive the connections originally used to fetch them, and there
+are some connections to which no document corresponds (e.g. the client is a
+connection).
+This variable should be treated as read only; but see L</"add_doc">
+below.
+
+=back
+
+=head1 INSTANCE METHODS
+
+=open
+
+=item $proxy->add_doc($doc,$conn)
+
+Adds a new connection $conn to be associated with document object $doc.  These
+should be a L<doc(3)> object and a L<gm_conn(3)> object respectively.  The
+connection will now be queued and whenever it wakes up, the connection's
+service function will be called, and passed the document object as its first
+argument.
+
+=item $proxy->delete_doc($doc_id)
+
+Delete document with ID $doc_id, which includes closing its connection if any
+and discarding all document state, cached chunks, cached files corresponding to
+the document, etc.  Returns undef iff the proxy doesn't know about such a
+document. 
+
+=item $proxy->doc_from_id($id)
+
+Returns the document object corresponding to doc ID $id, if the proxy knows
+about such a document; otherwise undef.
+
+=back
+
+=head1 BUGS
+
+delete_doc doesn't really explicitly discard any state; it just removes the
+document from the active list.  Currently it doesn't even close the document's
+associated connection, which is really bad.
+
+=cut
+
+
+package proxy;
+require "gm_conn.pl";
+
+sub new {
+    my $class = shift;
+    my $authrec = shift;
+    my $globals = shift;
+    my $self = bless ({
+        Auth => $authrec,
+        Connections => [makeconn gm_conn ("client",STDIN,STDOUT,
+                                          \&client_serve,\&client_exception)],
+        Globals => $globals,
+    });
+    return $self;
+}
+
+sub Auth { shift->{"Auth"} }
+sub Connections { @@{shift->{"Connections"}}}
+sub Docs { @@{shift->{"Docs"}}}
+sub Globals { shift->{"Globals"}}
+
+sub mainloop {
+    my $self = shift;
+
+    my @@ready = ();
+    while (1) {
+        #
+        #  Wait for an active connection to wake up.  Note that the client is
+        #  itself an active connection.
+        #  BUG::should check client at higher priority.
+        #
+        @@conns = @@{$self->{"Connections"}}; 
+        @@ready = &gm_sock::selectsock (-1, @@conns);
+        warn( "Selectsock returned, but nothing is ready!"), next
+            unless defined @@ready;
+        
+        # Serve the requests one at a time
+        
+        my $cond;
+        while ($conn = shift @@ready) {
+            $cond = $conn->conditions;
+            &{$conn->readfunc}($self);
+        }
+    }
+    exit 0;
+}
+
+sub add_doc {
+    my $self = shift;
+    my $doc = shift;
+    my $conn = shift;
+    push(@@{$self->{"Docs"}}, $doc);
+    if (ref($conn) eq 'gm_conn') {
+        push(@@{$self->{"Connections"}}, $conn);
+    } else {
+        warn("Null connection object for doc id " . $doc->id);
+    }
+}
+
+sub doc_from_id {
+    my $self = shift;
+    my $docid = shift;
+    my @@docs = @@{$self->{"Docs"}};
+    my $ndx = $self->doc_index_from_id($docid);
+    return $ndx && $docs[$ndx];
+}
+
+sub doc_index_from_id {
+    # this is a private function!
+    my $self = shift;
+    my $docid = shift;
+    my @@docs = @@{$self->{"Docs"}};
+    my $ndx = 0;
+    for (@@docs) {
+        last if ($_->id == $docid);
+        $ndx++;
+    }
+    return ($ndx > $#docs) ? undef : $ndx;
+}
+
+sub delete_doc {
+    my $self = shift;
+    my $docid = shift;
+    my $ndx = $self->doc_index_from_id($docid);
+
+    if (defined $ndx) {
+        # delete it
+        splice(@@{$self->{"Docs"}}, $ndx, 1);
+        return 1;
+    } else {
+        return undef;
+    }
+}
+
+#
+#  Exceptional condition on client socket: shut down proxy
+#
+
+#
+#  Serve request from client
+#
+
+sub client_serve {
+    my $proxy = shift;
+    my $handler;
+    my @@args;
+    
+    # Read pending message, and peek at first token.
+
+    my $msgtype = &Msg::read_generic;
+
+    # Dispatch on message type.
+
+    if ($handler = $MsgHandlers{$msgtype}) {
+        @@args = &{"Msg::receive_$handler"};
+        if ($@@) {
+            &Msg::send_op_failed(&Msg::FLAG_MSG_ERROR,
+                                 &MSG::OP_FAIL, $msgtype,
+                                 "Malformed $msgtype msg");
+        } else {
+            &{"proxy::" . "handle_$handler"}($proxy, @@args);
+        }
+    } else {
+        &Mon::status("Unknown client request token '$msgtype'");
+        &Msg::send_auth_error(&Msg::FLAG_MSG_ERROR,
+                              &Msg::ERR_STR, "Bad request: $msgtype");
+    }
+    return;
+}
+
+
+1;
+@
+
+
+1.11
+log
+@Added extensive documentation in the form of embedded perlpod.
+@
+text
+@@
+
+
+1.10
+log
+@minimal refinement seems to work, albeit bad management of ppm's and
+gifs results in lots of wasteful shell processes to determinme simple
+properties of the orig file. Lesson: need to keep properties with each
+file/chunk.
+@
+text
+@d1 103
+a103 3
+#
+#  Proxy main service loop.  Implements the proxy abstraction and its methods.
+# 
+d111 1
+d116 1
+d121 5
+a127 1
+    my $G = shift;                          # global vars
+d136 1
+a136 1
+        @@conns = @@{$self->{Connections}}; 
+d156 1
+a156 1
+    push(@@{$self->{Docs}}, $doc);
+d158 1
+a158 1
+        push(@@{$self->{Connections}}, $conn);
+d161 35
+@
+
+
+1.9
+log
+@skeletal refinement is working, but D'OH!  it returns the specified
+chunk at the distilled size, not the original size! D'OH!
+@
+text
+@d88 1
+a88 1
+        &Msg::send_auth_error(&Msg::FLAG_MSG_ERR,
+@
+
+
+1.8
+log
+@Fixed 'bad htype' bug on every other fetch (lesson: don't do a 'return'
+or far jump out a 'while each()' loop!).  Fixed error behavior: was
+trying to set error field in self->resp instead of self (an
+HTTP::Headers object rather than a proxy object).  Still tbd: Image
+module does not call gifmunch if distillation isn't needed or would
+increase e2e latency. (Hook in place, but no fxnality yet.)
+@
+text
+@d80 1
+a80 1
+            &Msg::send_op_failed(&Msg::FLAG_MSG_ERR,
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d40 1
+a40 1
+            &{$conn->readfunc}();
+d46 12
+d67 1
+a67 1
+    my $self = shift;
+d84 1
+a84 1
+            &{"handle_$handler"}($self, @@args);
+d88 2
+a89 1
+        &Msg::send_auth_error(0,&Msg::ERR_STR, "Bad request: $msgtype");
+@
+
+
+1.6
+log
+@Defined a simple protocol in hsk.txt for setting session-level
+preferences for an htype, and implemented the message handler for it
+which sends the parsed prefs info to the set_prefs routine of the
+appropriate htype module.
+@
+text
+@d72 1
+a72 1
+            &{"handle_$handler"}(@@args);
+@
+
+
+1.5
+log
+@Weird bug in accept.pl: the kerberos version number was not being
+converted from unsigned char to perl int after being extracted from the
+decrypted rcmd ticket; this resulted in a warning "Argument not numeric
+in entersub" when calling save_credentials; but mysteriously, also
+caused an error in UserAgent much later -- "undefined subroutine
+UserAgent::_need_proxy" while fetching a file: URL -- even though the
+fetch should succeed, and the subroutine is defined in a previously
+loaded file!  Hypothesis: the bad kerberos version number had some
+non-obvious effect on internal perl data structures because of stack
+overrun or similar badness when it was passed to the underlying kerberos
+call?  Ugh...
+@
+text
+@a30 1
+        &Mon::status("Waiting for command");
+d56 3
+a58 1
+
+d65 2
+a66 2
+    if ($msgtype eq &Msg::OP_OPEN_DOC) {
+        my($msgtype,$docloc,$max,$docid) = &Msg::receive_open_doc;
+d68 5
+a72 11
+            &Msg::send_op_failed(0,&Msg::OP_FAIL, &Msg::OP_OPEN_DOC,
+                                 "Malformed OPEN_DOC request");
+            return;
+        }
+        # Create new document object for the document to be opened.
+        my $doc = "doc"->new( $docloc,$max,$docid);
+        # Fetch and segment document
+        unless ($doc->fetch) {
+            &Msg::send_op_failed(0, &Msg::OP_FAIL, &Msg::OP_OPEN_DOC,
+                                 $doc->err);
+            return;
+a73 10
+        # Send chunks to client, up to threshold
+        $doc->send_chunks(0..$max-1);
+        # Add document to the list of open documents
+        push(@@{$self->{Docs}}, $doc);
+        #
+        # The document object encapsulates a connection object that represents
+        # the filehandle on which the document is being received.  Put it on
+        # the queue of filehandles to look at.
+        #
+        push(@@{$self->{Connections}}, $doc->{conn});
+@
+
+
+1.4
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.
+@
+text
+@d74 5
+a78 1
+        $doc->fetch;
+@
+
+
+1.3
+log
+@image segmenter successfuly calls pnmcut, but leaves chunks in ppm
+format for now
+@
+text
+@d73 1
+d75 3
+a91 7
+# Destroy should get called when proxy goes away
+
+sub DESTROY {
+    system "kdestroy";
+    &Mon::kill;
+}
+    
+@
+
+
+1.2
+log
+@Added utilities file (with debugging stuff and generalization of
+instance-variable access for various classes), and segment manager
+(provides generic segmentation services).  'tm' submodule will contain
+high-level document type (htype) "chunkers".  added close_doc message to
+hsk.txt.
+@
+text
+@d88 8
+@
+
+
+1.1
+log
+@Semi-runnable state; allows auth handshake and OD (open doc) requests
+seem to work.
+@
+text
+@d39 3
+a41 3
+        while ($sock = shift @@ready) {
+            $cond = shift @@ready;
+            &{$sock->readfunc}();
+d72 2
+a73 1
+        my $doc = doc->new($docloc,$max,$docid);
+@

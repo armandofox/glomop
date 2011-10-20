@@ -1,0 +1,485 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.01;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From mds@@ic.EECS.Berkeley.EDU  Fri Nov 20 13:34:26 1998
+Return-Path: mds@@ic.EECS.Berkeley.EDU
+Received: from ic.EECS.Berkeley.EDU (ic.EECS.Berkeley.EDU [128.32.168.7]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA17450 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 13:34:25 -0800
+Received: (from mds@@localhost)
+	by ic.EECS.Berkeley.EDU (8.8.8/8.8.8) id NAA30449;
+	Fri, 20 Nov 1998 13:34:41 -0800 (PST)
+Date: Fri, 20 Nov 1998 13:34:41 -0800 (PST)
+From: "Mark D. Spiller" <mds@@EECS.Berkeley.EDU>
+Message-Id: <199811202134.NAA30449@@ic.EECS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: Mark D. Spiller - CS261 homework 3
+Cc: mds@@ic.EECS.Berkeley.EDU
+Status: RO
+
+
+Mark D. Spiller
+CS 261, HW #3
+
+Note:  I discussed these problems with Chen-Nee Chuah.
+
+**************
+Question 1
+**************
+
+This program violates the basic principle of running in priveleged
+mode for the minimum time possible.  Instead of being root only during
+the portions that absolutely require the increased privileges, the
+program retains privileges except for the one code segment where the
+developer has determined that he wants something to occur with the
+invoker's set of privileges.  One option would be to explicity reduce
+priviliges except for the calls that really require them.
+
+Another option is to rewrite the program to perform all the privileged
+actions first and then release privileged mode.  The rename option at
+the end, unfortunately, seems to require a higher level of privilege.
+One option might be to actually split the program into two programs -
+the first piece would give the user a copy of the file that the user
+could edit.  The second program would look at a file to make sure that
+it is OK, and if so, rename it.  This doesn't affect the program
+function, since one could still prevent multiple users from editing at
+the same time by making the lock file and the temp file being edited
+the same file (specifically, the lock file).  In this situation, the
+first program would copy the moderator file as superuser (thus
+creating the lock file), revoke all privileges, start debugging, and
+then run the text editor.  The second program would confirm that the
+file was OK, and rename it to the moderator file, thus releasing the
+lock.  Lots of details not mentioned, but this serves the point that
+it *could* be rewritten so that it wouldn't have to run almost the
+entire time in privileged mode.
+
+I am not 100% sure that the problem couldn't be solved without setuid
+root.  Why not just create a "moderators" group, a "moderator" user,
+and make this program setuid moderator?  "moderator" creates the file,
+but puts it in a directory that only he can access (chmod 700
+directory).  Users in the moderators group running the script become
+the moderator, and can then access the file.  Moderator can be a
+low-privilege user, so that writing the debug file as moderator is no
+big deal either.  Probably trickier and higher overhead to set up
+right, but less risky in terms of unauthorized access to superuser
+privileges.
+
+Now, for specific points in the program:
+
+- Line #116 - the exec of vi...  vi is run as root, and it is possible
+  to run shell commands from vi (":!command"), which will be run as
+  root.  Very very bad.
+
+- Since the program is running in privileged mode for almost the entire
+  time, this means that all of the library calls made are trusted.  Any
+  bugs found in those calls would allow the malicious invoker to exploit
+  them as root in this setuid program.
+
+- The return values are not checked for the fopens in the copyfile()
+  function.  It may be possible to create an empty copy instead of an
+  accurate copy.  Although the looksat() function could catch this if it
+  was made more clever, it would be good to check correctly in copyfile().
+  In general, all of the return values for system calls should be
+  checked.
+
+- Since the program is operating on files, there are a lot of file
+  attacks that we discussed in class that might be possible.  Since the
+  debug and lock files are created in tmp, depending on where the
+  moderators file is located (i.e. it might be on NFS), there is a
+  chance that users on workstations mounting the moderators filesystem
+  might each create their own version of the debug file on their own
+  workstation.  There is also the possibility of race conditions, such
+  as between the looksat() call and the rename() call.  Finally,
+  although only root can delete the moderators file if root created it,
+  anyone is allowed to twiddle it as much as they like, or even truncate
+  it, as long as it passes the looksat() call, which seems risky.
+
+- Line #29, gid_t glist[20] - Instead of 20, this really should be
+  NGROUPS_MAX.  It is not clear from the man page whether getgroups is
+  used correctly - the man page says :
+  	"This array has gidsetsize entries and must be large enough to
+  	contain the entire list.  This list cannot be greater than NGROUPS_MAX."
+  Does this mean the entire list of *20* or of *NGROUPS_MAX*?  Seems
+  that if the man page is ambiguous, that the implementations might also
+  be so.  Didn't actually confirm this to be a problem, though.  If it is
+  correct, then the user may suffer a reduction of group permissions, but
+  a reduction should not be a security problem.
+
+- If the debug or moderator files do not yet exist, then when they are
+  created by the program they would be opened with permissions depending
+  on the user's umask.  Depending on this value, other users might not
+  be able to open the file (denial of service), since the files are open
+  with the invoking user's privileges/permissions.
+
+  Additional problems with the debug file include the following:
+
+  1) Since there is no locking of the debug file, if multiple people run
+    the program it could be confusing, especially since the debug messages
+    aren't all that useful (doesn't give uid, function name, etc). (Same
+    goes for the perror calls.  It might be nice to put the perror calls
+    in the debug file as well).
+  
+  2) Since the debug file is opened with user permissions, this means
+    that the user can normally open it as well.  It would be better to
+    have some sort of append-only system, so that users can mess other
+    users up by removing parts of the debug file.  The file should be
+    created originally by someone (like root), so that users cannot change
+    the permissions of it later.  But then again, the debug file can't be
+    expected to provide accurate logging anyway, since debugging is only by
+    user-option, anyway.
+
+- Buffer overruns in sprintf, lines 68 & 157.  Buffer overruns could
+  be used to attack the stack, as described in class.  Another nice
+  target would be the #defines - if you could change one of the
+  filenames to "/etc/passwd" and change it while privileged, that would
+  be very handy.
+
+- The signal handler might be used adversely.  If someone else could
+  send the right signal to the handler, the program will run looksok at
+  the buffer, and rename it to moderators, but vi will still have tmpf
+  open.  I am not sure what will happen to an open file descriptor to
+  tmpf when the file gets moved to MODF - will writes to it go to tmpf
+  or MODF?  Seems like it might give the attacker a chance to write the
+  file after the check has occurred.  (unconfirmed)
+
+- The exec of vi might, as discussed in class, pass the environment
+  variables of the user to the vi call.  Something like the LD_LIBRARY
+  value might be used to make vi do something it shouldn't.  (Of course,
+  the shell command attack in vi, described above, is still a much easier
+  attack).
+
+- The exit(1) calls that occur after grablock() do not unlink the lock
+  file, creating a denial of service attack.
+
+- The looksat() function is very important - This has to be know
+  everything about the news server, so that nothing dangerous can get
+  through, including changes between versions of the news program.
+
+- tmpnam() is listed in the man page to be unsafe for multi-threaded
+  situations.  It isn't clear what it will do, though.
+
+
+
+*****************************
+Question 2 - ACTIVE NETWORKS
+*****************************
+
+2.1. BPF byte-code mobile code, no loops, packet/interface reads only
+
+- Denial of Service/degradation: although loops are not allowed,
+malicious users can create really long programs that can have similar
+effects.  This can be avoided by setting limits on program length.
+
+- DOS: The network loses it's ability to balance load when a
+particular link is over-used, since attackers can send all of their
+packets down one link and saturate it.  The router must be able to
+determine network state and be able to override packet requests for
+the good of the network.
+
+- The choice of which interface is used could become a covert channel
+
+- The router API might uncover routes/interfaces previously kept
+secret, which could then be detected using traceroute on received
+packets.
+
+- Different # hops for different interfaces on the way to the same
+destination might allow for a TTL attack on an IDS.  It seems like
+this and the two previous attacks are not really avoidable without
+some setup in the router specifying different levels of permissions
+for different packet sources/destinations.
+
+- Congestion control: If packets begin to go their own way based on
+their handlers, how will this affect end-to-end congestion control?
+(This is relevant for all of the cases below as well).  
+
+***
+
+2.2. Flows/FlowIDs to amortize mobile code overhead (seems like from
+this point on one could use mobile code to make a packet filter, if
+one creates a /dev/null interface for drops...  Pretty cool, easy way
+to make every smart router a packet filter!!)
+
+- Depending on how a flow is defined, one could degrade/modify other
+people's traffic on that router by sending packets with falsified
+source/destination information.  This could make the targets packets
+do all sorts of weird things (i.e. go to weird/untrusted places).
+Fixing this would require some sort of authentication of packets
+origin and destination or limitation of program capability.
+Per-packet authentication would be an impossible overhead in this
+situation, but if code updates occur very infrequently it might be
+feasible.  Another option might be to incur another round-trip time to
+check with both the source and the destination (perhaps as part of the
+handshake?) that this is really their code, and leave it to them to 
+confirm that their code is executing.
+
+- Replacement algorithms for when the router runs out of memory: An
+attacker could make lots of fraudulent connections to fill the memory
+and push out other connections' code.  Some sort of time-out and
+fair-size-test of code would be necessary.  An admission policy might
+also a solution to resource issues in this problem from this point
+(2.2 through 2.7) on.
+
+- The router becomes a storage of information for many flows, which
+might make it more likely to be attacked.  State must be cleared out
+after use (and not re-used by accident).
+
+***
+
+2.3. Loops allowed in byte-code
+
+- Denial of Service: Programs can go into infinite loops.  Need some
+kind of checking to ensure that loops are not infinite (code
+verification?). Time slicing and time limits would work - in this
+case, time limits would probably be the best option.  Users can be
+told that their code will only run for X cycles, and thus infinite
+loops are avoided.
+
+- Bounds: You don't want users to jump out of their code and execute
+other packet's code or go somewhere weird in the router's code.
+(solution - careful coding for router control, code
+verification/Software fault isolation, bounds checking).
+
+***
+
+2.4. Handlers allowed read/write access to packet.
+
+- At this point, the mobile code can actually put information about
+the interfaces directly into a packet and send it through the
+interface that it desires...  Additionally, the code can collect
+information about every router along the way, adding it to its data -
+it can't change the packet size, but if the user sends a large packet
+full of blank data, the code can fill the blank space with data as
+desired.  These problems are unavoidable, if you want code to be able
+to look at the interfaces and choose between them intelligently - one
+has to be careful that the packet code-router API does not give out
+any data beyond what is absolutely necessary and safe.
+
+- Limitations of writability: One has to be careful when one specifies
+exactly what is writable.  Things that you would not want to make
+writable include: header [src/dest/TTL/etc], flow ID, and the code
+itself!  Basically, one has to make sure that the code cannot switch
+to another flow (and possibly change that flow's code!) - otherwise,
+packets can stay in the network, collecting information and using CPU
+cycles endlessly, changing their flow whenever they get too near their
+destination...  The network of active routers could become a CPU farm
+or a roaming distributed storage system at the hackers whim... :) Or
+change from a valid packet/protocol to an invalid protocol after
+passing through a firewall.  If packets can rewrite their headers,
+they also start to become untraceable, unless some sort of logging in
+routers is implemented (infeasible for high throughput, perhaps only
+logging of active code?).
+
+***
+
+2.5. Handlers may maintain (sandboxed) state across packet events
+
+- The addition of even more state plus the added weakness (due to
+increased number of active network features) makes the router an even
+juicier target.  Malicious handlers that break the system can now
+access other handlers' state, and potentially gather statistical data
+on connections and do traffic analysis.
+
+- How much memory do you allocate?  How do you handle contention?
+This is getting ugly, one is basically putting a computer out in the
+net and letting people run programs on it.  How can you detect that it
+is still being used for routing and not other things?  Very complex,
+plus many things that you would do to check will only kill throughput
+further.  One simple possibility would be draconian CPU/memory
+restrictions, but that would go against the compression argument that
+caused this "feature" in the first place.
+
+At this level things start to become very clearly unmanageable.
+
+***
+
+2.6. Handlers allowed to construct and send IP packets
+
+- At this point handlers can carry out all sorts of nifty attacks like
+the ones we talked about in class.  Packet bombs from numerous routers
+(DOS) and potentially untraceable fragmentation (active attacks) are
+two possibilities.  Attempted solutions might include restricting the
+number of packets that can be sent, and limiting those packets to the
+same address as the original packet.  A router that perfectly
+implements and check the TCP/IP protocol could also verify check that
+every packet is OK, but such perfect hardware/software is not very
+likely.
+
+- Combined with 2.4 above, in the case where the header/etc is
+writable, a packet might be able to go to a firewall, change itself to
+be able to pass through, have its handler loop and wait while it
+spawns attack packets on the end hosts, gather results, change itself
+to pass back through the firewall, and then head home with the
+secrets...  Firewalls need to kill anything incoming, and possibly
+outgoing, that contains a handler.
+
+***
+
+2.7. Protocol extended to allow Java byte-code
+
+- Can it get any worse?  Not really.  At this point, the complexity of
+what is possible to run is so high that there will always be bugs, and
+the system becomes totally insecure.  Routers must be part of the TCB
+for the network to function, and even if this is the case the
+throughput will drop enormously due to what users will probably write.
+Now you don't need to both having a machine on the network to use as a
+packet sniffer, you can just write it and have the router run it!  All
+the attacks that we talked about in class for Java are now possible as
+well...  This is a very bad picture for security.  Send everything
+strongly encrypted, and hope it gets there...someday.
+
+OK, the point is made, I am now thoroughly disillusioned with Active
+Networks.  *sigh* It sounded like such a great idea in CS268,
+though...
+
+*************************
+Question 3 - MOBILE CODE
+*************************
+
+3.1. How would you block mobile code at the firewall?
+
+The crux of this question is "What IS considered mobile code?!?!?".
+Depending on the definition of mobile code, the problem of blocking it
+may be impossible.  Some examples of potential mobile code would be:
+
+  - Java bytecode, Javascript, ActiveX
+  - Mail attachments (ie Word macros, MIME-encoded data)
+  - CGI/PERL
+  - html-embedded code (links to exe files, things that call handlers...)
+  - ftp'd binaries
+  - pure ascii... (ie emailed c program code, PERL, ...)
+  - the deadly cdrom-attack (bring in a cdrom, install code)
+
+Depending on one's definition, even if one restricted anything that
+was not pure ascii, it might still be letting in malicious mobile
+code!
+
+Bottom line, one would need a very intelligent application level
+firewall that knows all the types of mobile code that are possible,
+and all the possible ways that they might be tunneled in through
+different "safe" protocols.  For example, the firewall would have to
+either know about anything that a web browser might do to run
+something that it downloads, or not allow web-browsing protocols
+through at all.  Similarly, the firewall would have to know everything
+about SSH tunneling, the keys involved, and ANYTHING (that might be
+mobile code) that could go through the tunnel, if it accepts any ssh
+packets.  This is clearly impossible/infeasible, making this a very
+very hard problem.
+
+Issues/problems to consider:
+
+(a) The firewall would have to be updated to keep track of all new
+formats and application capabilities.  This includes being updated on
+ALL of the possible interactions that might occur between the new
+protocol and any existing protocols (including tunneling, etc).
+
+(b) The firewall has to be able to break through encrypted channels,
+to see what is going on underneath them.  Since it thus has to have
+all of the keys for the firewalled domain, it becomes a VERY
+attractive site to break into...
+
+(c) The firewall has to anticipate anything that a user who really
+wants to execute mobile code will do to try and get around it.  (and
+there are probably more users than firewall developers...)
+
+(d) Data still has to pass through the firewall => some performance is
+required.  These checks are going to be very computationally
+expensive, if at all possible, because of the complexity involved.
+
+(e) If nothing can ever get through, how will software be distributed?
+Not only dangerous code isn't getting through, but also potentially
+useful programs, not to mention comraderie/productive interaction.
+
+
+3.2. Blocking only DANGEROUS mobile code introduces what further problems?
+
+Now the problem gets even harder - besides having to detect everything
+that might be mobile code, you also have to figure out what
+"dangerous" means for each of them.  First priority is to find a
+common definition of "dangerous" - is writing files "dangerous"?  What
+about consuming a lot of CPU time?  Interactions between different
+entities (protocols/applications) become even more complex here.
+
+One option for allowing code through is figuring out whom you really
+trust.  If you can authenticate the people that you really trust, and
+they personally/financially trust/guarantee the code, anticipating any
+kind of situation that you use it in, AND/OR you are willing to accept
+the consequences of what happens if things go wrong, you might allow
+their code through.
+
+Assuming that the policies can be made, and one can build the
+knowledge database of protocols/applications and their "dangerous"
+abilities, the firewall can then either pass them through or run the
+mobile code on itself on the behalf of the user.
+
+If mobile code passes through, you have to plan for the event that
+something dangerous comes through, and take steps on the end host as
+well.  Measures that can be taken on the end host include: code
+verification, proof-carrying code, safe languages (ideally, proveably
+safe), library replacement on hosts, sandboxing, and the installation
+of programs (especially network browsers) that allow you to choose and
+severely restrict the mobile code that they run.
+
+The most secure solution might be to set up two networks, one
+completely off the net, with only one highly-restricted and monitored
+pipe in/out for data exchange, and a second for running mobile code.
+
+
+3.3. Who is to blame, the firewall or end host?
+
+Looking at 3.1:
+Many of the issues involve both the firewall and the end host.  
+
+(a) The firewall has to keep track of all the formats, to handle new
+applications with new capabilities that could be installed onto the
+end hosts.
+
+(b) This involves both as well...  If the end client chooses to use
+new forms of encryption, the firewall has to figure this out and
+either deny the attempt, or request the key, or ...
+
+(c) This involves both the firewall and the end-host/user, but the
+firewall can't be blamed for inside-user attacks.  It CAN be blamed
+for being too strict, but that is a policy issue, not really the
+firewall's fault.
+
+(d) This is a purely firewall issue. Some sort of parallelization will
+probably be required to get any performance/throughput.
+
+(e) This is a policy issue, not really specifically related to either
+the firewall nor the end-user.
+
+For 3.2, although the "dangerous" categorization is a policy decision
+independent of the firewall and end hosts, the firewall is to blame
+for failing to detect additional parameters and weeding out those
+connections, as well as for detecting "trusted" incoming data
+streams/mobile code.  The end host is blamed for anything that is
+considered "not dangerous" that does something dangerous, and is thus
+required to handle the additional protective measures described.  Both
+can be blamed for bugs...
+
+
+
+Aiya!  This was quite an illusion-shattering homework.  Now both
+active networks and mobile code no longer look so appealing...  I
+don't envy you guys the task of reading through and grading these
+homeworks, although the different thoughts/ideas present must be
+really interesting!
+
+@

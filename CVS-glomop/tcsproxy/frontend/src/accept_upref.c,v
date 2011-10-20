@@ -1,0 +1,385 @@
+head	1.5;
+access;
+symbols
+	Yatin-final:1.5
+	Yatin:1.5.0.2
+	pre-yatin-merge:1.5
+	transend-beta2:1.4
+	fox-dev:1.4.4.2
+	frontend-ng:1.3
+	transend-beta-latest:1.3
+	Aggregators:1.3
+	NoAggregators:1.3
+	iang:1.3.0.4
+	transend-beta:1.3.0.2
+	SOSP:1.3;
+locks; strict;
+comment	@ * @;
+
+
+1.5
+date	97.08.30.21.34.09;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.07.24.18.50.02;	author fox;	state Exp;
+branches
+	1.4.4.1;
+next	1.3;
+
+1.3
+date	97.02.17.01.35.50;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.02.12.02.58.20;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.07.22.47.53;	author fox;	state Exp;
+branches;
+next	;
+
+1.4.4.1
+date	97.08.11.04.12.48;	author fox;	state Exp;
+branches;
+next	1.4.4.2;
+
+1.4.4.2
+date	97.08.15.03.42.59;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.5
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  accept_upref.c
+ *  Set up a separate TCP socket for receiving client
+ *  prefs requests.  Note that the request may arrive via the proxy's
+ *  main socket, or directly if the user has configured "no proxies for"
+ *  to point to the user prefs address (the preferred setup).  This
+ *  runs as a single thread that is created at initialization time and
+ *  repeatedly handles requests from the socket.
+ *
+ *   Actual parsing of the prefs data is handled in file parse_upref.c.
+ */
+
+#include "userpref.h"
+#include "config_tr.h"
+#include "ALLARGS.h"
+#include "utils.h"
+#include <string.h>
+#include <errno.h>
+
+extern Monitor *gMon;
+
+static int upref_sock;
+static pthread_t thr_parse_upref;
+static ThrFunc accept_upref_request;
+
+gm_Bool
+init_parse_uprefs(UINT16 port)
+{
+  char portnum[8];
+  int i;
+
+  sprintf(portnum, "%d", port);
+  if ((upref_sock = slisten(portnum)) < 1) {
+    char error[200];
+    MON_SEND_3(MON_ERR,"Listen on %d failed: %s\n", (int)port, strerror(errno));
+    return gm_False;
+  }
+
+  THR_OP("Thread create listen for prefs",
+         pthread_create(&thr_parse_upref, (pthread_attr_t *)NULL,
+                        accept_upref_request, (void *)NULL));
+
+  MON_SEND_2(MON_LOGGING,"Listening for prefs changes on port %d\n", port);
+  return gm_True;
+}
+
+/*
+ *  accept_upref_request
+ *  Waits in a loop accepting user pref requests on socket; tries to
+ *  process request, if impossible, returns an error through http_error
+ *  function.  If request looks good, tries to change the prefs database
+ *  to reflect new prefs.
+ */
+
+static int newconn = 0;
+
+static void *
+accept_upref_request(void *arg)
+{
+  MON_SEND(MON_LOGGING,"Accepting user prefs changes");
+  while (1) {
+    newconn = saccept(upref_sock);
+    
+    if (newconn < 0) {
+      MON_SEND_2(MON_ERR,"Accepting new connection: %s", strerror(errno));
+      continue;
+    }
+
+    (void)parse_prefs_request(newconn);
+    shutdown(newconn, 2);
+    close(newconn);
+  }
+
+}
+
+/*
+ *  Collecting incoming prefs request from open file descriptor, parse
+ *  them, and call userpref routines to do the work.  It should not
+ *  close or shutdown the file descriptor - that is done by the caller.
+ *  
+ *
+ *  ARGS: file descriptor of open socket
+ *  REENTRANT: No - only one thread is doing userprefs on a single
+ *  socket
+ *  RETURNS: true/false (success/failure);
+ *  SIDE EFFECTS: calls http_error_return to return a result to the
+ *  client
+ */
+gm_Bool
+parse_prefs_request(int sock)
+{
+  Request hd;
+  Request *hp = &hd;
+  size_t headerlen = sizeof(HeaderData);
+  ts_strtok_state *ts_st;
+  char *method;
+  char *tmp;
+  gm_Bool result = gm_False;
+  
+  hp->len = readline_or_timeout(hp, READ_ALL_HEADERS, NULL);
+
+  if (hp->len == -1) {
+    /* request timed out */
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+
+  ts_st = ts_strtok_init(hp->header_data);
+
+  /*
+   *  Currently, user prefs are delivered via the "GET" method and an
+   *  HTML form.  Form data is parsed out of the URL, which has the form
+   *  "name=val&name=val&...."
+   */
+  if (((method = ts_strtok(" ",ts_st)) == NULL)
+      || (strncasecmp(method, "get", (size_t)3) != 0)) {
+    /* no tokens on line! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  if ((hp->url = ts_strtok(" ", ts_st)) == NULL) {
+    /* No URL! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  /* note, we don't really care about the HTTP version, but we need to know
+     where the URL terminates, so.... */
+
+  if ((tmp = ts_strtok(" ", ts_st)) != NULL) {
+    *(tmp-1) = '\0';            /* terminator for hp->url */
+  }
+  /* now analyze the URL.  */
+
+  result = parse_and_change_prefs(hp->url, sock);
+  ts_strtok_finish(ts_st);
+
+PARSE_PREFS_RETURN:
+  return result;
+}
+
+/*
+ *  upref_shutdown
+ *  Close socket in an orderly way when exiting.
+ */
+
+void
+upref_shutdown(void)
+{
+  shutdown(newconn, 2);
+  close(newconn);
+  shutdown(upref_sock, 2);
+  close(upref_sock);
+}
+@
+
+
+1.4
+log
+@debugging/monitoring function interface in frontend cleaned up.  change to xs/Makefile.PL.in to avoid spurious double initialization of stuff in libdist.a when clib.so was dynamically loaded.
+@
+text
+@d14 1
+a14 1
+#include "proxy.h"
+a16 1
+#include "httpreq.h"
+d74 71
+@
+
+
+1.4.4.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d14 1
+a14 1
+#include "config_tr.h"
+d17 1
+@
+
+
+1.4.4.2
+log
+@*** empty log message ***
+@
+text
+@a76 71
+ *  Collecting incoming prefs request from open file descriptor, parse
+ *  them, and call userpref routines to do the work.  It should not
+ *  close or shutdown the file descriptor - that is done by the caller.
+ *  
+ *
+ *  ARGS: file descriptor of open socket
+ *  REENTRANT: No - only one thread is doing userprefs on a single
+ *  socket
+ *  RETURNS: true/false (success/failure);
+ *  SIDE EFFECTS: calls http_error_return to return a result to the
+ *  client
+ */
+gm_Bool
+parse_prefs_request(int sock)
+{
+  Request hd;
+  Request *hp = &hd;
+  size_t headerlen = sizeof(HeaderData);
+  ts_strtok_state *ts_st;
+  char *method;
+  char *tmp;
+  gm_Bool result = gm_False;
+  
+  hp->len = readline_or_timeout(hp, READ_ALL_HEADERS, NULL);
+
+  if (hp->len == -1) {
+    /* request timed out */
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+
+  ts_st = ts_strtok_init(hp->header_data);
+
+  /*
+   *  Currently, user prefs are delivered via the "GET" method and an
+   *  HTML form.  Form data is parsed out of the URL, which has the form
+   *  "name=val&name=val&...."
+   */
+  if (((method = ts_strtok(" ",ts_st)) == NULL)
+      || (strncasecmp(method, "get", (size_t)3) != 0)) {
+    /* no tokens on line! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  if ((hp->url = ts_strtok(" ", ts_st)) == NULL) {
+    /* No URL! */
+    http_error_return(sock, HTTP_VERSION_UNKNOWN,
+                      HTTP_ERR_MALFORMED_REQUEST, hp->header_data);
+    ts_strtok_finish(ts_st);
+    goto PARSE_PREFS_RETURN;
+    /* NOTREACHED */
+  }
+  /* note, we don't really care about the HTTP version, but we need to know
+     where the URL terminates, so.... */
+
+  if ((tmp = ts_strtok(" ", ts_st)) != NULL) {
+    *(tmp-1) = '\0';            /* terminator for hp->url */
+  }
+  /* now analyze the URL.  */
+
+  result = parse_and_change_prefs(hp->url, sock);
+  ts_strtok_finish(ts_st);
+
+PARSE_PREFS_RETURN:
+  return result;
+}
+
+/*
+@
+
+
+1.3
+log
+@Took OUT setsockopts in accept_upref.c
+@
+text
+@d36 1
+a36 2
+    sprintf(error, "Listen on %d failed: %s\n", (int)port, strerror(errno));
+    MON_LOG_ERR(error);
+d44 1
+a44 1
+  MON_LOG_MSG_2("Listening for prefs changes on port %d\n", port);
+d61 1
+a61 1
+  MON_LOG_MSG("Accepting user prefs changes");
+d66 1
+a66 1
+      MON_LOG_ERR_2("Accepting new connection: %s", strerror(errno));
+@
+
+
+1.2
+log
+@preferences use cache and database
+@
+text
+@a40 12
+  i = 1;
+  if (setsockopt(upref_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&i,
+                 sizeof(int))
+      != 0) {
+    MON_LOG_ERR_2("setsockopt SO_REUSEADDR: %s", strerror(errno));
+  }
+  i = 0;
+  if (setsockopt(upref_sock, SOL_SOCKET, SO_KEEPALIVE, (const char *)&i,
+                 sizeof(int))
+      != 0) {
+    MON_LOG_ERR_2("setsockopt SO_KEEPALIVE: %s", strerror(errno));
+  }
+@
+
+
+1.1
+log
+@User prefs skeleton working
+@
+text
+@a52 1
+
+d77 1
+d82 1
+@

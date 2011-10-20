@@ -1,0 +1,201 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.02.27.09.10.31;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added online aggregation
+@
+text
+@<html>
+<title>
+short title
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+long title
+</h1>
+<strong>
+authors
+</strong>
+<br><br>
+<i>Summary by Armando Fox and Steve Gribble</i>
+
+<p><b>One-line summary:</b>
+
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Goal: allow continuous monitoring of incrementally refined
+       results of doing a long-running aggregation query (query in which
+       some statistics are computed over a selection, e.g. "select
+       avg(R.c1*R.c2) from R where ...").  Related work:
+       <ul>
+         <li> online analytical processing (OLAP): also
+              support super-aggregation and sub-aggregation
+         <li> "fast-first" query proc: attempt to quickly return first
+              few tuples
+         <li> APPROXIMATE: defines approximate relational algebra which
+              it uses to process standard queries in an iteratively
+              refining manner.
+       </ul>
+  <li> Design goals:
+       <ul>
+         <li> Continuous observation in UI: regular updates at a
+              selectable rate (time granularity)
+         <li> Control of fairness: if query is computing several running
+              aggregates, user should be able to control the relative
+              rates at which they are updated
+         <li> Minimum time to accuracy: should converge to a narrow
+              confidence interval quickly
+         <li> Minimum time to completion: less important; authors
+              conjecture that most long running online aggregations will
+              be halted by user long before completion.
+       </ul>
+  <li> Naive implementation: Ingres allows arbitrary functions in the
+       query, e.g. "SELECT running_avg(S.grade) WHERE....", and you
+       define <i>running_avg</i> to be a function with internal state
+       that returns the next refinement of a running aggregate.  But
+       these functions can't be used with SQL "group by", aren't well
+       integrated into the query language, and don't perform very well.
+       So we modify the DBMS engine itself....
+  <li> Problems to be solved in DB engine modifications:
+       <ul>
+         <li> Data must be randomly accessed, in order for running
+              aggregate to be statistically meaningful
+         <li> If query specifies "group by", need non-blocking way to do
+              the grouping (think of an event loop: each "event" of
+              incrementally refining one of the aggregates has to be
+              short, to keep behavior and control interactive)
+         <li> Need non-blocking join algorithms (same reasoning)
+         <li> Query optimization metrics may change
+       </ul>
+  <li> <b>Random access to data.</b>
+       <ul>
+         <li> Heap scan: records are usually stored in unspecified
+              order, though sometimes some residual dependence on (e.g.)
+              insertion order.  <i>This is usually the best random
+              access method.</i>
+         <li> Index scan: only if the indexed attributes are not the
+              ones being aggregated.
+         <li> Random sampling from indices: works, but requires repeated
+              probes to random hash buckets.  Bleah.
+       </ul>
+  <li> <b>Non-blocking "group by"</b>:
+       <ul>
+         <li> hash input relation on grouping
+              columns; then as soon as a tuple is read from input, can
+              immediately update aggregate for its group.
+         <li> <i>Index striding</i>: round-robin fetches of tuples that
+              satisfy the "group by" constraints.  To do this, given a
+              B-tree index on grouping columns, scan index looking for
+              distinct keys placing each in its own bucket, and once the
+              complete set of distinct keys has been found, round-robin
+              tuples from each bucket. Can also weight the round-robin.
+         <li> Index striding allows control of relative rates of
+              updating the aggregates for different groups, and if user
+              requests that one group be stopped, other groups will run
+              faster.
+       </ul>
+  <li> <b>Non-blocking join.</b> Sort-merge and hybrid-hash join are
+       out, since the sort or 
+       inner-relation-hash steps (respectively) are blocking ops.  Use
+       nested-loop join instead.
+  <li> <b>Query optimization gotchas.</b>
+       <ul>
+         <li> Sorting can be avoided entirely
+         <li> Don't want to produce results that are ordered on
+              aggregation or grouping columns, so want to identify
+              "interestingly bad" (or "anti-interesting") orders (using
+              <a href="access_path.html">Selinger's</a> terminology)
+         <li> Blocking sub-operations should be modelled by superlinear
+              cost functions, to make them highly unlikely to be chosen
+         <li> Plans that increase user control (eg by using index
+              striding) should be favored
+         <li> Best "batch execution" plan may sometimes be better than
+              any interactive plan, for short enough query
+       </ul>
+  <li> <b>Running confidence intervals.</b>
+       <ul>
+         <li> Can be <i>conservative</i> (final value inside confidence
+              interval with probability <i>at least
+              p</i>), <i>large-sample</i> based on Central Limit Thms
+              (probability <i>p</i>), or <i>deterministic</i>
+              (probability 1; not very useful unless number of records
+              is huge).
+         <li> Derivation given for how to compute running
+              CI  for arithmetic mean of an arbitrary combination of
+              fields of the relation, i.e. "SELECT AVG(f(R.c1,...,R.cN))
+              FROM R WHERE..."
+       </ul>
+  <li> <b>Performance.</b>
+       <ul>
+         <li> Convergence to narrow 99% confidence interval is fast
+              (tesn of seconds for a query that takes hundreds of
+              seconds).
+         <li> Implementation artifact: for high update rates, the Tk
+              script is not able to process updates as fast as the DB
+              engine can deliver them, so progress appears to be slower.
+       </ul>
+  <li> <b>Future work and open questions.</b>
+       <ul>
+         <li> Nested queries? (in which results at outer level depend on
+              results at inner level)
+         <li> User interface for naive users
+         <li> usability and performance metrics for OLA not crisply
+              defined here or elsewhere
+         <li> Checkpointing for very long running queries
+         <li> tracking online queries: identifying the specific tuples
+              that caused some interesting behavior (eg spike) in the
+              running aggregate
+         <li> Confidence interval formulae for additional aggregate
+              functions 
+              
+       </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+<ul>
+  <li>Incremental refinement for long queries; probably very applicable to
+"online data mining" (e.g. looking for interesting stuff in WWW
+traffic).
+  <li> UI issues may have some overlap with other techniques that
+       provide incremental refinement.  (Can you think of any?  Prefix
+       encodings for images and video maybe?)
+</ul>
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> Running CI derivation applies only to a particular aggregation
+       function (arith mean).  How hard is it to do for other functions?
+       Do you have to add code to the DB core for each new aggregation
+       function you want to compute using OLA, or can it be done
+       extensibly while preserving performance?  (May be a subset of
+       the general problem of building extensible DB's)
+  <li> Design and approach are all mixed in with implementation
+       decisions.  Should clearly separate design goals and implications
+       from effects resulting from the specific implementation.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

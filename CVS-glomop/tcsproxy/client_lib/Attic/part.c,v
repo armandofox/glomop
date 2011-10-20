@@ -1,0 +1,512 @@
+head	1.4;
+access;
+symbols
+	steve:1.1.1.1
+	steve:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	96.10.28.01.14.33;	author gribble;	state dead;
+branches;
+next	1.3;
+
+1.3
+date	96.10.27.23.44.36;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.26.01.02.36;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.23.51.45;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.23.51.45;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Changed the directory structure around to match armando/yatin's.
+@
+text
+@/*
+ * File:          part.c
+ * Purpose:       Partition management for the Harvest cache substrate
+ * Author:        Steve Gribble
+ * Creation Date: October 23rd, 1996
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <sys/errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <assert.h>
+
+#include <pthread.h>
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "part.h"
+#include "configure.h"
+#include "md5.h"
+
+extern int      errno;
+extern ll       config_list;
+
+pthread_mutex_t partition_mutex;
+int             num_partitions = 0;
+ll              partition_list = NULL;
+
+struct sockaddr *localaddr;
+int              localaddrlen;
+
+int  part_compare(void *d1, void *d2);
+void part_nuke(void *nukeMe);
+int  get_part_number(int num_partitions, char *url);
+
+clib_response Part_Initialize(char *configfile)
+{
+  clib_response    retval;
+  part_element    *part_el;
+  ll               tmp;
+  cfg_nv          *cfg_el;
+  char            *tok = NULL;
+  ts_strtok_state *ts_st;
+  int              pretval;
+
+  if ((pretval = pthread_mutex_init(&partition_mutex, NULL)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+
+  /* Make a local address */
+  localaddr = (struct sockaddr *) malloc(sizeof(struct sockaddr_in));
+  localaddrlen = sizeof(struct sockaddr_in);
+  make_inetaddr(NULL, NULL, (struct sockaddr_in *) localaddr);
+
+  if ((retval = config_parse(configfile)) != CLIB_OK)
+    return retval;
+  tmp = config_list;
+  /* Loop through each partition defined in the configuration file
+      and build the correct part_element structure for it */
+  do {
+    cfg_el = get_next_matching("partition", &tmp);
+    if (cfg_el == NULL)
+      break;
+    if (cfg_el->value == NULL)
+      continue;
+    tmp = tmp->next;
+    ts_st = ts_strtok_init(cfg_el->value);
+    tok = ts_strtok(" ", ts_st);
+
+    /* Loop through each token in the name/values tuple */
+    while (tok != NULL) {
+      part_el = (part_element *) malloc(sizeof(part_element));
+      if (part_el == NULL) {
+	fprintf(stderr, "Out of memory in Part_Initialize(1)\n");
+	exit(1);
+      }
+      part_el->addr = (struct sockaddr *) malloc(sizeof(struct sockaddr_in));
+      if (part_el->addr == NULL) {
+	fprintf(stderr, "Out of memory in Part_Initialize(2)\n");
+	exit(1);
+      }
+      part_el->addrlen = sizeof(struct sockaddr_in);
+
+      /* Build a struct sockaddr_in for this harvest partition host */
+      if (make_inetaddr(tok, "3128", (struct sockaddr_in *) part_el->addr)
+	  != 0) {
+	free(part_el->addr);
+	free(part_el);
+	fprintf(stderr, "Bogus partition name in Part_Initialize: %s\n", tok);
+      } else {
+	/* add the structure to our partition list */
+	if (!ll_add_to_end(&partition_list, (void *) part_el)) {
+	  fprintf(stderr, "ll_add_to_end failed in Part_Initialize\n");
+	  exit(1);
+	}
+	num_partitions++;
+      }
+      tok = ts_strtok(" ", ts_st);
+    }
+    ts_strtok_finish(ts_st);
+  } while (cfg_el != NULL);
+
+  return retval;
+}
+
+clib_response Part_Add(struct sockaddr *addr, int addrlen)
+{
+  part_element *add;
+  int           pretval;
+
+  /* Build a part_element structure and add it to our list */
+  add = (part_element *) malloc(sizeof(part_element *));
+  if (add == NULL) {
+    fprintf(stderr, "Out of memory in Part_Add (1)\n");
+    exit(1);
+  }
+
+  add->addr = (struct sockaddr *) malloc(addrlen);
+  if (add->addr == NULL) {
+    fprintf(stderr, "Out of memory in Part_Add (2)\n");
+    free(add);
+    exit(1);
+  }
+
+  memcpy(add->addr, addr, addrlen);
+  add->addrlen = addrlen;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  if (!ll_add_to_end(&partition_list, (void *) add)) {
+    fprintf(stderr, "ll_add_to_end failed in Part_Add\n");
+    exit(1);
+  }
+  num_partitions++;
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return CLIB_OK;
+}
+
+clib_response Part_Delete(struct sockaddr *addr, int addrlen)
+{
+  part_element    el;
+  int             pretval;
+  clib_response   rv;
+
+  /* Attempt to find a partition that matches, and delete it from list */
+  el.addr = addr;
+  el.addrlen = addrlen;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  if (ll_del(&partition_list, &el, part_compare, part_nuke)) {
+    num_partitions--;
+    rv = CLIB_OK;
+  } else
+    rv = CLIB_NO_SUCH_PART;
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return rv;
+}
+
+clib_response Part_GetTCPsock(char *url, int *fd)
+{
+  int              part_num, i, pretval;
+  ll               tmp;
+  part_element     *el;
+  struct protoent *proto;
+  clib_response    rv = CLIB_OK;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* Find the right structure in the partition list */
+  tmp = partition_list;
+  part_num = get_part_number(num_partitions, url);
+  for (i=0; i<part_num; i++) {
+    assert(tmp != NULL);
+    tmp = tmp->next;
+  }
+  el = (part_element *) tmp->data;
+  
+  /* we have the structure, now make the socket and connect it */
+  proto = getprotobyname("tcp");
+  if (proto == NULL) {
+    perror("getprotobyname failed: ");
+    rv = CLIB_NO_FD;
+  } else {
+    *fd = socket(PF_INET, SOCK_STREAM, proto->p_proto);
+    if (*fd < 0) {
+      perror("socket failed: ");
+      rv = CLIB_NO_FD;
+    } else {
+      if (bind(*fd, localaddr, localaddrlen) < 0) {
+	perror("bind failed: ");
+	rv = CLIB_NO_FD;
+      } else {
+	/* set the port to 3128 */
+	((struct sockaddr_in *) el->addr)->sin_port = htons(3128);
+	if (connect(*fd, el->addr, el->addrlen) < 0) {
+	  perror("connect failed: ");
+	  rv = CLIB_NO_FD;
+	}
+      }
+    }
+  }
+
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return rv;
+}
+
+clib_response Part_GetUDPsock(char *url, int *fd)
+{
+  int              part_num, i, pretval;
+  ll               tmp;
+  part_element     *el;
+  struct protoent *proto;
+  clib_response    rv = CLIB_OK;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  tmp = partition_list;
+  /* Find the right structure in the partition list */
+  part_num = get_part_number(num_partitions, url);
+  for (i=0; i<part_num; i++) {
+    assert(tmp != NULL);
+    tmp = tmp->next;
+  }
+  el = (part_element *) tmp->data;
+  
+  /* we have the structure, now make the socket and connect it */
+  proto = getprotobyname("udp");
+  if (proto == NULL) {
+    perror("getprotobyname failed: ");
+    rv = CLIB_NO_FD;
+  } else {
+    *fd = socket(PF_INET, SOCK_DGRAM, proto->p_proto);
+    if (*fd < 0) {
+      perror("socket failed: ");
+      rv = CLIB_NO_FD;
+    } else {
+      if (bind(*fd, (struct sockaddr *) localaddr, localaddrlen) < 0) {
+	perror("bind failed: ");
+	rv = CLIB_NO_FD;
+      } else {
+	/* set the port to 3130 */
+	((struct sockaddr_in *) el->addr)->sin_port = htons(3130);
+	if (connect(*fd, el->addr, el->addrlen) < 0) {
+	  perror("connect failed: ");
+	  rv = CLIB_NO_FD;
+	}
+      }
+    }
+  }
+
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return rv;
+}
+
+/* Some utility functions used by the linked list routines to find and
+   delete stuff */
+int  part_compare(void *d1, void *d2)
+{
+  part_element    *el1 = (part_element *) d1;
+  part_element    *el2 = (part_element *) d2;
+
+  assert(d1 != NULL);
+  assert(d2 != NULL);
+
+  if (el1->addrlen > el2->addrlen)
+    return 1;
+  if (el1->addrlen < el2->addrlen)
+    return -1;
+  return memcmp(el1->addr, el2->addr, el1->addrlen);
+}
+void part_nuke(void *nukeMe)
+{
+  part_element    *el = (part_element *) nukeMe;
+
+  assert(el != NULL);
+  if (el->addr)
+    free(el->addr);
+  free(el);
+}
+
+/* This function does the MD5 hash of the URL, and computes a partition
+   number from that hash and the number of partitions available. */
+int  get_part_number(int num_partitions, char *url)
+{
+  MD5_CTX  ctx;
+  long int bits;
+
+  MD5Init(&ctx);
+  MD5Update(&ctx, url, strlen(url));
+  MD5Final(&ctx);
+
+  memcpy(&bits, &(ctx.digest[0]), sizeof(long int));
+  bits = ntohl(bits);
+
+  return (bits % num_partitions);
+}
+@
+
+
+1.3
+log
+@Great!  Pretty much everything works now.  I'm still a little worried about
+blocking vs. non-blocking.
+@
+text
+@@
+
+
+1.2
+log
+@Woohoo!  Partitioning worked out.  Plus, I've thread-safefied the
+part.c partition adding/removing/querying functions.
+@
+text
+@d29 1
+a29 1
+#include "config.h"
+d52 1
+a52 1
+  char            *dupe = NULL, *tok = NULL;
+a67 1
+
+a111 2
+
+    free(dupe);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d54 1
+d56 4
+a59 1
+  pthread_mutex_init(&partition_mutex, NULL);
+d123 1
+d141 6
+d152 6
+d164 2
+d170 6
+d178 6
+a183 1
+    return CLIB_OK;
+d185 3
+a187 1
+  return CLIB_NO_SUCH_PART;
+d192 2
+a193 2
+  int              part_num, i;
+  ll               tmp = partition_list;
+d196 1
+d198 5
+d204 1
+d207 1
+a207 4
+    if (tmp == NULL) {
+      /* We're in a state of flux.  Try again. */
+      return Part_GetTCPsock(url, fd);
+    }
+d216 19
+a234 1
+    return CLIB_NO_FD;
+d236 4
+a239 8
+  *fd = socket(PF_INET, SOCK_STREAM, proto->p_proto);
+  if (*fd < 0) {
+    perror("socket failed: ");
+    return CLIB_NO_FD;
+  }
+  if (bind(*fd, localaddr, localaddrlen) < 0) {
+    perror("bind failed: ");
+    return CLIB_NO_FD;
+d241 1
+d243 1
+a243 5
+  if (connect(*fd, el->addr, el->addrlen) < 0) {
+    perror("connect failed: ");
+    return CLIB_NO_FD;
+  }
+  return CLIB_OK;
+d248 2
+a249 2
+  int              part_num, i;
+  ll               tmp = partition_list;
+d252 1
+d254 6
+d263 1
+a263 4
+    if (tmp == NULL) {
+      /* We're in a state of flux.  Try again. */
+      return Part_GetTCPsock(url, fd);
+    }
+d272 19
+a290 1
+    return CLIB_NO_FD;
+d292 4
+a295 12
+  *fd = socket(PF_INET, SOCK_DGRAM, proto->p_proto);
+  if (*fd < 0) {
+    perror("socket failed: ");
+    return CLIB_NO_FD;
+  }
+  if (bind(*fd, (struct sockaddr *) localaddr, localaddrlen) < 0) {
+    perror("bind failed: ");
+    return CLIB_NO_FD;
+  }
+  if (connect(*fd, el->addr, el->addrlen) < 0) {
+    perror("connect failed: ");
+    return CLIB_NO_FD;
+d297 3
+a299 1
+  return CLIB_OK;
+@
+
+
+1.1.1.1
+log
+@Client-library for talking with the partitioned harvest cache subsystem.
+@
+text
+@@

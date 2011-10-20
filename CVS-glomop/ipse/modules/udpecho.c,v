@@ -1,0 +1,166 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  ipse-pcap:1.1.1.1 ipse-pcap:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     97.06.17.01.09.04;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/* 
+   Created 5/13/97 -- kaminsky
+
+   This module sends a UDP packet with a given string to the echo
+   port of a specified computer.  It then waits for a valid response to 
+   the packet.
+
+   The module takes four comma-separated arguments in the following order:
+      string to echo, source port, source host, dest. host
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include "uifile.h"
+#include <pcap.h>
+
+typedef struct {
+    int sent;
+    u_char *data;
+    int datalen;
+    int src_port;
+    int dst_port;
+    char *src_host;
+    char *dst_host;
+} state_t;
+
+static void * udpecho_init(int handid, char *arg)
+{
+    state_t *state = malloc(sizeof(state_t));
+    if (state == NULL) return (INIT_FAIL);
+    state->sent = 0;
+    state->data = NULL;
+    state->datalen = 0;
+    state->src_port = 0;
+    state->dst_port = 0;
+    state->src_host = NULL;
+    state->dst_host = NULL;
+ 
+    if (arg) {
+	char *larg = strdup(arg);
+	char *c,*s;
+	int field = 0;
+	if (larg == NULL) return (INIT_FAIL);
+
+	c = larg;
+	while((s = strsep(&c,",")) != NULL && field < 4) {
+	    switch(field) {
+	    case 0:
+		/* data to echo */
+		state->data = strdup(s);
+		state->datalen = strlen(s);
+		break;
+	    case 1:
+		/* source port */
+		state->src_port = atoi(s);
+		break;
+	    case 2:
+		/* source host */
+		state->src_host = strdup(s);
+		break;
+	    case 3:
+		/* destination host */
+		state->dst_host = strdup(s);
+		break;
+	    }
+	    ++field;
+	}
+	free(larg);
+    }
+    
+    return state;
+}
+
+static int udpecho_handle(interface_t *interface, void *st)
+{
+    state_t *state = (state_t *)st;
+    int wd;
+    ip_packet_t *packet;
+
+    /*
+    if (interface->frame_type == DLT_EN10MB) {
+    } else if (interface->frame_type == DLT_PPP) {
+    } else {
+    }
+    */
+
+    packet = interface->packet;
+    wd = interface->wd;
+
+    if (state->sent == 0) {
+	send_udp(wd, 
+		 state->data, 
+		 state->datalen, 
+		 htons(state->src_port),
+		 htons(7),
+		 resolve_name(state->src_host),
+		 resolve_name(state->dst_host));
+	state->sent = 1;
+	printf("Sent UDP echo: %s:%d -> %s:echo\n",
+	       state->src_host, state->src_port, state->dst_host);
+
+    } else if (state->sent == 1) {
+	if ((packet->iphead.ip_p == IPPROTO_UDP) &&
+	    (packet->p.udp.head.uh_sport == htons(7)) &&
+	    (packet->p.udp.head.uh_dport == htons(state->src_port)) &&
+	    (packet->iphead.ip_src.s_addr == resolve_name(state->dst_host)) &&
+	    (packet->iphead.ip_dst.s_addr == resolve_name(state->src_host)) &&
+	    (!memcmp(packet->p.udp.data, state->data, state->datalen))) {
+	    printf("Received UDP echo.\n");
+	    state->sent = 2;
+	}
+    }
+
+    return 0;
+}
+
+static void udpecho_clean(void *st)
+{
+    state_t *state = (state_t *)st;
+    free(state);
+}
+
+int nops = 1;
+module_ops oplist[] = { { udpecho_init, udpecho_handle, udpecho_clean } };
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

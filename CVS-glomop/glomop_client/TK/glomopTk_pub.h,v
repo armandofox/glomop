@@ -1,0 +1,900 @@
+head	1.10;
+access;
+symbols
+	stable:1.7
+	current:1.7
+	release:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.10
+date	96.08.23.19.57.44;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.07.25.22.12.25;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.07.25.17.31.36;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.14.21.10.25;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.07.05.08.38;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.07.00.25.54;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.01.00.04.36;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.05.31.17.23.22;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.05.24.21.30.52;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.02.22.00.45.59;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@Merged with Wink source tree.  It all works now.
+@
+text
+@/*
+   Copyright (C) 1994-1996 by the Regents of the University of California.
+   Commercial and non-commercial licenses to use this software must be arranged
+   by the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+   <fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+   Prof. Randy Katz <randy@@cs.berkeley.edu>.
+*/
+
+/*
+ * glomopTk_pub.h --
+ *
+ * Prototypes and datastructures for generic versions of the routines
+ * exported to client applications.  These version are intended to lie
+ * under a thin language-specific glue layer.
+ *
+ * $Id: glomopTk_pub.h,v 1.3 96/08/22 19:53:20 glomop Exp $
+ * 
+ */
+
+#ifndef GLOMOP_TKPUB
+#define GLOMOP_TKPUB
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef unsigned short GM_Boolean;
+typedef int            GM_Error;
+
+/*
+ *  A GM_ConnectId is returned to the client after issuing a
+ *  GM_ConnectProxy call.  This ConnectId is used in all future GloMop
+ *  function calls to identify a proxy and session.
+ */
+
+typedef unsigned long int GM_ConnectId;
+
+/*
+ *  Document ID's identify adaptive-pipe connections.  A document ID is
+ *  returned immediately by the async GetDocument call, and passed later
+ *  to a event handler proc to identify which document is arriving.
+ */
+
+typedef unsigned long GM_DocId;
+
+/*
+ *  Chunk ID's identify chunks within a given document.  A 
+ *  (GM_DocID, GM_ChunkID) pair is unique among all chunks and documents.
+ */
+
+typedef unsigned long GM_ChunkId;
+
+/*
+ *  Binary large objects and chunks of a document
+ */
+typedef void *BlobPtr;
+
+
+/*
+ *  A DocLocator tells the proxy how to retrieve a document from the
+ *  "wired network". 
+ */
+
+#define DL_MAXLEN 256
+typedef struct _DocLocator {
+    char doc_url[DL_MAXLEN];              /* --> the URL of the document */
+} GM_DocLocator;
+
+/* 
+ * A GM_MimeType object describes the mime type and subtype of a chunk
+ */
+#define MIME_MAXLEN 128
+typedef struct _MimeType {
+  char mimetype[MIME_MAXLEN];
+} GM_MimeType;
+
+/*
+ *  Each chunk of a document  is assigned a chunk id uunique within that
+ *  document.  The doc_id of the document in which the chunk lives
+ *  is provided for reference.  The refine_dl field is a document locator
+ *  that should be used to request refinements of this chunk.
+ *  
+ *  The type of the chunk is specified using the MIME type convention.
+ */
+
+typedef struct _DocChunk {
+    GM_ChunkId    chunk_id;        /* the chunk ID within this document */
+    GM_DocId      doc_id;          /* the document in which this chunk lives */
+    GM_DocLocator refine_dl;       /* DL used for refining the chunk */
+    GM_MimeType   mime_type;       /* MIME type of the chunk */
+    BlobPtr       metadata_obj;    /* binary metadata */
+    long int      metadata_len;    /* length of metadata blob */
+    BlobPtr       chunk_obj;       /* this is the actual chunk data */
+    long int      blob_len;        /* length of blob data */
+} GM_DocChunk;
+
+/*
+ * By convention, the chunk_obj in the first chunk delivered to the client
+ * is of mime_type glomop/toc, and has a well-defined structure.  This is
+ * that structure - it can be accessed using the "GM_ParseTocChunk" function.
+ * The descriptor_array describes the remaining chunks that have yet to
+ * arrive.  TOC is chunk #0, descriptor_array[0] is chunk #1,
+ * descriptor_array[1] is chunk #2, etc.  
+ * 
+ * Note - the BlobPtr and the descriptor array are both malloc'ed by
+ * GM_ParseTocChunk, so you (YOU) must free them once you're done.
+ */
+
+typedef struct _ChunkDescriptor {
+  GM_MimeType     mimetype;
+  char            annotation[DL_MAXLEN];   /* NULL-term C string */
+} GM_ChunkDescriptor;
+
+typedef struct _TocChunk {
+  BlobPtr             metadata;         /* opaque bytes for now, don't worry */
+  long int            metadatalen; 
+  GM_ChunkDescriptor *descriptor_array;
+  long int            num_descriptors;
+} GM_TocChunk;
+
+
+/*
+ *  Callback procedure for when a chunk arrives.  The chunk is
+ *  completely self-describing.
+ */
+
+typedef void (*GM_DocCallbackProcPtr)(GM_ConnectId connId, 
+				      GM_DocChunk theChunk);
+
+/*
+ *  Callback procedure for when a network property of interest changes.
+ */
+
+typedef unsigned short GM_EventType;
+#define GM_NETDOWN     0   /* Network (and proxy) connectivity lost */
+#define GM_NETUP       1   /* Network (not proxy) connectivity gained */
+
+typedef void (*GM_EventCallbackProcPtr)(GM_EventType event,
+                                        char *eventData);
+
+#define PREFNAME_MAXLEN 32
+/*
+ * Structure used for specifying QoS preferences
+ */
+typedef struct _QosPrefs {
+  char   prefname[32];   /* something like "mtu" or "bpp" or "scale" */
+  int    prefval; 
+  int    prefweight;     /* 0-255, with -1 meaning undefined */
+} GM_QosPrefs;
+
+/**************************PROTOTYPE FUNCTIONS*************************/
+
+/*
+ *  Establish connection to proxy
+ */
+
+/*
+ *  The GM_ConnectProxy function call is used to forge a new connection
+ *  to a proxy specified by proxyAddr.  proxyAddr should be a NULL
+ *  terminated string of the form "HOST PORT".   A GM_ConnectId
+ *  of zero indicates that the connection attempt failed.  This function
+ *  call is synchronous - ie. the client will suspend until the connection
+ *  and authentication succeed.  The "is_asynch" parameter dictates 
+ *  whether the rest of the session proceeds asynchronously (ie.
+ *  GetDoc returns immediately and callbacks are used) or
+ *  synchronously (ie. GetDocSynch should be used instead).
+ */
+
+GM_ConnectId  GM_ConnectProxy(char *proxyhost, char *proxyport,
+			      char *username, char *passwd,
+			      char *realm, unsigned short tgt_lifetime,
+			      unsigned short is_asynch);
+
+GM_ConnectId  GM_ConnectProxy_Unauth(char *proxhost, char *proxyport,
+				     char *username,
+				     unsigned short is_asynch);
+
+
+/*
+ *  The GM_DisconnectProxy function call is used to destroy a currently
+ *  active proxy connection.  The connId field is a connection ID returned
+ *  from a previous GM_ConnectProxy function call.  A non-zero GM_Error
+ *  value indicates that the disconnection failed.  This call is
+ *  synchronous.
+ */
+
+GM_Error GM_DisconnectProxy(GM_ConnectId connId);
+
+/*
+ *  Initiate a "get document" request.
+ *
+ *  Args:
+ *  
+ *  DocLocator structure: tells proxy how to locate the document, using
+ *  the URL mechanism for identifying documents.
+ *
+ *  callbackThresh: the number of document chunks that must arrive
+ *  before the callback procedure that receives the document is able to
+ *  do anything useful.
+ *
+ *  callbackProc: the procedure that should be called as soon as the first
+ *  CallbackThresh chunks of the document have arrived.  The
+ *  callback procedure can be changed after this first callback.
+ *  A client is forced to call GM_GetChunk on chunks for callbacks to happen
+ *  following this first callback.
+ *
+ *  maxChunks: the maximum number of chunks to preload into the GloMop
+ *  layer initially.  By convention the first chunk is the document
+ *  table of contents.  -1 indicates all chunks should be loaded.
+ *
+ *  extra: an extra character buffer, not to exceed 15 bytes.  This argument
+ *  may be NULL - I needed a convenient spot to tuck away a Tcl command
+ *  name, this was the easiest place to put it.
+ * 
+ *  Returns a document ID that will be passed to the callback proc
+ *  later to identify the document.  If the document ID is null, an
+ *  error occurred.  (TBD: an "errno"-like mechanism in which
+ *  information about the error is stored.)
+ *
+ */
+
+GM_DocId GM_GetDoc(GM_ConnectId connId,
+		   GM_DocLocator loc,
+                   GM_DocCallbackProcPtr callback,
+                   unsigned callbackThreshold,
+                   unsigned maxChunks,
+		   char *extra);
+
+
+/*
+ *  Initiate a "get document" request.
+ *
+ *  Args:
+ *  
+ *  DocLocator structure: tells proxy how to locate the document, using
+ *  the URL mechanism for identifying documents.
+ *
+ *  This document request will proceed synchronously, and will allocate
+ *  enough space in the passed by reference (GM_DocChunk *) returned_chunks
+ *  argument for all of the document's chunks (including the TOC), and will
+ *  return the number of chunks in the array in the passed by reference
+ *  (unsigned) num_retchunks arguments.  The caller is responsible for
+ *  freeing the array.
+ *
+ *  In case of error, a GM_DocId of 0 is returned, otherwise a positive
+ *  DocId is returned.
+ */
+
+GM_DocId GM_GetDocSynch(GM_ConnectId connId,
+			GM_DocLocator loc,
+			unsigned *num_retchunks,
+			GM_DocChunk **returned_chunks);
+
+/*
+ *  Request a chunk from an open document connection.  This may require
+ *  loading the chunk from the proxy if the chunk isn't already there.
+ *  The chunk will be delivered by the callback mechanism.
+ *  
+ *  Returns -1 on error, 0 otherwise.
+ */
+
+GM_Error  GM_GetChunk(GM_ConnectId connId,
+		      GM_DocId doc_id,
+		      GM_ChunkId chunk_id);
+                   
+/*
+ *  Close an open document connection.  All glomop-managed buffers for
+ *  this document are freed, and the document is "forgotten about"; any
+ *  preloads in progress for this document are cancelled; etc.
+ *
+ *  This call is asynchronous.
+ */
+GM_Error  GM_CloseDoc(GM_ConnectId connId,
+		      GM_DocId doc_id);
+                   
+/*
+ *  Set/change the callback proc for an existing request; any future
+ *  notifications on the request will go to the new proc.  Returns the
+ *  pointer to the old callback procedure (like signal(1)).
+ *  newMaxChunks refers to the new maximum number of chunks from this
+ *  document that can be preloaded into the GloMop layer from the proxy.
+ *  newThreshold refers to the new number of chunks that must be preloaded
+ *  before the callback procedure is called.
+ *  
+ *  The "extra" argument is again my cheap hidey-hole for a Tcl
+ *  command name, and can be ignored by non-tcl glomop glue.
+ *  
+ *  This call will return immediately.
+ */
+
+GM_DocCallbackProcPtr GM_SetCallback(GM_ConnectId connId,
+				     GM_DocId doc_id,
+                                     GM_DocCallbackProcPtr newProc,
+				     unsigned newMaxChunks,
+				     unsigned newThreshold,
+				     char *extra);
+
+/*
+ *  Set/change the QoS preferences for some proxy connection;  this
+ *  call sets the session wide preferences.  The mechanisms for doing
+ *  per document preference setting or per-chunk setting are not
+ *  currently specified.
+ *
+ *  The connId argument specifies the session that this will affect,
+ *  the htype argument specifies a document type for which we're setting
+ *  preferences (eg. "Image"), the num_prefs argument specifies the number
+ *  of preference elements in the prefArray, and the prefArray is an
+ *  array of GM_QosPrefs structures.
+ */
+
+GM_Error  GM_SetQosPrefs(GM_ConnectId connId, char *htype,
+			 int num_prefs, GM_QosPrefs *prefArray);
+
+
+/*
+ * One particular QoS prefs name is "outputtype".  It has a number of values,
+ * namely:
+ *         value                     symbolic name
+ *          0                       GM_LIST_OF_CHUNKS
+ *          1                       GM_ASFILE_CHUNK
+ *          2                       GM_BITMAP_CHUNK
+ *
+ *
+ * This function merely provides a wrapper around the GM_SetQosPrefs
+ * function, setting this outputtype variable to one of these values
+ * for a given htype
+ */
+
+#define GM_LIST_OF_CHUNKS   (unsigned char) 0
+#define GM_ASFILE_CHUNK     (unsigned char) 1
+#define GM_BITMAP_CHUNK     (unsigned char) 2
+
+GM_Error  GM_SetOutputType(GM_ConnectId connId, char *htype,
+			   unsigned char outputtype);
+
+/*
+ * This function allows you to reregister the client's device class with
+ * the proxy.
+ */
+
+GM_Error GM_RegisterDeviceClass(GM_ConnectId connId, char *device_class);
+
+/*
+ * If you want to change the binding between a mime-type and a high-level
+ * proxy "htype", you can do it with this function.  The default bindings
+ * are:
+ *
+ *     mime type                           htype
+ *     =========================================
+ *     text/html                         WinkWeb
+ *     application/postscript            PSpaper
+ *     image/gif                IcapImage4colour
+ *
+ * Other htypes you might think about using are:
+ *     Image -> sends GIF chunks down to the image_browser.tcl app
+ *
+ * The connId argument specifies the proxy connect that this binding
+ * change should apply to, and the (mime_type, htype) pair indicates the
+ * new or modified binding.
+ * 
+ * This function returns -1 on error, 0 on success.
+ */
+
+ GM_Error GM_ChangeMimeHTypeBinding(GM_ConnectId connId,
+				    char *mime_type,
+				    char *htype);
+
+ 
+/*
+ * If you receive a chunk with mimetype glomop/toc, then you can call 
+ * this function to receive a nice, pretty datastructure containing
+ * the TOC descriptors.  If you pass in a bogus chunk, a non-zero GM_Error
+ * will be returned.  The GM_TocChunk datastructure passed in by reference is
+ * filled by this function.  The GM_DocChunk structure is passed by reference
+ * for efficiency only - it is not modified.
+ */
+
+GM_Error GM_ParseTocChunk(GM_DocChunk *toc_chunk, GM_TocChunk *parsed_toc);
+
+#ifdef __cplusplus
+}
+#endif
+
+
+#endif
+
+@
+
+
+1.9
+log
+@Added synchronous interface to glomop library.  Connect and Connect_Unauth
+now take a flag for synchronous vs asynchronous, and there is a
+GetDoc_Synch call for synchronous document download.
+@
+text
+@d2 8
+d16 1
+a16 1
+ * $Id: glomopTk_pub.h,v 1.8 1996/07/25 17:31:36 gribble Exp $
+a17 37
+ * $Log: glomopTk_pub.h,v $
+ * Revision 1.8  1996/07/25 17:31:36  gribble
+ * Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+ * function to glomopTk_pub.{c|h}.
+ *
+ * Revision 1.7  1996/06/14 21:10:25  gribble
+ * Whoohoo!  Created image browser application, added unauthenticated
+ * connection, TOC parsing.
+ *
+ * Revision 1.6  1996/06/07 05:08:38  gribble
+ * Threw in "extra" field into document structure to store callback
+ * command name for Tcl (yes, a hack), and added a BlobPtr length field
+ * to keep track of how big chunks are.  Built straw-man GetImageChunk
+ * and GetChunkType procedures and Tcl commands to actually retrieve
+ * chunks.  Built Tcl callback functionality (I think).
+ *
+ * Revision 1.5  1996/06/07 00:25:54  gribble
+ * Drastically cut GloMop API for a first cut implementation.
+ *
+ * Revision 1.4  1996/06/01 00:04:36  gribble
+ * Fixed up so that the gm_connectproxy command successfully uses the
+ * Charon authentication module.
+ *
+ * Revision 1.3  1996/05/31 17:23:22  gribble
+ * Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+ *
+ * Revision 1.2  1996/05/24 21:30:52  gribble
+ * Added protocol parser functionality, and the tkAppInit.c file required
+ * to build gmwish.  Modified headers and Makefile to include protocol
+ * parsing.  Preliminary stab at underlying C glomop functionality, and glue
+ * routines to map into them.  Will need significant rewriting.
+ *
+ * Revision 1.1  1996/02/22 00:45:59  gribble
+ * Skeleton core structure complete.  Next stage: implementation of core
+ * routines.
+ *
+ *
+d23 4
+d91 2
+d316 54
+d380 4
+d386 1
+@
+
+
+1.8
+log
+@Fiddled so that the gmwish_main functionality works.  Added TOC parsing
+function to glomopTk_pub.{c|h}.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.7 1996/06/14 21:10:25 gribble Exp $
+d11 4
+d186 4
+a189 1
+ *  and authentication succeed.
+d194 2
+a195 1
+			      char *realm, unsigned short tgt_lifetime);
+d198 2
+a199 1
+				     char *username);
+d251 25
+@
+
+
+1.7
+log
+@Whoohoo!  Created image browser application, added unauthenticated
+connection, TOC parsing.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.6 1996/06/07 05:08:38 gribble Exp $
+d11 4
+d117 25
+d302 13
+@
+
+
+1.6
+log
+@Threw in "extra" field into document structure to store callback
+command name for Tcl (yes, a hack), and added a BlobPtr length field
+to keep track of how big chunks are.  Built straw-man GetImageChunk
+and GetChunkType procedures and Tcl commands to actually retrieve
+chunks.  Built Tcl callback functionality (I think).
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.5 1996/06/07 00:25:54 gribble Exp $
+d11 7
+d131 9
+d160 4
+d258 12
+d271 2
+@
+
+
+1.5
+log
+@Drastically cut GloMop API for a first cut implementation.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.4 1996/06/01 00:04:36 gribble Exp $
+d11 3
+d102 1
+d176 4
+d191 2
+a192 1
+                   unsigned maxChunks);
+d225 3
+d235 2
+a236 1
+				     unsigned newThreshold);
+@
+
+
+1.4
+log
+@Fixed up so that the gm_connectproxy command successfully uses the
+Charon authentication module.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.3 1996/05/31 17:23:22 gribble Exp $
+d11 4
+a45 39
+ *  GM_PProto identifies the protocol the proxy should use when
+ *  retrieving a particular document (FTP, HTTP, others...)
+ */
+typedef unsigned short GM_PProto;
+#define GM_FTP_PROTO  1
+#define GM_HTTP_PROTO 2
+#define GM_MH_PROTO   3
+#define GM_POP_PROTO  4
+
+/*
+ *  GM_DocType identifies document types.  A document can be complex
+ *  and composed of a number of chunks of particular subtypes (ie.
+ *  a web page, consisting of HTML and inlined images), or it can be
+ *  "simple" and be composed of a single subtype.
+ */
+
+typedef unsigned short GM_DocType;
+#define GM_WEBPAGE_DOCTYPE     1      /* HTML plus inlines */
+#define GM_MAILFOLDER_DOCTYPE  2      /* A number of mail messages */
+#define GM_MAILMESSAGE_DOCTYPE 3      /* Headers and MIME inclusions */
+#define GM_SIMPLE_DOCTYPE      4      /* A single subtype */
+
+/*
+ *  GM_DocSubType identifies a particular subtype.  It is used by the
+ *  client when providing a list of acceptable chunk subtypes, and by
+ *  the proxy to identify returned chunk types.
+ */
+typedef unsigned short GM_DocSubType;
+#define GM_GIF_SUBTYPE        1
+#define GM_JPEG_SUBTYPE       2
+#define GM_PICT_SUBTYPE       3
+#define GM_PNM_SUBTYPE        4       /* PBM, PGM, or PNM */
+#define GM_PLAINTEXT_SUBTYPE  5
+#define GM_HTML_SUBTYPE       6
+#define GM_RTF_SUBTYPE        7
+#define GM_POSTSCRIPT_SUBTYPE 8
+#define GM_BLOB_SUBTYPE       9      /* ie. opaque binary data */
+
+/*
+d68 1
+a68 12
+ *  "wired network".  The doc_path field is interpreted relative to the
+ *  protocol.  Some example pairs might be:
+ *     doc_protocol                     doc_path
+ *     HTTP                             URL of document
+ *     FTP                              ftp host, path
+ *     Local file                       pathname on local disk
+ *  The ClientData field can hold additional info needed for retrieval
+ *  (e.g., username & password for non-anonymous FTP).
+ *  Some additional fields are filled in for proxy-supplied embedded
+ *  document references: doc_reqid (the ID by which the object can be
+ *  requested), doc_size (size in bytes), doc_type.  The idea is that
+ *  the embedded reference can be passed directly to CGetDoc.
+d71 1
+d73 1
+a73 6
+    GM_PProto doc_protocol;     /* --> protocol number */
+    char *doc_path;             /* --> protocol-specific */
+    char *doc_clientdata;       /* --> additional protocol-specific stuff */
+    long int doc_size;          /* <-- size of object in bytes */
+    GM_DocType doc_type;        /* <-- document's type */
+    GM_DocId doc_id;            /* <-- proxy is prefetching this for us */
+d76 2
+a77 2
+/*
+ *  A list of types and subtypes acceptable to the client.
+d79 4
+a82 8
+
+typedef struct _TypeList {
+    int numTypes;
+    GM_DocType *types;          /* addressable as an array */
+    int numSubTypes;
+    GM_DocSubType *subtypes;    /* addressable as an array */
+} GM_TypeList;
+
+d85 1
+a85 1
+ *  Each chunk of a document contains a chunk_id unique within that
+d87 1
+a87 1
+ *  is provided for reference.  The refine_id field is a document ID
+d89 2
+a90 17
+ *
+ *  Each chunk of a document also contains a Document Reference Table,
+ *  which gives DocID's for other documents embedded in this chunk.
+ *
+ *  EXAMPLE: A MIME-encoded mail message is a chunk consisting of plain
+ *  text whose Document Reference Table points to the MIME objects, each
+ *  of which must be fetched with a separate CGetDoc
+ *  connection.
+ *  EXAMPLE: A Web page is a chunk consisting of HTML whose
+ *  Document Reference Table contains references to inlined graphics,
+ *  and  possibly also references to other HTML pages accessed as
+ *  links.
+ *
+ *  Since each reference in the DRT is a GM_DocLocator, it can
+ *  be passed directly to CGetDoc to fetch the corresponding document on
+ *  a new pipe.  The subtype of the BLOB data is specified by the
+ *  subtype field.
+d94 5
+a98 7
+    GM_ChunkId chunk_id;        /* the chunk ID within this document */
+    GM_DocId   doc_id;          /* the document in which this chunk lives */
+    GM_DocId   refine_id;       /* docID used for refinements of the chunk */
+    int chunk_nrefs;            /* number of references in DRT */
+    GM_DocLocator *chunk_refs;  /* and here they are */
+    GM_DocSubType subtype;      /* the subtype of this chunk */
+    BlobPtr chunk_obj;          /* this is the actual chunk data */
+d102 6
+a107 30
+ *  Callback procedure for when a document is arriving.  Docid
+ *  identifies the document; type gives the datatype; numChunksAvail
+ *  specifies the number of (possibly noncontiguous) chunks arriving;
+ *  theChunks is an array of pointers to these chunks (actually all
+ *  pointers into a contiguous buffer); clientOwnsBuffer is nonzero iff
+ *  it is the application's responsibility to manage and eventually free
+ *  the buffer (i.e. the network manager guarantees that this buffer
+ *  space will not be overwritten unless the client explicitly passes
+ *  the pointer in a future Get call).
+ */
+
+typedef void (*GM_DocCallbackProcPtr)(GM_DocId docid,
+                 GM_DocType type, unsigned numChunksAvail,
+                 unsigned totalChunks, GM_DocChunk *theChunks,
+                 GM_Boolean clientOwnsBuffer);
+
+/*
+ *  chunk deltas: Used when setting the threshold at which the next
+ *  callback should occur.  Semantics are similar to lseek();
+ *  GM_RELATIVE and GM_ABSOLUTE are followed by another argument, the
+ *  numeric value.
+ */
+
+#define GM_ALL_CHUNKS  1        /* don't call me till all chunks are in */
+#define GM_AS_MANY_AS_POSSIBLE 2
+#define GM_NEXT_CHUNK  2        /* call when next chunk is ready */
+#define GM_RELATIVE    3        /* call after next N chunks arrive */
+#define GM_ABSOLUTE    4        /* call when the N'th chunk arrives */
+#define GM_ANYTIME     5        /* call whenever it's convenient */
+                                /* (e.g. from load balancing standpoint) */
+d114 2
+a115 2
+#define GM_NETDOWN  0
+#define GM_NETUP    1
+a119 7
+/*
+ *  A declaration for the error code set by some procedures
+ */
+
+extern GM_Error cErrno;
+extern char *cErrString;
+
+a150 8
+ *  Register the list of types known.  Called once after connection, may
+ *  be called again later to update the list.  This call is asynchronous -
+ *  it will return immediately.
+ */
+
+GM_Error GM_RegisterTypes(GM_ConnectId connId, GM_TypeList *t);
+
+/*
+d155 2
+a156 13
+ *  DocLocator structure: tells proxy how to locate the document in a
+ *  protocol-dependent way.  E.g. for HTTP, DocLocator may contain a
+ *  URL; for GMail, it may contain the name of the mailspool directory
+ *  and host; etc.
+ *
+ *  AcceptTypes list: a list specifying which types are acceptable as
+ *  return.  If null, any type previously registered with proxy is OK.
+ *  Non-null lists only have scope within this call - to change default
+ *  acceptable types, the GM_RegisterTypes call must be used.
+ *
+ *  annotation: a descriptive comment about the request, stored locally
+ *  so client can review what requests are outstanding.  not used by the
+ *  proxy. 
+d158 1
+a158 1
+ *  callbackThresh: the number of document "chunks" that must arrive
+d160 1
+a160 1
+ *  do anything useful.  "Chunks" are defined relative to each datatype.
+d163 2
+a164 2
+ *  CallbackThresh "chunks" of the document have arrived.  The
+ *  callback procedure and can be changed after this first callback.
+d170 1
+a170 3
+ *  table of contents.  Some symbolic constants are available to
+ *  specify things like "all chunks", "as many as will fit in some
+ *  existing buffer", etc.
+d175 1
+a175 1
+ *  information about the error is stored.)  This call is asynchronous.
+d180 1
+a180 3
+		   GM_DocLocator *loc,
+                   GM_TypeList *types,
+                   char *annotation,
+d186 1
+a186 1
+ *  Get a chunk from an open document connection.  This may require
+d188 3
+a190 5
+ *
+ *  Alternatively: Maybe GM_GetDoc should only return the TOC (though it may
+ *  preload up to maxChunks chunks)? 
+ *
+ *  This call is asynchronous.
+d192 4
+a195 3
+GM_DocChunk  GM_GetChunk(GM_ConnectId connId,
+			 GM_DocId doc_id,
+			 GM_ChunkId chunk_id);
+d198 1
+a198 1
+ *  Close an open document connection.  All client-allocated buffers for
+d223 1
+a223 2
+				     unsigned newThreshold,
+				     BlobPtr buffer);
+@
+
+
+1.3
+log
+@Unknown changes, due to REALLY ANNOYING lossage after barad-dur crash.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.2 1996/05/24 21:30:52 gribble Exp $
+d11 3
+d238 3
+a240 1
+GM_ConnectId  GM_ConnectProxy(char *proxyAddr);
+@
+
+
+1.2
+log
+@Added protocol parser functionality, and the tkAppInit.c file required
+to build gmwish.  Modified headers and Makefile to include protocol
+parsing.  Preliminary stab at underlying C glomop functionality, and glue
+routines to map into them.  Will need significant rewriting.
+@
+text
+@d8 1
+a8 1
+ * $Id: glomopTk_pub.h,v 1.1 1996/02/22 00:45:59 gribble Exp $
+d11 6
+d36 1
+a36 1
+typedef unsigned short GM_ConnectId;
+d83 1
+a83 1
+typedef unsigned short GM_DocId;
+d90 1
+a90 1
+typedef unsigned int GM_ChunkId;
+@
+
+
+1.1
+log
+@Skeleton core structure complete.  Next stage: implementation of core
+routines.
+@
+text
+@d8 1
+a8 1
+ * $Id$
+d10 5
+a14 1
+ * $Log$
+d247 1
+a247 1
+GM_Error GM_RegisterTypes(GM_TypeList *t);
+d291 2
+a292 1
+GM_DocId GM_GetDoc(GM_DocLocator *loc,
+d308 3
+a310 2
+GM_DocChunk  GM_GetChunk(GM_DocId doc_id,
+                      GM_ChunkId chunk_id);
+d319 2
+a320 1
+GM_Error  GM_CloseDoc(GM_DocId doc_id);
+d334 2
+a335 1
+GM_DocCallbackProcPtr GM_SetCallback(GM_DocId doc_id,
+@

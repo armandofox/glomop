@@ -1,0 +1,296 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	96.03.06.19.01.16;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.03.06.04.33.09;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Fixed so that offsets greater than a constant are randomly truncated below
+that constant.  Try using 30 for the constant.  This also fixed the second
+granularity problem.
+@
+text
+@#!/usr/sww/bin/perl5
+
+# load_sim.pl - discrete time simulator
+#  ARGS:  <simtime (s)> <incr(s)> <thresh> <userscript1> <userscript2> ... <userscriptN>
+
+&parseArgs;
+&openFiles;
+&initSim;
+&runSim;
+&closeFiles;
+exit(0);
+
+sub parseArgs {
+    $simtime = shift @@ARGV || &usage;
+    $incrtime = shift @@ARGV || &usage;
+    $timeoutthresh = shift @@ARGV || &usage;
+
+    $numinputs = 0;
+    while ($_ = shift @@ARGV) {
+	$input[$numinputs] = $_;
+	$ifile[$numinputs] = $nfile = "FILE_${numinputs}";
+	open($nfile,  $input[$numinputs]) || die
+	    "Could not open file $input[$numinputs]: $!";
+
+	# slurp in file, building int_i[], size_i[], and numlines[i]
+	$numlines[$numinputs] = 0;
+	$intname = "int_$numinputs";
+	$sizename = "size_$numinputs";
+	$nfile = $ifile[$numinputs];
+	while ($nextline = <$nfile>) {
+	    chomp $nextline;
+	    last unless $nextline;
+	    ($$intname[$numlines[$numinputs]], 
+	     $$sizename[$numlines[$numinputs]]) = split(/\s+/, $nextline, 2);
+	    if ($$intname[$numlines[$numinputs]] > $timeoutthresh) {
+		$$intname[$numlines[$numinputs]] = 
+		    1 + $timeoutthresh * rand();
+	    }
+	    $numlines[$numinputs] += 1;
+	    }
+	$curline[$numinputs] = int( rand() * ($numlines[$numinputs]-1));
+	$numinputs++;
+    }
+}
+
+sub openFiles {
+    open(LAT, ">latency.log");
+    open(CPUUSE, ">cpuuse.log");
+}
+
+sub closeFiles {
+    close(LAT);
+    close(CPUUSE);
+}
+
+sub initSim {
+    # this sub builds the list of tasks being done for each user
+    # as well as the next task to be done for each user
+
+    $curtime = 0;
+    $numexecuting = 0;
+
+    for ($i=0; $i<$numinputs; $i++) {
+	($nextT, $nextS) = &getnext($i);
+	$nextET = &rawExecutionTime($nextS);
+	$issuetime[$i] = $curtime + $nextT; # time when next task issued
+	$issuenext[$i] = $nextET;           # length of next task to be issued
+    }
+}
+
+sub runSim {
+    local $origNum;
+
+    while ($curtime <= $simtime) {
+	$origNum = $numexecuting;
+	print CPUUSE "$curtime $numexecuting\n";
+
+	# first - check to see if anything completed in last slice
+	if ($numexecuting != 0) {
+	    local $numpopped = 0;
+	    
+	  USERLOOP:
+	    for ($i=0; $i<$numinputs; $i++) {
+		$lotrname = "lotr_$i";     # list of execution times remaining
+		$lostname = "lost_$i";     # list of start times
+		$llen = scalar(@@$lotrname);
+		
+	      TASKLOOP:
+		for ($j=0, $wh=0; $j<$llen; $j++) {
+
+		    # $incrtime has elapsed, share the processor equally
+		    # between $numexecuting tasks
+
+		    if ($$lotrname[$wh] < ($incrtime/$numexecuting)) {
+			# this task has finished.  dump out elapsed time
+
+			$eltime = $curtime - $$lostname[$wh] + $$lotrname[$wh];
+			print "Finish: endtime $curtime, rm $$lotrname[$wh],";
+			print " elapsed time $eltime\n";
+			print LAT "$eltime\n";
+
+			# take this task off of execution queues
+			splice(@@$lotrname, $wh, 1);
+			splice(@@$lostname, $wh, 1);
+
+			$numpopped += 1;
+			if ($numpopped == $numexecuting) {
+			    last USERLOOP;  # all done
+			}
+		    } else {
+			$wh++;
+		    }
+		} # end for ($j=0...)
+	    } # end for ($i=0...)
+	    
+	    $numexecuting -= $numpopped;
+	} # end if ($numexe...)
+
+	# run down remaining tasks, decrementing them.  here we assume
+	# that split of CPU during slice remains constant, even if a task
+	# finishes.  (ie. an approximation)
+
+	if ($origNum != 0) {
+	    for ($i=0; $i<$numinputs; $i++) {
+		$lotrname = "lotr_$i";     # list of execution times remaining
+		$lostname = "lost_$i";     # list of start times
+		$llen = scalar(@@$lotrname);
+		
+		for ($j=0; $j<$llen; $j++) {
+		    $$lotrname[$j] -= ($incrtime/$origNum);
+		}
+	    }
+	}
+
+	# calculate increment of time to next loop
+	$nextcur = $curtime + $incrtime;
+
+	# do some magic to avoid roundoff errors
+	$nextcur = int($nextcur / $incrtime + 0.5);
+	$nextcur = $nextcur * $incrtime;
+
+	# now add new tasks to current slice
+      USER2LOOP:
+	for ($i=0; $i<$numinputs; $i++) {
+	    $lotrname = "lotr_$i";     # list of execution times remaining
+	    $lostname = "lost_$i";     # list of start times
+
+	    # look at issuetime[$i]
+	    
+	  GETNEXTLOOP:
+	    while (1) {
+		if ($issuetime[$i] <= $nextcur) {
+		    push (@@$lotrname, $issuenext[$i]);
+		    push (@@$lostname, $nextcur);
+
+		    print "Issued: starttime $nextcur, tr $issuenext[$i]\n";
+		    $numexecuting += 1;
+		    
+		    ($nextT, $nextS) = &getnext($i);
+		    $nextET = &rawExecutionTime($nextS);
+		    $issuetime[$i] = $issuetime[$i] + $nextT; # next task time
+		    $issuenext[$i] = $nextET;           # length of next task
+		} else {
+		    last GETNEXTLOOP;  # break out.
+		}
+	    }
+	}
+	# actually increment time
+	$curtime = $nextcur;
+    }
+}
+
+sub rawExecutionTime {
+    local $gifsize = shift;
+    local $numdistillers = shift || 1;
+    local ($yintercept, $slope, $extime);
+
+    $slope = 0.0005126325 * ($gifsize**.7183588);
+    if ( ($gifsize > 0) && ($gifsize < 100000)) {
+	$yintercept = .01539 + .00001037403*$gifsize;
+    } else {
+	$yintercept = .8406506 + .000002449857*$gifsize;
+    }
+    $yintercept *= -1.0;
+    $extime = $yintercept + ($slope * $numdistillers);
+    return $extime;
+}
+
+sub getnext {
+    local $filenum = shift;
+    local @@retarr;
+    local $intname = "int_$filenum";
+    local $sizename = "size_$filenum";
+
+    # looping behaviour
+    if ($curline[$filenum] >= $numlines[$filenum]) {
+	$curline[$filenum] = 0;
+    }
+
+    # return values
+    push(@@retarr, $$intname[$curline[$filenum]]);
+    push(@@retarr, $$sizename[$curline[$filenum]]);
+    $curline[$filenum] += 1;
+    return @@retarr;
+}
+
+sub usage {
+    print STDERR <<endofhelp;
+$0: discrete time simulator.  
+
+This program performs a discrete time simulation of a workstations running
+a variable number of gifmunch distillers, and accepting a stream of
+distillation requests from a number of users.
+
+The program accepts the following arguments:
+ $0 <simtime> <incr> <thresh> <userscript1> <userscript2> .. <userscriptN>
+
+where <simtime> is the amount of time to run the simulation (s), in
+seconds, <incr> is the discretization interval of time in seconds,
+<thresh> is a threshold request interarrival time beyond which a
+random time is chosen below the threshold, and 
+<userscript1> .. <userscriptN> are names of scripts representing
+individual users.  Each script must contain lines of the format:
+
+<interarrival time (s)> <whitespace> <gifsize (bytes)>
+
+The program run through each user script, looping back to the beginning
+of a script when it "runs out".
+
+The output of the program (to STDOUT) are a series of latencies as seen
+when an individual distillation request finishes.
+
+endofhelp
+    die;
+}
+@
+
+
+1.1
+log
+@httpdan:  parse UCB CS web server logs and produce stats
+load_sim.pl:  simulate load on a web proxy
+@
+text
+@d4 1
+a4 1
+#  ARGS:  <simtime (s)> <incr(s)> <userscript1> <userscript2> ... <userscriptN>
+d7 1
+d10 1
+d16 1
+d35 3
+a37 2
+	    if ($$intname[$numlines[$numinputs]] > 100) {
+		$$intname[$numlines[$numinputs]] = 10+ int(90*rand());
+d41 1
+a41 1
+	$curline[$numinputs] = 0;   # used in getnext
+d46 10
+d76 1
+d100 1
+d216 1
+a216 1
+ $0 <simtime> <incr> <userscript1> <userscript2> .. <userscriptN>
+d220 3
+a222 1
+and <userscript1> .. <userscriptN> are names of scripts representing
+@

@@ -1,0 +1,269 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.07.10.23.12.37;	author aspolito;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.19.23.30.23;	author aspolito;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@fixed some handle problems
+@
+text
+@#pragma pack(2)
+
+#include <Pilot.h>
+
+#include "transRsc.h"
+#include "trans.h"
+
+#define PROXYHOST1 "avro.cs.berkeley.edu"
+#define PROXYPORT1 4444
+
+#define PROXYHOST2 "mirage.cs.berkeley.edu"
+#define PROXYPORT2 7777
+
+
+static Int conID1 = -1;
+static Int conID2 = -1;
+
+#ifdef DEBUG
+extern long data_start, bss_start;
+static void StartDebug(void)
+{
+ extern void start ();
+ DWord romVersion;
+ FtrGet(sysFtrCreator, sysFtrNumROMVersion, &romVersion);
+ if (romVersion >= 0x02000000) {
+    (*(char*)257) = 1; /* Turn on debugging */
+ }
+
+ asm("
+        lea data_start(%%a4),%%a1
+        move.l %%a1,%%d2
+        lea bss_start(%%a4),%%a1
+        move.l %%a1,%%d1
+        lea start(%%pc),%%a0
+        move.l %%a0,%%d0
+        sub.l #start, %%d0
+        move.l #0x12BEEF34, %%d3
+        trap #8
+        move.l #0, %%d3
+        move.l #0, %%d0
+        move.l #0, %%d1
+        move.l #0, %%d2
+ " : : : "d0", "d1", "d2", "d3", "a1", "a0");
+
+}
+#endif
+
+static Boolean MainFormHandleEvent (EventPtr e)
+{
+    Boolean handled = false;
+    FormPtr frm;
+    
+    switch (e->eType) {
+    case frmOpenEvent:
+	frm = FrmGetActiveForm();
+	FrmDrawForm(frm);
+	handled = true;
+	break;
+
+    case menuEvent:
+	MenuEraseStatus(NULL);
+
+	switch(e->data.menu.itemID) {
+	}
+
+    	handled = true;
+	break;
+
+    case ctlSelectEvent:
+	switch(e->data.ctlEnter.controlID) {
+	}
+	break;
+
+    default:
+        break;
+    }
+    return handled;
+}
+
+static Boolean ApplicationHandleEvent(EventPtr e) {
+  FormPtr frm;
+  Word    formId;
+  Boolean handled = false;
+  
+  if (e->eType == frmLoadEvent) {
+    formId = e->data.frmLoad.formID;
+    frm = FrmInitForm(formId);
+    FrmSetActiveForm(frm);
+    
+    switch(formId) {
+    case MainForm:
+      FrmSetEventHandler(frm, MainFormHandleEvent);
+      break;
+    }
+    handled = true;
+  } else if (e->eType == transNewChunk) {
+    transEventPtr te = (transEventPtr) e;
+    ChunkPtr c = MemHandleLock(te->data.newChunk.chunkHand);
+
+    /*    printf ("Got a chunk!\n"); */
+    SendChunk(c);
+
+    if (c->dataSize) {
+      MemHandleFree (c->dataHand);
+    } 
+    if (c->metaHand) {
+      MemHandleFree (c->metaHand);
+    }
+
+    MemHandleUnlock(te->data.newChunk.chunkHand);
+    MemHandleFree(te->data.newChunk.chunkHand);
+    handled = true;
+  }
+  
+  return handled;
+}
+
+/* Get preferences, open (or create) app database */
+static Word StartApplication(void)
+{
+  Word err;
+
+  err = StartTrans();
+   
+  conID1 = OpenConnection(PROXYHOST1, PROXYPORT1, NULL);
+  conID2 = OpenConnection(PROXYHOST2, PROXYPORT2, NULL);
+
+  
+  if ((conID1 >= 0) && (conID2 >= 0)) {
+    FrmGotoForm(MainForm);
+    return 0;
+  }
+  else {    
+    return -1;
+  }
+}
+
+/* Save preferences, close forms, close app database */
+static void StopApplication(void) {
+  Word err;
+
+  err = StopTrans();
+  if (err) {
+    ErrFatalDisplayIf(err, "Error closing transport layer!");
+    return;
+  }
+      
+  if (conID1 >= 0) {
+    CloseConnection(conID1);
+  }
+  if (conID2 >= 0) {
+    CloseConnection(conID2);
+  }
+  FrmSaveAllForms();
+  FrmCloseAllForms();
+}
+
+/* The main event loop */
+static void EventLoop(void) {
+  Word err;
+  EventType e;
+  
+  do {
+    Long timeout = evtWaitForever;
+    /* Check if there's data available */
+    
+    CheckNetwork();
+
+    EvtGetEvent(&e, timeout);
+    
+    if (! SysHandleEvent (&e))
+      if (! MenuHandleEvent (NULL, &e, &err))
+	if (! ApplicationHandleEvent (&e))
+	  FrmDispatchEvent (&e);
+    
+  } while (e.eType != appStopEvent);   
+}
+
+DWord PilotMain(Word cmd, Ptr cmdPBP, Word launchFlags) {
+  Word err;
+  
+  if (cmd == sysAppLaunchCmdNormalLaunch) {
+    
+#ifdef DEBUG
+  StartDebug();
+#endif
+	
+  err = StartApplication();
+  if (err) return err;
+  
+  EventLoop();
+  StopApplication();
+
+  } else {
+    return sysErrParamErr;
+  }
+
+  return 0;
+}
+@
+
+
+1.1
+log
+@trans.c now doesn't include actual code to run a program.
+That has been moved to transtest.c
+@
+text
+@d8 2
+a9 2
+#define PROXYHOST "mirage.cs.berkeley.edu"
+#define PROXYPORT 4444
+d11 6
+a16 1
+static Int conID = -1;
+d100 1
+a100 1
+    printf ("Got a chunk!\n");
+d102 8
+a109 1
+    MemHandleFree (c->dataHand);
+d124 3
+a126 3
+  if (err) {
+    ErrFatalDisplayIf(err, "Can't open transport layer!");
+  }
+d128 2
+a129 2
+  conID = OpenConnection(PROXYHOST, PROXYPORT);
+  if (conID > 0) {
+d133 2
+a134 2
+  else {
+    return 1;
+d148 5
+a152 2
+  if (conID >= 0) {
+    CloseConnection(conID);
+d167 1
+a167 1
+    CheckNetwork(conID);
+@

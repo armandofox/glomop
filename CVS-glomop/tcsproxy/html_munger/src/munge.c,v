@@ -1,0 +1,1298 @@
+head	1.24;
+access;
+symbols
+	Yatin-final:1.24
+	Yatin:1.24.0.2
+	pre-yatin-merge:1.24
+	transend-beta2:1.24
+	fox-dev:1.24
+	html_munger-ng:1.23
+	transend-beta-latest:1.23
+	Aggregators:1.23
+	NoAggregators:1.23
+	iang:1.23.0.2
+	transend-beta:1.22.0.2
+	SOSP:1.16
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.24
+date	97.06.14.15.30.45;	author yatin;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.04.30.07.55.24;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.04.16.01.29.21;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.04.09.02.59.23;	author yatin;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.08.20.53.01;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.04.08.08.21.05;	author aspolito;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.03.31.23.40.32;	author aspolito;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.03.12.22.34.09;	author aspolito;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.03.09.05.19.45;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.03.04.19.26.45;	author aspolito;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.02.27.04.01.41;	author aspolito;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.02.27.03.31.34;	author aspolito;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.02.26.04.14.39;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.02.25.09.51.25;	author aspolito;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.02.21.07.35.12;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.15.00.00.14;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.11.02.38.08;	author aspolito;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.05.04.11.58;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.05.03.57.07;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.01.29.04.13.29;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.12.01.59.03;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.06.07.45.09;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.26.00.29.13;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.02.39.53;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.02.39.53;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@changes to the DistillerInit() API
+@
+text
+@/*
+ *  munge.c
+ *
+ *  DistillerMain for HTML munger.  The DistillerMain function accepts a
+ *  single distiller argument: a string that should be spliced at the
+ *  end of every URL whose extension (.gif, etc) suggests that it is a
+ *  "recognized type".  (I know you aren't supposed to guess MIME types
+ *  from extensions, but hey, sue me.)  The function known_extensions
+ *  returns a boolean indicating whether the given URL has an extension
+ *  that should be munged.
+ *
+ *  The HTML lexer is actually Dan Connolly's (W3C) reference SGML
+ *  lexer, which is fast but has an evil callback convention (see
+ *  comments in the callback() function).
+ */
+
+#include "munge.h"
+#include "sgml_lex.h"
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include "../../frontend/include/ARGS.h"
+#include <stdlib.h>
+
+#ifdef INST
+FILE *Log;
+#endif
+MonitorClientID mon;
+
+/* this is messy, it gets around the lexer callback stupidity */
+static Argument * args;
+static int nargs;
+
+/* value defines where ICON_STRING should be placed */
+/* this is one of icon_string_pos                   */
+/* if no_icon dont place at all                     */
+/* if at_beginning place at the very beginning      */
+/* if after_head place after </HEAD>                */
+/* if in_body place after <BODY>                    */
+/* set to no_icon after placing                     */
+static int where_string;
+
+void callback(void *,SGML_Lexer *, int, SGML_TokType *, SGML_String *,
+              size_t *);
+
+void clean_HtmlTagDescr(struct HtmlTagDescr *, int);
+
+/*
+ *  BUG::Why are strncasecmp and strcasecmp defined here????  There is
+ *  an AC_REPLACE_FUNCS in the toplevel Makefile, but there is no
+ *  strncasecmp.c or strcasecmp.c.
+ */
+
+int
+strncasecmp(const char *s1, const char *s2, size_t s)
+{
+  register int i = 0;
+  register signed char z,c1,c2;
+  while (i++ < s && (c1 = *s1++) && (c2 = *s2++))
+    if ((z = tolower(c1) - tolower(c2)) != 0)
+      return (z < 0? -1: 1);
+  return 0;
+}
+
+#define strcasecmp_(s1,s2) strncasecmp((s1),(s2),strlen(s1))
+
+int find_where_string(DistillerInput * di) {
+  int head_end = 0, frameset = 0, noframes = 0;
+  char * data = (char *) DataPtr(di);
+  UINT32 i;
+
+  for (i = 0; i < DataLength(di); i++) {
+    if (data[i] == '<') {
+      if (!strcasecmp_("</HEAD", data+i)) {
+	head_end = i;
+      } else if (!strcasecmp_("<BODY", data+i)) {
+	return in_body;
+      } else if (!strcasecmp_("<NOFRAMES", data+i)) {
+	noframes = 1;
+      } else if (!strcasecmp_("<FRAMESET", data+i)) {
+	frameset = 1;
+      }
+    }    
+  }
+
+  if (noframes) return in_noframes;
+  if (frameset) return no_icon;
+  if (head_end) return after_head;
+  return at_beginning;
+}
+
+DistillerStatus
+ComputeDistillationCost(Argument *args, int numArgs,
+                        DistillerInput *in,
+                        DistillationCost *cost)
+{
+  cost->estimatedTime_ms = DataLength(in);
+  return distOk;
+}
+
+DistillerStatus
+DistillerInit(C_DistillerType distType, int argc, const char * const *argv)
+{
+#ifdef INST
+  char file[80];
+  extern FILE *Log;
+  extern int errno;
+#endif
+  
+  mon = DistillerGetMonitorClientID();
+
+#ifdef INST
+  sprintf(file, "/tmp/html.%d", getpid());
+  Log = fopen(file, "w");
+  if (Log == NULL) {
+    sprintf(file, "Opening /tmp/html.%d: errno = %d\n", getpid(), errno);
+    MonitorClientSend(mon, "Errors", file, "");
+    return distFatalError;
+  }
+#endif
+  return distOk;
+}
+
+DistillerStatus
+DistillerMain(Argument *args_, int nargs_,
+              DistillerInput *din,
+              DistillerOutput *dout)
+{
+  SGML_Lexer *l;
+  OutputInfo output_info;
+  int show_icon = 1; 
+  int i;
+
+  DataNeedsFree(dout,gm_False);
+  MetadataNeedsFree(dout,gm_False);
+
+  args = args_;
+  nargs = nargs_;
+
+  /* initilize the tag processor */
+  process_tag(NULL, NULL, 0, NULL, NULL, 0, NULL);
+  
+  where_string = no_icon;
+
+  /* add the ICON_STRING of we should */
+  for (i=0; i<nargs; i++) {
+    if ((ARG_ID(args[i]) == FRONT_SHOW_ICON) && ARG_INT(args[i]) == 0) {
+      show_icon = 0;
+      break;
+    }
+  }
+
+  if (show_icon) where_string = find_where_string(din);
+  
+  assert(l = SGML_newLexer());
+  /*
+   *  fill in the output structure that will be passed to the callback
+   *  routine.  Allocate an output buffer that is initially the size
+   *  of the input buffer * 2.
+   */
+  output_info.html_bufsize = (DataLength(din) << 1) + 1000;
+  output_info.html_buf = DistillerMalloc((size_t)(output_info.html_bufsize));
+  assert(output_info.html_buf);
+  output_info.html_buflen = 0;
+
+  if (where_string == at_beginning) {
+    append_string(&output_info, ICON_STRING, -1);
+    where_string = no_icon;
+  }
+
+  SGML_lex(l, (const char *)DataPtr(din), (size_t)DataLength(din),
+           callback, (void *)&output_info,
+           callback, (void *)&output_info,
+           callback, NULL);
+  SGML_lex(l, (const char *)NULL, (size_t)0,
+           callback, (void *)&output_info,
+           callback, (void *)&output_info,
+           callback, NULL);
+  SGML_delLexer(l);
+
+  /*
+   *  Return the output buffer and size.
+   */
+  SetDataLength(dout,output_info.html_buflen);
+  SetData(dout, output_info.html_buf);
+  DataNeedsFree(dout, gm_True);
+  strncpy(dout->mimeType, "text/html", MAX_MIMETYPE);
+
+  
+#ifdef INST
+  fprintf(Log, "\n");
+#endif
+  return(distOk);
+}
+
+int
+known_extension(char *str, int len)
+{
+  static char *known[] = {"gif", "jpeg", "jpg", "pgif", "pjpeg", "pjpg"};
+  static int knownlen[] = { 3, 4, 3, 4, 5, 4 };
+  int i;
+
+  if (len == 0)
+    return 0;
+  for (i=0; i<(sizeof(known)/sizeof(char *)); i++)
+    if (strncasecmp(known[i], str+len-knownlen[i], knownlen[i]) == 0)
+      return 1;
+  return 0;
+}
+
+/*
+ *  HTML lexer callback; gets called when a tag or HTML content is
+ *  parsed.
+ *
+ *  ARGS:
+ *  distinfo - struct containing output buf pointer, "magic dust" to add
+ *     to URL if this is a tag that has a URL link, etc.
+ *  l - lexer object
+ *  qty - number of <tokentype,string> tuples to follow
+ *  types,strings,lengths - something that really oughta be an array of structs
+ *      Each types[] is an SGML_TokType:
+ *      SGML_ERROR: error token; corresponding string is error message
+ *      SGML_ATTRNAME: tag was parsed; corresponding string is either an
+ *              attr or a value, alternating.  E.g. we would get:
+ *              SGML_ATTR "SRC"
+ *              SGML_ATTR "http://www.com"
+ *              SGML_ATTR "WIDTH"
+ *              SGML_ATTR "3"
+ *         The auto variable next_str_is_attrval remembers this state. Ugh.
+ *         Note the strings aren't null-terminated; hence lengths[].  Ugh.
+ */
+void
+callback(void *_distinfo,
+         SGML_Lexer *l,
+         int qty,
+         SGML_TokType types[], SGML_String strings[], size_t lengths[])
+{
+  int i;
+  int sgml_error;
+  int next_str_is_attrval;
+  int next_str_is_attrname;
+  int in_html_tag;
+  OutputInfo *di = (OutputInfo *)_distinfo;
+  struct HtmlTagDescr* tag_attribs;
+  int nattribs;
+  char *tagname = NULL;
+
+  if (_distinfo == NULL)
+    return;
+
+  tag_attribs = (struct HtmlTagDescr*) 
+    calloc(sizeof(struct HtmlTagDescr) * qty, 1);
+
+  /*
+   *  In case we're going to parse a tag, initialize....
+   */
+  nattribs = 0;
+  next_str_is_attrval = 0;
+  next_str_is_attrname = 0;
+  sgml_error = 0;
+  in_html_tag = 0;
+  /* memset(tag_attribs, sizeof(tag_attribs), '*');*/
+  
+  for (i=0; i< qty && !sgml_error; i++) {
+    if (next_str_is_attrval) {
+      int stringlen;
+      char *ls, *ts;
+      int lslen, tslen;
+      /*
+       *  Handle an attribute value
+       */
+      next_str_is_attrval = 0;
+      if (lengths[i] == 0) {
+        /* null attribute */
+	tag_attribs[nattribs].attr_origval = (char *) DistillerMalloc(1);
+	tag_attribs[nattribs].attr_val = (char *) DistillerMalloc(1);	  
+        tag_attribs[nattribs].attr_origval[0] = '\0';
+        tag_attribs[nattribs].attr_val[0] = '\0';
+        nattribs++;
+        continue;
+      }
+      /*
+       *  This is evil: the attribute value is returned as a single
+       *  string that INCLUDES both leading and trailing whitespace,
+       *  EVEN IF the attribute value itself is double quoted.  I.e. the
+       *  text  '<SRC= "foo"  >' will return the attribute value
+       *  ' "foo"  '.  Truly evil.  To fix it, we separate it into the
+       *  leading whitespace, attr value optionally in double quotes,
+       *  and trailing whitespace.  The char pointers ls and ts point to
+       *  the leading and trailing strings, and lslen and tslen are
+       *  their lengths.  Note that we special-case ts to "" if tslen is
+       *  found to be zero, to avoid a possible bad pointer dereference
+       *  off the end of the original string.  This lexer interface sucks.
+       */
+
+      tag_attribs[nattribs].attr_origval = (char *) DistillerMalloc(lengths[i]+1);
+      bogon_strncpy(tag_attribs[nattribs].attr_origval, strings[i], lengths[i]);
+
+      lslen = 0;
+      ls = (char *)strings[i];
+      while (lslen < lengths[i] && isspace(*ls)) {
+        ls++; lslen++;
+      }
+      if (*ls == '"') {
+        ls++; lslen++;
+      }
+      tslen = 1;
+      ts = (char *)(&strings[i][lengths[i]-1]);
+      while (tslen < lengths[i]-lslen  && isspace(*ts)) {
+        ts--; tslen++;
+      }
+      if (*ts != '"') {
+        ts++; tslen--;
+      }
+      if (tslen == 0)
+        ts = "";
+      stringlen = lengths[i]-tslen-lslen;
+      
+      tag_attribs[nattribs].attr_val = (char *) DistillerMalloc(stringlen+1);
+      bogon_strncpy(tag_attribs[nattribs].attr_val, ls, stringlen);
+
+      nattribs++;
+    } else {
+      /*
+       *  Not an attrib name: consider other token types
+       */
+      switch(types[i]) {
+      case SGML_ATTRNAME: 
+        /* the strings are attribute/value pairs.  WHen parsing such a
+         *  pair, the lexer always alternates attrib names with values.
+         *  Even if we have something like <IMG SRC="foo" ISMAP HREF="...">,
+         *  when it gets to the ISMAP, we'll get an attribute name of ''
+         *  (null) and a value of "ISMAP".  (If we had said
+         *  ISMAP="TRUE", we'd get an attribute name of "ISMAP=" and a
+         *  value of "TRUE".)  So if we do see a null attribute name,
+         *  assume the *real* attribute name is the *next* token.  Ugh.
+         */
+        if (lengths[i] > 0) {
+          int real_len = lengths[i];
+          /* get rid of trailing '=' and whitespace */
+          while(isspace(strings[i][real_len-1])
+                || strings[i][real_len-1] == '=')
+            real_len--;
+	  
+	  tag_attribs[nattribs].attr_name = (char *) DistillerMalloc(real_len+1);
+          bogon_strncpy(tag_attribs[nattribs].attr_name, strings[i], real_len);
+          next_str_is_attrval = 1;
+          next_str_is_attrname = 0;
+        } else {
+          /* this is a "null attribute" */
+          next_str_is_attrname = 1;
+        }
+        break;
+        
+      case SGML_NAME:
+      case SGML_NMTOKEN:
+      case SGML_LITERAL:
+        /*
+         *  If we are inside parsing an HTML tag, *and*
+         *  next_str_is_attrname is true, then this string is the
+         *  attribute name of some attribute that doesn't have a value,
+         *  like ISMAP.  THe corresponding attribute value should be set
+         *  to the null string.
+         */
+        if (next_str_is_attrname) {
+          next_str_is_attrname = 0;
+	  tag_attribs[nattribs].attr_name = (char *) DistillerMalloc(lengths[i]+1);
+          bogon_strncpy(tag_attribs[nattribs].attr_name, strings[i], lengths[i]);
+	  tag_attribs[nattribs].attr_val = (char *) DistillerMalloc(1);
+	  tag_attribs[nattribs].attr_origval = (char *) DistillerMalloc(1);
+          tag_attribs[nattribs].attr_val[0] = '\0';
+          tag_attribs[nattribs].attr_origval[0] = '\0';
+          nattribs++;
+        } else {
+          /*
+           *  Otherwise, just copy this stuff to the output.
+           */
+          append_string(di, strings[i], lengths[i]);
+        }
+        break;
+      case SGML_WARNING:
+      case SGML_ERROR:
+      case SGML_LIMITATION:
+        {
+          char error[1024];
+
+	  append_string(di, "LAME", -1);
+          sprintf(error, "Warning/error: %*.*s\n", (int)lengths[i],
+                  (int)lengths[i], strings[i]);
+          MonitorClientSend(mon, "Errors", error, "");
+        }
+        sgml_error = 1;
+        break;
+      case SGML_TAGC:
+        /*
+         *  We've reached a tag close, so process the entire tag at once.
+         */
+        if (in_html_tag) {
+	  process_tag(tagname, tag_attribs, nattribs, di, args, nargs, 
+		      &where_string);
+        } else {
+          append_string(di, strings[i], lengths[i]);
+        }
+        in_html_tag = 0;
+        break;
+      case SGML_START:
+      case SGML_END:
+        /*
+         *  Open tag (start tag or end tag, i.e. "<A" or "</A"): copy verbatim
+         *  to  tagname.
+         */
+	tagname = (char *) DistillerMalloc (lengths[i]+1);
+        bogon_strncpy(tagname, strings[i], lengths[i]);
+        in_html_tag = 1;
+        nattribs = 0;
+        break;
+      case SGML_COMMENT:
+	/*	append_string(di, "TEST", -1);*/
+      case SGML_DATA:
+      case SGML_GEREF:
+      case SGML_REFC:
+      case SGML_MARKUP_DECL:
+        append_string(di, strings[i], lengths[i]);
+        break;
+      default:
+#if 0
+        fprintf(stderr, "Type=%d str=%*.*s\n", (int)types[i],
+                lengths[i],lengths[i],strings[i]);
+#endif
+        break;
+      }
+    }
+  }
+  clean_HtmlTagDescr(tag_attribs, qty);
+  DistillerFree (tag_attribs);
+  if (tagname) {
+    DistillerFree (tagname);
+  }
+}
+
+void clean_HtmlTagDescr(struct HtmlTagDescr *td, int qty) {
+  int i;
+  
+  for (i = 0; i < qty; i++) {
+    if (td[i].attr_name) {
+      DistillerFree (td[i].attr_name); 
+    }
+    if (td[i].attr_val) {
+      DistillerFree (td[i].attr_val); 
+    }
+    if (td[i].attr_origval) {
+      DistillerFree (td[i].attr_origval); 
+    }
+  }
+}
+
+@
+
+
+1.23
+log
+@frontend and ptm changes for new distiller api
+@
+text
+@d102 1
+a102 1
+DistillerInit(C_DistillerType distType)
+@
+
+
+1.22
+log
+@Now conforms to new DistillerInit() interface.
+@
+text
+@d69 1
+a69 1
+  char * data = (char *) di->data;
+d72 1
+a72 1
+  for (i = 0; i < di->length; i++) {
+d97 1
+a97 1
+  cost->estimatedTime_ms = in->length;
+d127 1
+a127 2
+              DistillerOutput *dout,
+              gm_Bool *freeOutputBuffer)
+d134 2
+a135 1
+  *freeOutputBuffer = gm_True; 
+d161 1
+a161 1
+  output_info.html_bufsize = (din->length << 1) + 1000;
+d171 1
+a171 1
+  SGML_lex(l, (const char *)(din->data), (size_t)(din->length),
+d184 3
+a186 2
+  dout->length = output_info.html_buflen;
+  dout->data = (void *)(output_info.html_buf);
+d189 1
+@
+
+
+1.21
+log
+@HTML munger changes for the TS logo with frames
+fe_checker waits for 30 seconds before re-pinging
+@
+text
+@d102 1
+a102 1
+DistillerInit(void)
+@
+
+
+1.20
+log
+@Fixed pref page bugs on html form; changed ICON_STRING in html munger to
+position top-right and force clear at both margins.  ie prefs retrieval
+and setting now works correctly.  still to do: ICON_STRING needs to
+reflect correct url to prefs (transend.cs...etc), along with arg that
+means "don't show the logo on that page" and "don't distill anything on
+that page".
+@
+text
+@d35 6
+a40 6
+/* this is either 0, 1, 2 or 3                      */
+/* if 0 dont place at all                           */
+/* if 1 place at the very begning                   */
+/* if 2 place after </HEAD>                         */
+/* if 3 place after <BODY>                          */
+/* set to 0 after placing                           */
+d65 1
+a65 1
+#define strcasecmp(s1,s2) strncasecmp((s1),(s2),strlen(s1))
+d68 1
+a68 1
+  int head_end = 0;
+d74 1
+a74 1
+      if (!strcasecmp("</HEAD", data+i)) {
+d76 6
+a81 2
+      } else if (!strcasecmp("<BODY", data+i)) {
+	return 3;
+d86 4
+a89 2
+  if (head_end) return 2;
+  return 1;
+d143 1
+a143 1
+  where_string = 0;
+d161 1
+a161 1
+  output_info.html_bufsize = din->length << 1;
+d166 1
+a166 1
+  if (where_string == 1) {
+d168 1
+a168 1
+    where_string = 0;
+@
+
+
+1.19
+log
+@now adds ICON_STRING (in munge.h) to the top of every web page.
+@
+text
+@d141 1
+a141 1
+    if ((ARG_ID(args[i]) == FRONT_NO_ICON) && ARG_INT(args[i])) {
+@
+
+
+1.18
+log
+@added support for magifing the src tags of images based on the image tag.
+@
+text
+@d22 1
+a22 1
+
+d30 13
+d67 19
+d119 1
+a119 1
+DistillerMain(Argument *args, int nargs,
+d126 2
+d131 3
+d135 11
+a145 1
+  process_tag(NULL, NULL, 0, NULL);
+d147 2
+d160 5
+d391 2
+a392 1
+	  process_tag(tagname, tag_attribs, nattribs, di);
+@
+
+
+1.17
+log
+@fixed boundry condition bug on ATTRIB=value pairs
+@
+text
+@d323 3
+a325 1
+          char error[100];
+d337 1
+a337 1
+          process_tag(tagname, tag_attribs, nattribs, di);
+d354 2
+a358 1
+      case SGML_COMMENT:
+@
+
+
+1.16
+log
+@added simple -DINST to dump out urls of image tags
+@
+text
+@d279 1
+a279 1
+          while(strings[i][real_len-1] == ' '
+@
+
+
+1.15
+log
+@arrays of statically allocated string buffers bad for text manipulation.
+Malloc good.
+@
+text
+@d25 3
+d66 6
+d73 10
+d127 4
+@
+
+
+1.14
+log
+@oops, lame error
+@
+text
+@d78 3
+a161 1
+  
+@
+
+
+1.13
+log
+@change html_munger to use dynamic memory allocation so it solves the problem
+of buffers being overwritten by extreme urls.
+@
+text
+@d175 1
+a175 1
+  /*  memset(tag_attribs, sizeof(tag_attribs), '*');*/
+@
+
+
+1.12
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d30 2
+a74 1
+  Argument *magic;
+d82 1
+a82 1
+   *  of the input buffer plus 25%.
+d88 1
+a88 8
+  if ((magic = getArgumentFromId(args, nargs, HTMLMUNGE_MAGIC_1)) != NULL) {
+    output_info.html_magicdust = ARG_STRING(*magic);
+    output_info.html_magicdust_len = strlen(output_info.html_magicdust);
+  } else {
+    output_info.html_magicdust = "";
+    output_info.html_magicdust_len = 0;
+  }
+    
+d156 1
+a156 1
+  struct HtmlTagDescr tag_attribs[MAX_TAG_ATTRS];
+d158 2
+a159 1
+  char tagname[MAX_ATTRNAME_LEN];
+d164 3
+a169 1
+  tagname[0] = '\0';
+d175 1
+a175 1
+  memset(tag_attribs, sizeof(tag_attribs), '*');
+d183 1
+a183 1
+       *  Handle an attribute value.  
+d188 2
+d209 1
+d232 1
+d257 2
+a258 1
+
+d280 1
+d282 2
+d322 1
+d343 21
+d365 1
+@
+
+
+1.11
+log
+@default output buffer is now twice the input buffer, not 1.25 times
+@
+text
+@d54 1
+a54 1
+  cost->estimatedTime = in->length;
+@
+
+
+1.10
+log
+@Fixed the lexer interface for digesting HTML tag constructs; some
+changes to Makefile to support this, added a source file munge_magic.c.
+Also modified test_main.c in gif_munger to make it a more portable test
+harness for distillers - still some work to be done on this.  HTML
+munger still works normally but uses better interface.  Next: magic URL's.
+@
+text
+@d83 1
+a83 1
+  output_info.html_bufsize = din->length + (din->length >> 2);
+@
+
+
+1.9
+log
+@Fixed up so that comments are now parsed correctly.
+@
+text
+@d17 1
+a21 1
+#include <time.h>
+a23 1
+#include "distinterface.h"
+d30 6
+a48 8
+typedef struct {
+  char *html_buf;
+  UINT32 html_buflen;
+  UINT32 html_bufsize;
+  char *html_magicdust;
+  int html_magicdust_len;
+} OutputInfo;
+
+d73 1
+a73 6
+  int ntimes = 0;
+  int i;
+  time_t s;
+  struct timeval tv1,tv2;
+  unsigned long sec,usec;
+  float fsec;
+d76 13
+a88 20
+  sec = usec = 0;
+  ntimes = 1;
+  s = time((time_t *)NULL);
+  for (i=0; i<ntimes; i++) {
+    gettimeofday(&tv1, NULL);
+    assert(l = SGML_newLexer());
+    /*
+     *  fill in the output structure that will be passed to the callback
+     *  routine.  Allocate an output buffer that is initially the size
+     *  of the input buffer plus 25%.
+     */
+    output_info.html_bufsize = din->length + (din->length >> 2);
+    output_info.html_buf = DistillerMalloc((size_t)(output_info.html_bufsize));
+    assert(output_info.html_buf);
+    output_info.html_buflen = 0;
+    if (nargs) {
+      output_info.html_magicdust = ARG_STRING(args[0]);
+    } else {
+      output_info.html_magicdust = "";
+    }
+d90 4
+d95 10
+a104 23
+    SGML_lex(l, (const char *)(din->data), (size_t)(din->length),
+             callback, (void *)&output_info,
+             callback, (void *)&output_info,
+             callback, NULL);
+    SGML_lex(l, (const char *)NULL, (size_t)0,
+             callback, (void *)&output_info,
+             callback, (void *)&output_info,
+             callback, NULL);
+    SGML_delLexer(l);
+    gettimeofday(&tv2,NULL);
+    sec += (tv2.tv_sec - tv1.tv_sec);
+    if (tv2.tv_usec >= tv1.tv_usec)
+      usec += (tv2.tv_usec - tv1.tv_usec);
+    else
+      usec += (1000000-tv1.tv_usec+tv2.tv_usec);
+    if (usec >= 1000000) {
+      sec++;
+      usec -= 1000000;
+    }
+    /*    exit(0); */
+  }
+  s = time((time_t *)NULL) - s;
+  fsec = (sec+usec/1.0e6)/ntimes;
+d157 4
+a160 2
+  int sgml_error = 0;
+  int next_str_is_attrval = 0;
+d162 4
+a165 5
+  int len;
+  int stringlen;
+  char *ls, *ts;
+  int lslen, tslen;
+  
+d168 12
+d182 6
+d189 5
+a193 1
+      if (lengths[i] == 0)
+d195 1
+d209 3
+d232 3
+a234 19
+      /*
+       *  Unless it's a recognized extension, ignore.
+       *  BUG: these should come from a .mailcap file or something.
+       */
+      if (!known_extension(ls, stringlen)) {
+        assert(di->html_buflen + lengths[i] < di->html_bufsize);
+        len = sprintf(di->html_buf + di->html_buflen,
+                      "%*.*s", (int)lengths[i], (int)lengths[i], strings[i]);
+      } else {
+        assert(di->html_buflen + lengths[i] + di->html_magicdust_len
+               < di->html_bufsize);
+        len = sprintf(di->html_buf + di->html_buflen,
+                      "%*.*s%*.*s%s%*.*s",
+                      lslen, lslen, strings[i],
+                      stringlen, stringlen, ls,
+                      di->html_magicdust,
+                      tslen, tslen, ts);
+      }
+      di->html_buflen += len;
+d241 17
+a257 3
+        /* the strings are attribute/value pairs */
+        if ((strncasecmp(strings[i], "HREF", lengths[i]) == 0)
+            || (strncasecmp(strings[i], "SRC", lengths[i]) == 0))
+d259 29
+a287 4
+        assert(di->html_buflen + lengths[i] < di->html_bufsize);
+        strncpy(di->html_buf + di->html_buflen,
+                strings[i], lengths[i]);
+        di->html_buflen += lengths[i];
+d293 4
+a296 4
+        char error[100];
+        sprintf(error, "Warning/error: %*.*s\n", (int)lengths[i],
+                (int)lengths[i], strings[i]);
+        MonitorClientSend(mon, "Errors", error, "");
+d300 21
+a321 3
+      case SGML_NAME:
+      case SGML_NMTOKEN:
+      case SGML_LITERAL:
+d326 1
+a326 7
+      case SGML_START:
+      case SGML_END:
+      case SGML_TAGC:
+        assert(di->html_buflen + lengths[i] < di->html_bufsize);
+        strncpy(di->html_buf + di->html_buflen,
+                strings[i], lengths[i]);
+        di->html_buflen += lengths[i];
+a337 2
+
+
+@
+
+
+1.8
+log
+@fixed bug caused by new userprefs setup
+@
+text
+@d108 1
+a108 1
+             callback, NULL,
+d112 1
+a112 1
+             callback, NULL,
+d280 1
+d300 2
+@
+
+
+1.7
+log
+@stupid bug
+@
+text
+@d83 1
+a83 1
+  *freeOutputBuffer = gm_True;
+d99 5
+a103 1
+    output_info.html_magicdust = ARG_STRING(args[0]);
+@
+
+
+1.6
+log
+@all "run" targets now put their programs in the background.
+run_frontend redirects stderr to "frontend.errs", but ideally we
+shouldn't have to rely on fprintf(stderr) at all.
+html and gif distillers no longer spew debugging output to stderr.
+Monitor now prints to stderr if the monitor object has the sentinel
+value MON_USE_STDERR.
+in doc directory, distillers.txt is now distillers.pod.  Use pod2* to
+make it into HTML,LaTEX, etc.
+@
+text
+@d262 1
+d267 1
+@
+
+
+1.5
+log
+@changed distiller interface to use struct DistillerInput/DistillerOutput in frontend,gif_munge,html_munge
+@
+text
+@d25 2
+a26 2
+/*void *DistillerMalloc(size_t s) { return (void *)malloc(s); }
+void DistillerFree(void *p) { (void)free(p); }*/
+d64 1
+a123 1
+  fprintf(stderr, "\n%d secs\n", (int)s);
+a124 1
+  fprintf(stderr, "%f secs per iteration\n", fsec);
+d262 2
+a263 1
+        fprintf(stderr, "Warning/error: %*.*s\n", (int)lengths[i],
+d265 1
+d284 1
+d287 1
+@
+
+
+1.4
+log
+@Fixed up to match the new ptm interfaces.
+@
+text
+@d54 1
+a54 1
+                        void *input, UINT32 inputLen,
+d57 1
+a57 1
+  cost->estimatedTime = inputLen;
+d69 2
+a70 2
+              void *input, UINT32 inputLen,
+              void **output, UINT32 *outputLen,
+d94 1
+a94 1
+    output_info.html_bufsize = inputLen + (inputLen >> 2);
+d101 1
+a101 1
+    SGML_lex(l, (const char *)input, (size_t)inputLen,
+d129 3
+a131 3
+  *outputLen = output_info.html_buflen;
+  *output = (void *)(output_info.html_buf);
+  fprintf(stderr, "Length: %lu\n", output_info.html_buflen);
+@
+
+
+1.3
+log
+@fast lexer works with front-end
+@
+text
+@d25 2
+a26 2
+void *DistillerMalloc(size_t s) { return (void *)malloc(s); }
+void DistillerFree(void *p) { (void)free(p); }
+d53 15
+d70 2
+a71 1
+              void **output, UINT32 *outputLen)
+d82 1
+@
+
+
+1.2
+log
+@html munger works, with new makefile and timing info in place
+@
+text
+@d1 16
+a18 1
+#include <assert.h>
+d23 5
+d44 12
+a55 2
+int
+main(int ac,char **av)
+d58 1
+a58 2
+  int count;
+  char buf[16000];
+a64 5
+  FILE *f;
+  
+  f = fopen(av[1], "r");
+  count = fread(buf, 1, sizeof(buf)-1, f);
+  fclose(f);
+d67 1
+a67 1
+  ntimes = atoi(av[2]);
+d72 20
+a91 3
+    SGML_lex(l, buf, count,
+             callback, "0825", callback, "Aux", callback, "Err");
+    SGML_lex(l, NULL, 0, callback, "0825", callback, "Aux", callback, "Err");
+d106 1
+a106 1
+  fprintf(stderr, "\n%d secs\n", s);
+d109 7
+d118 14
+d133 21
+d155 1
+a155 1
+callback(void *magicdust,
+d158 1
+a158 1
+         SGML_TokType *types, SGML_String *strings, size_t *lengths)
+d161 1
+d163 5
+d169 3
+a171 1
+  for (i=0; i< qty; i++) {
+d174 43
+a216 3
+      if (*strings[i] == '"') {
+        fprintf(stdout, "%*.*s__%s__\"", lengths[i]-1, lengths[i]-1, strings[i],
+                (char *)magicdust);
+d218 8
+a225 2
+        fprintf(stdout, "%*.*s__%s__", lengths[i], lengths[i],
+                strings[i], (char *)magicdust);
+d227 1
+d229 3
+a232 6
+      case SGML_ERROR:
+#if 0
+        fprintf(stderr, "Whoa! ");
+        fwrite(strings[i], 1, lengths[i], stderr);
+#endif
+        break;
+d236 1
+a236 1
+            || (strncmp(strings[i], "SRC", lengths[i]) == 0))
+d238 26
+a263 1
+        fwrite(strings[i], 1, lengths[i], stdout);
+d266 2
+a267 1
+        fwrite(strings[i], 1, lengths[i], stdout);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+d15 3
+a17 3
+  register signed char z;
+  for (i=0; i<s; i++, s1++, s2++)
+    if ((z = tolower(*s2) - tolower(*s1)) != 0)
+d27 1
+a27 1
+  SGML_Lexer *l = SGML_newLexer();
+d30 7
+d38 10
+a47 5
+  assert(l);
+  /*  SGML_lexNorm(l, 1); */
+
+  while (!feof(stdin)) {
+    count = fread(buf, 1, sizeof(buf)-1, stdin);
+d50 13
+d64 4
+a67 4
+  SGML_lex(l, NULL, 0, callback, "0825", callback, "Aux", callback, "Err");
+  SGML_delLexer(l);
+  exit(0);
+  /*NOTREACHED*/
+d84 1
+a84 1
+        fprintf(stdout, "%*s__%s__\"", lengths[i]-1, strings[i],
+d87 2
+a88 1
+        fprintf(stdout, "%*s__%s__", lengths[i],strings[i], (char *)magicdust);
+d93 1
+d96 1
+@
+
+
+1.1.1.1
+log
+@html munger/distiller
+@
+text
+@@

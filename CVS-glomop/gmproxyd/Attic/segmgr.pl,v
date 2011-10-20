@@ -1,0 +1,470 @@
+head	1.9;
+access;
+symbols
+	prewink:1.6
+	stable:1.3;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	96.07.26.20.31.09;	author fox;	state dead;
+branches;
+next	1.8;
+
+1.8
+date	96.07.09.02.53.27;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.07.07.00.03.25;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.23.01.33.13;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.16.01.41.31;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.15.02.39.05;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.11.02.17.29;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.10.22.50.25;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.07.00.33.56;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@segmgr renamed to chunk.  lots of changes including new html parser,
+rudimentary layout manager, beginnings of interface to ptm, modularized
+front-end vs back-end distiller components (but interfaces aren't really
+stabilized yet).
+@
+text
+@=head1 NAME
+
+chunk - GloMop chunk abstraction and interface to Segmentation Manager
+
+=head1 SYNOPSIS
+
+ require "util.pl";
+ require "segmgr.pl";
+
+ # Constructors/class methods:
+ 
+ $ch = new chunk ($mime_type,$compr_type,$doc_id,$chunk_idx,$data,$filename,$refine_dl,$anno);
+ 
+ $toc = toc chunk ($doc_id, $metadata, @@chunks);
+ 
+ # Instance methods:
+ 
+ $data = $ch->packed();
+ 
+ # Instance variables:
+ 
+ mime_type
+ doc_id
+ chunk_idx
+ refine_dl
+ compr_type
+ data
+ len
+ anno
+ filename (obsolete)
+
+=head1 DESCRIPTION
+
+The segmentation manager provides generic services for modules that will do
+chunking of documents, and exports the chunk abstraction.
+
+=head1 CONSTRUCTORS/CLASS METHODS
+
+=over 3
+
+=item new chunk ($mime, $compr, $doc_id, $indx, $data, $filename, $refine_dl, $anno)
+
+Creates a chunk object with the given instance variables.  If $data is defined,
+it is taken to be the chunk contents; otherwise, $filename must be defined and
+be a readable file containing the chunk contents verbatim.  If $refine_dl is
+defined, it is taken as the Document Locator for refinement of this chunk; if
+undefined, an appropriate Document Locator is synthesized.
+
+=item $toc = toc chunk ($doc_id, $metadata, @@chunks)
+
+Once you have built up a list of chunks that make up a document, you can call
+this constructor to create a TOC chunk.  It returns a chunk object that is
+intended to be used as chunk index 0.  $doc_id is the document ID for which
+this is the TOC; $metadata is an opaque string that is used as the TOC
+metadata; @@chunks is an array of chunk objects.  This routine will create a TOC
+entry for each of the chunks, and return the TOC as a chunk object.
+
+=back
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $data = $ch->packed
+
+Returns the opaque bytes corresponding to the "chunk" portion of a chunk
+delivery message.  The result can be used, e.g., as one of the arguments of the
+L<Msg::send_chunk(3)> call.
+
+=back
+
+=head1 INSTANCE VARIABLES
+
+You can set an instance variable's value by passing the value to the instance
+variable accessor function.
+
+=over 3
+
+=item $ch->mime_type
+
+The MIME type/subtype of this chunk, as a string; e.g. "image/gif".
+
+=item $ch->doc_id
+
+The document ID (integer) of which this chunk is a part.
+
+=item $ch->chunk_idx
+
+The index of this chunk.  Chunk index 0, by convention, is the table of
+contents.
+
+=item $ch->refine_dl
+
+The document locator to use for refining this chunk.
+
+=item $ch->compr_type
+
+The compression type to be applied to this chunk, as a 2-letter string.  This
+will be used at chunk delivery time to compress the content for the client, but
+you never have to deal with it directly; chunk data is always returned in
+verbatim uncompressed form when accessed through the appropriate method.
+Currently ignored since no compression is implemented.
+
+=item $ch->data
+
+The data corresponding to this chunk, returned as a verbatim scalar.  If the
+data was previously only in a file, the file is read and its contents
+returned.   B<BUG::this behavior is NYI!>
+
+=item $ch->len
+
+The length of the data.  This is a read-only variable.
+
+=item $ch->anno
+
+Textual annotation of the chunk contents, to help make the chunk
+self-describing.  This is transmitted in the chunk 
+message and may or may not be used by the client.
+
+=item $ch->filename
+
+The filename containing the verbatim chunk data; if undefined, there is no such
+file.  B<Warning:> This is an obsolete instance method that will soon go away
+or be made private; don't use it.
+
+=back
+
+=cut
+
+package chunk;
+
+&util::instvars(qw(chunk
+                   mime_type
+                   doc_id
+                   chunk_idx
+                   refine_dl
+                   compr_type
+                   len:r
+                   filename:r
+                   anno
+                   ));
+
+#  Create a new chunk, given the mime type, compr_type, data
+#  length, document and chunk id's, and content and/or filename.
+#
+#  The 'data' instance variable is handled by a special function; see below in
+#  this file.
+#
+#  If data is undef, filename must be defined and is assumed to contain the raw
+#  data.  Vice versa if filename is undef.  At least one must be defined.
+#
+#  If compr_type is undef, no compression is done; otherwise the data is
+#  compressed (by being read from file first, if necessary).
+#
+#  If length is undef, it is computed from the data or file length.
+
+sub new {
+    my ($class,$mime,$comptype,$doc_id,$chunk_idx,$data,
+        $filename,$refine,$anno) = @@_;
+
+    die "chunk::new: At least one of data or filename must be defined"
+        unless (defined $data || (defined $filename && -r $filename));
+
+    # BUG::should do compression here
+
+    if (defined $data) {
+        $length = length($data);
+    } else {
+        $length = -s $filename;
+    }
+
+    unless ($refine) {
+        if (defined $filename) {
+            $refine = "file:$filename";
+        } else {
+            $refine = "refine://no";
+        }
+    }
+
+    # create the object
+
+    return bless {
+        "mime_type" => $mime,
+        "refine_dl" => $refine,
+        "compr_type" => $comptype,
+        "len" => $length,
+        "data" => $data,
+        "filename" => $filename,
+        "anno" => $anno
+        };
+}
+
+#
+#  Return the chunk data packed together as the opaque bytes that will be
+#  transmitted in a message.  If necessary,pull the data out of a file.  
+#
+
+sub packed {
+    my $self = shift;
+    if (! defined $self->{"data"}) {
+        open(F, $self->filename);
+        local($/) = undef;
+        $self->data( <F> );
+        close F;
+    }
+    my $len = length($self->data);
+    $self->{len} = $len;
+    # pack the MIME type, refinement DL, compr type, length, data
+    return (&Msg::pack_str1($self->mime_type)
+            .  &Msg::pack_str1($self->refine_dl)
+            .  &Msg::pack_i16($self->compr_type)
+            .  &Msg::pack_i16($self->len)
+            .  pack("a$len", $self->data));
+}
+
+#
+#  Routines that operate on the DTOC.
+#  Return a new empty table-of-contents (DTOC) chunk.
+#
+
+sub toc {
+    my ($class,$doc_id,$metadata,@@chunks) = @@_;
+    my $toc =  new chunk "glomop/toc", undef, $doc_id, 0, "", undef, "TOC";
+    my $data = '';
+    # fill in metadata
+    $data .= &Msg::pack_str2($metadata);
+    # and number of chunks
+    $data .= &Msg::pack_i16(scalar @@chunks);
+    foreach $ch (@@chunks) {
+        $data .= &Msg::pack_str1($ch->mime_type);
+        $data .= &Msg::pack_str1($ch->anno);
+    }
+    # all done
+    $toc->{"data"} = $data;
+    return $toc;
+}
+
+sub data {
+    my $self = shift;
+    if ($#_ >= 0) {
+        # set data
+        my $dat = shift;
+        $self->{"data"} = $dat;
+        $self->{"len"} = length($dat);
+    }
+    $self->{"data"};
+}
+
+1;
+@
+
+
+1.8
+log
+@imported from wink, 7/8 pm
+@
+text
+@@
+
+
+1.7
+log
+@Various robustifications, addition of client abstraction, mainloop.pl
+renamed to proxy.pl.  interface to htypes has changed: the doc object
+(instead of doc_id) and client object are now passed.
+@
+text
+@a137 1
+                   data
+d236 11
+@
+
+
+1.6
+log
+@Added extensive documentation in the form of embedded perlpod.
+@
+text
+@d173 7
+a179 1
+    $refine = "file:$filename" unless $refine;
+@
+
+
+1.5
+log
+@minimal refinement seems to work, albeit bad management of ppm's and
+gifs results in lots of wasteful shell processes to determinme simple
+properties of the orig file. Lesson: need to keep properties with each
+file/chunk.
+@
+text
+@d1 128
+a128 4
+#
+#  Segmentation manager: provides generic services for modules that will do
+#  chunking of documents.
+#
+a131 10
+#  Chunk instance variables:
+#    mime_type: MIME type
+#    refine_dl: doc locator to refine this chunk into its own document
+#    compr_type: compression type (2-letter code)
+#    len: data length
+#    data: content
+#    filename: filename containing content
+#      (at least one of data and filename must be non-null)
+#    anno: textual annotation (str1), to make chunk self-describing
+
+d139 2
+a140 2
+                   length
+                   filename
+d181 1
+a181 1
+        "length" => $length,
+d202 1
+a202 1
+    $self->length($len);
+d207 1
+a207 1
+            .  &Msg::pack_i16($self->length)
+@
+
+
+1.4
+log
+@skeletal refinement is working, but D'OH!  it returns the specified
+chunk at the distilled size, not the original size! D'OH!
+@
+text
+@d46 1
+a46 1
+        $filename,$anno) = @@_;
+d59 1
+a59 1
+    my $refine = "file:$filename";
+@
+
+
+1.3
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.
+@
+text
+@d59 1
+a59 1
+    my $refine = "refine://" . "$doc_id/$chunk_idx";
+@
+
+
+1.2
+log
+@image segmenter successfuly calls pnmcut, but leaves chunks in ppm
+format for now
+@
+text
+@d16 1
+a23 1
+                   len
+d25 4
+a28 1
+                   filename));
+d33 3
+d45 2
+a46 1
+    my ($class,$mime,$comptype,$doc_id,$chunk_idx,$len,$data,$filename) = @@_;
+d53 4
+a56 6
+    unless (defined $length) {
+        if (defined $data) {
+            $length = length($data);
+        } else {
+            $length = -s $filename;
+        }
+d69 2
+a70 1
+        "filename" => $filename
+d75 2
+a76 1
+#  Return a new empty table-of-contents (DTOC) object.
+d79 22
+a100 2
+sub newtoc {
+    my ($class,$doc_id) = @@_;
+d102 15
+a117 1
+
+@
+
+
+1.1
+log
+@Added utilities file (with debugging stuff and generalization of
+instance-variable access for various classes), and segment manager
+(provides generic segmentation services).  'tm' submodule will contain
+high-level document type (htype) "chunkers".  added close_doc message to
+hsk.txt.
+@
+text
+@d6 73
+@

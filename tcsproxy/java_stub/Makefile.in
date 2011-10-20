@@ -1,0 +1,65 @@
+# Copyright (C) 1994-1996 by the Regents of the University of California.
+# Use is governed by the terms in the LICENSE file.
+# @configure_input@
+
+DISTLIB = -L../lib -ldist -lclib -lmon
+LIBS = -ljava @LIBS@ 
+
+################# end site variables #################
+
+ifdef DEBUG
+	OPTFLAGS = -DDEBUG -g
+endif
+
+INCLUDEPATH = @INCLUDEPATH@  @JAVAINCDIR@ @JAVAINCDIR@/genunix
+INCLUDES = $(patsubst %,-I%,$(INCLUDEPATH) .)
+LDFLAGS = @LDFLAGS@
+LDRUNPATHOPTS = @LDRUNPATHARGS@@JAVALIBDIR@
+CPPFLAGS = @CPPFLAGS@ $(INCLUDES) @DEFS@
+CFLAGS = @CFLAGS@ -Dbool=char
+CFLAGS += $(OPTFLAGS)
+CC = @CC@
+CXX = @CXX@
+INSTALL = @INSTALL@
+
+ifneq "$(PURIFY)" ""
+	PURIFYPATH = purify -cache-dir=/tmp
+endif
+LD = $(PURIFYPATH) $(CXX)
+
+
+ifdef DEBUGGING
+CFLAGS += -DDEBUGGING
+endif
+
+TARGETS = java_stub
+
+all: $(TARGETS)
+
+install: ../sbin/java_stub
+
+../sbin/%: %
+	$(INSTALL)  $< $@
+
+MYOBJS = java_stub.o @LIBOBJS@
+
+java_stub: $(MYOBJS) ../lib/libclib.a
+	$(LD) $(LDFLAGS) -o $@  -u DistillerBufferFree -u InitializeDistillerCache -u Distill $< $(DISTLIB) $(MYLIBS) $(LIBS) -L@JAVALIBDIR@ $(LDRUNPATHOPTS) @LIBTHREAD@
+
+../ptm/libdist.a:
+	cd ../ptm && $(MAKE) libdist.a
+
+snprintf.o: ../frontend/src/snprintf.c
+	$(CC) $(CPPFLAGS)  $(CFLAGS) $< -c -o $@
+
+%.o: %.c
+	$(CC) $(CPPFLAGS)  $(CFLAGS) $< -c -o $@
+
+tags:
+	find . -name \*.[ch] -print | etags -
+
+clean:
+	rm -f *.o *~ perl_stub
+
+distclean: clean
+	rm -f Makefile

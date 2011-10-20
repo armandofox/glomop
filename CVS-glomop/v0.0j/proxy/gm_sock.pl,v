@@ -1,0 +1,816 @@
+head	1.10;
+access;
+symbols
+	release:1.7
+	Release:1.6;
+locks; strict;
+comment	@# @;
+
+
+1.10
+date	96.02.14.02.16.41;	author fox;	state dead;
+branches;
+next	1.9;
+
+1.9
+date	95.11.14.04.00.49;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.10.25.23.01.52;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.10.18.22.12.46;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.10.18.05.20.17;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.10.18.03.08.59;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.10.17.03.23.00;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.10.17.01.14.17;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.10.13.03.19.31;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.11.01.21.06;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.10
+log
+@gm_sock.pl moved to new perllib module.
+@
+text
+@#
+#  gm_sock.pl
+#
+#  Accept client connection on TCP socket, open a connection to a TCP server,
+#  or create a fake socket from an already open (pair of) filehandles.
+#
+#  Socket object methods:  All return nonzero for success.  IN case of error,
+#  call the lasterror() method to get error message text.
+#
+#  Constructors:
+#
+#  listensock(port, queuesize): create socket object for listening (server)
+#  connectsock(host, port): create socket object and connect to host:port
+#  makesock(readfh, writefh): bless a pair of open filehandles into a socket
+#        object; useful if you've already opened the socket yourself
+#
+#  Methods:
+#
+#  acceptsock(): accept connection on created socket object; returns a new
+#               socket object.
+#  readsock():  read a line from accepted connection; strips newlines
+#  readsock_raw(): read a line, don't strip anything
+#  writesock(): write bytes to accepted connection, verbatim
+#  closesock(): close socket object
+#  killsock():  shutdown and close (shouldn't usually need to do this, since it
+#               shuts down the original socket)
+#  redirect(readfh,writefh):  Redirect existing socket to use these filehandles
+#               for reading and writing (default: STDIN, STDOUT)
+#  lasterror(): return last error condition
+#  eof(): return true if eof has been seen on this socket
+#
+#  Methods that help you violate encapsulation:
+#
+#  filehandles(): returns read and write filehandles
+#  endpoints(): (talkhost, talkport, listenhost, listenport) as strings
+#
+###########################################################################
+
+package gm_sock;
+use Socket;
+
+$FH = "SR0";
+
+#
+#  Determine name and address of local host
+#
+
+chop($Hostname = `hostname 2>&1`);
+if ($? >> 8) {
+    chop($Hostname = `/usr/ucb/hostname 2>&1`);
+    die "Cannot find/execute 'hostname' command"
+        if ($? >> 8);
+}
+
+$Myaddr = (gethostbyname($Hostname))[4];
+die "Cannot get IP address of $Hostname: $!"
+    unless $Myaddr;
+
+###########################################################################
+#  redirect socket to STDIN/STDOUT
+#
+###########################################################################
+
+sub redirect {
+    my $self = shift;
+    my $fh = $self->{ReadFH};
+    my($read,$write) = @@_ ? @@_ : ("STDIN", "STDOUT");
+    my($result) = 1;
+    
+    open($write, ">&$fh") or $result = 0;
+    open($read, "<&$fh") or $result = 0;
+
+    select($write); $| = 1;
+    select($read); $| = 1;
+
+    return $result;
+}
+
+######################################################################
+#  readsock: Read a "line" from already-open socket (up to CRLF) and remove
+#  trailing CRLF
+#  readsock_raw: don't strip trailing CRLF
+######################################################################
+
+sub readsock {
+    my $self = shift;
+    my $count = shift;
+    my $addr;
+
+    if ($self->{Protomodel} eq 'tcp') {
+        $_ = $self->readsock_raw();
+        return $_ unless defined $_;
+        chop while /[\r\n\012]$/;
+        return $_;
+    } else {
+        ($addr, $_) = $self->readsock_raw($count);
+        return (wantarray? () : undef) unless defined $_;
+        chop while /[\r\n\012]$/;
+        return (wantarray?
+                (join('.',unpack('C4', (unpack('S n a4 x8',$addr))[2])), $_)
+                :
+                $_);
+    }
+}
+
+sub readsock_raw {
+    my $self = shift;
+    my $count = shift;
+    my $sock = $self->{ReadFH};
+    my $result;
+    
+    unless ($sock) {
+        $self->{Error} = "No read filehandle";
+        return undef;
+    }
+    
+    if ($self->{Protomodel} eq 'tcp') {
+        select($sock); $| = 1; select(STDERR);
+        $_ = <$sock>;
+    
+        $self->{EOF} = 1, $_ = ""
+            unless defined $_;
+    
+        ($self->closesock()), $_ = ""
+            unless $_;
+        return $_;
+    } else {
+        ($self->{Error} = "Datagram receive requires a byte count",
+         return undef)
+            unless $count > 0;
+        # connectionless: just do a receive
+        my $addr = recv $sock,$result,$count,0;
+        $self->{Error} = "recvfrom failed: $!" unless defined $addr;
+        return $addr, $result;
+    }
+}
+
+sub eof
+{
+    my $self= shift;
+    return ($self->{EOF});
+}
+
+######################################################################
+#  writesock
+#
+#  Write a 'line' to already-open socket, appending a trailing newline.
+######################################################################
+
+sub writesock {
+    my $self = shift;
+    my $sock = $self->{WriteFH};
+    unless ($sock) {
+        $self->{Error} = "No write filehandle";
+        return 0;
+    }
+    if ($self->{Protomodel} eq 'tcp') {
+        print $sock (@@_);
+    } else {
+        $self->{Error} = "send failed: $!", return undef
+            unless (send $sock,join(//, @@_),0);
+    }
+    return 1;
+}
+
+###########################################################################
+#  filehandles: return filehandle names for reading & writing
+###########################################################################
+
+sub filehandles {
+    my $self = shift;
+
+    my $readfh = $self->{ReadFH};
+    my $writefh = $self->{WriteFH};
+
+    return ('gm_sock::' . $readfh, 'gm_sock::' . $writefh);
+}
+
+###########################################################################
+#  endpoints: return socket endpoints as list:
+#  talkhost,talkport,listenhost,listenport 
+###########################################################################
+
+sub endpoints {
+    my $self = shift;
+
+    return ($self->{TalkHost}, $self->{TalkPort},
+            $self->{ListenHost}, $self->{ListenPort});
+}
+
+###########################################################################
+#  connectsock: Open socket connection to host:port
+###########################################################################
+
+sub connectsock {
+    shift;
+    my $self = &new();
+    my($host, $port, $protoname) = @@_;
+    $protoname = 'tcp' unless $protoname;
+    $protoname = lc $protoname;
+    $protomodel = ($protoname eq 'tcp'? SOCK_STREAM : SOCK_DGRAM);
+    my($fh) = $FH++;
+    my($name, $aliases, $proto) = getprotobyname($protoname);
+    my($addr) = (gethostbyname($host))[4];
+    my($me) = pack('S n a4 x8', AF_INET, 0, $Myaddr);
+    my($them) = pack('S n a4 x8', AF_INET, $port, $addr);
+
+    unless (socket($fh, PF_INET, $protomodel, $proto)) {
+        $Err = "connectsock: socket: $!";
+        return undef;
+    }
+    
+    setsockopt($fh, SOL_SOCKET, SO_REUSEADDR, 1)
+        || warn("Warning: setsockopt: $!");
+
+    setsockopt($fh, SOL_SOCKET, SO_LINGER, pack("ii",1, 1000));
+
+    unless (bind($fh, $me)) {
+        $Err = "connectsock: bind: $!";
+        return undef;
+    }
+
+    unless (connect($fh, $them)) {
+        $Err = "connectsock: connect $host:$port: $!";
+        return undef;
+    }
+    select($fh); $| = 1; select(STDOUT);
+
+    $self->{ReadFH} = $self->{WriteFH} = $fh;
+    $self->{TalkHost} = $Hostname;
+    $self->{TalkPort} = "??";
+    $self->{ListenHost} = $host;
+    $self->{ListenPort} = $port;
+    $self->{Protomodel} = $protomodel;
+    return $self;
+}
+
+######################################################################
+#  listensock: Open socket for listening for new client connections
+#
+#  Arguments: port, queue size
+######################################################################
+
+sub listensock {
+    my $self = shift;
+    my($port, $protoname, $qsize) = @@_;
+    my $readfh = $FH++;
+
+    $qsize = 10 unless $qsize;
+    $protoname = 'tcp' unless $protoname;
+    $protoname = lc $protoname;
+    my $protomodel = ($protoname eq 'tcp'? SOCK_STREAM : SOCK_DGRAM);
+
+    local($name,$aliases,$proto) = getprotobyname($protoname);
+    local($bind);
+
+    # Check args
+
+    unless ($port) {
+        die "listensock: usage: listensock port [qsize]";
+    }
+
+    $bind = pack('S n a4 x8', AF_INET, $port, "\0\0\0\0");
+
+    # create socket
+
+    unless (socket($readfh, PF_INET, $protomodel, $proto)) {
+        die( "listensock: socket($readfh): $!" );
+        return 0;
+    }
+    setsockopt($readfh, SOL_SOCKET, SO_REUSEADDR, 1);
+
+    # Bind socket to our addr/port num
+
+    unless (bind($readfh, $bind)) {
+        $self->{Error} =  "listensock: bind: $!";
+        return 0;
+    }
+
+    if ($protomodel eq 'tcp') {
+        # listen for connections
+
+        unless (listen($readfh, $qsize)) {
+            $self->{Error} = "listensock: listen: $!";
+            return 0;
+        }
+    }
+
+    select($readfh); $| = 1; select(STDOUT);
+
+    $self = &new();
+    $self->{ReadFH} = $readfh;
+    $self->{WriteFH} = $readfh;
+    $self->{ListenHost} = join(".", unpack('C4', $Myaddr));
+    $self->{ListenPort} = $port;
+    $self->{Protomodel} = $protomodel;
+    
+    return $self;
+}
+
+###########################################################################
+#  new: return a generic, blessed, anonymous hash for the socket object's
+#  instance variables.  This is a private method.
+###########################################################################
+
+sub new
+{
+    return (bless {
+        EOF => 0,
+        ReadFH => "",
+        WriteFH => "",
+        Error => "",
+        ListenHost => "",
+        ListenPort => "",
+        TalkHost => "",
+        TalkPort => ""
+        });
+}
+        
+
+###########################################################################
+#  makesock: take an already open read and write filehandle and treat them as a
+#  socket object reference
+###########################################################################
+
+sub makesock
+{
+    my $self = shift;
+    my($readfh,$writefh) = @@_;
+
+    select($readfh); $| = 1; select($writefh); $| = 1;
+    
+    $self = &new();
+    $self->{ReadFH} = $readfh;
+    $self->{WriteFH} = $writefh;
+    return $self;
+}
+
+###########################################################################
+#  lasterror: return the last error message generated by an operation on this
+#  socket object.
+###########################################################################
+
+sub lasterror
+{
+    my $self = shift;
+    return $self->{Error};
+}
+
+sub acceptsock
+{
+    my $self = shift;
+    my ($af,$port,$inetaddr);
+    my $newreadfh = $FH++;
+    my $newwritefh = $newreadfh;
+    my $addr;
+
+    # if this is  a datagram socket, just return this instance.
+    return $self if $self->{Protomodel} ne 'tcp';
+
+    my($addr) = accept($newreadfh, $self->{ReadFH});
+    unless ($addr) {
+        $self->{Error} = "Accept failed: $!";
+        return undef;
+    }
+
+    ($af,$port,$inetaddr) = unpack('S n a4 x8', $addr);
+
+    $selfcopy = &new();
+
+    $selfcopy->{ListenPort} = $self->{ListenPort};
+    $selfcopy->{ListenHost} = $self->{ListenHost};
+    $selfcopy->{TalkHost} = join(".", unpack('C4', $inetaddr));
+    $selfcopy->{TalkPort} = $port;
+    $selfcopy->{ReadFH} = $newreadfh;
+    $selfcopy->{WriteFH} = $newwritefh;
+
+    return $selfcopy;
+}
+
+sub closesock
+{
+    my $self = shift;
+    close $self->{ReadFH};
+    close $self->{WriteFH};
+}
+
+sub killsock
+{
+    my $self = shift;
+    #shutdown($Sockfh, 2);
+    close($self->{ReadFH});
+}
+
+###########################################################################
+#  close_conn: close logical connection to client
+###########################################################################
+
+sub close_conn {
+    my $self = shift;
+    # any "bye" acknowledge should go here.
+    closesock $self;
+    return 1;
+}
+
+######################################################################
+# Return a value for 'require'
+1;
+@
+
+
+1.9
+log
+@added udp socket support
+@
+text
+@@
+
+
+1.8
+log
+@cleaned up some other stuff.  socket stuff is nicer now.
+@
+text
+@d22 1
+d30 1
+d44 15
+d82 1
+d87 22
+d110 2
+a111 1
+
+d114 1
+a114 1
+        return 0;
+d117 3
+a119 2
+    select($sock); $| = 1; select(STDERR);
+    $_ = <$sock>;
+d121 2
+a122 2
+    $self->{EOF} = 1, return ""
+        unless defined $_;
+d124 18
+a141 4
+    ($self->closesock()), return "" unless $_;
+    # BUG: shouldn't always chop.
+    chop while /[\r\n\012]$/;
+    return $_;
+d143 1
+a143 1
+    
+d157 6
+a162 1
+    print $sock (@@_);
+d191 47
+d246 1
+a246 1
+    my($port, $qsize) = @@_;
+d249 6
+a254 2
+    local($hostname,$myaddr);
+    local($name,$aliases,$proto) = getprotobyname('tcp');
+d263 1
+a263 4
+    chop($hostname = `hostname`);
+    $myaddr = (gethostbyname($hostname))[4];
+
+    $bind = pack('S n a4 x8', &AF_INET, $port, "\0\0\0\0");
+d267 2
+a268 2
+    unless (socket($readfh, &PF_INET, &SOCK_STREAM, $proto)) {
+        &aux'log( "listensock: socket($readfh): $!" );
+d271 1
+a271 1
+    setsockopt($readfh, &SOL_SOCKET, &SO_REUSEADDR, 1);
+d276 1
+a276 1
+        &aux'log("listensock: bind: $!");
+d280 2
+a281 1
+    # listen for connections
+d283 4
+a286 3
+    unless (listen($readfh, $qsize)) {
+        &aux'log("listensock: listen: $!");
+        return 0;
+d294 1
+a294 1
+    $self->{ListenHost} = join(".", unpack('C4', $myaddr));
+d296 2
+a297 1
+
+d356 5
+a360 1
+    
+d377 1
+d385 1
+a385 1
+    close $self->{WriteFH} unless ($self->{WriteFH} eq $self->{ReadFH});
+@
+
+
+1.7
+log
+@gm_mail only reports new mail now
+@
+text
+@d4 2
+a5 2
+#  Accept client connection on a socket, or create a fake socket from an
+#  already open filehandle.
+d10 4
+a13 1
+#  opensock(port, queuesize): create socket object for listening
+d15 6
+a20 2
+#                       object 
+#  acceptsock(): accept connection on created socket object
+d30 5
+d40 1
+a40 2
+$Sockfh = "NS0";
+$Origfh = "S0";
+d82 2
+a83 1
+    (closesock $self), return "" unless $_;
+a84 1
+    &aux'debug("Readsock --> $_");
+d105 25
+d131 1
+a131 1
+#  opensock: Open socket for listening for new client connections
+a133 3
+#
+#  Caller will do an accept() on the socket and fork a copy of itself
+#  (gmproxyd) to handle each client.
+d136 1
+a136 1
+sub opensock {
+d139 1
+a139 3
+    my $origfh = $Origfh++;
+    my $readfh = $Sockfh++;
+    my $writefh = $readfh;
+d144 7
+a150 1
+    
+d158 2
+a159 2
+    unless (socket($origfh, &PF_INET, &SOCK_STREAM, $proto)) {
+        &aux'log( "opensock: socket($origfh): $!" );
+d162 1
+a162 1
+    setsockopt($origfh, &SOL_SOCKET, &SO_REUSEADDR, 1);
+d166 2
+a167 2
+    unless (bind($origfh, $bind)) {
+        &aux'log("opensock: bind: $!");
+d173 2
+a174 2
+    unless (listen($origfh, $qsize)) {
+        &aux'log("opensock: listen: $!");
+d178 9
+a186 3
+    select($origfh); $| = 1; select(STDOUT);
+    return (bless { EOF => 0, ReadFH => $readfh, WriteFH => $writefh,
+                OrigFH => $origfh, Error => ""});
+d190 20
+d221 4
+a224 2
+    return (bless { EOF => 0, ReadFH => $readfh, WriteFH => $writefh,
+                    OrigFH => undef(), Error => "" });
+d241 3
+a243 3
+
+    $self->{Error} = "Object is not a real socket", return 0
+        unless $self->{OrigFH};
+d245 1
+a245 1
+    my($addr) = accept($self->{ReadFH}, $self->{OrigFH});
+d248 1
+a248 1
+        return 0;
+d250 12
+a261 1
+    return $addr;
+a285 1
+    &aux'log("Connection from $UserName closed.");
+@
+
+
+1.6
+log
+@Mail works again!
+@
+text
+@a89 1
+    &aux'debug("writesock: @@_");
+d211 1
+a211 1
+    exit 0;
+@
+
+
+1.5
+log
+@auth and proxy now totally separate.
+@
+text
+@d39 1
+a39 1
+    my($read,$write) = @@_ || (STDIN, STDOUT);
+d42 2
+a43 2
+    open($write, ">&$Sockfh") or $result = 0;
+    open($read, "<&$Sockfh") or $result = 0;
+d157 2
+@
+
+
+1.4
+log
+@cleaned up exec stuff, seems to work using weird trick from perl book
+p.349.
+@
+text
+@d4 2
+a5 5
+#  Accept client connection on a socket.  This module and gm_auth.pl together
+#  contain everything and only those things necessary to open and authenticate
+#  a connection.  Once authentication succeeds, a copy of the proxy is spawned
+#  running as the authenticated user.  That (unprivileged) copy loads the
+#  remainder of the proxy code.
+d7 17
+a27 2
+# Class static vars
+
+d29 1
+a29 2
+$Origfh = '';
+
+d38 3
+a40 2
+    my $fh = $Sockfh;
+    local($result) = 1;
+d42 2
+a43 2
+    open(STDOUT, ">&$Sockfh") or $result = 0;
+    open(STDIN, "<&$Sockfh") or $result = 0;
+d45 2
+a46 2
+    select(STDOUT); $| = 1;
+    select(STDIN); $| = 1;
+d58 9
+a66 3
+    die "No socket!" unless $Sockfh;
+    select($Sockfh); $| = 1; select(STDERR);
+    $_ = <$Sockfh>;
+d85 5
+d91 1
+a91 1
+    print $Sockfh (@@_);
+d107 4
+a110 2
+    $Origfh = "S";
+    $Sockfh++;
+d122 5
+a126 3
+    socket($Origfh, &PF_INET, &SOCK_STREAM, $proto) ||
+        die "opensock: socket($Origfh): $!";
+    setsockopt($Origfh, &SOL_SOCKET, &SO_REUSEADDR, 1);
+d130 4
+a133 1
+    bind($Origfh, $bind) || die  "opensock: bind: $!";
+d137 33
+a169 3
+    listen($Origfh, $qsize) || die  "opensock: listen: $!";
+    select($Origfh); $| = 1; select(STDOUT);
+    return (bless { EOF => 0 });
+d175 9
+a183 1
+    my($addr) = accept($Sockfh, $Origfh) || die "accept: $!";
+d190 2
+a191 1
+    close $Sockfh;
+d198 1
+a198 1
+    close($Sockfh);
+d208 1
+a208 1
+    &closesock;
+@
+
+
+1.3
+log
+@foo bar
+@
+text
+@d20 19
+@
+
+
+1.2
+log
+@objectified and cleaned up, plaintext mail may be working now.
+@
+text
+@d28 1
+a28 2
+    &aux'debug("Sockfh is: $Sockfh");
+    select($Sockfh); $| = 1;
+d30 4
+d90 1
+a90 1
+    return (bless {});
+@
+
+
+1.1
+log
+@Compactified and encapsulated some of the code.  Auth seems to be in
+reasonable shape.  Still need to test the suid stuff.
+@
+text
+@d44 1
+a45 1
+    my $self = shift;
+d97 6
+d106 1
+a106 1
+    shutdown($Sockfh, 2);
+a120 12
+
+######################################################################
+#  closesock: shut down socket for this client, and exit
+#######################################################################
+
+sub closesock {
+    my $self = shift;
+    shutdown(main'NS, 2);
+    close(main'NS);
+    exit 0;
+}
+
+@

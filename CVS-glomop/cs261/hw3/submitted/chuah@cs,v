@@ -1,0 +1,498 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.10.59;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From chuah@@berryman.CS.Berkeley.EDU  Fri Nov 20 13:54:59 1998
+Return-Path: chuah@@berryman.CS.Berkeley.EDU
+Received: from berryman.CS.Berkeley.EDU (berryman.CS.Berkeley.EDU [128.32.130.39]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA17481 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 13:54:59 -0800
+Received: from localhost (chuah@@localhost)
+	by berryman.CS.Berkeley.EDU (8.9.1/8.9.1) with SMTP id NAA01920;
+	Fri, 20 Nov 1998 13:55:13 -0800 (PST)
+Date: Fri, 20 Nov 1998 13:55:13 -0800 (PST)
+From: Chen-Nee Chuah <chuah@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+cc: chuah@@CS.Berkeley.EDU
+Subject: Homework 3 
+Message-ID: <Pine.BSF.4.02A.9811201348561.1629-100000@@berryman.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+
+Hi,
+
+Enclosed is my homework 3 solutions. Just want to let you know that 
+all the three homework assignments in this class ask really interesting
+questions. I enjoy banging my head on it.  Thanks!
+
+
+	*************************************************************
+			CS 261- Homework 3			    
+			
+		submitted by:  Chen-Nee Chuah			    
+	**************************************************************
+
+Acknowledgment: I discussed these problems with Mark Spiller.
+
+Question 1
+==========
+The code is intended to allow unprivileged users to edit the
+moderators file. It is installed setuid root. Find as many security
+vulnerabilities as you can in the code.
+
+First I will comment on the vulnerabilities at a high level, with
+reference to specific lines of code. Then I will go through each each
+segment of the code and discuss its vulnerability.
+
+The major flaws of this code are:
+
+(a) It violates fail safe and least privilege principles. The code is
+    running with ROOT PRIVILEGE for MOST PARTS. This is a big security
+    hole, because any interruption into the program or bugs in library 
+    calls will allow malicious attack running as root. 
+    One way to fix this is to somehow rearrange the code in main() and 
+    debug() could be rearranged somehow to RELEASE ROOT
+    PRIVILEGE EARLIER and for MOST PARTS, and regain the privilege 
+    only for critical operations such as copyfile (Line 163) and 
+    rename (Line 169).
+
+(b) Line 165 - RUNNING vi(tmpf) WITH ROOT PRIVILEGE IS A BAD IDEA!
+    First one can excecute shell commands within "vi" (:!command)
+    as ROOT. This totally compromise the security of the machine.
+    One possible way to mitigate this effect is to release root 
+    privilege in main() before "vi"  since user privilege is 
+    sufficient to edit the file with vi. 
+
+(c) The code also fails to abide by the Complete Mediation rule. IT
+    DOESN'T CHECK FOR ALL SYSTEM RETURN VALUES. For instance,
+
+    Line 33 : glen = getgroups(20, glist); since the return values
+  	      are not checked, there are potentially uncaught errors, 
+              such as when the argument '20' is smaller than then number
+              of groups in the group set, or when the argument in glist
+              specifies an invalid address. 
+
+	      Also the argument, "20" here, should not exceed NGROUP_MAX 
+              as defined in <sys/param.h>. But the code doesn't check
+	      this,  which might cause problems later in Line 46, when
+	      setgroups(glen,glist) is called. Instead of using 20, why
+	      not just use NGROUP_MAX?
+                        
+   Line 98-99: Return values of fopen are not checked. One might not
+	       be reading or writing the correct files, and might be
+ 	       compromising both confidentiality and integrity. 
+	     
+   Line 150-153: The check is incomplete. It only checks for the case
+		 with 2 arguments with -d option but not when there
+  		 are more arguments or insufficient arguments. 
+
+(d) The code has RACE CONDITIONS problem. For instance, 
+    Line 168-169: if (looksok (tmpf))
+			rename (tmpf, MODF);
+    The sanity check and rename are not atomic, there is space for
+    attacks between "after the file passes through sanity check" and
+    "when it is actually renamed to MODF". So malicious attackers can
+    change tmpf and if they win the race before file is renamed ,
+    integrity of MODF is compromised.
+
+(e) The code is subject to BUFFER OVERRUN attack because it uses
+    command sprintf which doesn't check the boundary. 
+	Line 68: sprintf(line, "%s......)
+		 where line is a pointer to the array char line[1024]
+    	         on the stack.
+        Line 157: sprintf(msg, "invoked.........)
+	          where msg points to the array char msg[512] on the
+                  stack.
+
+    One can overwrite the buffer on stack and replace the return 
+    address to point to malicious code (as discussed in class).
+    The solution is to replace sprintf with snprintf that checks 
+    the size. 
+
+Besides these vulnerabilities that violate fundamental principles,
+there are other problems that I will discuss by stepping through the
+code line by line.
+
+(f) Lines 7 - 16: "# include"'s
+    The code trust all these files completely. If the library
+    contains malicious/unsafe code, there is no way the program can
+    detect it.
+
+(g) Lines 18-19: It's bad to put the debug  file to in the local 
+    /tmp directory. Since it resides in local drives, and there are no
+    locking of the debug file, it is possible to have multiple users 
+    running multiple copies of debug files. This could be very confusing
+    and might cause file inconsitency problems. 
+    
+(h) Lines 38-40: f=open(fname, "a"); Here the file permission is not 
+    specified. There is a potential denial of service attack, because 
+    if the debug or moderator files do not yet exist, when they are
+    created by the program, they will be opened with permissions set 
+    based on the user's umask ( umask 077?), then only the 
+    user creating the file can write to the file. Subsequent users
+    might not be able to open the file and this will create denial 
+    of service attack. 
+   
+    Secondly,  there is a potential problem of having to compromise 
+    integrity of the file. Since the file is opened with normal user
+    permissions, this means that the users can normally open it and modify
+    it. Since all users who have the same privilege can edit the file, 
+    they could overwrite or destroy the exisiting content written by other
+    people. 
+
+(i) Lines 85-87: If there is an error and the function exit(1) is called,
+    it only closes the lock file but it never unlink it! As a result 
+    lock file will stay and create a Denial of Service attack. 
+    This also occurs with the exit(1) call on Line 113-115. 
+
+(j) Line 86: To be more cautious, perror() should include more parameters.
+    If the program is somehow forced to exit with errors, there might be 
+    potential file inconsistency due to NFS.
+
+(k) Line 116-117: The execution of vi might pass the environment variables
+    of the user to the vi call. Some variables (like LD_LIBRARY as
+    discussed in class) might be used to make vi do something
+    illegal/malicious. 
+
+(l) Lines 130-142: looksok() function should be written carefully because
+    this is the checkpoint where anything potentially dangerous will be
+    detected and prevented from geting through. One problem is that 
+    one has to know everything about the news server to include all the 
+    possible sanity checks (e.g. check the old file and new file to 
+    make sure that only valid changes are made, or restrict that the 
+    new file only appends changes to the old one, not overwriting it etc). 
+
+(m) Line 157: getpwuid is supposed to return struct that contains username
+    and password. If one can break into getpwuid, it will be disastrous.
+
+(n) Line 162: tmpnam is system library function that might be unsafe 
+    for multithreaded environment. Not sure if this can be counted 
+    as not atomic and subject to race condition attack!
+
+
+
+------------------------------------------------------------------------
+
+Question 2
+==========
+For each of the extensions described below, list the security threats
+that might arise and how they could be addressed.
+
+2.1) Since the mobile code is specified to as BPF bytecodes, there are
+only a limited number of operations it can do. However it can read the
+packet itself and a global list of interffaces available at the
+router. This is subject to the following threats: 
+(a) The global list of router interface (might be confidential) is now
+    exposed to any packets with the mobile code. The packet can choose
+    to forward the packet on a certain interface that might not be
+    otherwise be available to public, e.g. the router might have
+    interface to private network that it never routes external packets
+    to(hence bypass firewall or packet filter).
+    Solution: This problem can be prevented if the router keeps a
+              separate list of "public" and "private" interface and
+              only allow the mobile code to choose from the "public"
+              interface.
+
+(b) One can launch denial of service attack by flooding the router
+    with packets with mobile code that forces the router to forward
+    these packets on to one particular interface. This will cause
+    congestion and break down the specific flow/connection, which
+    might cause degrade the router performance, or cause resource
+    starvation.
+    Solution: The router should be intelligent enough to make the
+              final decision of whether to forward the packet as
+              specified or drop it. 
+
+(c) Denial of Service Attack. Malicious users can create really long 
+    mobile code that have the similar effect as infinite loops. 
+    Solution: Check the program length and limit it to a fixed 
+              maximum number of bytes.
+
+(d) Different interfaces on the router might lead to different routes
+    for a particular flow that differs in # of hops. If mobile code
+    forces packets to choose one route as opposed to others, instead
+    of depending on standard routing algorithm (say shortest paths),
+    this might mess up distributed routing algorithm. For instance,
+    if flow F is supposed to be routed from A to B via C, and the mobile
+    code forced it to route via D. If the network relies on exchange 
+    of routing tables to update path from source to destination, future
+    flows that need to go to B will be routed via D, although route via
+    C might be a lot shorter. 
+    Solution: The router need to keep a separate routing table that it
+              sends to neighbouring routers, and do not update any change
+              of route that's due to mobile code.
+
+
+2.2) Allow mobile code for a particular flow to be saved at the
+     router.  
+(a) The mobile codes might exhaust buffer memory of the router and
+    cause serious problems. The malicious attacker can send a packet
+    with enormously long mobile code, and it will hoard most of the
+    memory resources at the router.
+    Solution: check the size of the mobile code before saving it. 
+
+(b) Since the mobile code is not authenticated, one can forge a packet
+    and change the traffic behavior of another flows. e.g. the
+    original packets of flow F should be routed via A. One can create
+    a packet with mobile code that route these packets via B. This is
+    cause packets of flow F to go through a different route, if the
+    false packet win the race condition initially, or it replaces the
+    old mobile code (depending on the implementation of router). Why is
+    this bad? the packets might be routed through unsafe network where
+    they could be eavesdropped.
+    Solution: Requires mobile code to be authenticated. The router 
+              has to authenticate the mobile code received based 
+              on flow id and signatures. This might be quite complex.
+
+(c) If the mobile code is not cleared from memory space after a
+    session is torn down. Subsequent packets from a new connection
+    which has exactly the same flow id. This might cause ill-defined
+    behavior to the packets.
+    Solution: The mobile code either has to be time stamped or removed
+              from memory explicitly so that when the session is torn
+              down. This will prevent packets belonging to another
+              session being incorrectly modified
+
+(d) Since the router must keep information about the state of the
+    flow, anyone who attack the router will gain information about the
+    state of all connections. This information is not otherwise
+    available if it's just a stateless store & forward switch in the
+    old IP world.
+    Solution: Keep minimum amount of necessary information. Clear 
+              information once it's not needed. 
+
+
+2.3) Backwards jumps and arbitrary control flow in the bytecode are
+     allowed.  
+
+(a) One can create infinite loops in the bytecode. The router will
+    hang and again, this can be denial of service attack.
+    Solution: Check explicit for infinite loops, or time the execution
+              of the mobile code. Stop the program if the execution
+	      exceeds a time limit. 
+
+(b) If the router doesn't check for memory boundary(Since routers
+    usually won't have expensive address space support), the code
+    might jump arbitrarily to other memory location of the router and
+    execute other malicious codes. 
+    Solution: Check for invalid jumps, or do sandboxing to make sure
+              that the bytecode cannot jump into other memory space
+              outside its boundary.
+
+
+2.4) Since the handlers are allowed to write to the packet itself, it
+     opens up the folowing of security holes: 
+(a) The mobile code can  change the TCP flow ID tuple (src host,
+    dst host, src port, dst port) to fool the firewall/packet filter
+    or any active IDS. e.g. One can start with a valid ID tuple and
+    flags to pass the firewall, then change it in an internal router,
+    collect information that got written into the packets, and again
+    change the IP tuple so that it get forwarded out of the protected
+    network. 
+    Solution: Disallow mobile code to change header field of the packet.
+
+(b) The mobile code can change the traffic behavior of other flows by 
+    contaminating them with forged packets. e.g. The mobile code can 
+    change the ID for the packets and resubmit itself to become part 
+    of another flow.
+    Solution: Restrict changing  flow ID field in the packet.
+
+(c) The mobile code can change the TTL field to give the packet
+    infinite life span. This might cause over flooding in the network,
+    and denial of service attacks.
+    Solution: Disallow mobile code to change header field of te packet.
+
+(d) The mobile code can change the content of the packet or even the 
+    code itself, and become an agent that collects information as they 
+    go through routers. For instance, it could collect information about
+    the list of interface at router that's not published and put this
+    information back in the packet, and forward it on. It can collect
+    information about each router on its path. 
+    Solution: It's hard to avoid invalid changes to codes. An initial
+              fix can be prohibiting the change the size of 
+              the packet in the header field and check that any writing
+              to the packet doesn't exceed the original packet length. 
+              However, malicious users can still create a extremely
+              long packet with empty data field that got filled 
+              as information is collected along the way. We can implement
+              sandboxing and prohibit the code from reading outside
+              the permitted memory space. Also, make sure that the 
+	      router doesn't dispose any confidential information about
+              interface except those that are necessary. 
+
+(e) Memory contention problem. What happens when the router runs out of 
+    states? 
+    Solution: The router might need some sort of admission control policy. 
+    
+In short, we need to give the mobile code LEAST PRIVILEGE to write to 
+the packet, and disallow any writing into places like :- header 
+[src/dest/TTL/packet size], flow ID, or the mobile code portion itself. 
+
+2.5) Handlers can maintain states across packet reception events.
+(a) Mobile code now stay longer at the router. It could be used to observe
+    and collect statistical data about all the traffic at the router and 
+    forward it to another machine. 
+
+(b) Allow someone to collect and accumulate inofrmation across packets
+ 
+    The solution to both problem is to limit the functionality of the
+    bytecode.  Fail safe principle: disallow all operations except the
+    fundamental ones that're necessary.
+    
+
+2.6) Allow handlers to construct whole IP packets in their own memory
+     space.  
+(a) This facilitate IP fragmentation attack since now the mobile code
+    can generate overlapping packets at intermediate router.
+    Solution: Limit the number of packets that can be sent, and check 
+    that it doesn't play any tricks on the TCP/IP protocol (but this
+    requires the router to know the protocol stack, which is complex). 
+
+(b) Malicious attacker can generate more traffic and work load than it
+    is supposed to. For instance, even if TCP has congestion control
+    and source rate is controlled. The packet can generate offsprings
+    at the router, and if it does so within an infinute loop, the
+    whole network will be flooded with packets. This will cause
+    network congestion and denial of service attacks. 
+
+(c) It can make the router its packet sniffer. e.g. it can catch
+    passwords from other flows, eveasdrop etc. 
+     
+    Again use fail safe principle: limit how the handler construct the
+    IP packets to allow only valid and well-behaved packets to be
+    generated. One might need a counter and feedback mechanism to do
+    congestion control when we run into problem like (b). 
+
+2.7) Allow Java bytecodes instead of BPF
+(a) There are a lot of security bugs in Java bytecode (as discussed in
+    class) and all these attacks now become possible..... 
+
+(b) Trusted computing base is ill-defined.
+
+(c) Since Java bytecodes replace BPF, there are no boundaries of what
+    memory space can be read/write by the bytecodes. This is really
+    BAD! All sorts of attack that we discussed in class can easily
+    take place.
+
+(d) The increase in complexity of the bytecodes demand high CPU usage
+    at the router, which really kill the throughput. 
+
+Solutions: The most conservative way is to disallow usage of Java
+Bytecodes.  As Java script becomes more prevalent, one way to cope
+with this is to have complex rules to detect illegal/malicious
+JavaScript and prohibit the execution of the mobile code for that
+particular flow that exhibit malicious behavior. 
+
+
+------------------------------------------------------------------------
+
+Question 3
+==========
+
+3.1) If it is acceptable to block all mobile code at the firewall, how
+     would you do so and what problems might you expect to encounter? 
+
+First, in order to block all the mobile code, one needs to be able to
+detect mobile code at the firewall. One needs to strictly define what
+is mobile code.
+	* CGI/PERL
+        * MIME, .exe files attached in email, 
+        * embedded exe files in webpage via http, Javascript,
+       	* Java bytecode, Active X
+	* binary files that are transported during FTP connections, etc. 
+  
+We need a far more complicated firewall, that not only contains
+application gateway, but it has to have complete knowledge about
+format and protocol stack of every single application so that it is
+able to check all possible places where binary files/mobile code might
+be hiding and detect them.
+
+Following fail safe principle: we can be restrictive and only allow
+ASCII files and known tags (HTML files) to pass through the firewall.
+
+Problems that we expect to encouter:
+
+(a) In practice, it's impossible to block all mobile code because of
+    the complexity involved. There is too many complex rules and
+    details about protocol stack/application format that the firewall
+    need to know to detect all mobile codes.
+
+(b) One needs to update the firewall with any modifications in
+    protocol stack/application software from time to time. This is
+    very costly and time consuming.
+
+(c) This approach is too restrictive, because useful/valid mobile
+    codes are being blocked. Software cannot be distributed or downloaded.
+
+(d) The firewalls need to deal with users attempts to get around it to
+    receive mobile codes.
+
+(e) The complexity and heavy processing will hurt the firewall
+    performance and bring the throughput down.
+
+
+3.2) We are asked to only block dangerous mobile code and let through 
+     safe mobile code. 
+
+What additional problems does this introduce?
+(a) The firewall need to know all protocols and all interaction between
+them in order to be able to differentiate dangerous mobile code from the 
+safe ones. This is even far more complex than the previous case. One needs
+to define what is "safe", what is "dangerous". 
+
+How can we solve them? 
+(a) Instead of checking all the complex scenarios and rules, we could 
+require that safe mobile code be authenticated, and we trust the party
+that sign the code, and allow authenticated code to get through. 
+
+(b) Need something similar to capabilities that list all the safe codes, 
+    and only allows this to get through. It is better to follow fail safe
+    principles and block all mobile codes except the ones that are listed
+    as "safe". 
+
+(c) Sandboxing: Assuming  malicious mobile code get through, limit the 
+    effect of it by allowing the mobile code to only read and write into
+    a specific memory location. 
+
+(d) Other solutions include Code Analysis and Proof Carrying code to
+    combat dangerous mobile code that go through. 
+
+3.3) Please refer to problems discussed in question 1. 
+
+(a) This is the problem of both end host and firewall. Because the 
+    end host determines what applications they are running, while
+    the firewall might not have full knowledge about the format/
+    protocol stack. 
+
+(b) This is also the problem of both end host and firewall. The end host
+    can decide not to use the new version of mobile code, but if it does,
+    it is responsible of updating the firewall. The firewall has to 
+    modify all the checking rules corresponding to the change in 
+    either protocol or application software. 
+
+(c) This is the problem of end hosts.
+
+(d) and (e) are the problem of the firewall.
+
+------------------------------------------------------------------------
+
+
+@

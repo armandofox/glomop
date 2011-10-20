@@ -1,0 +1,100 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.30.21.24.58;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@<html>
+<font face="Times New Roman, Times">1)<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Stateful
+packet inspection firewall</font><font face="Times New Roman, Times">
+<dl>
+<dd>1.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Comparison
+with application-level firewalls. 
+<dd>Packet inspection does not require certain applications on the client
+to be rewritten unlike application level firewalls.&nbsp; Likewise, a
+telnet application does not have to telnet the firewall first.&nbsp;
+Since both types of firewalls implement the same type of checks, then
+their success as firewalls should be the same.&nbsp; On the other hand,
+packet inspection firewalls don’t require building the entire OSI layer
+since it accomplishes the same thing with low-level routines.&nbsp; This
+will probably lead to better performance and thus might be more accepted
+by users that must use a firewall.&nbsp; In addition stateful packet
+inspection doesn’t require updating all the machines on the inside of the
+firewall to know how to communicate with it, but rather each new attack
+fix is added to the firewall.
+</dl><x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Times New Roman, Times">
+<dl>
+<dd>2.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Comparison
+with intrusion detection systems.
+<dd>Both of these systems are just low-level applications that listen in
+on traffic.&nbsp; Intrusion detection watches traffic and later informs
+what packet behavior seems illegitimate.&nbsp; Packet inspection firewall
+is very similar.&nbsp; It too receives information about what behavior is
+ok (see example in question write-up) but it drops packets that seem to
+be malicious.&nbsp; In a way, stateful packet inspection firewalls are
+just intrusion detection systems that drop packets that look bad instead
+of outputting a report later.&nbsp; In that sense, they are more
+useful.&nbsp; However, they do not output logs, which allow an
+administrator to later view behavior and catch NEW attacks.&nbsp; A
+stateful packet inspection firewall that also outputs logs seems like an
+idea to consider.<br>
+<br>
+<br>
+<br>
+</font><font face="Times New Roman, Times">
+</dl>2)<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Overrun
+bugs and growing the stack
+upwards.</font><font face="Times New Roman, Times">
+<dl>
+<dd>1.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Overrun
+a buffer and overwrite important state:&nbsp;&nbsp; Stack growth won’t
+fix anything.&nbsp; It’ll just require the variable that is overwriting
+the critical state variable to be “on the other side” on the
+stack.</font><font face="Times New Roman, Times">
+<dd>2.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">This
+attack has nothing to do with the direction of stack growth.&nbsp; Global
+variables aren’t stored on the stack anyways.&nbsp; So this is still
+feasible.</font><font face="Times New Roman, Times">
+<dd>3.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">
+The exact version of stack smashing won’t work.&nbsp; However, a slight variation on it is thus introduced.&nbsp; So a new attack is: If any data from the calling procedure is called by reference, then that buffer can be overrun to clobber the return address of the called procedure. </font><font face="Times New Roman, Times">
+<dd>4.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Just like above, the exact attack won’t work, but a simple variation does the trick.&nbsp; It’s the same idea of needing to find a way to overwrite the return address.</font><font face="Times New Roman, Times">
+<dd>5.<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">This is just like overwriting critical state on the stack.&nbsp; You just have to make sure that the variable overwriting this function pointer is a variable “before” the one in question, not “after” as done for the stack growing downwards.<br>
+<br>
+
+</dl>The central theme to existing attack is that the exact attack won’t work, but a simple variation will.&nbsp; This can be seen as a new attack, or as a quick fix to the new problem.<br>
+<br>
+A possible new attack:&nbsp; A function calls another with an argument that is not initialized to anything.&nbsp; Before calling that function, you could do a buffer overrun to initialize it to what you want it to be (something horribly evil) and that data will be used.&nbsp; <br>
+<br>
+3) Fixing the compiler<br>
+<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab>While thinking of ideas, I didn’t worry about how certain fixes will affect performance.&nbsp; I’m assuming that for critical code its ok to run a little slower to improve security.<br>
+</font><font face="Times New Roman, Times">
+<dl>
+<dl>
+<dd>a)<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Have no state on the stack.&nbsp; Instead use malloc (heap), thus changing where things are at each run.&nbsp; You can’t overwrite security-critical state on the stack if it isn’t there.&nbsp;&nbsp; This really simplifies to having no stack at all, which leads to a language like LISP.&nbsp; Although this is no longer C, it still introduces the issue that you don’t want return addresses and other critical information to lie in contiguous memory.&nbsp; Along those lines, the stack could be an abstract thing which looks like contiguous memory to the user, but isn’t really.&nbsp; The rest of the details should be private (wow, the idea of classes) and not accessible.<br>
+<br>
+</font><font face="Times New Roman, Times">
+<dd>b)<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">Just to make the attack harder, increasing the cost to the hacker of bringing the program down:&nbsp; Store the return address at the beginning and the end of the stack frame.&nbsp; Then confirm that they equal each other before returning.&nbsp; (Economy of mechanism?)<br>
+<br>
+</font><font face="Times New Roman, Times">
+<dd>c)<x-tab>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</x-tab></font><font face="Arial, Helvetica">The following could be implemented for code that doesn’t have any dynamic linking (do security critical programs allow this anyway? Should they).&nbsp; We can generate a list of all possible return addresses for each procedure in the heap segment, make the heap non-executable and check the list against the return address about to be used.&nbsp; This way, new code can’t be added using a buffer overrun in the heap and RA’s can be checked.&nbsp; I’m suggesting at a least common mechanism approach in which critical programs should not allow executable heaps and so on.</font>
+</dl>
+</dl><br>
+</html>
+
+@

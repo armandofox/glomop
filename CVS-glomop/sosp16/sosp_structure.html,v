@@ -1,0 +1,495 @@
+head	1.1;
+branch	1.1.1;
+access;
+symbols
+	SOSP:1.1.1.1
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.03.02.00.28.03;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.03.02.00.28.03;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@<html> <head>
+<title>SOSP structure</title>
+</head>
+
+<body>
+
+<h1>Motivation</h1>
+
+<ul>
+  <li> trend toward SNS
+       <ul>
+         <li> <b>Main observation:</b> computing and storage is cheaper
+              than moving data, and getting cheaper (search engines,
+              transformation proxies....)
+         <li> "utility model": 24x7 services accessible to large groups
+              of users
+         <li> "mass customized" services becoming pervasive
+         <li> economic benefits of centralization of resources
+         <li> "social" benefits: some services only useful if lots of
+              people use them (eg Firefly)
+       </ul>
+  <li> SNS are hard to build - a lot of engineering support must be
+       designed into them: 
+       <ul>
+         <li> 24x7 operation, even across hw/sw upgrades and transient faults
+         <li> scalability to handle exponential growth of Internet
+              user population, traffic, number of 
+              sites, etc. (Seltzer OSDI 96, and
+              others)
+         <li> ability to mass customize content for different users (and
+              browsers, and by extension, devices - [FGBA96])
+         <li> burstiness fundamental: want ability to "overflow" work
+              during peak periods
+       </ul>
+  <li> economic desiderata to make them appealing for mass deployment:
+       <ul>
+         <li> All nodes interchangeable
+         <li> incremental scalability to preserve investment
+         <li> ease of management, lest
+              administration become a burdensome cost
+              (ASPLOS-VII NOW workshop: 
+              "NOW's will live or die by how well the management problem
+              can be solved" (paraphrase; who said it))?
+       </ul>
+  <li> goal: make them easier to build and deploy
+       <ul>
+         <li> can "utility" requirements be encapsulated for reuse?
+         <li> can  "service layer" be made modular and extensible
+              without worrying about the "utility" requirements?
+         <li> can this be done in a way that makes framework suitable
+              for a broad range of current and future systems and is
+              reasonable to build and deploy using commodity HW/SW
+              technology?  (important for riding the commodity curve and
+              preserving investment)
+       </ul>
+  <li> Contributions of this paper
+       <ul>
+         <li> specification of "layered architecture" for
+              SNS's, based on the above requirements/principles
+              <ul>
+                <li> SNS layer (scalable network services support)<br>
+                     (SNS == "middleware" in other terminology?)
+                <li> TACC layer
+                     (transformation/aggregation/caching/customization),
+                <li> Services layer (the actual workers)
+              </ul>
+         <li> detailed evaluation of implemented system (tcsproxy) that
+              instantiates the architecture
+              <ul>
+                <li> fault tolerance behavior
+                <li> overflow excess capacity
+                <li> self-tuning load balancer
+                <li> effort required to extend system (add new types of
+                     workers) or compose existing ones
+                <li> integration with caching and mass customization
+              </ul>
+         <li> Classification of other existing systems (and future ones)
+              into this architecture, and how they differ
+              in implementing the architecture
+         <li> System tested by both trace playback from real client
+              traces and exposure to UCB WWW community ("real users")
+       </ul>
+</ul>
+
+<h1>Layered architecture, and principles that justify it</h1>
+
+<ul>
+  <li> Architectural Overview and "layer model" for SNS
+       <table border="1">
+       <tr><td>Application (e.g. WWW proxy)</td></tr>
+       <tr><td>Data transformation &amp; aggregation support<br>
+       Caching support<br>mass customization</td></tr>
+       <tr><td>General SNS infrastructure (FT, incremental scalability
+       etc.)</td></tr>
+       </table>
+  <li> SNS layer
+       <ul>
+         <li> various types of FT
+              (process-pair and process-peer, timeouts everywhere,
+              graceful and ungraceful death), and why used
+         <li> incremental scalability
+         <li> overlapping concurrent I/O latencies
+         <li> load balancing
+         <li> system monitoring/control API ("single virtual machine")
+              usable by all system agents
+       </ul>
+  <li> TACC layer
+       <ul>
+         <li> transparent access to user prefs DB; ACID vs. BASE
+              (Basically?, Availability, Soft state, Eventual
+              consistency) data
+         <li> infrastructure for specifying "task
+              chains" of composable workers (type graph)
+         <li> how to generate and pass
+              arguments to those workers, based on properties of the
+              request, the client software (e.g. "User-agent"), and the
+              user prefs
+         <li> transparent access to/through cache
+         <li> NOTE: "We are not a write server" -- cache is never dirty,
+              which simplifies some FT and consistency issues
+       </ul>
+  <li> Service layer
+       <ul>
+         <li> whatever application level service you offer
+              (In our system: distillation and refinement; aggregation
+              also possible)
+         <li> narrow API, thread-unsafe workers allowed, virtually no
+              restrictions on what workers do
+         <li> services provided by SNS are transparent to workers; TACC
+              services are available via API (caching, prefs, etc)
+       </ul>
+</ul>
+
+<h1>Implementation Description</h1>
+<ul>
+  <li> tcsproxy block diagram w/1-sentence explanations of each bubble
+  <li> SNS: Front End
+       <ul>
+         <li> Thread Control and Monitoring
+         <li> User Preferences (current: gdbm; future: Bayou); ACID vs
+              BASE data
+       </ul>
+  <li> SNS: Inktomi/Hotbot front end
+       <ul>
+         <li> production system
+         <li> similar ideas in frontend for load balancing
+       </ul>
+  <li> PTM
+       <ul>
+         <li> shell that allows you to drop in a centralized policy for
+              load balancing, etc. (eg classes of users)
+         <li> caching of PTM data occurs at front-ends to avoid large
+              traffic stream to PTM
+         <li> fault tolerance means it's ok for it to be centralized
+         <li> hetero load balancing handles burstiness and preserves
+              original investment by allowing 
+              heterogeneous system
+         <li> "overflow work" can go to larger shared pool ("utility")
+         <li> Self-tuning: heterogeneity and load balancing,
+              notification when capacity exceeded 
+       </ul>
+  <li> Partitioned Harvest Cache
+       <ul>
+         <li> off the shelf code; can certainly do better
+         <li> Fault tolerance and growability of partitions
+         <li> Ability to both "get" and "put" (needed for caching of
+              post-transformed data)
+       </ul>
+  <li> GIF, JPEG, HTML Distillers (before/after screenshots needed)
+       <ul>
+         <li> General requirements for distillers; non-MT-safe,
+              optionally stateful
+         <li> Tradeoffs of timeslicing vs. serial; most requests are
+              short in our workload, so get nice queueing properties,
+              and timeslicing doesn't buy much.  For long things, like
+              PS, it probably will.
+         <li> Off-the-shelf code (how long did each take to write?)
+         <li> Composability; cite unpublished Dig Doc project; example
+              "read me the PS file"
+         <li> HTML: URL munging to effect refinement.  Client interface
+              is Java applet or inserted HTML links.  (Need a generic
+              name for this, see below.)
+       </ul>
+  <li> Client interface (screenshot needed)
+       <ul>
+         <li> User prefs setting
+         <li> Refinement interface: munged HTML, or Java applet (example
+              of mass customization!) 
+       </ul>
+  <li> Monitor (screenshot needed)
+       <ul>
+         <li> Virtual machine controller,remote monitoring from
+              "anywhere" (via mcast)
+         <li> Observe and control all nodes; logging and async
+              notification (incl. email) supported 
+         <li> Controllable/extensible interface
+
+         <li> Multicast allows immediate popup
+              anywhere
+       </ul>
+</ul>
+
+<h1>Measurements/Experiments</h1>
+
+<h3>SNS Experiments</h3>
+
+<ul>
+  <li> Fault tolerance
+       <ul>
+	    <li> randomly kill nodes while system runs, see
+		 notches in load vs. time graph
+	    <li> for each component class in system,
+		 measure recovery time after a failure
+	    <li> with what frequency can failures occur and still have
+		 the system perform "reasonably" - how does performance
+		 degrade in face of failure?
+       </ul>
+  <li> Burstiness
+       <ul>
+	    <li> measure peak to average load on system across various time
+		 scales.  (What is good metric for load?  Requests per
+		 second?  Requests per second weighted by data size of
+		 request?  Bursts can occur in rate of requests and in data
+		 sizes.)
+	    <li> Demonstrate we automatically pull in nondedicated overflow
+		 nodes, and
+		 release them after awhile (have distillers detect idleness
+		 and kill themselves, in addition to having PTM kill them
+		 based on centralized policy)
+	    <li> reaction speed of overflow mechanism versus degree of
+		 hysteresis
+	    <li> what average capacity is needed to handle, say, 90% of all
+		 bursts at some particular timescale?
+       </ul>
+  <li> Self tuning
+       <ul>
+	    <li> heterogeneous network experiment using only queue
+		 length as load balancing hint.  If too coarse, integrate
+		 linear regression stuff into a distiller, and try to derive
+		 normalization constant as distiller runs.  (Should we mention
+		 this approach even if the queue-limit approach works,
+		 given that future distillers may be more compute
+		 intensive?)
+	    <li> measure performance of system (what is correct metric? I
+		 think average end-to-end latency through system) as a
+		 function of offered load, for a fixed number of
+		 distillers.  This will give us a curve from which we can
+		 deduce hysteresis limits for spawning new distillers.
+       </ul>
+  <li> Scalability
+       <ul>
+	    <li> Under heavy load, measure performance of system as a
+		 function of:
+		 <ul>
+		      <li> number of distillers, holding all else constant
+		      <li> number of cache partitions, holding all else
+			   constant
+		      <li> (number of front ends, holding all else
+			   constant?)
+		      <li> effective bandwidth available in network
+			   fabric.  (10baseT, 100baseT, myrinet, ...?)
+		 </ul>
+	    <li> at what point does FE become bottleneck?  At what
+		 point does network become bottleneck?
+       </ul>
+  <li> Attempt to deduce balance equation (ratio of
+       frontends:distillers:cache partitions)
+</ul>
+
+
+<h3>TACC Experiments</h3>
+
+<ul>
+  <li> Cost (gedanken): how much bandwidth per user would be needed for
+       users to
+       experience same latency as proxy provides?  Tradeoff of adding
+       bandwidth vs. adding proxy in order to reduce latency.
+  <li> Extensibility: some figures on how long it took to write
+       distillers; one example of composable distillers (PS to audio),
+       one of an aggregation distiller (Ian's webnews?)
+  <li> Cache performance
+       <ul>
+	    <li> cache hit rate = f(user population, cache size)
+	    <li> hit rate of cached distilled representations
+       </ul>
+  <li> Measurements of read:write ratio of user preferences from real users
+</ul>
+
+<h1>Discussion</h1>
+
+<h3>Solving bigger problems</h3>
+<ul>
+  <li> AOL web service (current configuration, shortcomings, etc); what
+       size system would we need?  Do we have evidence that it scales to
+       that size?
+  <li> IBM Olympic web server: 280 hits/sec avg load, peaks 2-3x higher
+</ul>
+
+<h3>Other cool services we could build</h3>
+
+<ul>
+  <li> "Java applet trust registry" per user
+  <li> Aggregation, etc. (WAIBA services)
+  <li> Search services
+  <li> "online aggregation" a/k/a data mining over Web content
+  <li> Deferred Web page fetch-and-notify for congested servers
+  <li> video servers (distilling or non-distilling)
+</ul>
+
+<h3>What we haven't done</h3>
+<ul>
+  <li> Currently, interior SAN performance is "uninteresting";
+       how big a system would make SAN a bottleneck?
+  <li> Haven't built the end-all distillation proxy, nor solved
+       the attendant WWW problems (naming, coherence, granularity
+       of representation, exploiting layered/prefix encodings,
+       etc.)
+  <li> How about write-intensive services? (Eric A.'s example: scalable
+       news server)
+  <li> Detailed code profiling (distillation is easily the
+       bottleneck, all other micro-optimizations may be largely
+       irrelevant, <i>except</i> to the extent they support
+       increased front-end thruput)
+  <li> Measured MagicRouter or multiple front-end system
+  <li> No security story for monitor (or anything else);
+       cannot proxy SSL, etc. though this could be done (Ian,
+       personal communication) if you trust your proxy
+       (e.g. "mini-proxy" system running on your desktop, which is
+       indeed feasible--we run it on laptops all the time)
+  <li> Is distiller API correct for other classes
+       of SNS?
+</ul>
+
+<h3>Related and future work: (one paragraph each?)</h3>
+<ul>
+  <li> "transparent" content transformation using infrastructure proxies:
+       <ul>
+         <li> various other proxies, cited in our ASPLOS
+         <li> WAIBA (OSF)
+         <li> Active Networks
+         <li> HTML Digestor from PARC
+       </ul>
+  <li> fault tolerance:
+  <li> load balancing and scalable distributed systems:
+       <ul>
+         <li> WebOS and UCSB Sweb++: scalability comes from
+              allowing clients to assume some load.
+         <li> Inktomi Whitepaper
+       </ul>
+  <li> administering a
+       collection of machines as a single virtual machine:
+       <ul>
+         <li> Eric Anderson et al.'s NOW Sys Adm console
+         <li> GLUnix tools (glurun, etc)
+         <li> Condor, LMF/Utopia, etc: batch job processors
+       </ul>
+  <li> Future work:
+       <ul>
+         <li> Support for very small and/or wireless clients; should be
+              mostly free (cite our 
+              extensive prev work, and "HTML Digestor" from PARC)
+         <li> Fast sockets integration
+         <li> Automatic notification
+       </ul>
+</ul>
+
+
+<h1> Conclusions (Need to be reworked)</h1>
+<ul>
+  <li> CII has a low cost per user, but offers high value added to
+       users through mass customization and intelligent content
+       manipulation
+  <li> Layered architecture encapsulates distinct and important
+       functionalities in reusable pieces
+       <ul>
+         <li> SNS: requirements for a 24x7 mass deployed service,
+              including system management, FT, scalability, overflow growth
+         <li> TACC: requirements for mass customization and composition
+              of services
+         <li> Services: the actual applications, blissfully ignorant of
+              the code under them
+       </ul>
+  <li> composable workers mechanism provides considerable generality in
+       what services can be provided; workers can be written completely
+       independently of underlying  mechanisms
+  <li> scalability: we have run it on 1 machine, on
+       3-4 machines, and for the whole UCB dialin community, and runs on
+       commodity everything (x86, Linux, ethernet)
+  <li> This is the way Internet service should really be provided
+  <li> We win
+</ul>
+
+<h1>Things we need names for</h1>
+
+<ul>
+  <li> the tcsproxy itself
+  <li>  "annotations you unobtrusively add to the HTML to
+       enable interaction with your service" (like our munged IMG tags,
+       inktomi's tcl macros, etc)
+  <li> composable workers mechanism
+</ul>
+
+<h3>Acks</h3>
+<ul>
+  <li> Eric A. - early proofreading and outline hacking, and picture
+       archive
+  <li> Ian - help coming up with BASE
+</ul>
+
+<h1>material for future papers....</h1>
+
+<ul>
+  <li> Lessons
+       <ul>
+         <li> Process management/discipline lessons (3 people, later 6;
+              25K+ lines
+              of code written, plus modification/integration of another
+              ??? lines off-the-shelf)
+         <li> Threads are great for this model (cite Ousterhout)
+         <li> Shitty code (e.g. ppm) considered harmful...but not as
+              much as you might think.  Need to design big SW systems
+              for this kind of FT.
+         <li> HTTP needs extensions: generalized feature negotiation
+              and state-passing, keepalive to proxies,
+              tokenized/compressed HTTP,
+              real content negotiation support, naming issues (for
+              caches) associated with content transformation.  HTTP/1.1
+              "Warning" and proposed "Accept-features" go part of the
+              way but not far enough.
+         <li> A lot of excess resolution on the Web! (giftojpeg,
+              quality reduction, etc.)  But no problem!  Servers don't
+              need to change!  This was our message before, and it still
+              is.
+       </UL>
+  <li>Blue-sky projects
+       <ul>
+         <li> More intelligent distillation (e.g. binning of graphics)
+         <li>  OS support for this type of system with millions of
+              threads?  Exokernel ideas influential
+         <li> Loosely snchronized distributed "user prefs"
+              infrastructure (Bayou) may be a good idea: value-added
+              infrastructural services can share this info.   Various
+              forms of certificate have been proposed
+              that encapsulate profile info; should leverage these.
+         <li> Relationship to MASH
+       </ul>
+</ul>
+<hr>
+<address></address>
+<!-- hhmts start -->
+Last modified: Tue Feb 25 10:58:12 1997
+<!-- hhmts end -->
+</body> </html>
+@
+
+
+1.1.1.1
+log
+@SOSP16 submission of "SNS" paper
+@
+text
+@@

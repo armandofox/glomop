@@ -1,0 +1,633 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.2
+date	96.01.19.03.21.37;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.01.19.02.01.10;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.01.19.02.01.10;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@first round edits for IPPS96 camera-ready
+@
+text
+@
+
+\documentstyle[12pt]{article}
+
+\title{Problem Set 1}
+\author{Paul Gauthier}
+
+\hoffset=-0.75in \voffset=-1.0in \textwidth=6.75in \textheight=9in
+\parskip=12pt
+
+\begin{document}
+
+\maketitle
+
+
+
+\begin{enumerate}
+%1
+\item{
+
+The [Lei+92] paper presents the mechanism for dealing with messages
+in the network at context switch time.
+
+At context switch time each message in the network are
+randomly redirected to one of the
+processing nodes in the system using the {\it all-fall-down} mode.
+
+When the context switch occurs all routers are placed into
+all-fall-down mode and route messages according to a fixed
+permutation. This permutation will evenly distribute messages
+amongst all processing nodes, regardless of their true destination.
+Once a message has begun to fall-down it is marked as such, and
+any router it passes through will recognize it and route it
+according to the prearranged permutation.
+
+Thus, each node will receive a small number of misdirected messages.
+They are stored with the swapped out processes user state, and
+can be reinjected into the network when the process is next
+swapped back in.
+
+There is a cost to the processing being swapped out, since it must
+drain the network of all these falling messages and then buffer
+them. As well, when the process is swapped in again, there
+is a cost to reinject all the messages.
+The [BK94] paper offers evidence that some or all of this CPU usage
+is charged to the process whose messages are being drained and
+reinjected.
+
+Since all the messages are drained from the network they should
+not affect the other process which is being swapped in. This is
+the goal of the entire all-fall-down mechanism. Otherwise
+a process which caused congestion in the network could
+have large impact on the performance of other, unrelated
+applications which happen to be time-slicing the partition
+with it.
+}
+
+
+%2
+\item{
+[Lei+92] explains that the
+CM-5 control network can be used to perform the following primitive
+operations:
+
+\begin{itemize}
+	\item{Broadcasting:}
+	\begin{itemize}
+		\item{user -- can broadcast 8 words to all other nodes}
+		\item{supervisor -- used by OS}
+		\item{interrupt -- used by OS}
+		\item{utility -- used by OS}
+	\end{itemize}
+
+	\item{Combining using bitwise OR, bitwise XOR, signed maximum,
+		signed addition, unsigned addition operators on 32-bit words:}
+	\begin{itemize}
+		\item{reduction -- combines values from all processors}
+		\item{forward scan -- processor $i$ gets the combination of
+			the previous $i-1$ processors' values}
+		\item{backward scan -- reverse of forward scan}
+		\item{router done -- blocks till the network drains}
+	\end{itemize}
+
+	\item{As well, a synchronous single bit OR and two separate
+	asynchronous single bit OR operations are available.}
+\end{itemize}
+
+
+Answers to construction questions:
+
+\begin{itemize}
+\item{Unsigned minimum:
+
+To compute an unsigned minimum of $\{x_i | 1 < i < n\}$ each node
+supplies $- (x_i - 2^{31})$ to the signed maximum reduction primitive. By
+reversing that transformation on the result,
+the unsigned minimum of the $x_i$ is obtained.
+
+The transformation essentially maps the $[0,2^{32}]$ range of
+unsigned integers down to the $[-2^{31},2^{31}-1]$ range of
+signed integers. The mapping preserves the {\it less-than} and
+{\it greater-than} relationships between the integers. Negating
+the value inverts these relationships so that the signed-maximum
+reduction can be used to compute a signed-minimum.
+}
+
+\item{Floating point addition:
+
+To compute 32-bit floating point sums would require two invocations of
+the control network primitives. Essentially, each node must execute
+the following pseudo-code (assuming IEEE floating point representation):
+
+\begin{verbatim}
+float
+    f;
+int
+    exp,
+    maxexp,
+    mantissa;
+
+exp= extract the exponent from f			// it is 8 bits, use bit operations
+
+maxexp= reduce(exp, SIGNED_MAXIMUM)		// this will find the max(exp)
+
+mantissa= extract the mantissa from f		// it is 23 bits, use bitwise ops
+mantissa= mantissa >> (maxexp - exp)		// align all the radix points
+if(sign bit of f is 1)
+    mantissa= -mantissa;
+mantissa= reduce(mantissa, SIGNED_SUM)		// mantissa now holds the sum
+
+f <- mantissa * 2^(maxexp)	// normalize, put back into IEEE form by bit twiddling
+\end{verbatim}
+
+This will not work for 64-bit floating points because the mantissa is
+53-bits wide. The control network can only handle 32-bit signed integers,
+so the reduction to compute the sum of mantissas can not be carried
+out directly.
+
+The [Lei+92] paper suggests that reductions on
+values larger than 32-bits can be accomplished through multiple
+primitive reductions by propagating residual data between them
+(the carry bits in the case of sum). This technique could be used
+to compute 64-bit floating point sums by using two sum reductions.
+This would facilitate construction of the 64-bit floating point add.
+
+Overflows in both the 32- and 64-bit floating point algorithms
+can be handled using a variation on this theme.
+
+With $n$ nodes contributing to
+the sum $log_2(n)$ bits of overflow could result in the worst case.
+If each node contributes less than $32 - log_2(n)$ bits to an add,
+no overflow out of the 32-bit integer can occur.
+
+By breaking the summation of the mantissa into a number of
+sums on words of this width, and bringing the carry information
+from the previous
+result into the next stage one can compute the result without loss
+of precision. Precision can then be thrown out to scale the result
+to fit back into the original 32- or 64-bit floating point representation.
+
+
+Other methods of dealing with overflow exist, but are long and
+complicated. This question is already over 4 pages long, so I
+won't bore you with them now.
+}
+
+\item{Median: {\bf Warning!} I'm presenting a long progression of algorithms
+which get more and more hacky and less and less realistic as they go. Read
+as far as you find it interesting.
+
+\begin{itemize}
+\item{
+An trivial algorithm to compute the median of $n$ values in $O(n/2)$
+time is to repeatedly compute the signed maximum of the set of
+numbers. Do this $n/2$ times, throwing out the max at each step.
+The max of what is left is the median.}
+
+\item{
+Another algorithm achieves $O(log_2(n))$ average case performance.
+Computing the average of $n$ values takes one global sum and
+then each node divides the result by $n$.
+
+At each step the average
+(of the remaining nodes) is computed. Nodes then contribute either
+0 or +1 to another global sum, depending on if they are less-than or
+greater-than the average. This splits the nodes into two sets.
+The nodes in the smaller set can determine that they should
+throw themselves out of further rounds. At the end of round one,
+the median must lie
+in the larger set. On average about half the nodes are thrown
+out, assuming an even distribution of numbers.
+
+By iterating these two steps and keeping track of how many nodes
+have been thrown out from the high and low ends (to determine
+which half to discard) one will eventually
+locate the median (the only node left). This node can then broadcast
+its value to the others.
+}
+
+\item{Another solution which on average works in $O(log_2(n))$ time is
+possible, but its worst case is $O(min(32,n))$ time rather than $O(n)$.
+This is the most likely algorithm to implement. Everything after this
+one is just for the sake of discussion.
+
+The CM-5 offers a global bitwise OR in constant time. Bitwise AND
+can also be computed in constant time (synthesized from supplied
+primitives). This set of operations can easily be pipelined to occur
+in rapid succession.
+
+If all nodes compute $global-OR(x_i)$ and $global-AND(x_i)$
+on the $n$ numbers ($x_i$) they can determine the leftmost
+bit on which not all $x_i$ values agree. To do this, the nodes
+locally bitwise XOR the results
+of the global OR and AND.
+The leftmost non-zero bit of this local XOR result is the
+leftmost bit in the $x_i$ which is different on at least 1 node.
+
+Now the nodes can each contribute either the integer 0 or 1 to
+a global sum (based on the value of the leftmost differing bit).
+All the $x_i$ now belong either to a high or low set. Every
+node can tell the size of these sets and determine which one
+must contain the median (the larger of the two on the first
+step). The nodes in the other set disqualify themselves from
+the remaining rounds.
+
+The remaining nodes recompute the global-OR and global-AND and
+do the local XOR to determine the next bit at which the
+remaining $x_i$ differ. The sum of 0's and 1's is repeated.
+By keeping track of how many nodes from the high and low
+ends have been disqualified each node can tell which set
+should be disqualified at this round.
+
+Iterate till either one node is left or all the values are
+the same (they differ at no bit). Broadcast the result.
+
+At each step a minimum of 1 node must be disqualified since
+we are testing a bit on which not all the nodes agree. So
+one bound on running time is $O(n)$. But since there are only
+32 bits in the entire word the run time must be $O(min(32,n))$.
+For randomly distributed values we can expect at
+each step the bit tested will split the group roughly in half.
+Thus at each step half the values can be discarded on average,
+providing the $O(log_2(n))$ expected runtime.
+}
+
+\item{And another optimization on the previous solution helps reduce
+the case where one would have to do all 32 steps.
+
+At each step the global sum can produce a number at most $r$, the
+number of nodes who have not been disqualified (the case
+where all these nodes contribute 1). The CM-5 offers a 32-bit
+unsigned sum, but this number $r$ takes only $log_2(r)$ bits
+to represent.
+
+By dividing the 32 bits of the sum into $f = floor(32/log_2(r))$ fields
+we can take $f$ sums concurrently with a single global sum
+invocation. Since no field can overflow into the field adjacent
+this will compute all $f$ sums correctly.
+
+Using this encoding we can test $t= floor(log_2(f))$ bits at each step instead
+of just one. We can test $t$ bits and {\bf not} $f$ bits.\footnote{A
+scheme where $f$ bits are tested won't work. In such a scheme, each
+node contributes a 1
+to the sum corresponding to the leftmost 1 bit and 0 to all others.
+The problem is that if the median is found to lie in part of the
+range which has the leftmost bit as a 1 then all the sums to the right
+become useless. This still has a worst case of only having effectively
+tested a single bit.}
+Each node figures out which of the $2^t$ different possible values it's group
+of $t$ bits has, and contributes a 1 to that sum, and a 0 to all the others.
+This will order the nodes into $t$ sets and each node
+knows enough to decide which set(s) to throw away. Thus, this optimization
+allows us to test $log_2(32/log_2(r))$ bits at each step, strictly
+reducing the
+worst case from 32 to some smaller number which depends on $n$.
+
+By noticing that the network is pipelined one could also initiate many
+of these mutli-field sums in rapid succession, testing even more bits
+per round.
+Each extra bit tested doubles the number of pipelined sums which must
+be issued. There will be a tradeoff point at which it is more
+effective to simply wait for the sums to come back (and potentially
+learn about more bits which can be skipped, because they are all identical
+in the remaining set of numbers) than it is to issue yet another
+pipelined add. This tradeoff will depend on the relative latency of
+a global sum versus the overhead of initiating another pipelined
+sum.
+
+Essentially at each round you want to issue as many
+pipelined sums as you can before the result of the first
+sum returns to you (since you would be idle anyway waiting
+for it). The number of pipelined sums to issue at each
+round must be a fixed number, determined a priori since
+all nodes need to know how many will occur (and therefore how
+many bits are being tested) before they issue their first
+sum.
+
+In reality most of these optimizations are complete overkill.
+I'm only presenting them because they're interesting, and they
+reduce the worst case behavior. But, if a large number of
+pipelined sums can be issued before the first result is
+available there may be ways to do all this with very
+little overhead, reducing the worst case down to something
+on the order of 8 iterations perhaps.
+}
+
+
+\end{itemize}
+}
+
+\end{itemize}
+}
+
+%3
+\item{
+For this question I am assuming all 99 cycles are actual CPU work.
+That is to say, the network is not a limiting factor, the CPU is
+not spinning, waiting for the network at any point. If some of
+those cycle were idle cycles, they could be overlapped with
+the 200 cycles of conversion needed on the sending side to
+achieve a higher bandwidth.
+
+The 16 bytes of payload holds 4 32-bit floating point values.
+We must convert 4 floating point numbers for each packet.
+This raises the time to send and receive one packet to $ 99 + 4(50)$:
+
+
+$2 \frac{16(33Mhz)}{99 + 4(50)} = 3.53 MB/s$
+
+The achievable bandwidth will be the same whether the 200 cycles of
+conversion occur at the sender or at the receiver. It is preferable
+to have the conversion occur at the sender. Slowing down the sending
+operation reduces the injection rate and allows the receiver to
+keep the network drained. This helps reduce network congestion,
+which is especially important in an adaptive network. Otherwise senders
+will flood the network if they are sending faster than the
+receiver can drain the data.
+
+This is not a concern in an ideal balanced system (for example)
+where a pair of nodes are sending to each other in perfect lock step.
+Unfortunately, if translation is occurring at the receiver, any
+perturbation of the steady state will only get worse. If one
+node polls and receives no data it will rapidly proceed to the
+next send. This will invoke more work for the other node, who will
+therefore be sending less data, reinforcing the problem.
+}
+
+
+%4
+\item{
+Figures 5, 7(b), 8(b), 10(b), and 16 from [A91] {\it Limits on Interconnection Network Performance}
+illustrate the fact that smaller packets have lower latency. The text on
+page 403 describes that this is mostly attributable to lower network
+congestion. Smaller packets allow more even interleaving of traffic. This is
+one of the motivations for the small ATM packet size, for example.
+
+Both [CK94] and [KP93] provide evidence that larger messages lead to
+increased bandwidth. This is due to the amortization of fixed
+(non-data-touching) overheads across more bytes. Specifically, table 2 shows
+that 11737 cycles are spent to send 1024 bytes of data and 397 cycles are
+spent to send 16 bytes of data. This works out to 11.5 cycles/byte for the
+larger message size, and 24.8 cycle/byte for the smaller message.
+Assuming the CPU is the bottleneck,
+not the network, the larger packets can obviously achieve higher bandwidth.
+
+Low overhead network injection and extraction primitives are needed.
+The
+use of a communications facility like active messages achieves this goal.
+It seems that non-data-touching overhead must be minimized if possible.
+The use of large messages to amortize the non-data-touching overhead,
+combined with fragmentation into small packets to achieve low latency
+and congestion are good solutions. It is imperative to avoid paying reordering and
+retransmission overheads on all these small packets. A network offering in
+order delivery and which does not drop packets is therefore desired.
+}
+
+%5
+\item{
+Data manipulation becomes the dominant sort of overhead for larger packets.
+Figures 3a-b in [KP94] illustrate this point very graphically. This is
+an obvious conclusion to draw. [CT90] discusses a more subtle
+situation in which data manipulation dwarfs all other overheads.
+When presentation layer conversion occurs the cost of this
+data touching can be enormous. The achievable throughput of such
+conversions is often orders of magnitude less than the link
+bandwidth (see also the answer to question 3 for another example).
+
+[CT90] argues for a number of measures. One of the most important
+is application level framing. By having the communication layer
+deliver chunks of data which make sense to an application out
+of order delivery can be sensibly left up to the application.
+An application can obviously not deal with arbitrary fragments
+of a message. But if the chunk makes semantic sense it can
+potentially handle it.
+
+As well, rolling many data touching layers into combined loops can
+help reduce data touching overheads. Again, this becomes more
+feasible with application framing due since many of these
+computations can then be pushed up to higher levels of the
+protocol stack.
+
+End-to-end checksumming without checksums on lower level packets
+(without some direct benefit) helps reduce the data touching
+overhead as well.
+}
+
+%6
+\item{
+The most important feature of the Metro router is that it {\it drops}
+packets if there is no available outbound route. This is due to
+the wormhole routing, since flits may be en-route already from
+the previous router. Messages may be much larger than the minimal
+buffering available at a single Metro router; typically messages
+span many routers. Therefore a Metro router can not block a packet,
+it has no buffering to store it in. It must drop the packet if it
+can not route it onwards. When packets are dropped a signal is
+passed back to the sender indicating a retransmission is needed.
+
+If a receiver is not ready to handle a block transfer (for example,
+the destination page was not pinned in memory) the Metro router
+would be forced to drop the packet. More generally, if for
+any reason the receiver can not accept any part of the data
+the remainder of the packet will be dropped.
+
+Another potential problem occurs if multiple nodes concurrently send to a
+single receiver. If there is only one logical path from the network
+into the network interface (NI) all these streams but one will
+be dropped. This is because the metro drops packets if there is
+congestion and no equivalent logical path available.
+
+The NI can ease this situation in two ways. First, it can provide
+enough buffer space onboard to handle short periods of host
+unavailability. Second, it can support multiple logical paths
+in from the network, to help reduce the packet dropping on
+many-to-one transmission. The host must be able to drain
+the NI's buffers at a greater rate than the network can fill
+them, or else they will eventually overrun.
+
+An on-board DMA engine capable of pushing block transfer data to
+main memory without host assistance would reduce the impact
+of host inattentiveness. How to reconcile this with multiple
+logical input paths from the network is an interesting
+question.
+
+Many of the techniques from the [BK94] CM-5 paper are
+applicable to the metro router:
+
+\begin{itemize}
+	\item{{\bf Barriers.} Barriers have the nice property that two
+		phases of communication which each work well can be
+		separated by a barrier and continue to work well. If they
+		were not separated they could interact and cause congestion,
+		which would lead to packet dropping in the metro.}
+	\item{{\bf Receiver Arbitration.} By using the 1-on-1  sender
+		to receiver	philosophy (by using permutations separated
+		by barriers, for example) one can remove target collisions.
+		This reduces the need for multiple logical channels into
+		the NI.}
+	\item{{\bf Bandwidth matching.} Bandwidth matching is extremely
+		important in adaptive networks like the metro. Without it,
+		high injection rates can lead to widespread congestion
+		in the network. Even worse in the metro network is the
+		fact that packets don't block on congestion, but are
+		dropped.}
+	\item{{\bf Packet interleaving/small packets.} Small packets, which
+		do not tie up the network for a long duration
+		as they wormhole through to the receiver and
+		packet interleaving will tend to reduce congestion and remove
+		hotspots.}
+\end{itemize}
+
+An NI with two logical inputs from the network, some amount of onboard
+buffering, and one DMA engine capable of
+servicing either input (but only one at a time) would make sense.
+One long transfer (receiver
+arbitration) can occur at a time (using the DMA engine) while the other
+logical channel can be used for short synchronization type messages
+(like barriers, etc).
+}
+
+%7
+\item{
+Consider the cube as having top, bottom, front, back, left and right faces.
+Rows running left to right across the front and back faces are contiguous.
+These entire faces are contiguous in memory. The top and bottom
+faces are comprised of 100 strips of 100 contiguous doubles each.
+The left and right faces are grids of non-contiguous doubles.
+
+To send all the data from one node (just the faces) to the 6 neighbors
+using strided transfers only 6 calls are needed. Using only
+contiguous transfers $2 + 2 * 100 + 2 * 10,000 = 20,202$ calls are needed.
+
+Using a non-strided transfer we obtain:
+
+$2*(100+10000*8*0.25) + 2*(100*(100+100*8*0.25)) + 2*(10000*(100+8*0.25)) = 2,140,200$
+
+The first term is for the contiguous front and back faces. The second is
+for the top and bottom faces which must be sent as 100 transfers of
+100 doubles. The final term is for the left and right faces which must
+be sent as 10,000 transfers of one double.
+
+Using the strided transfer we obtain:
+
+$2*(100+10000*8*0.25) + 2*(100+10000*8*0.25) + 2*(100+10000*8*0.25) = 120,600$
+
+In this sum the front and back faces can still be sent in as a contiguous
+chunk. The top and bottom faces can be sent as single transfers of
+100 strides of 100 doubles
+at each step. The strides are spaced at intervals of 10,000 doubles.
+The left and right faces can be sent as single transfers of
+10,000 strides of 1 double at each step. The strides are spaced at
+intervals of 100 doubles.
+
+The strided transfer is 17.76 times as fast.
+}
+
+%8
+\item{
+There are a number of reasons why adaptive routing may be a bad idea.
+One of the most obvious is that it increases the complexity of
+routers.
+Simpler routers are less prone to failure, cheaper to
+design and have lower latencies.
+\footnote{One potential way to combat the increase in latency is
+through the use of
+{\it bimodal routers} which can route quickly in the normal
+(non-adaptive) case, but can route adaptively if needed at higher
+latency.}
+
+In mesh or torus topologies the use of adaptive routing has
+a serious impact on deadlock avoidance. Static routing algorithms
+can be easily demonstrated to be deadlock free and generate
+minimal paths. Adaptive routing algorithms must take great pains
+to avoid deadlock, and in many cases route along non-minimal
+paths to avoid congestion.
+
+The ability to avoid faults and congestion is the main argument for
+adaptive routing. In topologies like the multibutterfly or
+the fat tree adaptive routing makes the most sense. Deadlock
+avoidance and minimal path concerns are not as serious as for
+the mesh/torus cases.
+
+One of the biggest sacrifices in adaptive routing is the loss of
+the ability to offer in-order delivery. If packets can take different
+paths, then they may arrive out of order. This adds the cost
+of packet reordering to the end-to-end processing costs.
+
+Without careful management of communication patterns adaptive routing
+has the potential to produce serious network congestion. This can
+happen if
+something like bandwidth matching or virtual circuits (to ensure
+all traffic from sender to receiver follows one path) isn't
+employed. Without these controls a sender can literally fill the
+network with messages for a receiver who cannot drain the
+network quickly enough. The sender will not sense backpressure
+until all adaptive paths have already backed up.
+
+One alternative which might capture many of the benefits
+while minimizing the flaws of adaptive routing
+is to use some form of virtual circuit mechanism (as in ATM
+switches). The virtual circuit can be established in an adaptive
+manner, and perhaps re-established in the case of performance
+degradation or failure. In these (hopefully) rare cases some
+mechanism could ensure all packets on the old route arrive before
+allowing packets to travel the new route. The overhead of this type of
+mechanism may turn out to be too high in the low-latency MPP
+interconnect arena.
+}
+
+\end{enumerate}
+
+
+\end{document}
+
+
+
+
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d454 1
+a454 1
+	\item{{\bf Receiver Arbitration.} By using the one-on-one sender
+@
+
+
+1.1.1.1
+log
+@initial import matches original submission to IPPS 96.
+@
+text
+@@

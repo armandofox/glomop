@@ -1,0 +1,167 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.20.19.41.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From gebis@@cory.EECS.Berkeley.EDU  Fri Nov 20 00:52:00 1998
+Return-Path: gebis@@cory.EECS.Berkeley.EDU
+Received: from po.EECS.Berkeley.EDU (po.EECS.Berkeley.EDU [128.32.134.172]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id AAA16654 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 00:52:00 -0800
+Received: (from gebis@@localhost)
+	by po.EECS.Berkeley.EDU (8.8.8/8.8.8) id AAA15875
+	for cs261-homeworks@@joseph.cs.berkeley.edu; Fri, 20 Nov 1998 00:52:14 -0800 (PST)
+Message-Id: <199811200852.AAA15875@@po.EECS.Berkeley.EDU>
+Subject: HW3
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Date: Fri, 20 Nov 1998 00:52:14 -0800 (PST)
+From: "Joseph Gebis" <gebis@@eecs.berkeley.edu>
+X-Mailer: ELM [version 2.5 PL0b2]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Status: RO
+
+HW3
+
+1)
+* The most obious error: many (all?) versions of vi include shell
+  commands.  Edit the file, shell out: rootshell.
+* Between the time that tmpnam() returns and the fopen(dst, "w") in
+  copyfile occurs, if the name can be guessed (is it usually the
+  pid?), a link between that name and a real, existing file can
+  be created.  "vi" is then exec'ed on the file, as superuser; you
+  can edit any file (it will get clobbered due to the copyfile
+  before vi is exec'ed, but oh well).
+* There is also a race between looksok() and rename().  You could
+  change the file during that race to insert shell escapes.
+* You can clobber the stack in debug() by making progname something
+  long and devious.
+* You can prevent anyone else from using the program by creating
+  "/tmp/vi_moderators.lock"
+* The comments in looksok() practically beg for you to figure out
+  something that is bad, but not checked for.  (I don't know the
+  format of the moderators file, though.)
+
+
+2)
+General security risk that applies to any adaptive routing variant:
+by allowing users to have some control over routing, you give them
+more choice about where the packet *doesn't* go.  (Presumably you
+make sure that the packet doesn't end up somewhere it couldn't 
+legitimately go.)  This would probably only matter if, for some
+reason, one path of the network had an intrusion detection system,
+logging system, or any other security tool.
+a) The biggest security risk is probably that the packet could use
+   a large number of bytecodes to try to cause more work for the
+   router, and cause it to have increased delays or dropped packets.
+b) There are three security concerns: a "bad" packet finding out
+   information about a good packet; a "bad" packet applying a filter
+   to a good packet; and "bad" packets communicating with each other.
+   In the first case: a user can find out the path that another
+   user's packets are taking by inserting a packet with the same flow.
+   (This is probably not a big deal, but might help the user to do
+   something bad further downstream).  In the second case: a user
+   can replace a previous flow with a new flow; this could be used to
+   divert a stream, possibly past a compromized host that is sniffing
+   passwords.  Finally, this could be used as some sort of covert
+   channel: if there are n possible interfaces, each packet can
+   covertly transmit log n bits by setting a flow to a particular
+   interface.
+c) The obvious risk is denial of service: add a jump to the current
+   instruction, and the router will just spin forever.
+d) This is a good way to hide information.  Shoot the packet past
+   the intrusion detection system, then "compress" it into a packet
+   that allows for some attack.  Also, a user can insert a handler
+   into another flow that will then modify another user's packet.
+   Another possibility is to insert a handler that reroutes the
+   packet destination to a machine which logs the packet, and re-routes
+   the original packet back to the original destination.
+e) If the size of memory per packet is determined by the packet, there
+   is the possibility for a denial-of-service attack by allocating
+   a large chunk of memory.  Even if the memory size is fixed, there
+   is still this possibility: a user just has to create many flows,
+   and have each flow take the maximum amount of memory.  Even better,
+   this new feature lets us put a password sniffer in the code:
+   insert a packet in someone else's flow with code that grabs the
+   first bytes after seeing "password:", and store those in the
+   allocated memory block.  Later, insert another packet that just
+   copies that memory block, and sends the packet off to a waiting
+   machine.
+f) This simplifies the previous attack: insert of inserting a second
+   bogus packet to copy the memory block, just shoot off a packet that
+   includes the bytes immediately after "password:".  But this also
+   opens up a new denial-of-service attack: insert a handler that
+   continually shoots packets at another host.  The benefit is that the
+   attack comes from any random router you pick (or any random 100
+   routers, or...).  Bonus points for do something funny with the packets
+   such as syn flooding.
+g) At this point, you've basically given complete control of your
+   router over to the Bad Guys.  Besides the obvious denial-of-service
+   trivially possible, if there is any bug in the JVM implementation
+   or libraries or anything, you are allowing any arbitrary user on
+   the internet to run code (and thus possibly excercise the bug).
+   Besides this, each thread that is executing can interfere with
+   other threads in the router: a user could prevent any other handler
+   from executing.
+
+3) 
+a) The biggest problem is in determining what things are in fact
+   mobile code.  The first thing to try would be to block requests
+   to things that look like mobile code (.class files, for example).
+   It would also be possible to try and block things that look like
+   mobile code (I don't know the format of ActiveX/Java bytecodes,
+   but there must be some way to identify basic examples of each).
+   There are problems with this: the first is that this won't help
+   against new forms of mobile code (or if the format of existing
+   types of mobile code changes); the second is that it's not
+   possible to find ALL mobile code without blocking everything.
+   For example, if some mobile code is compressed (or otherwise
+   changed so that its format is not obvious), you won't be able
+   to detect this.
+b) It would be easy to define a class of things that just won't
+   be allowed: for example, Java classes with classloaders.  You
+   could also try and analyze the code and look for specific actions
+   that would not be allowed: suspicious-looking network activity,
+   attempted disk access, and so on.  You could also try and
+   prevent some denial-of-service attacks by not allowing code
+   that pops up new windows.
+
+   In general, the problem with this approach is that it requires
+   you to try and consider every possible bad thing that can happen.
+   You *will* miss some things.  Other potentially bad things are
+   virtually impossible to detect (how can you tell if the code
+   will hog the CPU?), and so the only way to prevent them is to
+   disallow all mobile code.
+
+   Of course, there still remains the problem of being able to detect
+   all mobile code; if you can't detect something, of course you
+   can't do any analysis of it.
+c) The question is flawed in the sense that it tries to assign blame
+   to either the firewall or the end host.  Trying to block dangerous
+   mobile code is an impossible task, so it doesn't really make sense
+   to blame the firewall for failing at it.
+
+   If you must assign blame: the firewall should be blamed for not being
+   able to detect all mobile code.  The end host should be blamed for
+   any mobile code that is designed to circumvent detection as mobile
+   code.  The firewall should be blamed for not being able to detect
+   every possible thing in the mobile code it does find.  The end host
+   should be blamed for providing code that does something bad.
+
+@

@@ -1,0 +1,1363 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @% @;
+
+
+1.1
+date     98.11.08.11.11.55;  author daw;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     98.11.08.11.11.55;  author daw;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@\documentstyle[twocolumn,psfig]{article}
+
+\pagestyle{empty} % note \thispagestyle below as well
+
+% from mab/smb
+\setlength{\textwidth}{6.5in}
+\setlength{\textheight}{9in}
+\setlength{\topmargin}{-.5in}
+\setlength{\oddsidemargin}{0in}
+\setlength{\evensidemargin}{0in}
+\setlength{\columnsep}{.25in}
+% \flushbottom
+\newcommand{\Unix}{{\sc Unix}}
+% \newcommand{\twiddle}{\char"7E}
+% \newcommand{\twiddle}{\~{}}
+
+
+% from us
+
+% block paragraph indent style
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{.5\baselineskip}
+
+\renewcommand{\topfraction}{1}
+\renewcommand{\bottomfraction}{1}
+\renewcommand{\textfraction}{0}
+
+\hyphenation{ad-van-tage}
+
+
+\newcommand{\marginnote}[1]{{\bf #1}}
+
+\begin{document}
+
+\title{{\Large \bf A Secure Environment for Untrusted Helper Applications} \\
+	{\large \bf Confining the Wily Hacker}}
+
+\author{Ian Goldberg \hspace*{5mm} David Wagner \hspace*{5mm} Randi Thomas
+	\hspace*{5mm} Eric A.\ Brewer \\
+{\tt \{iang,daw,randit,brewer\}@@cs.berkeley.edu}\\
+{\em University of California, Berkeley}
+}
+\date{}
+
+\maketitle
+\bibliographystyle{plain}
+
+\thispagestyle{empty} % note \pagestyle above as well
+
+\begin{abstract}
+Many popular programs, such as Netscape, use untrusted helper applications
+to process data from the network.  Unfortunately, the unauthenticated
+network data they interpret
+could well have been created by an adversary, and the
+helper applications are usually too complex to be bug-free. This raises
+significant security concerns.  Therefore, it is desirable to
+create a secure environment to contain untrusted helper applications.
+We propose to reduce the risk of a security breach by
+restricting the program's access to the operating system.
+In particular, we intercept and filter dangerous system calls
+via the Solaris process tracing facility.
+This enabled us to build a simple, clean, user-mode
+implementation of a secure
+environment for untrusted helper applications.
+Our implementation has negligible performance impact,
+and can protect pre-existing applications.
+\end{abstract}
+
+
+\section{Introduction}
+
+Over the past several years the Internet environment has
+changed drastically.
+This network, which was once populated almost exclusively
+by cooperating researchers who shared trusted software and data,
+is now inhabited by a much larger and
+more diverse group that includes pranksters, crackers, 
+and business competitors.
+Since the software and data exchanged on the Internet
+is very often unauthenticated, it could easily
+have been created by an adversary.
+
+Web browsers are an increasingly popular tool for retrieving
+data from the Internet.
+They often rely on helper applications to process various
+kinds of information.
+These helper applications are security-critical,
+as they handle untrusted data,
+but they are not particularly trustworthy themselves.
+Older versions of {\tt ghostscript}, for example, allowed malicious
+programs to spawn processes and to read or write an
+unsuspecting user's files
+\cite{cert-gs,fc-email,fc-50,uphoff-gs,wet-gs}.
+What is needed in this new environment, then,
+is protection for all resources on a user's system from this threat.
+
+Our aim is to confine the untrusted software and data by
+monitoring and restricting the system calls it performs.
+We built Janus\footnote{
+	Janus is the Roman god of entrances and exits,
+	who had two heads and eternally kept watch over
+	doorways and gateways to keep out intruders.
+},
+a secure environment for untrusted helper
+applications, by taking advantage of the Solaris process
+tracing facility.
+Our primary goals for the prototype implementation
+include security, versatility, and configurability.
+Our prototype is meant to serve as a proof-of-concept, and
+we believe our techniques may have a wider application.
+
+
+\section{Motivation}
+\label{motiv}
+
+\subsection{The threat model}
+
+Before we can discuss possible approaches to the problem,
+we need to start by clarifying the threat model.
+Web browsers and {\tt .mailcap} files make it convenient
+for users to view information in a wide variety of formats
+by de-multiplexing documents to helper applications
+based on the document format.
+For example,
+when a user downloads a Postscript document
+from a remote network site, it may be automatically
+handled by {\tt ghostview}.
+Since that downloaded data could be under adversarial control,
+it is completely untrustworthy.
+We are concerned that an adversary could send malicious
+data that subverts the document viewer
+(through some unspecified security bug or misfeature),
+compromising the user's security.
+Therefore we consider helper applications untrusted,
+and wish to place them outside the host's trust perimeter.
+
+We believe that this is a prudent level of paranoia.
+Many helper programs
+were initially envisioned as a viewer for a friendly user
+and were not designed with adversarial inputs in mind.
+Furthermore, {\tt ghostscript} implements a full programming language,
+with complete access to the filesystem;
+many other helper applications are also very general.
+Worse still, these programs are generally big and bloated,
+and large complex programs are notoriously insecure.%
+\footnote{
+For instance, {\tt ghostscript} is more than 60,000 lines of C; and
+{\tt mpeg\_play} is more than 20,000 lines long.
+}
+Security vulnerabilities have been
+exposed in these applications
+\cite{cert-gs,fc-email,fc-50,uphoff-gs,wet-gs}.
+
+
+\subsection{The difficulties}
+
+What security requirements are demanded from a successful
+protection mechanism?
+Simply put, an outsider who has control over the helper application
+must not be able to compromise the confidentiality, integrity,
+or availability of the rest of the system, including the
+user's files or account.
+Any damage must be limited to the helper application's
+display window, temporary files and storage, and
+associated short-lived objects.
+In other words, we insist on the Principle of Least Privilege:
+the helper application should be granted the most restrictive
+collection of capabilities required to perform its legitimate duties,
+and no more.
+This ensures that the damage a compromised application can cause
+is limited by the restricted environment in which it executes.
+In contrast, an unprotected Unix application that is compromised
+will have all the privileges of the account
+from which it is running,
+which is unacceptable.
+
+Imposing a restricted execution environment on helper
+applications is more difficult than it might seem.
+Many traditional paradigms such as
+the reference monitor and network firewall
+are insufficient on their own, as discussed below.
+In order to demonstrate the
+difficulty of this problem and appreciate the need
+for a novel solution,
+we explore several possible approaches.
+
+{\sc Building security directly into each helper application:\,\,}
+Taking things to the extreme, we could insist all helper
+applications be rewritten in a simple, secure form.
+We reject this as completely unrealistic;
+it is simply too much work to re-implement them.
+More practically, we could adopt a reactive philosophy,
+recognizing individual weaknesses as each appears
+and engineering security patches one at a time.
+Historically, this has been a losing battle,
+at least for large applications:
+for instance, explore
+the sad tale of the {\tt sendmail} ``bug of the month''
+\cite{%
+8lgm-sendmail-1,8lgm-sendmail-2,8lgm-sendmail-4,8lgm-sendmail-3,%
+cert-sendmail-1,cert-sendmail-2,cert-sendmail-3,cert-sendmail-4,%
+cert-sendmail-5,cert-sendmail-6,cert-sendmail-7,cert-sendmail-8%
+}.
+In any event, attempts to build security directly into
+the many helper applications would require each program to
+be considered separately---not an easy approach to get right.
+For now, we are stuck with many useful programs
+which offer only minimal assurances of security;
+therefore what we require is a general, external protection mechanism.
+
+{\sc Adding new protection features into the OS:\,\,}
+We reject this design for several reasons.
+First, it is inconvenient.
+Development and installation both require modifications
+to the kernel.
+This approach, therefore, has little chance of
+becoming widely used in practice.
+Second, wary users may wish to protect themselves
+without needing the assistance of a system administrator
+to patch and recompile the operating system.
+Third, security-critical kernel modifications
+are very risky: a bug could end up allowing
+new remote attacks or allow a compromised
+application to subvert the entire system.
+The chances of exacerbating the current situation are too high.
+Better to find a user-level mechanism
+so that users can protect themselves, and so that
+pre-existing access controls can serve as a backup;
+even in the worst case, security cannot decrease.
+
+{\sc The pre-existing reference monitor:\,\,}
+The traditional operating system's monolithic reference monitor
+cannot protect against attacks on helper applications directly.
+At most, it could prevent a penetration from spreading to
+new accounts once the browser user's account has been compromised,
+but by then the damage has already been done.
+In practice, against a motivated attacker
+most operating systems fail to prevent the spread of penetration;
+once one account has been subverted,
+the whole system typically falls in rapid succession.
+
+{\sc The conventional network firewall:\,\,}
+Packet filters cannot distinguish between different types
+of HTTP traffic, let alone analyze the data for security threats.
+A proxy could, but it would be hard-pressed to understand
+all possible file formats, interpret the often-complex application
+languages, and squelch all dangerous data.
+This would make for a very complex
+and thus untrustworthy proxy.
+
+We therefore see the need for a new, simple, and general
+user-level protection mechanism
+that does not require modification
+of existing helper applications or operating systems.
+The usual techniques and conventional paradigms
+do not work well in this situation.
+We hope that the difficulty of the problem
+and the potential utility of a solution
+should help to motivate interest in our project.
+
+
+
+\section{Design}
+\label{design}
+
+Our design, in the style of a reference monitor, centers around 
+the following basic assumption:
+	\begin{center} \frame{\parbox{2.9in}{
+	\begin{center} \parbox{2.7in}{ \begin{center}
+	\sc
+	An application can do little harm
+	if its access to the underlying operating system is appropriately
+	restricted.
+	\end{center}
+	} \end{center}
+	}}
+	\end{center}
+Our goal, then, was to design a user-level mechanism
+that monitors an untrusted application and
+disallows harmful system calls.
+
+A corollary of the assumption is that an application may be allowed to
+do anything it likes that does not involve a system call.  This means it
+may have complete access to its address space, both code and data.
+Therefore, any user-level mechanism we provide
+must reside in a different address space.
+Under Unix, this means having a separate process.
+
+One of our basic design goals was {\sc security}.  The untrusted application
+should not be able to access any part of the system or network for which
+our program has not granted it permission.
+We use the term {\em sandboxing} to describe the concept
+of confining a helper application to a restricted environment,
+within which it has free reign.
+This term was first introduced, in a slightly different setting,
+in \cite{sfi}.
+
+To achieve security, a slogan we kept in mind
+was ``keep it simple'' \cite{hints-design}.
+Simple programs are more likely to be secure;
+simplicity helps to avoid bugs,
+and makes it easier to find those which creep in
+\cite[Theorem 1]{ches-smb-book}.
+% (see Theorem 1 in \cite{ches-smb-book}).
+We would like to keep our program simpler than
+the applications that would run under it.
+
+Another of our goals was {\sc versatility}.  We would like to be able
+to allow or deny individual system calls flexibly, perhaps
+depending on the arguments to the call.  For example, the {\tt open}
+system call could be allowed or denied depending on which file the
+application was trying to open, and whether it was for reading or for
+writing.
+
+Our third goal was {\sc configurability}.  Different sites have different
+requirements as to which files the application should have access, or
+to which hosts it should be allowed to open a TCP connection.
+In fact, our program ought to be configurable in this way even on a
+per-user or per-application basis.
+
+On the other hand,
+we did {\em not} strive for the criteria of safety
+or portability of applications.
+By {\em safety}, we mean 
+protecting the application from its own bugs.
+We allow the user to run any program he wishes, and we
+allow the executable to play within its own address space as much as it
+would like.
+
+We adopted for
+our program, then, a simple, modular design:
+\begin{itemize}
+\item a {\em framework}, which is the essential body of the program, and
+\item dynamic {\em modules}, used to implement various aspects of a
+configurable security policy by filtering relevant system calls.
+\end{itemize}
+
+The framework reads a configuration file, which can be site-,
+user-, or application-dependent.  This file lists which
+of the modules should be loaded, and may supply parameters to them.
+For example, the configuration line
+\begin{verbatim}
+    path allow read,write /tmp/*
+\end{verbatim}
+\noindent
+would load the {\tt path} module, passing it the parameters ``{\tt allow
+read,write /tmp/*}'' at initialization time.
+This syntax is intended to allow
+files under {\tt /tmp} to be opened for reading or writing.
+
+Each module filters out certain dangerous system call invocations,
+according to its area of specialization.
+When the application attempts a system call,
+the framework dispatches that information to relevant policy modules.
+Each module reports its opinion on whether the system call should
+be permitted or quashed,
+and any necessary action is taken by the framework.
+We note that, following the Principle of Least Privilege,
+we let the operating system execute a system call only
+if some module explicitly allows it;
+the default is for system calls to be denied.
+This behavior is important
+because it causes the system to err on the side of security
+in case of an under-specified security policy.
+
+Each module contains a list of system calls that it will
+examine and filter.
+Note that some system calls may appear in several modules' lists.
+A module may assign to each system call a function
+which validates the arguments of the call
+{\em before} the call is executed by the operating system.%
+\footnote{
+In addition, a module can assign to a system call a similar function
+which gets called {\em after} the system call has executed, just before
+control is returned to the helper application.  This function can examine the
+arguments to the system call, as well as the return value, and update the
+module's local state.
+}
+The function can then use this information
+to optionally update local state, and then
+suggest allowing the system call, suggest denying it,
+or make no comment on the attempted system call.
+% In the event that this function would always return the same value,
+% one can assign the value itself to the system call in place of the function.%
+
+The suggestion to allow is used to indicate a module's
+explicit approval of the execution of this system call.
+The suggestion to deny indicates a system call
+which is to be denied execution.
+Finally, a ``no comment'' response means that the
+module has no input as to the dispatch of this system call.
+
+Modules are listed in the configuration file from most
+general to most specific, so that the last relevant
+module for any system call dictates whether the call is to be
+allowed or denied.
+For example,
+a suggestion to allow countermands an earlier denial.
+Note that a ``no comment'' response has no effect:
+in particular, it does not override an earlier ``deny''
+or ``allow'' response.
+
+Normally, when conflicts arise,
+earlier modules are overridden by later ones.
+To escape this behavior,
+for very special circumstances
+modules may unequivocally allow or deny a system call
+and explicitly insist that their judgement be considered final.
+In this case, no further modules are consulted;
+a ``super-allow'' or ``super-deny'' cannot be overridden.
+The intent is that this feature should be used quite rarely,
+for only the most critical of uses.
+Write access to {\tt .rhosts} could be super-denied
+near the top of the configuration file, for example,
+to provide a safety net in case we
+accidentally miswrite a subsequent file access rule.
+
+In designing the framework we aimed for simplicity and
+versatility as much as possible,
+though these goals often conflict.
+One can imagine more versatile and sophisticated algorithms
+to dispatch system calls, but they would
+come at a great cost to simplicity.
+
+\section{Implementation}
+\label{implement}
+
+\subsection{Choice of operating system}
+
+In order to implement our design, we needed to find an operating system
+that allowed one user-level process to watch the
+system calls executed by another process, and to control the second process
+in various ways (such as causing selected system calls to fail).
+
+Luckily, most operating systems have a process-tracing facility,
+intended for debugging.
+Most operating systems offer a program called
+{\tt trace(1)}, {\tt strace(1)}, or {\tt truss(1)}
+which can observe the system calls performed by another process
+as well as their return values.
+This is often implemented with a special system call.
+{\tt ptrace(2)}, which
+allows the tracer to register a callback
+that is executed whenever the tracee issues a system call.
+Unfortunately, {\tt ptrace} offers only very coarse-grained
+all-or-nothing tracing:
+we cannot trace a few system calls without tracing all the rest as well.
+Another disadvantage of the {\tt ptrace(2)} interface is that many
+OS implementations provide no way for a tracing process
+to abort a system call without killing the traced process entirely.
+
+Some more modern operating systems, such as Solaris 2.4 and OSF/1,
+however, offer a better process-tracing
+facility through the {\tt /proc} virtual filesystem.
+This interface allows direct control of the traced process's memory.
+Furthermore, it has fine-grained control: we can request
+callbacks on a per-system call basis.
+
+There are only slight differences between the Solaris and the OSF/1
+interfaces to the {\tt /proc} facility.
+One of them is that Solaris
+provides an easy way for the tracing process to determine the arguments
+and return values of a system call performed
+by the traced process.
+Also, Solaris operating system is somewhat more widely deployed.
+For these reasons,
+we chose Solaris 2.4 for our implementation.
+
+\subsection{The policy modules}
+\subsubsection{Overview}
+
+The policy modules are used to select and implement security policy
+decisions.  They are dynamically loaded at runtime, so that different
+security policies can be configured for different sites, users, or
+applications.  We implemented a sample set of modules that can be used
+to set up the traced application's environment, and to
+restrict its ability to read or write
+files, execute programs, and establish TCP connections.
+In addition, the traced application is prevented from performing
+certain system calls, as described below.
+The provided modules offer considerable
+flexibility themselves, so that may configure them simply by editing
+their parameters in the configuration file.  However, if different
+modules are desired or required, it is very simple to compile new ones.
+
+Policy modules need to make a decision as to which system calls to
+allow, which to deny, and for which a function must be called to
+determine what to do.  The first two types of system calls are the
+easiest to handle.
+
+Some examples of system calls that are always allowed (in our sample
+modules) are {\tt close}, {\tt exit}, {\tt fork}, and {\tt read}.
+The operating system's protection on these system calls is
+sufficient for our needs.
+
+Some examples of system calls that are always denied (in our sample
+modules) are ones that would not succeed for an unprivileged process anyway,
+like {\tt setuid} and {\tt mount},
+along with some others, like {\tt chdir}, that we
+disallow as part of our security policy.
+
+The hardest system calls to handle are those for which a function must,
+in general, be called to determine whether the system call should
+be allowed or denied.
+The majority of these are system calls such as {\tt open},
+{\tt rename}, {\tt stat}, and {\tt kill}
+whose arguments must be checked against
+the configurable security policy specified in the parameters given
+to the module at load time.
+
+\subsubsection{Sample security policy}
+
+We implemented a sample security policy to test our ideas,
+as a proof of concept.
+
+Helper applications are allowed to {\tt fork} children,
+we then recursively trace.
+Traced processes can only send signals to themselves or
+to their children,
+and never to an untraced application.
+Environment variables are initially sanitized,
+and resource usage is carefully limited.
+
+In our policy, access to the filesystem is severely limited.
+A helper application is placed in a particular
+directory; it cannot {\tt chdir} out of this directory. 
+We allow it full access to files in or below this directory;
+to prevent escape from this sandbox directory,
+access to paths containing {\tt ..}\ are always denied.
+The untrusted application is allowed read access to certain
+carefully controlled files referenced by absolute pathnames,
+such as shared libraries and global configuration files.
+We concentrate all access control in the {\tt open} system call,
+and always allow {\tt read} and {\tt write} calls;
+this is safe, because {\tt write}
+is only useful when used on a file descriptor obtained from a system
+call like {\tt open}.
+This approach simplifies matters, and also allows us
+a performance optimization further down the line;
+see Section~\ref{optimizer}.
+
+Of course, protecting the filesystem alone is not enough.
+Nearly any practical helper application will require access
+to network resources.
+For example, all of the programs we considered need to open
+a window on the X11 display to present document contents.
+In our security policy, network access must be carefully controlled:
+we allow network connections only to the X display,
+and this access is allowed only through a safe X proxy.
+
+X11 does not itself provide the security services we require
+(X access control is all-or-nothing).
+A rogue X client has full access to all other clients on
+the same server, so an otherwise confined helper application
+could compromise other applications if it were allowed uncontrolled
+access to X.
+Fortunately the firewall community has already built several
+safe X proxies that understand the X protocol and filter out
+dangerous requests \cite{x11-proxy,xnest}.
+We integrated our Janus prototype with {\tt Xnest} \cite{xnest},
+which lets us run another complete instance
+of the X protocol under {\tt Xnest}.
+{\tt Xnest} acts as a server to its clients
+(e.g.\ untrusted helper applications),
+but its display is painted within one window managed by the
+root X server.
+In this way, untrusted applications are securely encapsulated
+within the child {\tt Xnest} server and cannot escape from
+this sandbox display area
+or affect other normal trusted applications.
+{\tt Xnest} is not ideal---it is not as small or simple
+as we would like---but further advances in X protocol
+filtering are likely to improve the situation.
+
+\subsubsection{Sample modules}
+
+Our modules implementing this sample policy are as follows.
+The {\tt basic} module supplies defaults for the system calls
+which are easiest to analyze, and takes no configuration parameters.
+The {\tt putenv} module allows one to specify environment variable
+settings for the traced application via its parameters;
+those which are not explicitly mentioned are unset.
+The special parameter {\tt display} causes the helper application
+to inherit the parent's {\tt DISPLAY}.
+The {\tt tcpconnect} module allows us to restrict TCP connections
+by host and/or port;
+the default is to disallow all connections.
+The {\tt path} module, the most complicated one, lets one
+allow or deny file accesses according to one or more patterns.
+
+Because this policy is just an example, we have not gone
+into excruciating detail regarding the specific policy
+decisions implemented in our modules.
+
+Our sample configuration file for this policy can be seen in
+Figure~\ref{sconfig} in the Appendix.
+
+\subsection{The framework}
+\subsubsection{Reading the configuration file}
+
+The framework starts by reading the configuration file, the location of
+which can be specified on the command line.  This configuration file
+consists of lines like those shown in Figure~\ref{sconfig}:
+the first word is the name of
+the module to load, and the rest of the line acts as a parameter to the
+module.
+
+For each module specified in the configuration file, {\tt dlopen(3x)}
+is used to dynamically load the module into the framework's address
+space.  The module's {\tt init()} function is called, if present, with
+the parameters for the module as its argument.
+
+The list of system calls and associated values and functions
+in the module is then
+merged into the framework's {\em dispatch table}.  The dispatch table is
+an array, indexed by system call number, of linked lists.  Each value
+and function in the module is appended to the list in the dispatch table
+that is indexed by the system call to which it is associated.
+
+The result, after the entire configuration file has been read, is that
+for each system call, the dispatch table provides a linked list
+that can be traversed to decide whether
+to allow or deny a system call.
+
+\subsubsection{Setting up the traced process}
+\label{setup}
+
+After the dispatch table is set up, the framework gets ready to run the
+application that is to be traced: a child process is {\tt fork()}ed,
+and the child's state is cleaned up.  This includes setting a {\tt
+umask} of 077, setting limits on virtual memory use, disabling core
+dumps, switching to a sandbox directory,
+and closing unnecessary file descriptors.
+Modules get a chance to further initialize the child's state;
+for instance, the {\tt putenv} module sanitizes the environment variables.
+The parent process waits for the child to complete this
+cleanup, and begins to debug the child via the {\tt /proc} interface.
+It sets the child process to stop whenever it begins or finishes a
+system call (actually, only a subset of the system calls are marked in
+this manner; see Section~\ref{optimizer}, below).
+The child waits until it is being traced, and executes the desired
+application.
+
+In our sample security policy, the application is confined
+to a sandbox directory.
+By default, this directory is created in {\tt /tmp} with a random name,
+but the {\tt SANDBOX\_DIR} environment variable can be used to
+override this choice.
+
+\subsubsection{Running the traced process}
+
+The application runs until it performs a system call.  At this point,
+it is put to sleep, and the tracing process wakes up.  The tracing
+process determines which system call was attempted, along with the
+arguments to the call.  It then traverses the appropriate linked list
+in the dispatch table, in order to determine
+whether to allow or to deny this system call.
+
+If the system call is to be allowed, the tracing process simply wakes up
+the application, which proceeds to complete the system call.
+If, however, the system
+call is to be denied, the tracing process wakes up the application with
+the {\tt PRSABORT} flag set.  This causes the system call to abort
+immediately, returning a value indicating that the system call failed
+and setting {\tt errno} to {\tt EINTR}.
+In either case, the tracing process goes back to sleep.
+
+The fact that an aborted system call returns {\tt EINTR} to the
+application presents a potential problem.  Some applications are coded
+in such a way that, if they receive an {\tt EINTR} error from a system
+call, they will retry the system call.
+Thus, if such a application tries to execute a
+system call which is denied by the security policy, it will
+get stuck in a retry loop.  We detect this problem by noticing when a
+large number (currently 100) of the same system call with the same
+arguments are consecutively denied.  If this occurs, we assume the
+traced application is not going to make any further progress, and just
+kill the application entirely, giving an explanatory message to the user.
+We would prefer to be able to return other error codes (such as {\tt
+EPERM}) to the application, but Solaris does not support that behavior.
+
+When a system call completes, the tracing process has the ability to
+examine the return value if it so wishes.  If any module had assigned
+a function to be executed when this system call completes, as described
+above, it is executed at this time.  This facility is not widely used,
+except in one special case.
+
+When a {\tt fork()} or {\tt vfork()} system call completes, the tracing
+process checks the return value and then {\tt fork()}s itself.  The child
+of the tracing process then detaches from the application, and begins
+tracing the application's child.  This method safely allows
+the traced application to spawn a child
+(as {\tt ghostview} spawns {\tt gs}, for example)
+by ensuring that all children of untrusted applications are traced as well.
+
+We have not aimed for extensive auditing, but logging of the
+actions taken by the framework would be
+easy to add to our implementation if desired.
+
+We should point out that the Solaris tracing facilities will not
+allow a traced application to {\tt exec()} a setuid program.
+Furthermore, traced programs cannot turn off their own tracing.
+
+\subsection{The optimizer}
+\label{optimizer}
+
+Our program has the potential to add a nontrivial amount of overhead
+to the traced application whenever it intercepts a system call.
+In order to keep this overhead down, we obviously want to intercept
+as few system calls as possible---or at least, as few of the common ones as
+possible.  However, we do not wish to give up security to gain
+performance.
+
+% In the event that this function would always return the same value,
+% one can assign the value itself to the system call in place of the function.%
+
+Therefore, we apply several optimizations to the system call dispatch
+table before the untrusted helper application executes.
+% at initialization time.
+We note that one common case arises when a module's system call
+handler always returns the same allow/deny value
+(and leaves no side effects);
+this special case allows us to remove redundant values in the dispatch table.
+
+The most important optimization observes that certain system calls,
+such as {\tt write}, are always allowed;
+so we need not register a callback with the OS for them.
+This avoids the extra context switches to
+and from the tracing process
+each time the traced application
+makes such a system call, and thus those system calls can execute at
+full speed as though there were no tracing or filtering.
+By eliminating the need to trace common system calls such as
+{\tt read} and {\tt write}, we can greatly speed up the common case.
+
+\section{Evaluation}
+\label{eval}
+
+The general population is more interested in efficiency
+and convenience than in security, so any security product intended
+for general use must address these concerns.
+For this reason, we evaluate our prototype implementation by a
+number of criteria,
+including security, applicability, and ease of use,
+in addition to performance.
+
+\subsection{Ease of use}
+
+The secure environment is relatively easy to install.
+All that is needed is to protect the invocation of any helper
+application with our environment.
+The most convenient solution is to specify our {\tt janus}
+program in a {\tt mailcap} file, which could look like
+	\begin{verbatim}
+	image/*; janus xv %s
+	application/postscript; janus ghostview %s
+	video/mpeg; janus mpeg_play %s
+	video/*; janus xanim %s
+	\end{verbatim}
+With little
+effort, a system administrator could set up the in-house security policy
+by listing {\tt janus} in the default global {\tt mailcap} file;
+then the secure environment
+would be transparent to all the users on the system.
+Similarly, users could protect themselves by doing the same
+to their personal {\tt .mailcap} file.
+
+\subsection{Applicability}
+
+Users will want to run our secure environment with
+pre-existing helper
+applications.
+We tested a number of programs under our secure environment,
+including
+{\tt ghostview},
+{\tt mpeg\_play},
+{\tt xdvi},
+{\tt xv}, and
+{\tt xanim}.
+Though we followed the Principle of Least Privilege and
+were very restrictive in our security policy,
+we found that each of the applications had sufficient
+privilege, and
+we had not unduly restricted the applications from doing
+their legitimate intended jobs.
+
+In addition, we ran the shells {\tt sh} and {\tt bash}
+under our secure environment.
+Unless the user explicitly tries to violate
+the security policy (e.g., by writing to {\tt .rhosts}),
+there is no indication of the restricted nature of the shell.
+Attempts to violate the security policy are rewarded
+with a shell error message.
+
+\subsection{Security}
+
+There is no universally accepted way to assess
+whether our implementation is secure;
+however, there are definite
+indications we can use to make this decision. 
+
+We believe in security through simplicity,
+and this was a guiding principle throughout the design
+and implementation process.
+Our entire implementation
+consists of approximately 2100 lines of code:
+the framework has 800, and the modules have the remaining 1300.
+Furthermore, 
+we have attempted to minimize the amount of security-critical
+state where possible.
+Since the design concept is a simple one, and because the entire
+program is small, the implementation is easier to understand and to
+evaluate.
+Thus, there is a much smaller chance of having an undetected security
+hole.
+
+We performed some simple sanity checks to verify that
+our implementation appropriately restricts applications.
+More work on assurance is needed.
+
+Most importantly, the best test is outside scrutiny
+by independent experienced security researchers;
+a detailed code review would help improve
+the assurance and security offered by our secure environment.
+All are encouraged to examine our implementation
+for flaws.
+
+\subsection{Performance}
+
+Since our design potentially adds time-consuming
+context switches for every system
+call the untrusted application makes, the obvious performance metric
+to evaluate is time.
+We measured the peak performance of {\tt ghostscript} and {\tt mpeg\_play},
+two large commonly used helper applications,
+under our secure environment.
+Note that {\tt mpeg\_play} in particular is performance critical.
+
+% FIX mpeg_play statistics (eek!)
+
+{\tt mpeg\_play} was used to display nine mpeg movies
+ranging in size from 53 KB (18 frames) to 740 KB (400
+frames).
+{\tt ghostscript} was used to display seven Postscript
+files ranging in size from 9 KB to 1.7 MB.
+{\tt ghostscript} was run non-interactively, so that
+all the pages in the Postscript file were
+displayed in succession with no user intervention.
+We took 100 measurements for each file, 50 traced under our
+secure environment and 50 untraced, calculating the
+mean and standard deviation for each set.
+The measurements were done using an unloaded single-processor
+SPARCstation 20 workstation running Solaris 2.4.
+%%Solaris 2.4 Operating System
+%%single T1 superSPARC processor at 50 MHz
+%%a level 1 cache
+%%no level 2 cache
+%%a mbus which is also clocked to 50 MHz
+%%48 MB of memory of which 40 MB are available for user applications
+The {\tt Xnest} X windows proxy \cite{xnest}
+was used with the secure environment,
+but not with the untraced measurements.
+
+The results are displayed in Figure~\ref{timings}.
+For each set, we plotted the traced time
+against the untraced time.\footnote{
+	Similar results were obtained when
+	measuring frame rate per second for {\tt mpeg\_play}.
+}
+The boxes around the data points indicate one standard deviation.
+The diagonal line shows the ideal result of no statistically
+significant performance overhead.
+In the best possible case,
+the error boxes will all intersect the ideal line.
+Boxes entirely above the line indicate statistically
+significant overhead.
+As can be seen,
+the secure environment imposes no significant
+performance penalty.
+	\begin{figure} % manual placement of the figure, sigh
+	\caption{
+	\label{timings}
+	Performance data for {\tt ghostscript} and {\tt mpeg\_play}}
+	\begin{center}
+	\ \psfig{file=chart1.ps,width=3.125in} 
+		\psfig{file=chart2.ps,width=3.125in}\ \ \ 
+	\end{center}
+	\vspace{-.5in}
+	\end{figure}
+
+The negligible performance impact can be attributed to
+the unintrusive nature of our implementation.
+Of course, all computations and memory references
+that do not involve the OS
+will execute at full speed, so system calls
+can be the only source of performance overhead.
+We first note that system calls are already so time-consuming
+that the additional overhead of the Janus process filtering
+is insignificant.
+Furthermore, most of the heavily used system calls
+(such as {\tt read} and {\tt write})
+require no access checks and therefore run at full speed.
+By staying out of the application's way and
+optimizing for the common case,
+we have allowed typical applications to run with
+negligible performance overhead.
+
+\section{Related work}
+\label{related}
+
+Due to the % fast and
+accelerated development of communication technology,
+the security and protection problems inherent in
+an open and free communication environment, such as the Internet,
+are relatively new ones to solve.
+Consequently, much of
+the work addressing security for this environment
+is still being developed.
+
+To achieve security,
+we use the concept of sandboxing,
+first introduced by Wahbe et al.\ in 
+the context of software fault isolation
+\cite{sfi}.
+However, they were actually solving a different problem.
+What they achieved was safety for trusted modules running in
+the same address space as untrusted modules.
+They ignored the problem of system-level security;
+conversely, we do not attempt to provide safety.
+They also use binary-rewriting technology
+to accomplish their goals,
+which prevents them from running arbitrarily general
+pre-existing applications.
+
+Java \cite{java} is an comprehensive system
+that addresses, among other things, both
+safety and security,
+although it achieves security by a different approach from ours.
+Java cannot secure pre-existing programs,
+because it requires use of a new language.
+We do not have this problem;
+our design will run any application, and so is more
+versatile in this respect.
+However, Java offers many other advantages that we do not address;
+for instance, Java provides architecture-independence,
+while Janus only applies to native code and provides no help
+with portability.
+
+OmniWare \cite{omni} takes advantage of software fault
+isolation techniques and compiler support
+to safely execute untrusted code.
+Like Java, it also has architecture-independence,
+extensibility, and efficiency as important goals.
+
+We note two important differences between the Java approach
+and the Janus philosophy.
+The Java protection mechanism is much more complex,
+and is closely intertwined with the rest of Java's other functionality.
+In contrast, we have more limited goals,
+explicitly aim for extreme simplicity,
+and keep the security mechanism orthogonal from
+the non-security-critical functionality.
+
+{\tt securelib} is a shared library that replaces
+the C {\tt accept}, {\tt recvfrom}, and {\tt recvmsg} library calls
+by a version that performs address-based authentication;
+it is intended to protect security-critical Unix system daemons
+\cite{securelib}.
+Other research that also takes advantage of shared libraries
+can be found in \cite{3d-1,3d-2}.
+We note that simple replacement of dangerous C library calls
+with a safe wrapper is insufficient in our extended context of
+untrusted and possibly hostile applications;
+a hostile application could bypass this access control
+by simply issuing the dangerous system call directly
+without invoking any library calls.
+
+Fernandez and Allen \cite{fernandez-allen} extend the
+filesystem protection mechanism
+with per-user access control lists.
+Lai and Gray \cite{lai-gray} describe an approach which protects against
+Trojan horses and viruses by limiting filesystem access:
+their OS extension confines user processes to the
+minimal filesystem privileges needed, relying on hints from
+the command line and (when necessary) run-time user input.
+TRON \cite{tron} discourages Trojan horses
+by adding per-process capabilities support to the filesystem
+discretionary access controls.
+These works all suffer two major disadvantages:
+they require kernel modifications, and they do not address
+issues such as control over process and network resources.
+
+Domain and Type Enforcement (DTE) is a way to extend
+the OS protection mechanisms to let system administrators
+specify fine-grained mandatory access controls
+over the interaction between security-relevant subjects and objects.
+% Objects are assigned types and subjects are given domains;
+% then the security policy is specified in a tabular format,
+% with access limited based on the relevant (domain,type) table entry.
+A research group at TIS has amassed considerable experience
+with DTE and its practical application to Unix systems
+\cite{dte-1,dte-2,dte-3,dte-4}.
+DTE is an attractive and broadly applicable
+approach to mandatory access control,
+but its main disadvantage is that it requires kernel modifications;
+we aimed instead for user-level protection.
+
+
+\section{Limitations and future work}
+\label{limit}
+
+\subsection{Limitations of the prototype}
+
+One inherent limitation of the Janus implementation
+is that we can only successfully run helper
+applications which do not legitimately need many privileges.
+Our approach will easily accommodate any program that only requires
+simple privileges, such as access to a preferences file.
+Application developers may want to keep this in mind and not assume,
+for example, that their applications will be able to access the whole
+filesystem.
+
+We have followed one simple direction in our
+prototype implementation, but others are possible as well.
+One could consider using specialized Unix system calls
+to revoke certain privileges.
+The two major contenders are {\tt chroot()}, to
+confine the application within a safe directory structure,
+and {\tt setuid()}, to change to a limited-privilege
+account such as {\tt nobody}.
+Unfortunately, programs need superuser privileges
+to use these features;
+since we were committed to a user-level implementation,
+we decided to ignore them.
+However, this design choice could be reconsidered.
+Other security policies (such as mandatory audit logs)
+may also be more appropriate in some environments.
+
+% Parts of the Solaris operating system, including TCP and UDP,
+% are accessed through a message-passing
+% interface; we have not yet implemented a proxy to handle this, but intend
+% to do so.
+
+% Another area not yet finished is the configuration
+% control problem for system administrators.
+% Some sysadmins will probably like to install
+% central default configurations for several popular
+% applications;
+% we have attempted to make this multiplexing easy,
+% without actually trying it out on a large system.
+
+% A possibility for future enhancement of our implementation is
+% to offer extensive auditing.
+% It would be conceptually simple to add logging and
+% accounting capabilities to our prototype,
+% and we plan to do so in the near future.
+
+
+The most fundamental limitation of our implementation,
+however, stems from its specialization for a single operating system.
+Each OS to which Janus might be ported
+requires a separate security analysis of its system calls.
+Also, a basic assumption of Janus is that the operating system
+provides multiple address spaces,
+allows trapping of system calls,
+and makes it feasible to interpose proxies where necessary.
+Solaris 2.4 has the most convenient support for these mechanisms;
+we believe our approach may also apply to
+some other Unix systems.
+On the other hand, platforms that do not support
+these services cannot directly benefit from our techniques.
+In particular, our approach cannot be applied to
+PCs running MS-DOS or Microsoft Windows.
+The utility of these confinement techniques, then, will be determined
+by the underlying operating system's
+support for user-level security primitives.
+
+\subsection{Future work}
+
+In this paper, we have limited discussion to the
+topic of protecting untrusted helper applications.
+It would also be interesting to explore how
+these techniques might be extended to a more ambitious scope.
+
+One exciting area for further research
+involves Java applet security.
+Java \cite{java} is seeing widespread deployment, but
+several implementation bugs \cite{java-bugs}
+have started to shake confidence in its security model.
+For more protection,
+one could run Java applets within a
+secure environment built from techniques described in this paper.
+This approach provides defense in depth:
+if the Java applet security mechanism is compromised,
+there is still a second line of defense.
+We are experimenting with this approach;
+more work is needed.
+
+Another natural extension of this work
+is to run web browsers under the Janus secure environment.
+The recursive tracing of child processes
+would ensure that running a browser under Janus
+would protect all spawned helper applications as well.
+The arguments which leave us suspicious of helper
+applications also apply to web browsers:
+they are large, complex programs that interpret
+untrusted network data.
+For example, a buffer overrun bug was found
+in an earlier version of the Netscape browser \cite{hack-netscape}.
+The main challenge is that browsers legitimately require many
+more privileges;
+for instance, most manage configuration files, data caches,
+and network connections.
+Of these, the broader network access seems to pose
+the most difficulties.
+
+% Other applications of these techniques are also possible.
+% For example, Janus would be appropriate for a
+% programming contest environment
+% in which contestants must have very restricted access
+% to the underlying system.
+
+We believe proxies are a promising approach for improving
+control over network accesses.
+By taking advantage of earlier work in firewalls,
+we were able to easily integrate a safe X proxy into our prototype.
+We have shown that one can
+guard access to system calls with a reference monitor
+constructed from process-tracing facilities;
+we suspect that one can effectively and flexibly
+guard access to the outside network with existing
+proxies developed by the firewall community.
+One issue is how to interpose proxies forcibly upon
+untrusted and uncooperative applications.
+We currently use environment variables as hints---for
+instance, we change the {\tt DISPLAY} variable to point
+to a proxy X server, and disallow access to any other
+X display---but this only works for well-behaved
+applications that consult environment variables consistently.
+One might consider implementing such hints
+with a shared library that replaces network
+library calls with a safe call to a secure proxy.
+
+So far we have followed the policy that a helper application
+should not be able to communicate with the outside network,
+since there are several subtle security issues with
+address-based authentication, trust perimeters, and covert channels
+\cite{java-bugs}.
+Integration with filtering proxies and
+fine-grained control over access to other network services,
+such as domain nameservers and remote web servers,
+would enable our techniques to be used in broader contexts.
+The overlap with research into firewalls
+lends hope that these problems can be solved satisfactorily.
+% we have some preliminary progress here,
+% but more research is called for.
+
+
+\section{Conclusion}
+\label{conc}
+
+% We set out to prove that our concept of confining
+% untrusted software and data can effectively provide
+% security at the user level.
+% Our approach appears feasible.
+% We fulfilled our goals of simplicity,
+% security, versatility, and configurability.
+% Performance measurements indicate no
+% significant overhead due to the secure environment.
+% %Performance was excellent---there was no statistically
+% %significant overhead.
+% Our evaluation indicated that the
+% approach is easy to use and widely applicable.
+
+We designed and implemented
+a secure environment for untrusted helper applications.
+We restrict an untrusted program's access to
+the operating system by using the
+process tracing facility available in Solaris 2.4.
+In this way, we have demonstrated the feasibility of
+building and enforcing practical security for
+untrusted helper applications.
+
+The Janus approach has two main advantages:
+% Our research contributions and philosophy can be summarized as
+\begin{itemize}
+\item The Janus protection mechanism is
+	{\em orthogonal} from other application functionality,
+	so our user-mode implementation is simple and clean.
+	This makes it more likely to be secure,
+	and allows our approach to be
+	broadly applicable to all applications.
+\item We can protect existing applications
+	with little performance penalty.
+\end{itemize}
+We feel that this effort is a valuable step toward
+security for the World Wide Web.
+
+% We have constructed a simple, clean, user-mode implementation
+% of a secure environment for untrusted
+% helper applications.
+%  by using the
+% process tracing facility available in Solaris 2.4.
+% In this way, we have demonstrated the feasibility
+% of building such an environment without kernel modifications
+% and of enforcing it with negligible performance impact.
+% We feel that this effort is a valuable step toward
+% security for the World Wide Web.
+% enabling users to execute untrusted applications
+% on unauthenticated network data securely.
+
+% In summary, by using the Solaris process tracing facilities,
+% we were able to construct a practical secure environment
+% for untrusted helper applications.
+
+%% In the past, we were forced to trust untrustworthy programs;
+%% now, with our novel approach to this problem,
+%% we can protect ourselves against this threat.
+
+\section{Availability}
+
+The Web page \\
+\centerline{\tt http://www.cs.berkeley.edu/\~{}daw/janus/}
+will contain more information on availability of the
+Janus software described in this paper.
+
+\section{Acknowledgements}
+
+We would like to thank Steven Bellovin, David Oppenheimer,
+Armando Fox, Steve Gribble, and the anonymous reviewers
+for their helpful comments.
+
+% \clearpage % HACK
+
+{ % \small
+\bibliography{main}
+
+{\em Note:\,\,}
+CERT advisories are available on the Internet from \\
+{\tt ftp://info.cert.org/pub/cert\_advisories/}.
+
+8lgm advisories can be obtained from \\
+{\tt http://www.8lgm.org/advisories/}.
+}
+
+% The following articles are published on the Internet:
+% \begin{itemize}
+% % \item[\cite{mjr-thinking-firewalls}]
+% %   {\tt http://www.telstra.com.au/pub/docs/security/firewalls.ps.Z}
+% % \item[\cite{tron}]
+% %   {\tt http://www.cs.washington.edu:80/homes/speed/papers/tron/tron/tron.html}
+% \item[\cite{java}]
+%  {\tt http://www.javasoft.com/whitePaper/javawhitepaper\_1.html}
+% \item[\cite{uphoff-gs}]
+  % {\tt http://www.eecs.nwu.edu/cgi-bin/mfs/files2/jmyers/public\_html/bugtraq/0166.html?30\#mfs}
+% \item[\cite{wet-gs}]
+  % {\tt http://www.eecs.nwu.edu/cgi-bin/mfs/files2/jmyers/public\_html/bugtraq/1995a/0759.html?30\#mfs}
+% % \item[\cite{xnest}]
+% %  {\tt ftp://ftp.cs.umass.edu/pub/rcf/exp/X11R6/xc/programs/Xserver/hw/xnest}
+% \end{itemize}
+
+
+
+
+
+
+
+
+
+
+
+
+
+\onecolumn
+\appendix
+
+\begin{figure}
+% \begin{figure}[p]
+\caption{\label{sconfig} Sample configuration file}
+\small
+\begin{verbatim}
+basic
+
+putenv display
+putenv HOME=. TMP=. PATH=/bin:/usr/bin:/usr/ucb:/usr/local/bin:/usr/local/X11/bin
+:/usr/bin/X11:/usr/contrib/bin:/usr/local/bin XAUTHORITY=./.Xauthority LD_LIBRARY
+_PATH=/usr/local/X11/lib
+
+tcpconnect allow display
+
+path super-deny read,write,exec */.forward */.rhosts */.klogin */.ktrust
+
+# this is the paradigm to deny absolute paths and allow relative paths
+# (of course, we will later allow selected absolute paths)
+# assumes someone will put us in a safe sandboxed dir.
+# note that the wildcard `*' can match anything, including /
+path allow read,write *
+path deny read,write /*
+
+# allow certain explicit paths
+path allow read /dev/zero /dev/null /etc/netconfig /etc/nsswitch.conf /etc/hosts 
+/etc/resolv.conf /etc/default/init /etc/TIMEZONE /etc/magic /etc/motd /etc/servic
+es /etc/inet/services /etc/hosts /etc/inet/hosts
+
+# note: subtle issues here.
+# make sure tcpconnect is loaded, to restrict connects!
+# /dev/ticotsord is the loopback equivalent of /dev/tcp.
+path allow read,write /dev/tcp /dev/ticotsord
+
+# where libraries live; includes app-defaults stuff too
+path allow read /lib/* /usr/lib/* /usr/local/X11/lib/* /usr/local/X11R6/lib/* /us
+r/share/lib/zoneinfo/* /usr/local/lib/* /usr/openwin/lib/*
+
+# these are here so you can read the files placed by Netscape and Mosaic
+path allow read /var/tmp/* /tmp/*
+
+# this is where binaries live; it should look a lot like your PATH
+path allow read,exec /bin/* /usr/bin/* /usr/ucb/* /usr/local/bin/* /usr/local/X11
+/bin/* /usr/bin/X11/* /usr/contrib/bin/* /usr/local/bin/*
+\end{verbatim}
+\end{figure}
+
+\end{document}
+@
+
+
+1.1.1.1
+log
+@Adding in my master's to CVS control.
+This version reflects the draft that I gave to Eric (I think).
+
+@
+text
+@@

@@ -1,0 +1,217 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.12.09.06.36.30;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Added some files that implement the command parser and helper
+functions.
+@
+text
+@/*
+ * http_html_parse.h
+ *
+ * This file contains the function declarations for the 
+ * HTTP and HTML parsing functionality needed to
+ * extract out parameters, commands, and cookies from client or
+ * economic agent submissions.
+ */
+
+#ifndef HTTP_HTML_PARSE_H
+#define HTTP_HTML_PARSE_H
+
+#define PARSE_OK 0
+#define PARSE_FAIL 1
+
+/* 
+ * function: parse_http_header
+ * 
+ * This function reads data from a socket, and splits it into the HTTP
+ * header block, and any leftover data that it happened to read in the
+ * process.
+ * 
+ *  arguments: 
+ *      - "socket" is a file descriptor for a socket from which we'll
+ *        read the data
+ *      - "header" is a pointer to a buffer that we'll allocate that
+ *        will contain the HTTP headers, including the terminating
+ *        "\r\n\r\n".  The caller must free this buffer.  This buffer
+ *        will be NULL terminated.
+ *      - "header_len" contains the length of the HTTP headers that we parsed,
+ *        not including the NULL terminator.
+ *      - "leftover" will contain any extra data that we read from the
+ *        socket while parsing the headers.  This buffer is NOT necessarily
+ *        NULL terminated.  The caller must free this buffer. 
+ *      - "leftover_len" contains the length of the leftover buffer.  If
+ *        the returned leftover_len is 0, then "leftover" is NULL, and is
+ *        not an allocated buffer.
+ * 
+ * return values:
+ *      - returns PARSE_OK on success, PARSE_FAIL on failure.  On failure,
+ *        no buffers will be allocated, and header_len and leftover_len will
+ *        be undefined.
+ *
+ * reentrancy:
+ *   - fully reentrant
+ */
+int parse_http_header(int socket, char **header, int *header_len,
+		      char **leftover, int *leftover_len);
+
+
+/* 
+ * function: scan_through_header
+ *
+ * This function scans through an HTTP header block and pulls out juicy
+ * information that we want for later.
+ *
+ * arguments:
+ *    - "header" is the HTTP header block of length "header_len".  "header"
+ *      should be NULL-terminated.
+ *    - "method" will be set to one of HEADER_GET, HEADER_POST, or
+ *      HEADER_UNKNOWN depending on the particular method observed
+ *    - "url" will be allocated and set to the full URL (NULL-terminated) 
+ *      seen in the first line of the headers, and "url_len" will be set to
+ *      its length, not including the NULL-term.
+ *    - "content_length" will be the value of the 'Content-length: ' HTTP
+ *      header, or it will be set to -1 if this header doesn't exist.
+ *
+ * return values:
+ *    - returns PARSE_OK on success, PARSE_FAIL on failure.  On failure,
+ *      "url" will NOT be allocated.
+ * 
+ * reentrancy:
+ *    - fully reentrant
+ */
+
+#define HEADER_GET 1
+#define HEADER_POST 2
+#define HEADER_HEAD 3
+#define HEADER_UNKNOWN 4
+
+int scan_through_header(char *header, int header_len,
+			int *method,
+			char **url, int *url_len,
+			int *content_length);
+
+/*
+  function: get_rest_of_data
+
+  This function will read "chars_left_to_read" more characters from the
+  socket "socket", and append them to the buffer "leftover_buffer".  There
+  are "leftover_len" characters in the buffer to begin with.  If 
+  "leftover_len" is initially 0, then "leftover_buffer" should be NULL,
+  otherwise "leftover_buffer" should contain the characters already read.
+
+  return values:
+    - returns PARSE_OK on success, PARSE_FAIL on failure.  On failure,
+      the buffers will not have been modified.
+    - on success, leftover_buffer will contain all of the data, and
+      letover_len will be modified to contain the total length.
+
+ */
+
+int get_rest_of_data(int socket,
+		     char **leftover_buffer,
+		     int *leftover_len,
+		     int chars_left_to_read);
+
+/*
+ * function: parse_URL
+
+ * This function will accept the URL submitted by a client, and
+ * parse out the COOKIE and command from that URL.
+ *
+ * arguments:
+     - "url" is the NULL-terminated URL
+     - "cookie" will be a pointer into "url", as will be "command"
+ * 
+ * side effects:
+ *   - the passed-in buffer "url" will be modified so that the "cookie"
+ *     and "command" fields are separated by a NULL-terminator.
+ *
+ * return values:
+ *   - PARSE_OK on success, PARSE_FAIL on failure.  On failure, the
+ *     "url" will be unmodified.
+ */
+
+int parse_URL(char *url,
+	      char **cookie,
+	      char **command);
+
+/* 
+ * function: add_name_value_to_buffer
+ *
+ * Given NULL-terminated strings "name" and "value", add the
+ * string "name=value\r\n" to the buffer "buffer".
+ * 
+ * "buf_len" should be set to the length of the buffer on input,
+ * and is changed to be the new length of the buffer on output.
+ * 
+ * returns PARSE_OK on success, PARSE_FAIL on failure.
+ *
+ * add_string_to_buffer is the same, but it just adds a single string.
+ */
+
+int add_name_value_to_buffer(char **buffer, int *buf_len,
+			     char *name, char *value);
+
+int add_string_to_buffer(char **buffer, int *buf_len,
+			 char *string);
+
+/*
+ * function: create_response_header
+ *
+ * This function will create and prepend a valid HTTP response header to
+ * the beginning of the existing data buffer.  "response_value" should
+ * be the response value declaration, i.e. "200 OK" or "500 Bad karma".
+ * "content-type" should be the content type of the returned data,
+ * e.g. "text/html" or "text/plain".  This function will deduce the
+ * content-length from the length of the buffer, and insert that header as
+ * well.
+ * 
+ * This function uses realloc to grow the buffer as appropriate.
+ */
+
+int prepend_response_header(char **buffer, int *buf_len,
+			    char *response_value,
+			    char *content_type);
+
+
+
+/* 
+   This function scans through a buffer and pulls out the next
+   URL-encoded name/value pair, after de-URL encoding it. 
+
+   arguments:
+     - on success, "name" will be allocated and set to the name
+     - on success, "value" will be allocated and set to the value
+     - on success, "next_buffer" will be set to the first byte
+       after the "name=value" pair. 
+  
+   On failure, this returns PARSE_FAIL and does nothing with buffers, and
+   allocates nothing.
+
+   On success, this returns PARSE_OK
+*/
+
+int scan_name_value(char *buffer,
+		    char **name, char **value,
+		    char **next_buffer);
+		    
+
+#endif
+
+@

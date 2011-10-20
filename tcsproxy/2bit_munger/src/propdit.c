@@ -1,0 +1,149 @@
+/*
+ *	propdit -
+ *		general propagation dither support.
+ *
+ *			Paul Haeberli - 1993
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include "propdit.h"
+
+#define random lrand48
+
+#define NLEVELS		4
+#define NOISEMAG	6
+#define NOISECUTIN	6
+#define NOISEPATS	500
+
+static int levels[NLEVELS] = { 0, 85, 170, 255 };
+static short qlevels[256];
+static short qerrors[256];
+static short donoise[256];
+static int inited;
+
+static void initthresh(void)
+{
+    int i, l, e, beste, bestl;
+
+    if(inited)
+	return;
+    for(i=0; i<256; i++) {
+	beste = 256;
+	for(l=0; l<NLEVELS; l++) {
+	    e = i-levels[l];
+	    if(e<0) e = -e;
+	    if(e<beste) {
+		beste = e;
+		bestl = levels[l];
+	    }
+	}
+	if(beste<NOISECUTIN)
+	    donoise[i] = 0;
+	else
+	    donoise[i] = 1;
+	qlevels[i] = bestl;
+	qerrors[i] = i-bestl;
+    }
+    inited = 1;
+}
+
+/*
+ *	noise adding stuff follows . . . 
+ *
+ */
+static void noiseset(propdit *pd, int *buf, int n, int mag)
+{
+    while(n--) 
+	*buf++ = (random()%((mag<<1)+1))-(mag);
+}
+
+/*
+ *	2 weight dither
+ *
+ */
+void propditrow(propdit *pd, short *buf, short *obuf)
+{
+    int i, p, n;
+    int rerror, rwant;
+    int *nptr;
+    int *error0, *error1;
+
+    n = pd->xsize;
+    nptr = pd->noise+(random()%NOISEPATS);
+    if(pd->cury&1) {
+	error0 = pd->err0+1;
+	error1 = pd->err1+1;
+	for(i=0; i<n; i++ ) {
+	    rerror = (error1[i-1]+error0[i])>>1;
+	    if(donoise[*buf])
+		rwant = *buf++ + rerror + *nptr++;
+	    else
+		rwant = *buf++ + rerror;
+	    p = rwant;
+	    if(p>255) 
+		p = 255;
+	    else if(p<0) 
+		p = 0;
+	    *obuf++ = qlevels[p];
+	    error1[i] = qerrors[p];
+	}
+    } else {
+	error0 = pd->err1+1;
+	error1 = pd->err0+1;
+	buf += (n-1);
+	obuf += (n-1);
+	for(i=n; i--;) {
+	    rerror = (error1[i+1]+error0[i])>>1;
+	    if(donoise[*buf])
+		rwant = *buf-- + rerror + *nptr++;
+	    else
+		rwant = *buf-- + rerror;
+	    p = rwant;
+	    if(p>255) 
+		p = 255;
+	    else if(p<0) 
+		p = 0;
+	    *obuf-- = qlevels[p];
+	    error1[i] = qerrors[p];
+	}
+    }
+    pd->cury++;
+}
+
+propdit *newpropdit(int xsize)
+{
+    propdit *pd;
+    int n, *nptr;
+
+    initthresh();
+
+/* make a new propdit structure for this width */
+    pd = (propdit *)malloc(sizeof(propdit));
+    pd->xsize = xsize;
+    pd->cury = 0;
+
+/* generate a vector of noise */
+    n = NOISEPATS+pd->xsize+2;
+    pd->noise = (int *)malloc(n*sizeof(int));
+    nptr = pd->noise;
+    while(n--)
+        *nptr++ = (random()%((NOISEMAG<<1)+1))-(NOISEMAG);
+
+/* allocate and init two error vectors */
+    pd->err0 = (int *)malloc((xsize+2)*sizeof(int));
+    pd->err1 = (int *)malloc((xsize+2)*sizeof(int));
+    noiseset(pd,pd->err0,xsize+2,20);
+    noiseset(pd,pd->err1,xsize+2,20);
+    return pd;
+}
+
+void freepropdit(propdit *pd)
+{
+    if(pd->err0)
+	free(pd->err0);
+    if(pd->err1)
+	free(pd->err1);
+    if(pd->noise)
+	free(pd->noise);
+    free(pd);
+}

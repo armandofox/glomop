@@ -1,0 +1,865 @@
+head	1.23;
+access;
+symbols
+	Yatin-final:1.22.2.1
+	Yatin:1.22.0.2
+	pre-yatin-merge:1.22
+	transend-beta2:1.11
+	fox-dev:1.11
+	transend-beta-latest:1.5
+	Aggregators:1.5
+	NoAggregators:1.5
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.23
+date	98.01.16.22.16.35;	author yatin;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.10.30.17.03.24;	author iang;	state Exp;
+branches
+	1.22.2.1;
+next	1.21;
+
+1.21
+date	97.10.26.00.34.00;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.10.18.00.26.50;	author iang;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	97.10.16.02.58.18;	author iang;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.10.08.01.27.22;	author iang;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.09.24.00.14.46;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.09.22.20.33.40;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.09.12.03.13.52;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.12.01.57.40;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.09.10.02.26.27;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.09.06.01.08.59;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.07.30.02.28.26;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.07.25.01.06.42;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.07.24.03.19.08;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.07.15.02.43.21;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.07.03.18.07.21;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.06.12.18.31.55;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.15.06.11.28;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.05.14.23.37.24;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.11.10.25.34;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.11.03.03.59;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.10.07.17.21;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.05.10.07.17.21;	author fox;	state Exp;
+branches;
+next	;
+
+1.22.2.1
+date	97.12.01.22.19.40;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.23
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@package clib;
+
+require Exporter;
+require DynaLoader;
+
+@@ISA = qw(Exporter DynaLoader);
+# Items to export into callers namespace by default. Note: do not export
+# names by default without a very good reason. Use EXPORT_OK instead.
+# Do not simply export all your public functions/methods/constants.
+@@EXPORT = qw(
+        Options_Find
+        MonitorClient_Send
+
+        Clib_Fetch
+	Clib_Redir_Fetch
+	Clib_Async_Fetch
+        Clib_Push
+        Clib_Query
+	Clib_Post
+
+        InitializeDistillerCache
+        Distill
+	DistillAsync
+	DistillRendezvous
+	DistillDestroy
+        make_argument     
+);
+
+=head1 NAME
+
+clib - TACC server interface for Perl workers
+
+=head1 SYNOPSIS
+
+       use clib;
+
+       &MonitorClient_Send($fieldname, $fieldvalue, $proc);
+
+       ($status,$headers,$data) = &Clib_Fetch($url,$client_headers);
+       $status = &Clib_Async_Fetch($url,$client_headers);
+       ($status,$headers,$data) = &Clib_Post($url,$client_headers,
+					      $data,$data_len);
+       $status = &Clib_Push($url,$server_headers,$data);
+       $status = &Clib_Query($url);
+
+=head1 DESCRIPTION
+
+=head2 Getting Configuration Options
+
+=over 4
+
+=item $val = &Options_Find($key)
+
+Returns the string value of the option named by $key in the current
+options file.  Currently, an empty string is returned if the option is
+not defined, or is defined to have the empty string as its value.  (This
+could be considered a bug; undefined options should really return
+undef.  Tough beans.)
+
+=back
+
+=head2 Using the GUI Monitor
+
+=over 4
+
+=item &MonitorClient_Send($field,$val,$proc)
+
+Cause the GUI monitor to display $val in field $field of this worker's
+monitor pane.  Display occurs according to $proc, which can  be one of
+the built-in monitor behaviors ("Log", "TimeChart", etc.) or a Tcl
+procedure that defines a monitor extension. See the monitor
+documentation for more details.
+
+=back
+
+=head2 Cache Access Methods
+
+For all methods that access the cache (Clib_*), $headers should have the
+following properties or 
+badness 10000 will occur:
+
+=over 4
+
+=item *
+
+Server headers (but not client headers) should begin with the server
+status line, e.g. "HTTP/1.0 200 OK".
+
+=item *
+
+Headers should be separated by CR+LF.
+
+=item *
+
+A blank line (i.e. two consecutive CR+LF's) should end the headers.
+
+=back
+
+Data is returned as a scalar.  Status code is an integer, as defined
+in F<clib.h>.
+
+C<Clib_Push> pushes the given data and headers into the cache, and keys
+them to the given URL.  The status codes returned are defined in
+F<clib.h> and available as &CLIB_OK, etc. from Perl; generally, any
+nonzero status indicates an error.
+
+C<Clib_Query> checks whether something is in the cache without actually
+retrieving it.  In the current implementation this requires a full TCP
+transaction, so the time savings  compared to just fetching the data
+outright depends heavily on how far away the data is.  It returns 
+either &CLIB_CACHE_HIT or &CLIB_CACHE_MISS if the check succeeds, or
+some error otherwise.
+
+=cut
+
+if (!defined $main::DEBUGGING && !defined $ENV{'CLIB_DEBUGGING'}) {
+
+   bootstrap clib;
+
+  # Preloaded methods go here.
+  # Autoload methods go after __END__, and are processed by the autosplit program.
+
+} else {
+
+  ## Debugging mode:  emulate Clib_* functions
+
+    use LWP;
+    use MD5;
+
+    $UA = new LWP::UserAgent or die "Couldn't create LWP::UserAgent";
+    $UA->use_alarm(0);
+    $UA->use_eval(1);
+    #  create a working directory...
+
+    $clib::username = (getpwuid($<))[0] || "user";
+    $tmpdir = "/tmp/clib_debug.$username";
+    unless (-d $tmpdir && -w $tmpdir) {
+        mkdir $tmpdir,0777 or die "Failed to make directory $tmpdir: $!";
+    }
+
+    sub MonitorClient_Send {
+        my($field,$val,$proc) = @@_;
+        warn "$field: $val \[$proc\]\n";
+    }
+
+    sub Options_Find {
+        my $opt = shift;
+        unless (defined %clib::Options) {
+            my $filename = $ENV{'GM_OPTIONS'} || "gm_options.$clib::username";
+            open(F, $filename)
+                or open(F, $filename = "../$filename")
+                    or die ("No options file $filename (even tried in cwd); " .
+                            "set the GM_OPTIONS envariable to point to one\n");
+            $clib::Options{"global.optfile"} = $filename;
+            while (<F>) {
+                chomp;
+                $clib::Options{$1} = $2
+                    if /^([^:]+):\s*(.*\S)\s*$/;
+            }
+            close F;
+        }
+        return $clib::Options{$opt} || "";
+    }
+
+        
+
+    sub get_key {
+        my $url = shift;
+        return substr(MD5->hexhash($url),16);
+    }
+
+    sub Clib_Async_Fetch {
+        return (&Clib_Fetch(@@_))[0];
+    }
+
+    sub Clib_Fetch {
+        my ($url,$hdrs) = @@_;
+        my $key = &get_key($url);
+
+        if (-r "$tmpdir/$key" && -r "$tmpdir/${key}.h") {
+            my ($data);
+            open (F, "$tmpdir/${key}.h");
+            $hdrs = '';
+            $hdrs .= $_ while <F>;
+            close F;
+            open(F, "$tmpdir/$key");
+            $data .= $_ while <F>;
+            close F;
+            return (0, $hdrs,$data);
+        }
+        if ($hdrs) {
+            my %hdrs = split(/((?=^\S+):\s+)|([\r\n]+)/, $hdrs) ;
+            $hdrs = new HTTP::Headers(%hdrs);
+        } else {
+            $hdrs = new HTTP::Headers;
+        }
+        my $req = new HTTP::Request ("GET",$url,$hdrs);
+
+        my $result = $UA->request($req);
+        my $ret_hdrs = join("\r\n", (join(' ', $result->code, $result->message)),
+                            $result->headers_as_string)
+            . "\r\n";
+        my $data = $result->content;
+        if ($result->is_success && $url !~ /^file:/) {
+            &Clib_Push($url, $ret_hdrs, $data);
+        }
+        return (0, $ret_hdrs, $data);
+    }
+
+    sub Clib_Redir_Fetch {
+	my ($url, $hdrs, $num_redirs) = @@_;
+	my @@ret;
+
+	if ($num_redirs <= 0) {
+	    return &Clib_Fetch($url, $hdrs);
+	}
+	while($num_redirs--) {
+	    @@ret = &Clib_Fetch($url, $hdrs);
+	    return @@ret if ($ret[0] != 0);
+	    $ret[1] =~ /^\S+ 3/ || return @@ret;
+	    if ($ret[1] =~ /\nlocation: ([^\r\n]*)/ios) {
+		$url = 1;
+	    } else {
+		return @@ret;
+	    }
+	}
+	@@ret;
+    }
+
+    sub Clib_Query {
+        my ($url);
+        my $key = &get_key($url);
+        
+        return ( -r "$tmpdir/$key" && -r "$tmpdir/${key}.h"
+                ? 1                             # CACHE_HIT
+                : 2                             # CACHE_MISS
+                );
+    }
+
+    sub Clib_Push {
+        my ($url,$hdrs,$data) = @@_;
+        my $key = &get_key($url);
+
+        open(F, ">$tmpdir/$key");
+        print F $data;
+        close F;
+
+        open(F, ">$tmpdir/${key}.h");
+        print F $hdrs;
+        close F;
+    }
+
+    sub InitializeDistillerCache {
+	1;
+    }
+
+    sub make_argument {
+	my ($type,$num,$val) = @@_;
+	$type.$num."=".$val;
+    }
+
+    sub Distill {
+	my ($MimeType, $distiller, $Metadata, $Data, @@args) = @@_;
+	my ($result, $outData, $outMetadata);
+	my ($tfname);
+
+	chomp $Metadata;
+	print STDERR "***DISTILLER***\n\nHeaders:\n${Metadata}\n.\nArgs: ";
+	print STDERR join(' ',@@args), "\n";
+
+	$tfname = "/tmp/distiller.$$";
+	open(T, ">$tfname") or die "Cannot write to $tfname: $!\n";
+	print T $Data;
+	close(T);
+
+	print STDERR "Data of type \"$MimeType\" written to \"$tfname\".\n" .
+	    "Please distill it using the \"$distiller\" distiller\n" .
+	    "and write the results to ".
+	    "\"${tfname}.OUT\".\nWhen that is done, enter the new headers.\n" .
+	    "End with \"#n\", where n is the return code:\n";
+	$outMetadata = '';
+	while(<STDIN>) {
+	    if (/^\#(\d+)$/) {
+		$result = $1;
+		last;
+	    }
+	    $outMetadata .= $_;
+	}
+	$outData = '';
+	open (T, "<${tfname}.OUT") or
+	    warn "Could not read ${tfname}.OUT: $!\n";
+	$outData = join('',<T>);
+	close(T);
+
+	unlink $tfname;
+	unlink $tfname.".OUT";
+
+	($result, $outData, $outMetadata);
+    }
+
+    sub DistillAsync {
+	my ($MimeType, $distiller, $Metadata, $Data, @@args) = @@_;
+	return (0, [$MimeType, $distiller, $Metadata, $data, @@args]);
+    }
+
+    sub DistillRendezvous {
+	my ($req, $timeout) = @@_;
+	&Distill(@@$req);
+    }
+
+    sub DistillDestroy {
+	my ($req) = @@_;
+	0;
+    }
+}
+
+1;
+__END__
+@
+
+
+1.22
+log
+@o Preserve aspect ratio when pinning verybest images
+o Enable clib debugging from env vars so you can do:
+    CLIB_DEBUGGING=1 perl -cw -I ../xs/lib foo.pl
+@
+text
+@d23 3
+d299 15
+@
+
+
+1.22.2.1
+log
+@Added DistillAsync and friends
+@
+text
+@a22 3
+	DistillAsync
+	DistillRendezvous
+	DistillDestroy
+a295 15
+    }
+
+    sub DistillAsync {
+	my ($MimeType, $distiller, $Metadata, $Data, @@args) = @@_;
+	return (0, [$MimeType, $distiller, $Metadata, $data, @@args]);
+    }
+
+    sub DistillRendezvous {
+	my ($req, $timeout) = @@_;
+	&Distill(@@$req);
+    }
+
+    sub DistillDestroy {
+	my ($req) = @@_;
+	0;
+@
+
+
+1.21
+log
+@TACCutils make_prefs_form now allows prefs form to be filled in with
+existing user profile args.  added correct emulation of getting the
+optoins filename to clib.pm.
+@
+text
+@d113 1
+a113 1
+if (!defined $main::DEBUGGING) {
+@
+
+
+1.20
+log
+@Added Clib_Redir_Fetch
+@
+text
+@d148 4
+a151 3
+                or open(F, "../$filename")
+                    or die ("No options file $filename or ../$filename; " .
+                            "you can set the GM_OPTIONS envariable to point to one\n");
+@
+
+
+1.19
+log
+@various bugfixes, etc.
+@
+text
+@d15 1
+d204 20
+@
+
+
+1.18
+log
+@The clib harness now does something sensible (as opposed to refusing to run)
+with inter-distiller calls.
+Also, layout improvement
+@
+text
+@d243 2
+a244 1
+	print STDERR "***DISTILLER***\n\nHeaders:\n${Metadata}\n.\n\n";
+@
+
+
+1.17
+log
+@kwhilite* files modified for in-class examples. Distill() functionality
+in clib.xs still not quite working - this commit will allow me to move
+it to purify.  Added stuff to perl_stub makefile so that libperl.so's
+directory is added to runtime dynamic lib path.
+@
+text
+@d227 47
+@
+
+
+1.16
+log
+@still testing Distill() perl calls; minor fixes to TACCutils
+@
+text
+@d20 1
+@
+
+
+1.15
+log
+@Optimizations to Pilot distiller:
+- 'wx' and 'string_width' optimized, since profiler indicated a lot of
+time was being spent there.
+- postprocessed images are now cached during processing of the same
+page, so addditional instances of an inline image are free.
+- Clib_Async_Fetch is now used in the distiller to prefetch images, so
+they'll be in the cache when we're ready to distill them.
+Also: added 'canonicalize' routine (to TACCutils) for canonicalizing
+relative urls, fixed some perl warnings in PilotFonts and SimpleFont.
+@
+text
+@d13 1
+d19 3
+@
+
+
+1.14
+log
+@Added Clib_Async_fetch to clib.c, clib.h, and to the xs glue.
+@
+text
+@d171 1
+a171 1
+            my ($hdrs,$data);
+d173 1
+a180 1
+        my $hdrs;
+@
+
+
+1.13
+log
+@tims config file
+@
+text
+@d14 1
+d31 1
+d160 4
+@
+
+
+1.12
+log
+@Removed compile time dependencies: proxy.home and proxy.perlmod are now
+config file options, so perl_stub doesn't need to know them at compile
+time (it constructs the -I path at runtime from the options file
+values).  Options_Find() has been exported to Perl (in
+clib.xs) and is emulated for the harness (in clib.pm).  pilotFonts
+directory was added for wingman distiller.  PilotFonts module now has an
+explicit init_fonts() call that supplies the dir name containing the
+pilot fonts.  Added documentation to clib.pm, TACCutils.pm,
+PilotFonts.pm and SimpleFont.pm.  removed all path-related dependencies
+in existing distillers and unpack_tstr.pl, and added font path error
+checking to layout.tcl
+@
+text
+@d188 1
+a188 1
+        if ($result->is_success) {
+@
+
+
+1.11
+log
+@Toplevel Makefile slimmed down.  lib/ subdir and corresponding install
+targets added, to prep for binary dist.  client_lib now has
+strerror()-style error reporting.  Fixed bug in dispatch.c that caused
+prefs call for an aggregator to coredump (strcpy called on null ptr).
+text/html distiller more streamlined and correctly "munges" user prefs
+form items.  GetOptions moved from clib to TaccUtils.  perl_stub now
+passes arguments named "s11", "i2", etc. instead of "11", "2", etc.
+@
+text
+@d11 1
+d37 14
+d124 1
+a124 1
+    $username = 'fox';
+d134 20
+@
+
+
+1.10
+log
+@temporary commit so anthony can make; still tracking memory bug interaction frontend/clientlib
+@
+text
+@a10 1
+        GetOptions
+a27 2
+       $optionValue = &GetOptions($optionName);
+
+a49 15
+=head2 Using the Options File
+
+=over 4
+
+=item $optionValue = &GetOptions($optionName);
+
+Returns the value of $optionName from the configuration file that this
+worker was started with.  Particularly useful in writing a service
+presentation worker (i.e. an munger that marks up HTML to allow the user
+to interact with the service) are options such as
+"frontend.prefsFormDisplayUrl", which gives the URL that will cause the
+user preferences form to be fetched, etc.
+
+=back
+
+a88 18
+
+sub GetOptions {
+    my $opt = shift;
+    unless (defined %clib::Options) {
+        my $username = (getpwuid($<))[0];
+        my $filename = $ENV{'GM_OPTIONS'} || "gm_options.$username";
+        open(F, $filename)
+            or open(F, "../$filename")
+                or die "No options file $filename or ../$filename";
+        while (<F>) {
+            chomp;
+            $clib::Options{$1} = $2
+                if /^([^:]+):\s*(.*\S)\s*$/;
+        }
+        close F;
+    }
+    return $clib::Options{$opt};
+}
+@
+
+
+1.9
+log
+@Changed the enum in clib.h to a series of #defines, so that the perl
+extension builder automatically makes the values available to perl.
+Much work on the perl html munger (using the new lexer): <img> attribute
+GMMAGIC is now converted to URL magic in the SRC attribute by the
+munger.  MonitorClient_Send and GetOptions are now available to perl
+distillers; this required changes to perl_stub and clib.xs.  Bug fix to
+tag_from_attribs routine in TACCutils.pm.  Tcl/tk simulator now supports
+"reload" and "open", and canvas is resized correctly.  Perl harness now
+turns on  perl -w by default.
+@
+text
+@d151 5
+@
+
+
+1.8
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@d11 2
+a12 6
+        SERVER_NAME
+        SET_PREFS_URL
+        GET_PREFS_URL
+        PREFS_CHANGE_URL_STRING
+        PREFS_SET_URL_STRING
+        AGG_STRING
+d19 1
+a19 1
+if (!defined $main::DEBUGGING) {
+d21 1
+a21 1
+   bootstrap clib;
+d23 1
+a23 1
+=head1 NAME
+d25 1
+a25 1
+clib - access to TACC cache front-end from Perl
+d27 1
+a27 1
+=head1 SYNOPSIS
+d29 1
+a29 2
+       use clib;   # normal operation
+       use clib_debug;   # if debugging your script interactively
+d39 33
+a71 1
+For all methods, $headers should have the following properties or
+d91 1
+a91 1
+Data is returned as ASCII text.  Status code is an integer, as defined
+d94 12
+d108 22
+a130 1
+
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d22 4
+a25 1
+bootstrap clib;
+d69 7
+a75 1
+# Preloaded methods go here.
+d77 76
+a152 1
+# Autoload methods go after __END__, and are processed by the autosplit program.
+@
+
+
+1.6
+log
+@various changes to makefiles to support auto-installation into sbin and bin directories.  perl HTML distiller no longer inserts UI in pages with frames.  PREFS_URL and similar strings are now static char* instead of #defines, but still need them to be initialized in PTM stub so distillers can get at them.  "run" targets are better now, they run stuff from the sbin and bin directories.
+@
+text
+@d30 2
+a31 1
+       use clib;
+@
+
+
+1.5
+log
+@Clib_Post now works.
+@
+text
+@d12 5
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d15 1
+d28 2
+@
+
+
+1.3
+log
+@various goodies for perl distillers
+@
+text
+@d18 39
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d11 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d11 3
+a13 1
+	CLIB_H
+@
+
+
+1.1.1.1
+log
+@perl extensions to go with transend distiller library
+@
+text
+@@

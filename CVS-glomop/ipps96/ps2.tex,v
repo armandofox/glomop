@@ -1,0 +1,180 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.2
+date	96.01.19.03.21.38;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.01.19.02.01.12;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.01.19.02.01.12;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@first round edits for IPPS96 camera-ready
+@
+text
+@
+\appendix
+
+\section{Related Projects}
+\subsection{Lok T. Liu: Generic Active Messages on the Intel Paragon}
+
+The Paragon's network model provides a computation processor and communication
+coprocessor, connected to the same bus.  The coprocessor talks directly to
+the Paragon data network; the network queues are implemented using memory
+shared between the two processors.
+
+Beyond message injection and extraction, the only additional coprocessor
+functionality relevant to our techniques is the fragmentation of large sends.
+The Paragon NI allows an individual DMA transmission to contain at most 8
+Kbytes; Liu's coprocessor code allows larger chunks to be fragmented
+transparently to the application.  This feature became available too late for
+us to assess its effects on our Paragon measurements, but we suspect that it
+would have had a performance impact on the methods that do not rely on
+interleaving (i.e. barriers and tokens).
+Having the coprocessor handle the software overhead of fragmentation
+would directly benefit both the token and DS algorithms. The high
+cost of injecting 8K packets would no longer be charged to the main CPU.
+It is likely that increasing the speed of injection would only hurt the
+uncontrolled sending techniques.
+
+
+It might be advantageous for the fragmentation granularity to be selectable by
+software; 8K byte chunks are too large to interleave in a larger machine (the
+one we used had only 8 nodes). Experiments on the 32-node Alewife and
+theoretical arguments \cite{theoretical-network-paper-from-294}
+predict that large injection sizes lead to poor overall performance.
+While the 8K injection size will certainly result in a high peak
+point-to-point bandwidth in the absence of congestion, we feel a
+smaller packet size will optimize all-pairs bulk-transfer.
+
+In general, though,
+Liu's work indicates that the Paragon's coprocessors afford opportunities for
+integration of techniques for choreographing communication.  We think it is
+worth investigating coprocessor support for interleaving and 
+dynamic scheduling.  
+
+Liu's active-message library allocates receive buffers using credit-based flow
+control.  We found that Liu's initial assumptions about buffer size led to
+buffers that were too small, so transmission was proceeding in a start-stop
+fashion as the credit supply was constantly depleted. In a congested
+network credits were presumably returning to the sender at a slower rate
+than that which point-to-point tests would indicate.
+
+As well, credits were being returned after each reception,
+so that the overhead of exchanging individual credits with 
+active messages became significant.  We solved this by modifying the
+active message layer to batch the transmission of credits.  The receiver now
+sends back $k$ credits at a time to a given receiver, having preallocating
+enough receive buffers to receive many more than
+$k$ messages from each receiver.  For our
+implementation, $k=16$ was chosen by trial and error, running
+experiments for various $k$ values.  Figure \ref{ackfreq} plots the effective
+bandwidth for various values of $k$; measurements were obtained by taking the
+average of four nearest-neighbor pairings of the eight nodes.  (Note that the
+effective bandwidths were lower on this earlier version of Liu's kernel.)
+
+While increasing the batching factor also implies a need for greater
+buffering at the receiver, this is not a significant worry. The ``buffers''
+being allocated are small descriptors which consume little memory.
+And as shown in figure \ref{ackfreq} almost all of the benefits of batching
+are gained for even small batching sizes.
+
+\begin{figure}
+\label{ackfreq}
+\centerline{\psfig{file=./graphs/ack.freq.eps,height=2.5in}}
+\caption{Effective nearest-neighbor bandwidth vs. credit batch size}
+\end{figure}
+
+\subsection{T. Callahan and S.C. Goldstein: NIFDY}
+
+The goal of Callahan and Goldstein's NIFDY network interface is to improve
+overall network throughput by reducing network congestion and by smoothing
+communication in cases where Strata techniques can't be applied because the
+communication patterns are irregular.  NIFDY achieves this through custom
+hardware, claiming that this reduces software latency.
+
+However, we were able to apply the ideas behind key Strata
+techniques (specifically, 1-on-1  communication enforced by barriers) to
+irregular traffic patterns by using dynamic scheduling.  While it is possible
+that dedicated hardware will achieve these goals at lower overhead, this has
+not been proven.  Furthermore, our methods have been demonstrated on three
+different platforms, and could be ported relatively easily to other platforms
+without even modifying system software.
+
+What if our techniques were used in a system with NIFDY interfaces?  We
+suspect that because we are already explicitly managing sender--receiver
+pairings and taking steps in software to prevent network congestion, the
+redundant functionality provided by NIFDY would simply present an additional
+layer of latency.  We believe our ``RISC-like approach'' is more effective:
+make the underlying hardware fast, and solve the global flow control problems
+at the global communication layer using software.
+    
+
+One specific feature of the NIFDY interface is that long block
+transfers are not streamed immediately onto the network. The first
+packet is sent alone. The receiver decides whether it will authorize
+a windowed long transfer and returns a credit and the result
+of this decision. At this point the data can begin to be pipelined
+into the network. The most effective techniques we have discussed
+(permutations with tokens or barriers and DS) manage the
+right to send within software.
+
+It is not clear how the NIFDY reclaims the credits it has granted
+to senders engaged in a sliding window transfers. One could envision
+a conflict between our techniques' and the NIFDY's view of
+which node has the right to send. If a large number of
+sliding window credits are ever handed out to nodes that do
+not hold the token of our
+mechanisms, serious performance degradation could result.
+The token holder would be forced to proceed using the single packet
+lock-step method. The credits for sliding window transfers would
+sit idle at senders who were waiting on the token.
+Such an extreme scenario can certainly be avoided, but the potential
+for conflict been two independent levels of is real.
+
+The claim is that the NIFDY chip is simple and inexpensive, but
+it remains to be seen how it will compare to a software only solution
+using techniques like those we have presented. It is also unknown
+how it will interact with these software techniques which have already
+been observed to be beneficial.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d83 1
+a83 1
+techniques (specifically, one-on-one communication enforced by barriers) to
+@
+
+
+1.1.1.1
+log
+@initial import matches original submission to IPPS 96.
+@
+text
+@@

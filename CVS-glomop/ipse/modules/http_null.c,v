@@ -1,0 +1,753 @@
+head	1.2;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.06.17.01.12.17;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Ok...getting there....fixed http_close bug in these guys.
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+#include "module.h"
+#include "stream.h"
+#include "tcpui.h"
+
+#define CRCHAR 0x0D
+#define LFCHAR 0x0A
+
+/* Functions that main.c will call */
+static void *http_init(int handid, char *arg);
+void *http_open(struct ui_dyp_data_ *ui_state, stream_t *stream);
+void  http_write(struct ui_dyp_data_ *ui_state, stream_t *stream);
+void  http_close(struct ui_dyp_data_ *ui_state, stream_t *stream);
+
+char *http_strcasestr(char *string, char *substr);
+int   is_sensible(struct tm *me);
+
+int nops = 1;
+
+module_ops oplist[] = { { http_init, tcp_handle, tcp_clean } };
+
+dynaparse_ops http_dynaparse_funcs = 
+    { http_open, http_write, http_close };
+
+static void *http_init(int handid, char *arg)
+{
+  state_t *state;
+  
+  state = tcp_init(handid, TCPINIT);
+  if (state == INIT_FAIL)
+    return INIT_FAIL;
+
+  state->dp_ops = &http_dynaparse_funcs;
+  return state;
+}
+
+/* Dynaparse functions that uifile.c will call */
+
+#define HPPARSE_BUFSIZE 64
+
+typedef enum 
+  { NEW, GOT_ADDR, GOT_REQUEST, GETTING_RESPONSE, GOT_RESPONSE } httpstate;
+
+typedef struct {
+  unsigned char client_no_cache;
+  unsigned char client_keep_alive;
+  unsigned char client_cache_control;
+  unsigned char client_if_modified_since;
+  time_t        client_if_modified_date;
+  unsigned char client_unless;
+} clientheaders;
+
+typedef struct {
+  unsigned char server_no_cache;
+  unsigned char server_cache_control;
+  unsigned char server_expires;
+  time_t        server_expires_date;
+  unsigned char server_last_modified;
+  time_t        server_last_modified_date;
+} serverheaders;
+
+typedef struct {
+  httpstate      connection_state;
+  char           source_address[HPPARSE_BUFSIZE];
+  char           dest_address[HPPARSE_BUFSIZE];
+  char          *client_request;
+  int            client_request_length;
+  unsigned int   response_header;
+  unsigned       response_startseq;
+  struct timeval request_time;
+  struct timeval response_time;
+  unsigned short sparse_foundheader;
+  unsigned short dumped_data;
+  clientheaders  ch;
+  serverheaders  sh;
+} http_parse_data;
+
+/* HTTP parsing functions */
+void check_client_headers(ui_dynaparse_data *state, http_parse_data *data);
+void check_server_headers(ui_dynaparse_data *state, http_parse_data *data);
+int  parse_clientdata(ui_dynaparse_data *state, http_parse_data *data);
+void parse_serverdata(ui_dynaparse_data *state, http_parse_data *data);
+void print_state(ui_dynaparse_data *state, http_parse_data *data, 
+		 stream_t *stream);
+
+void *http_open(struct ui_dyp_data_ *ui_state, stream_t *stream)
+{
+  http_parse_data *data = 
+    (http_parse_data *) calloc(1, sizeof(http_parse_data));
+
+  if (data == NULL) {
+    /* out of memory */
+    exit(1);
+  }
+  data->connection_state = NEW;
+  return (void *) data;
+}
+
+void http_write(struct ui_dyp_data_ *state, stream_t *stream)
+{
+  http_parse_data *data = (http_parse_data *) state->dpdata;
+
+  if (!data) {
+    state->dpdata = http_open(state, stream);
+    data = (http_parse_data *) state->dpdata;
+    printf("Did write fix!!!\n");
+    exit(5);
+  }
+
+  /* Which way did the data come through ? */
+  if (state->netlen > 0) {
+    /* from low to high - client to server */
+    switch(data->connection_state) {
+    case NEW:
+      /* Brand new connection - set the state to GOT_ADDR, since we
+	 have it in the state record anyway.  Fall through to the
+	 GOT_ADDR case. */
+      data->connection_state = GOT_ADDR;
+      gettimeofday(&(data->request_time), NULL);
+    case GOT_ADDR:
+    case GOT_RESPONSE:
+      /* We have the address noted, and either we're looking for 
+	 the first client request, or we've seen a server response and
+	 we're looking for another request from the client */
+      data->response_startseq = stream->nextseq[STREAM_DIR_HTOL];
+      check_client_headers(state, data);
+      if (parse_clientdata(state, data)) {
+	data->connection_state = GOT_REQUEST;
+      }
+      break;
+    case GOT_REQUEST:
+      /* Do nothing in this state.  Client data is just flowing to the
+	 server.  Perhaps it's a POST or something clever like that. */
+      check_client_headers(state, data);
+      break;
+    case GETTING_RESPONSE:
+      /* Data has flowed from the server to the client.  Now that we
+	 see client to server data flowing, we should print out our
+	 state, reinitialize the HTTP connection state, and off we go. */
+      data->connection_state = GOT_RESPONSE;
+      if (data->dumped_data == 0) {
+	print_state(state, data, stream);
+	data->dumped_data = 1;
+      }
+      free(data->client_request);  data->client_request = NULL;
+      data->client_request_length = 0;
+      data->sparse_foundheader = 0;
+      data->response_header = 0;
+      data->dumped_data = 0;
+      bzero(&(data->ch), sizeof(clientheaders));
+      bzero(&(data->sh), sizeof(serverheaders));
+      if (state->data[STREAM_DIR_HTOL]) {
+	free(state->data[STREAM_DIR_HTOL]);
+	state->len[STREAM_DIR_HTOL] = 0;
+	state->data[STREAM_DIR_HTOL] = NULL;
+      }
+      gettimeofday(&(data->request_time), NULL);
+      data->response_startseq = stream->nextseq[STREAM_DIR_HTOL];
+      check_client_headers(state, data);
+      if (parse_clientdata(state, data)) {
+	data->connection_state = GOT_REQUEST;
+      }
+      break;
+    default:
+      break;
+    }
+  } else if (state->netlen < 0) {
+    /* from high to low - server to client */
+    switch(data->connection_state) {
+    case GOT_REQUEST:
+      gettimeofday(&(data->response_time), NULL);
+    case GETTING_RESPONSE:
+      /* OK - we have the client request, now we're looking at the server
+	 data.  We're attempting to detect the end of header and to
+	 count bytes returned to the client. */
+      check_server_headers(state, data);
+      parse_serverdata(state, data);
+      data->connection_state = GETTING_RESPONSE;
+      break;
+    case NEW:
+    case GOT_ADDR:
+    case GOT_RESPONSE:
+      /* We can trash server data while we are receiving client data.  Once
+	 a complete client line has been received, then we start paying
+	 attention. */
+      if (state->data[STREAM_DIR_HTOL]) {
+	check_server_headers(state, data);
+	free(state->data[STREAM_DIR_HTOL]);
+	state->data[STREAM_DIR_HTOL] = NULL;
+	state->len[STREAM_DIR_HTOL] = 0;
+      }
+      break;
+    default:
+      /* These are either unexpected or we've already gotten
+	 everything we need out of the server's response.
+	 Stay in same state and wait for client activity */
+      break;
+    }
+  }
+
+  /* Now check for a FIN-type deal */
+  if ((data->dumped_data == 0) && (stream->closed[STREAM_DIR_HTOL])) {
+    print_state(state, data, stream);
+    data->dumped_data = 1;
+  }
+}
+
+void http_close(struct ui_dyp_data_ *state, stream_t *stream)
+{
+  http_parse_data *data = (http_parse_data *) state->dpdata;
+
+  if (!state)
+    return;
+
+  data = (http_parse_data *) state->dpdata;
+  if (!data) {
+    return;
+  }
+
+  if (state->data[STREAM_DIR_HTOL]) {
+    free(state->data[STREAM_DIR_HTOL]);
+    state->data[STREAM_DIR_HTOL] = NULL;
+    state->len[STREAM_DIR_HTOL] = 0;
+  }
+  if (state->dpdata) {
+    if (data->dumped_data == 0) {
+      print_state(state, data, stream);
+      data->dumped_data = 1;
+    }
+    free(data->client_request);
+    data->client_request = NULL;
+    free(state->dpdata);
+    state->dpdata = NULL;
+  }
+}
+
+void check_client_headers(ui_dynaparse_data *state, http_parse_data *data)
+{
+  return;
+}
+
+int isNullClient(ui_dynaparse_data *state, http_parse_data *data)
+{
+  char *url;
+  char *endpt, *fndPt;
+
+  if (data) {
+    if (data->client_request)
+      url = data->client_request;
+    else
+      return 0;
+  } else
+    return 0;
+
+  /* Look for ? or ; to mark end of url-proper */
+  endpt = strchr(url, '?');
+  if (endpt == NULL)
+    endpt = strchr(url, ';');
+
+  if (endpt == NULL) {
+    char *httppt;
+
+    httppt = strstr(url, " HTTP/1.0");
+    if (httppt == NULL)
+      endpt = url + strlen(url) - 1;
+    else
+      endpt = httppt - 1;
+  }
+  else
+    endpt -= 1;
+
+  /* OK - lets work our way back, looking for a dot in the good case,
+     and either a "/", ":", or the start of string in bad case */
+  for (fndPt = endpt; fndPt > url; fndPt--) {
+    if (*fndPt == '.') {
+      return 0;
+    } else if ((*fndPt == ':') || (*fndPt == '/'))
+      break;  /* bad case */
+  }
+
+  /* bad case */
+  return 1;
+}
+
+void check_server_headers(ui_dynaparse_data *state, http_parse_data *data)
+{
+  unsigned int i;
+  unsigned char *tmp, *substr = NULL;
+  char     supebuf[1024] = "";
+
+  if ((data->sparse_foundheader != 1)) {
+    tmp = state->data[STREAM_DIR_HTOL];
+    i = state->len[STREAM_DIR_HTOL];
+
+    if (isNullClient(state, data)) {
+      if (tmp) {
+	if ((substr = http_strcasestr(tmp, "Content-type:"))) {
+	  substr += 13;
+	  while (isspace(*substr) || (*substr == ':'))
+	    substr++;
+	  
+	  if (sscanf(substr, "%s", supebuf) == 1)
+	    fprintf(stdout, "%s\n", supebuf);
+	}
+      }
+    }
+  }
+}
+
+int parse_clientdata(ui_dynaparse_data *state, http_parse_data *data)
+{
+  /* My job is to parse the client data, looking for the initial request
+     line.  */
+  int            i;
+  unsigned char *tmp, *tmpo;
+
+  tmp = state->data[STREAM_DIR_LTOH];
+  if (tmp) {
+    for (i=0; i<state->len[STREAM_DIR_LTOH]; i++, tmp++) {
+      if ((*tmp == CRCHAR) || (*tmp == LFCHAR)) {
+	
+	/* We found the request line.  NULL terminate it, and steal the
+	   buffer space into the HTTP data record for printing out later. */
+	*tmp = '\0';
+	data->client_request = state->data[STREAM_DIR_LTOH];
+	data->client_request_length = i;
+	state->data[STREAM_DIR_LTOH] = NULL;
+	state->len[STREAM_DIR_LTOH] = 0;
+	
+	/* See if the request line ended with "HTTP/1.x".  If not, don't
+	   both parsing for the header in the server response. */
+	tmpo = data->client_request + (unsigned long) (i-8);
+	if ((i < 8) || (strncmp(tmpo, "HTTP/1.", 7) != 0)) {
+	  data->sparse_foundheader = 1;
+	}
+	return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+typedef 
+   enum {NONE_S, LF_S, CR_S, LFCR_S, CRLF_S, CRLFCR_S, DONE_S} sparsestate;
+
+#define MAXHEADER_PARSE 750
+
+void parse_serverdata(ui_dynaparse_data *state, http_parse_data *data)
+{
+  int            i, maxlen;
+  unsigned char *tmp;
+  sparsestate    curstate = NONE_S;
+  register char c;
+
+  if (!data)
+    return;
+  if (!state)
+    return;
+
+  if (data->sparse_foundheader == 1) {
+    /* We've given up looking for, or actually have found, our server
+       response header end boundary.  Now, we're just keeping track of the
+       # of bytes returned by the server.  Actually, the sequence #'s
+       will do that for us. */
+    if (state->data[STREAM_DIR_HTOL]) {
+      free(state->data[STREAM_DIR_HTOL]);
+      state->data[STREAM_DIR_HTOL] = NULL;
+      state->len[STREAM_DIR_HTOL] = 0;
+    }
+    return;
+  }
+
+  /* We want to try and parse data, but only MAXHEADER_PARSE bytes
+     worth, else give up and count bytes instead. */
+  maxlen = (state->len[STREAM_DIR_HTOL] > MAXHEADER_PARSE) ? 
+    MAXHEADER_PARSE : state->len[STREAM_DIR_HTOL];
+
+  /* Strategy - run through data, looking for the first occurrence of
+     either the start of data (given by CR/CR, LF/LF, or CR/LF/CR/LF) */
+  tmp = state->data[STREAM_DIR_HTOL];
+  for (i=0; i<maxlen; i++, tmp++) {
+    c = *tmp;
+
+    switch(curstate) {
+
+    case NONE_S:
+      switch(c) {
+      case CRCHAR:
+	curstate = CR_S; break;
+      case LFCHAR:
+	curstate = LF_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case CR_S:
+      switch(c) {
+      case CRCHAR:
+	curstate = DONE_S; break;
+      case LFCHAR:
+	curstate = CRLF_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case LF_S:
+      switch(c) {
+      case CRCHAR:
+	curstate = LFCR_S; break;
+      case LFCHAR:
+	curstate = DONE_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case CRLF_S:
+      switch(c) {
+      case CRCHAR:
+	curstate = CRLFCR_S; break;
+      case LFCHAR:
+	curstate = DONE_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case LFCR_S:
+      switch(c) {
+      case CRCHAR:
+	curstate = DONE_S; break;
+      case LFCHAR:
+	curstate = CRLFCR_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case CRLFCR_S:
+      switch(c) {
+      case CRCHAR:
+      case LFCHAR:
+	curstate = DONE_S; break;
+      default:
+	curstate = NONE_S; break;
+      }
+      break;
+
+    case DONE_S:
+    default:
+      printf("THIS CODE SHOULD NEVER EXECUTE\n");
+      break;
+    }
+
+    if (curstate == DONE_S)
+      break;
+  }
+  if (curstate == DONE_S) {
+    /* We've found the end of our header.  Compute how much data 
+       was in it. */
+    data->sparse_foundheader = 1;
+    data->response_header = i + 1;
+    if (state->data[STREAM_DIR_HTOL]) {
+      /*      free(state->data[STREAM_DIR_HTOL]);
+      state->data[STREAM_DIR_HTOL] = NULL;
+      state->len[STREAM_DIR_HTOL] = 0; */
+    }
+    return;
+  }
+
+  /* If the original length was more than MAXHEADER_PARSE bytes,
+     assume that we're on a HTTP/0.9 system - this may be wrong in the
+     case of extremely lengthy HTTP headers, but MAXHEADER_PARSE is a
+     reasonable length. */
+  if (state->len[STREAM_DIR_HTOL] > MAXHEADER_PARSE) {
+    data->sparse_foundheader = 1;
+    if (state->data[STREAM_DIR_HTOL]) {
+      /*      free(state->data[STREAM_DIR_HTOL]);
+      state->len[STREAM_DIR_HTOL] = 0;
+      state->data[STREAM_DIR_HTOL] = NULL; */
+    }
+    return;
+  }
+
+  /* Data was less than MAXHEADER_PARSE bytes, and we didn't find the
+     end of header.  We'll end up staying in the same state, and
+     continuing on. */
+  return;
+}
+
+void print_state(ui_dynaparse_data *state, http_parse_data *data,
+		 stream_t *stream)
+{
+  int ilen;
+  long llen;
+  unsigned ulen, rlen;
+  struct timeval now;
+  unsigned char clnt_pragmas = 0, srvr_pragmas = 0;
+
+  return;
+  gettimeofday(&now, NULL);
+
+  if (data->ch.client_no_cache)
+    clnt_pragmas |= 1;
+  if (data->ch.client_keep_alive)
+    clnt_pragmas |= 2;
+  if (data->ch.client_cache_control)
+    clnt_pragmas |= 4;
+  if (data->ch.client_if_modified_since)
+    clnt_pragmas |= 8;
+  if (data->ch.client_unless)
+    clnt_pragmas |= 16;
+
+  if (data->sh.server_no_cache)
+    srvr_pragmas |= 1;
+  if (data->sh.server_cache_control)
+    srvr_pragmas |= 2;
+  if (data->sh.server_expires)
+    srvr_pragmas |= 4;
+  if (data->sh.server_last_modified)
+    srvr_pragmas |= 8;
+
+  /* This function is where the logging takes place.  We'll look at
+     what state we're in, and use that to decide how much data we've
+     collected and can report on for this HTTP connection. */
+
+  switch(data->connection_state) {
+  case NEW:
+    /* New connection being printed?  Nonsensical. */
+    break;
+  case GOT_ADDR:
+    /* We only have data about client and server addresses.  We don't
+       even have a fully formed client response. */
+
+    write(1, &((data->request_time).tv_sec), sizeof(long));
+    write(1, &((data->request_time).tv_usec), sizeof(long));
+    write(1, &(state->addr[STREAM_DIR_LTOH]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_LTOH]), sizeof(unsigned short));
+    write(1, &(state->addr[STREAM_DIR_HTOL]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_HTOL]), sizeof(unsigned short));
+
+    ilen = 3;
+    write(1, &ilen, sizeof(int));   /* URL LENGTH */
+    write(1, "\"-\"", 3);           /* URL "-" */
+
+    llen = (long) 0;
+    write(1, &llen, sizeof(long));
+    write(1, &llen, sizeof(long));  /* reponse time 0:0 */
+
+    ulen = (unsigned) 0;
+    write(1, &ulen, sizeof(unsigned));  /* header len 0 */
+    write(1, &ulen, sizeof(unsigned));  /* data len 0 */
+
+    llen = (long) 0;
+    write(1, &llen, sizeof(long));
+    write(1, &llen, sizeof(long));  /* data reponse time 0:0 */
+
+    /* Write out pragmas */
+    write(1, &clnt_pragmas, sizeof(unsigned char));
+    write(1, &(data->ch.client_if_modified_date), sizeof(long));
+    write(1, &srvr_pragmas, sizeof(unsigned char));
+    write(1, &(data->sh.server_expires_date), sizeof(long));
+    write(1, &(data->sh.server_last_modified_date), sizeof(long));
+    break;
+
+  case GOT_REQUEST:
+    
+    /* We have a fully formed client request, we're waiting for a server
+       response at all. */
+    write(1, &((data->request_time).tv_sec), sizeof(long));
+    write(1, &((data->request_time).tv_usec), sizeof(long));
+    write(1, &(state->addr[STREAM_DIR_LTOH]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_LTOH]), sizeof(unsigned short));
+    write(1, &(state->addr[STREAM_DIR_HTOL]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_HTOL]), sizeof(unsigned short));
+
+    ilen = strlen(data->client_request);
+    if (ilen == 0) {
+      ilen = 3;
+      write(1, &ilen, sizeof(int));   /* URL LENGTH */
+      write(1, "\"-\"", 3);           /* URL "-" */
+    } else {
+      ilen += 2;                      /* start and end quote */
+      write(1, &ilen, sizeof(int));
+      write(1, "\"", 1);
+      write(1, data->client_request, ilen-2);
+      write(1, "\"", 1);
+    }
+
+    llen = (long) 0;
+    write(1, &llen, sizeof(long));
+    write(1, &llen, sizeof(long));  /* reponse time 0:0 */
+
+    ulen = (unsigned) 0;
+    write(1, &ulen, sizeof(unsigned));  /* header len 0 */
+    write(1, &ulen, sizeof(unsigned));  /* data len 0 */
+
+    llen = (long) 0;
+    write(1, &llen, sizeof(long));
+    write(1, &llen, sizeof(long));  /* reponse time 0:0 */
+
+    /* Write out pragmas */
+    write(1, &clnt_pragmas, sizeof(unsigned char));
+    write(1, &(data->ch.client_if_modified_date), sizeof(long));
+    write(1, &srvr_pragmas, sizeof(unsigned char));
+    write(1, &(data->sh.server_expires_date), sizeof(long));
+    write(1, &(data->sh.server_last_modified_date), sizeof(long));
+
+    break;
+
+  case GETTING_RESPONSE:
+    /* We have a fully formed client request, and some of a server response.
+       This probably was an HTTP/0.9 request, and the connection was closed
+       after getting all of the server response. */
+  case GOT_RESPONSE:
+    /* We have both a fully formed client request and a fully formed
+       server response.  Dump em both safely. */
+
+    write(1, &((data->request_time).tv_sec), sizeof(long));
+    write(1, &((data->request_time).tv_usec), sizeof(long));
+    write(1, &(state->addr[STREAM_DIR_LTOH]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_LTOH]), sizeof(unsigned short));
+    write(1, &(state->addr[STREAM_DIR_HTOL]), sizeof(unsigned long));
+    write(1, &(state->port[STREAM_DIR_HTOL]), sizeof(unsigned short));
+
+    ilen = data->client_request_length;
+    if (ilen == 0) {
+      ilen = 3;
+      write(1, &ilen, sizeof(int));   /* URL LENGTH */
+      write(1, "\"-\"", 3);           /* URL "-" */
+    } else {
+      ilen += 2;                      /* start and end quote */
+      write(1, &ilen, sizeof(int));
+      write(1, "\"", 1);
+      write(1, data->client_request, ilen-2);
+      write(1, "\"", 1);
+    }
+
+    write(1, &((data->response_time).tv_sec), sizeof(long));
+    write(1, &((data->response_time).tv_usec), sizeof(long));
+    write(1, &(data->response_header), sizeof(unsigned));
+
+    rlen = stream->nextseq[STREAM_DIR_HTOL] - data->response_startseq -
+      data->response_header;
+    write(1, &rlen, sizeof(unsigned));
+
+    /* Write out time that connection is closed */
+    write(1, &(now.tv_sec), sizeof(long));
+    write(1, &(now.tv_usec), sizeof(long));
+
+    /* Write out pragmas */
+    write(1, &clnt_pragmas, sizeof(unsigned char));
+    write(1, &(data->ch.client_if_modified_date), sizeof(long));
+    write(1, &srvr_pragmas, sizeof(unsigned char));
+    write(1, &(data->sh.server_expires_date), sizeof(long));
+    write(1, &(data->sh.server_last_modified_date), sizeof(long));
+
+    break;
+  }
+
+}
+char *http_strcasestr(char *string, char *substr)
+{
+  int str_len, substr_len, cmplen, i;
+  char *ptr;
+
+  str_len = strlen(string);
+  substr_len = strlen(substr);
+  cmplen = str_len - substr_len + 1;
+
+  for (ptr = string, i=0; i<cmplen; i++, ptr++) {
+    if (strncasecmp(ptr, substr, substr_len) == 0)
+      return ptr;
+  }
+  return NULL;
+}
+
+int   is_sensible(struct tm *me)
+{
+  if (me->tm_year <= 0)
+    return 0;
+  if ((me->tm_mon < 0) || (me->tm_mon > 11))
+    return 0;
+  if ((me->tm_mday <= 0) || (me->tm_mday > 31))
+    return 0;
+  if ((me->tm_sec < 0) || (me->tm_sec > 61))
+    return 0;
+  if ((me->tm_min < 0) || (me->tm_min > 59))
+    return 0;
+  
+  return 1;
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d221 5
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

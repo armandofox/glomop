@@ -1,0 +1,195 @@
+head	1.3;
+access;
+symbols
+	start:1.1.1.1
+	soda445:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.3
+date	97.09.02.20.49.10;	author iang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.14.18.00.46;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.05.14.16.55.37;	author iang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.05.14.16.55.37;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.3
+log
+@.
+@
+text
+@#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+
+int nextshow = 0;
+int nextlabel = -1;
+char nextlabeltext[100];
+FILE *labelF = NULL;
+
+int SHOWINCR = 32;
+
+void showoff(int offset)
+{
+    if (offset >= nextshow) {
+	printf("| 0x%08x  %d\n", offset, offset);
+	while(nextshow <= offset) nextshow += SHOWINCR;
+    }
+}
+
+void showlabel(int offset)
+{
+    char lfline[100];
+    char *endp;
+    char *nl;
+
+    if (offset >= 0) {
+	printf(".global %s\n", nextlabeltext);
+	printf("%s: | 0x%08x  %d\n", nextlabeltext, offset, offset);
+    }
+    fgets(lfline, 99, labelF);
+    nl = strchr(lfline, '\n');
+    if (nl) *nl = '\0';
+    nextlabel = strtoul(lfline, &endp, 0);
+    while (*endp && isspace(*endp)) ++endp;
+    strcpy(nextlabeltext, endp);
+    while(nextshow <= offset) nextshow += SHOWINCR;
+}
+
+main(int argc, char **argv)
+{
+    int nextb;
+    int offset = 0;
+    unsigned char buf[70];
+    int bufi = 0;
+
+    if (argc > 1 && !strcmp(argv[1],"-1")) {
+	SHOWINCR = 1;
+	--argc;
+	++argv;
+    }
+
+    if (argc > 1) {
+	labelF = fopen(argv[1], "r");
+	if (!labelF) {
+	    perror("fopen");
+	    exit(1);
+	}
+	showlabel(-1);
+    }
+
+    while(1) {
+	nextb = getchar();
+	if (nextb == EOF) break;
+
+	if (labelF && offset == nextlabel) {
+	    showlabel(offset);
+	}
+
+	++offset;
+
+	if (nextb >= 32 && nextb < 127 && nextb != 34 && nextb != '\\') {
+	    buf[bufi] = nextb;
+	    bufi++;
+	    if (bufi == 60) {
+		buf[60] = '\0';
+		showoff(offset-bufi);
+		printf(".ascii \"%s\"\n", buf);
+		bufi = 0;
+	    }
+	    if (bufi > 1 && buf[bufi-2] == 'N' &&
+		(buf[bufi-1] == 'u' || buf[bufi-1] == 'V' ||
+		 buf[bufi-1] == 's')) {
+		if (bufi > 2) {
+		    buf[bufi-2] = '\0';
+		    showoff(offset-bufi);
+		    printf(".ascii \"%s\"\n", buf);
+		    buf[bufi-2] = 'N';
+		}
+		buf[bufi] = '\0';
+		showoff(offset-2);
+		printf(".ascii \"%s\"\n", buf+bufi-2);
+		bufi = 0;
+	    }
+	} else if (nextb == 0) {
+	    if (bufi) {
+		buf[bufi] = '\0';
+		showoff(offset-bufi-1);
+		printf(".asciz \"%s\"\n", buf);
+		bufi = 0;
+	    } else {
+		showoff(offset-1);
+		printf(".byte 0\n");
+	    }
+	} else {
+	    if (bufi) {
+		buf[bufi] = '\0';
+		showoff(offset-bufi-1);
+		printf(".ascii \"%s\"\n", buf);
+		bufi = 0;
+	    }
+	    showoff(offset-1);
+	    printf(".byte %d\n", nextb);
+	}
+    }
+    if (bufi) {
+	buf[bufi] = '\0';
+	showoff(offset-bufi);
+	printf(".ascii \"%s\"\n", buf);
+	bufi = 0;
+    }
+    fflush(stdout);
+}
+@
+
+
+1.2
+log
+@Added -1 option
+@
+text
+@d26 2
+a27 1
+    if (offset >= 0)
+d29 1
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d10 1
+a10 1
+#define SHOWINCR 1
+d43 6
+@
+
+
+1.1.1.1
+log
+@Reverse-engineering the Pilot kernel
+@
+text
+@@

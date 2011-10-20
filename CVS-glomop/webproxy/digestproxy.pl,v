@@ -1,0 +1,1754 @@
+head	1.24;
+access;
+symbols
+	release:1.23
+	pregeo:1.23
+	geoworks-0701:1.23.2.1
+	geoworks-062696:1.23
+	dev:1.19
+	demo:1.17.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.24
+date	96.07.04.02.38.46;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	96.04.04.01.46.32;	author fox;	state Exp;
+branches
+	1.23.2.1;
+next	1.22;
+
+1.22
+date	96.03.09.23.36.09;	author fox;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	96.02.21.22.35.04;	author fox;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	96.02.16.21.47.18;	author fox;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	95.12.08.00.27.39;	author fox;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	95.11.28.01.01.40;	author fox;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	95.11.15.10.10.55;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	95.11.10.08.27.48;	author fox;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	95.11.03.21.46.59;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	95.10.31.07.08.13;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	95.10.28.01.53.57;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	95.09.29.05.40.23;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	95.09.27.20.34.29;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	95.09.19.21.03.57;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	95.09.17.23.02.19;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	95.09.17.20.42.54;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	95.09.15.20.38.58;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	95.09.11.20.23.45;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	95.09.10.00.34.18;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	95.09.07.21.03.00;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.09.07.18.06.29;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.08.30.00.00.39;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.08.29.21.44.09;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	95.08.29.21.44.10;	author fox;	state Exp;
+branches;
+next	;
+
+1.23.2.1
+date	96.07.04.03.18.44;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.24
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#!/usr/sww/bin/perl5
+
+use POSIX;
+
+%Const = ();
+
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.23 1996/04/04 01:46:32 fox Exp $';
+
+$Const{Proxy} = 'Pythia';                          # name of this agent
+
+# Unregistered users can only access URL's that match this protocol, server and
+# URL regexp.
+
+$Const{GlomopSubtree} = '^http://www.cs.berkeley.edu/~fox/glomop/';
+
+# Which hosts or subnets to allow (IP addresses)
+%AllowHostAddr = ();
+@@AllowHostName = ();
+@@AllowSubnet = ();
+
+# Template for packing addresses for socket calls
+$Const{Sockaddr}= 'S n a4 x8';
+
+# Timeout for select() in milliseconds
+$Const{SelectTimeout} = undef;
+
+# PID of the "parent" proxy process
+$Const{Ppid} = $$;
+
+#
+# Globals reused frequently
+#
+
+%Children = ();                             # outstanding unreaped children
+$IPaddr = '';                               # client's IP addr as string
+$Listen = '';                               # listening socket object
+$Handoff = '';                              # and for handoff advice
+$Accept = '';                               # accepted socket object
+
+#
+#  Mobile hosts for which handoff modifies prefs.  Array key is IP addr; value
+#  is interface name of current network for that IP addr.
+#  If a particular key exists, all connections from that IP address
+#  should concatenate the interface name to the IP addr to do a prefs lookup,
+#  rather than using the interface name alone.
+#
+%MobileHosts = ();
+
+#
+# defaults  for cmd line options
+#
+$gb{neverfork} = 0;
+$help{neverfork} = 'Run in debugging mode: never fork';
+
+$g{statfile} = '/dev/null';
+$help{statfile} = 'File in which to write distillation statistics';
+
+$g{port}  = 5555;                     # http port
+$help{port} = 'HTTP port';
+
+$g{sport} = 9100;
+$help{sport} = 'Default port for starting local services';
+$g{handoff} = 9543;
+$help{handoff} = 'UDP port for handoff messages';
+
+$g{qsize} = 10;
+$help{qsize} = 'Socket queue size';
+
+$g{gateway} = '';
+$help{gateway} = 'Firewall gateway machine (host:port)';
+
+$g{config} = './pythia.cf';
+$help{config} = 'Pythia configuration file';
+
+%Port = ('http', 80);
+
+#
+#  startup
+#
+
+&parse_args;
+&init;
+
+unshift(@@INC, ".", "/disks/barad-dur/now/pythia/release/perllib");
+require ('gm_sock.pl');
+require ('./parse_html.pl');
+require ('./child.pl');
+require ('./errors.pl');
+require ('./prefs.pl');
+require ('./register.html.pl');
+require ('./munge_html.pl');
+require ('./services.pl');
+require ('./handoff.pl');
+
+
+#
+#  Open a socket for listening.
+#
+($Listen = listensock gm_sock $g{port}, 'tcp', $g{qsize})
+    or &Die("listensock (TCP): $gm_sock::Err");
+#
+# and for receiving handoff msgs
+#
+($Handoff = listensock gm_sock $g{handoff}, 'udp')
+    or &Die("listensock (UDP): $gm_sock::Err");
+
+#
+#  Start services collector.
+#
+&distiller::startdefault($Const{Hostname}, $g{port}, $Const{Arch});
+
+$Const{ProxyHost} = ($Listen->endpoints)[2]; # IP address of this machine
+$Const{RegisterString} = 'PythiaRegistration/?';
+$Const{RegisterURL} =
+    "http://$Const{ProxyHost}:$g{port}/$Const{RegisterString}";
+$Const{RegisterPage} = "http://PythiaRegistration";
+$Const{StatsURL} = 'http://proxystats';
+
+&mainloop;
+
+#------------------------------------------------------------
+#  main loop: listen for connections, and fork child to handle them
+#
+
+sub mainloop {
+    my($addr);
+    my($c,$zz,$dummy);
+    my($rbits,$ebits) = ();
+    my($rout,$eout) = ();
+    my($vec);
+    my($from, $hmsg);
+    my($url, $method, $proto, $reqtype, @@hdrs);
+
+    my($sockfh) = ($Listen->filehandles)[0];
+    
+    vec($rbits, fileno($sockfh), 1) = 1;
+    vec($ebits, fileno($sockfh), 1) = 1;
+    
+    &log("Listening on port " . ($Listen->endpoints)[3]);
+
+    CON: for ($Con = 0; ; $Con++) {
+
+        $Accept->closesock() if (ref($Accept) eq gm_sock);
+
+      SELECT: while (1) {
+          #
+          # Idle loop: while there are outstanding children, loop between
+          # waiting on select() and reaping the children.  NOTE: Real POSIX
+          # waitpid should allow us to specify 0 as the first arg, to check
+          # for status of other processes in our process group, but it
+          # doesn't seem to work in perl....
+          #
+          unless ($gb{neverfork}) {
+              do {
+                  $zz=POSIX::waitpid(-1, &WNOHANG);
+                  (delete $Children{$zz}, &debug('fork', "Reaped $zz"))
+                      if $zz > 0;
+              } while ($zz > 0);
+          }
+          #$sel = select($rout=$rbits,undef,$eout=$ebits,$Const{SelectTimeout});
+          $sel = select($rout=$rbits,undef,$eout=$ebits,undef);
+          if ($sel == -1) { warn "Error: $!"; }
+          last SELECT if (($sel > 0) && (vec($rout,fileno($sockfh),1)));
+          warn "Rout: " . ord($rout) .", sel: $sel";
+      }
+          
+        #
+        #  Determine whether ready socket is TCP (client conn) or UDP (handoff
+        #  advise).
+        #
+
+        if (vec($rout, fileno($handfh), 1)) {
+            unless (($from,$hmsg) = $Handoff->readsock_raw(65536)) {
+                &log("** Handoff msg not seen!");
+                next CON;
+            }
+            if (($from, $suffix) = &do_handoff($hmsg)) {
+                &debug('handoff', "Handoff $from to network $suffix")
+                    unless ($MobileHosts{$from} eq $suffix);
+                $MobileHosts{$from} = $suffix;
+            } else {
+                &log("*** Handoff msg couldn't be parsed");
+            }
+            next CON;
+        }
+
+        next CON unless (vec($rout, fileno($sockfh), 1));
+
+        $Accept = $Listen->acceptsock();
+        unless ($Accept) {
+            &log( "*** accept: " . $Listen->lasterror());
+            next CON;
+        }
+        # get the client's IP addr.
+        $IPaddr = ($Accept->endpoints())[0];
+
+        # If it's a mobile host, determine which prefs to use.
+        if ($suff = $MobileHosts{$IPaddr}) {
+            $IPaddr .= ".$suff";
+        }
+
+        # see if this client is allowed to connect.
+        unless (&check_privilege) {
+            &http_error("503 Host or subnet disallowed");
+            next CON;
+        }
+        # collect HTTP request line.
+
+        unless (($url, $method, $proto, $reqtype, %hdrs)
+                = &collect_request($Accept)) {
+            &log("*** Bad request");
+            &http_error("400 Bad request");
+            next CON;
+        }
+
+        #  Determine request type.  Possible requests:
+        #   New service added or removed:
+        #        SVCADD servicename@@host:port
+        #        SVCDEL servicename@@host:port
+        #   Registration
+        #        GET url (where url is the magic "registration" URL)
+        #   Prefs change
+        #        GET url (where url is the "generate prefs page" URL)
+        #   Stats query
+        #        GET url (where url is "magic proxystats URL")
+        #   Regular http
+
+        #
+        # If a new service is being added:
+        #
+        if ($method =~ /svcadd/i) {
+            # the "URL" encodes the service name and location, e.g.
+            #    "gifmunch@@foobar.com:9999"
+            my $ipad = ($Accept->endpoints())[0];
+            my $port = $proto;
+            &distiller::birth($ipad,$port,$url);
+            next CON;
+        }
+
+        #
+        # If a new service is being removed:
+        #
+        if ($method =~ /svcdel/i) {
+            my $svc = $url;
+            my $port = $proto;
+            my $ipad = ($Accept->endpoints())[0];
+            &distiller::death($ipad, $port, $svc);
+            next CON;
+        }
+
+        #
+        # If this is a new registration request, go handle it.
+        #
+        if ($url =~ s/^$Const{RegisterURL}//o) {
+            my($x);
+            $Socket = $Accept;
+            &debug('reg',"Registration request from $IPaddr");
+            # call register function, which returns HTML text giving status of
+            # registration transaction.
+            $x = &register($url, $IPaddr) ;
+            if (defined $x) {
+                &send_client( $x);
+            } else {
+                # registration failed!
+                &client_disallowed;
+            }
+            next CON;
+        }
+
+        #
+        # If this is a stats request, return some stats.
+        #
+
+        if ($url =~ /^$Const{StatsURL}$/o) {
+            $Accept->writesock( &get_stats );
+            next CON;
+        }
+
+        #
+        # If this is a request to change/register prefs, handle it.
+        #
+        if ($url =~ /$Const{RegisterPage}/o) {
+            $Socket = $Accept;
+            &do_register($IPaddr);
+            next CON;
+        }
+
+        if ($gb{neverfork}) {
+            &debug('http', "Handling client request");
+            &handle_conn($Accept, $url, $method, $proto, $reqtype, %hdrs);
+        } elsif ($c = fork()) {
+            # this is the parent
+            $Children{$c}++;
+            &debug('fork', "$Con: [$c]\n");
+            $Accept->closesock;
+        } elsif (! defined ($c)) {
+            # fork failed!
+            die "*** $$: Fatal: fork failed!\n";
+        } else {
+            # this is the child
+            &handle_conn($Accept, $url, $method, $proto, $reqtype, %hdrs);
+            exit 0;
+        }
+    }
+}
+
+###########################################################################
+#  Check whether client is authorized to use Pythia.
+#
+#  Input: Global $PackedIP and $IPaddr give IP addr as packed and string resp.
+#  Result: Nonzero iff client allowed to connect to Pythia.
+#  Assumptions: %AllowHost and @@AllowSubnet array entries have been set up from
+#  pythia.cf file. 
+#
+###########################################################################
+
+sub check_privilege_init
+{
+        # read config info
+        while(<CFG>) {
+            s/\s+/ /g;
+            if (/allow host (\d+\.\d+\.\d+\.\d+)/ ) {
+                $AllowHostAddr{$1}++;
+                next;
+            } elsif (/allow subnet (\d+)\.(\d+)\.(\d+)\.(\d+)/ ) {
+                push(@@AllowSubnet, (($1<<24)+($2<<16)+($3<<8)+($4)));
+                next;
+            } elsif (/allow host (\S+)/) {
+                $AllowHostName{$1}++;
+            }
+        }
+}
+
+sub check_privilege {
+    local($result) = 0;                     # fail-safe.
+    local(@@ip) = split('.', $IPaddr);
+    local($ip) = (pop @@ip) + ((pop @@ip) << 8) + ((pop @@ip) << 16)
+        + ((pop @@ip) << 24);
+    local($hn);
+    return 1;
+    
+    #  is it on an allowed subnet?
+    foreach (@@AllowSubnet) {
+        return 1 if ($_ & $ip == 0);
+    }
+    # if not, is it an allowed host by IP address?
+    return 1 if $AllowHostAddr{$IPaddr};
+
+    # if not, is it an allowed host by hostname/regexp?
+
+    $hn = (gethostbyaddr($packedip, &AF_INET))[0];
+
+    foreach(@@AllowHostName) {
+        # each of the array entries is a regexp.
+        return 1 if ($hn =~ /^$_$/i);
+    }
+}
+
+
+#--------------------------------------------------------------------
+#  init other global state, and set up the @@Config array to contain the
+#  noncomment contents of the configuration file.
+#
+
+sub init {
+    my @@uname;
+
+    @@uname = &uname
+        or die "Uname failed; $!";
+    chop($Const{Uptime} = `/bin/date`);
+
+    $Const{Rev} = $1 if $Const{Rev} =~ /,v\s+([\d.]+)/;
+    $SIG{'INT'} = $SIG{'KILL'} = 'parent_cleanup';
+    #
+    #  Determine our own hostname and arch
+    #
+    ($Const{Arch},$Const{Hostname}) = @@uname[0,1];
+    #
+    #  Read config info from file.
+    #
+    if (open(CFG, $g{config})) {
+        @@Config = ();
+        while(<CFG>) {
+            push(@@Config, $_) unless /^#/;
+        }
+    } else {
+        &log("Warning: can't read config file '$g{config}', using defaults");
+    }
+}
+
+#----------------------------------------------------------------------
+#  cleanup and die
+#
+
+sub parent_cleanup {
+    warn "*** Proxy shutting down\n";
+    &checkpoint;                            # sync prefs file before leaving
+    eval {$Listen->killsock()};
+    eval {$Accept->killsock()};
+    eval {&distiller::killall()};            # shut down distillation svrs
+    exit 0;
+}
+
+sub Die {
+    printf STDERR "@@_\n";
+    # do cleanup
+    &{$SIG{"INT"}};
+    warn "$0: Die:should never get here!\n";
+    exit 1;
+}
+
+#---------------------------------------------------------------------------
+# parse cmd line
+#
+
+sub parse_args {
+    local(@@debug);
+    &usage if (grep(/-help/, @@ARGV));
+
+    # setup default args first
+
+    while ($_ = shift @@ARGV) {
+
+        s/^-//;
+        $g{$_} = shift @@ARGV, next if defined $g{$_};
+        $gb{$_} = 1, next if defined $gb{$_};
+        $gb{$_} = 0, next if (s/^no// && defined $gb{$_});
+        if (/^debug/) {
+            @@debug = split(/\s*,\s*/, shift @@ARGV);
+            if (grep (/^all$/, @@debug)) {
+                &main::log("All debugging messages enabled");
+                $main::DebugAll = 1;
+            } else {
+                for (@@debug) { $Debug{$_}++; }
+                local($") = ",";                #" 
+                &log("Debugging enabled for @@debug");
+            }
+            next;
+        }
+        warn "$0: arg '$_' ignored\n";
+    }
+}
+
+#------------------------------------------------------------
+#  Log
+#
+
+sub debug {
+    local($key, @@args) = @@_;
+    return unless (exists $main::Debug{$key} || $main::DebugAll);
+    print STDERR "$$" . "[$key]: ";
+    local($") = "\n";                       # "
+    print STDERR "@@args";
+    print STDERR "\n" unless ((pop @@args) =~ /\n$/);
+}
+
+sub log {
+    local(@@args) = @@_;
+    local($") = "\n";                       #" 
+    print STDERR "$$:@@args";
+    print STDERR "\n" unless ((pop @@args) =~ /\n$/);
+}
+
+sub get_stats {
+    # Return a string (possibly including newlines) of interesting stats
+    my @@x;
+
+    push(@@x, "Pythia HTTP proxy served $Con requests since $Const{Uptime}");
+    push(@@x, sprintf("%d registered users (%d new this session)",
+                     &prefs::register_info));
+    my @@svcs = $Services->servlist('*');
+    push(@@x, "Services:");
+    push(@@x, @@svcs);
+    push(@@x, '');
+    return join("\n", @@x);
+}
+
+#------------------------------------------------------------------
+#  usage
+#
+
+sub usage {
+    print STDERR "$0: HTTP proxy\n\n";
+    print STDERR "  Usage: $0 [options]\n\n";
+
+    print STDERR
+        "-debug key[,key,...]: print debugging messages related to 'key':\n";
+    print STDERR "                  conn - HTTP control traffic\n";
+    print STDERR "                  echo - HTTP data traffic\n";
+    print STDERR "                  fork - child processes\n";
+    print STDERR "                  refine - refinement control traffic\n";
+    print STDERR "                  reg - registration traffic\n";
+    print STDERR "                  all - everything (really verbose!)\n";
+    foreach (keys %g) {
+        print STDERR "-$_: $help{$_} (default $g{$_})\n";
+    }
+    if (%gb) {
+        print STDERR "\n  Boolean options (specify -foo or -nofoo):\n";
+        foreach (keys %gb) {
+            printf STDERR ("-$_: $help{$_} (def -%s$_)\n",
+                           $gb{$_}? "": "no");
+        }
+    }
+    exit 0;
+}
+@
+
+
+1.23
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@d7 1
+a7 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.22 1996/03/09 23:36:09 fox Exp $';
+d25 1
+a25 1
+$Const{SelectTimeout} = 0.5;
+d110 1
+a110 2
+$Services = new services;
+$Services->startdefault($Const{Hostname}, $g{port}, $Const{Arch});
+d128 2
+a129 2
+    my($rbits,$wbits,$ebits) = (0,0,0);
+    my($rout,$wout,$eout) = ();
+a134 1
+    my($handfh) = ($Handoff->filehandles)[0];
+a137 2
+    vec($rbits, fileno($handfh), 1) = 1;
+    vec($ebits, fileno($handfh), 1) = 1;
+d146 21
+a166 17
+            #
+            # Idle loop: while there are outstanding children, loop between
+            # waiting on select() and reaping the children.  NOTE: Real POSIX
+            # waitpid should allow us to specify 0 as the first arg, to check
+            # for status of other processes in our process group, but it
+            # doesn't seem to work in perl....
+            #
+            do {
+                $zz=POSIX::waitpid(-1, &WNOHANG);
+                (delete $Children{$zz}, &debug('fork', "Reaped $zz"))
+                    if $zz > 0;
+            } while ($zz > 0);
+            last SELECT if (select($rout=$rbits, undef, $eout=$ebits,
+                                   $Const{SelectTimeout}) > 0);
+        }
+
+        
+d232 5
+a236 7
+            my($svc,$port) = ($url,$proto);
+            my($host) = ($Accept->endpoints())[0];
+            if ($port) {
+                $Services->birth($host, $port, $svc);
+            } else {
+                &log("*** Svcadd failed (error during service startup)");
+            }
+d244 4
+a247 3
+            my($svc,$port) = ($url,$proto);
+            my($host) = ($Accept->endpoints())[0];
+            $Services->death($host, $port, $svc);
+a282 2
+            # BUG: If we know about the user, we should customize the prefs
+            # form before sending it back.
+d289 1
+d366 4
+a369 2
+    local($host);
+    
+d375 1
+a375 1
+    #  Determine our own hostname
+d377 1
+a377 23
+    my $host;
+    foreach $cmd ('hostname', '/usr/ucb/hostname', '/bin/hostname') {
+        chop($host = `$cmd`);
+        last unless $? >> 8;
+    }
+    if ($? >> 8) {
+        die "Can't determine hostname";
+    }
+    $Const{Hostname} = $host;
+
+    #
+    #  Determine our own architecture
+    #
+    my $arch;
+    foreach $cmd ('uname', '/bin/uname') {
+        chop($arch=`$cmd`);
+        last unless $? >> 8;
+    }
+    if ($? >> 8) {
+        die "Can't determine archtype";
+    }
+    $Const{Arch} = $arch;
+
+d398 3
+a400 3
+    eval '$Listen->killsock()';
+    eval '$Accept->killsock()';
+    eval '$Services->killall()';            # shut down distillation svrs
+d407 1
+a407 1
+    eval "\&$SIG{'INT'}";
+d433 4
+a436 1
+                last;
+a437 3
+            for (@@debug) { $Debug{$_}++; }
+            local($") = ",";                #" 
+            &log("Debugging enabled for @@debug");
+@
+
+
+1.23.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d7 1
+a7 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.23 1996/04/04 01:46:32 fox Exp $';
+d25 1
+a25 1
+$Const{SelectTimeout} = undef;
+a30 18
+#  Per-connection "globals"
+#
+
+sub new_conn {
+    my $self = {};
+    foreach (qw(IPaddr URL method proto request reqtype
+                hash:client_headers hash:server_headers sock data)) {
+        if (s/^hash://) {
+            $self->{$_} = {};
+        } else {
+            $self->{$_} = '';
+        }
+    }
+    return $self;
+}
+      
+
+#
+d110 2
+a111 1
+&distiller::startdefault($Const{Hostname}, $g{port}, $Const{Arch});
+d114 1
+a114 1
+$Const{RegisterString} = 'PythiaRegistration/';
+d129 2
+a130 2
+    my($rbits,$ebits) = ();
+    my($rout,$eout) = ();
+d136 1
+d140 2
+d150 17
+a166 21
+          #
+          # Idle loop: while there are outstanding children, loop between
+          # waiting on select() and reaping the children.  NOTE: Real POSIX
+          # waitpid should allow us to specify 0 as the first arg, to check
+          # for status of other processes in our process group, but it
+          # doesn't seem to work in perl....
+          #
+          unless ($gb{neverfork}) {
+              do {
+                  $zz=POSIX::waitpid(-1, &WNOHANG);
+                  (delete $Children{$zz}, &debug('fork', "Reaped $zz"))
+                      if $zz > 0;
+              } while ($zz > 0);
+          }
+          #$sel = select($rout=$rbits,undef,$eout=$ebits,$Const{SelectTimeout});
+          $sel = select($rout=$rbits,undef,$eout=$ebits,undef);
+          if ($sel == -1) { warn "Error: $!"; }
+          last SELECT if (($sel > 0) && (vec($rout,fileno($sockfh),1)));
+          warn "Rout: " . ord($rout) .", sel: $sel";
+      }
+          
+d195 1
+a195 3
+        $con = &new_conn;
+        $con->{"sock"} = $Accept;
+        $con->{"IPaddr"} = ($Accept->endpoints())[0];
+d197 10
+d208 3
+a210 2
+        
+        unless (&collect_request($con)) {
+d212 1
+a212 1
+            &http_error($con,"400 Bad request");
+a226 3
+        if ($con->{"client_headers"}->{"User-Agent"} =~ /\bnokia\b/i) {
+            $con->{"IPaddr"} = "nokia";         # HACK HACK HACK
+        }
+d231 8
+a238 7
+        if ($con->{"method"} =~ /svcadd/i) {
+            # the "URL" encodes the service name and location, e.g.
+            #    "gifmunch@@foobar.com:9999"
+            my $svc = $con->{"URL"};
+            my $ipad = ($Accept->endpoints())[0];
+            my $port = $con->{"proto"};
+            &distiller::birth($ipad,$port,$svc);
+d245 4
+a248 5
+        if ($con->{"method"} =~ /svcdel/i) {
+            my $svc = $con->{"URL"};
+            my $port = $con->{"proto"};
+            my $ipad = ($Accept->endpoints())[0];
+            &distiller::death($ipad, $port, $svc);
+d255 1
+a255 1
+        if ($con->{"URL"} =~ s/^$Const{RegisterURL}//o) {
+d257 2
+a258 2
+            $con->{"sock"} = $Accept;
+            &debug('reg',"Registration request from " . $con->{"IPaddr"});
+d261 1
+a261 1
+            $x = &register($con->{"URL"}, $con->{"IPaddr"}) ;
+d263 1
+a263 2
+                &send_client($con, &minimal_headers($x));
+                &send_client($con, $x);
+d275 1
+a275 1
+        if ($con->{"URL"} =~ /^$Const{StatsURL}$/o) {
+d283 5
+a287 3
+        if ($con->{"URL"} =~ /$Const{RegisterPage}/o) {
+            $con->{"sock"} = $Accept;
+            &do_register($con->{"IPaddr"});
+d292 1
+a292 2
+            &debug('http', "Handling client request");
+            &handle_conn($con);
+d303 1
+a303 1
+            &handle_conn($con); 
+d309 52
+d368 2
+a369 4
+    my @@uname;
+
+    @@uname = &uname
+        or die "Uname failed; $!";
+d375 12
+a386 1
+    #  Determine our own hostname and arch
+d388 12
+a399 1
+    ($Const{Arch},$Const{Hostname}) = @@uname[0,1];
+d420 3
+a422 3
+    eval {$Listen->killsock()};
+    eval {$Accept->killsock()};
+    eval {&distiller::killall()};            # shut down distillation svrs
+d429 1
+a429 1
+    &{$SIG{"INT"}};
+d455 1
+a455 4
+            } else {
+                for (@@debug) { $Debug{$_}++; }
+                local($") = ",";                #" 
+                &log("Debugging enabled for @@debug");
+d457 3
+d472 1
+a472 1
+    return unless ((exists $main::Debug{$key}) || $main::DebugAll);
+@
+
+
+1.22
+log
+@latest version: uses perl HTML parser from net (with some additions and
+bug fixes by me); SafeSurf (NetCondom) removes Java/JavaScript tags; no
+longer has problems accidentally nesting <A>'s for refinement tags;
+understands new format handoff messages; pathnames for external
+distillers now in .cf file, not in code; minor changes to registration
+page; "About Pythia" link (to reg page) now appears on every page served
+by Pythia; random other buglets fixed.
+@
+text
+@d7 1
+a7 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.19 1995/12/08 00:27:39 fox Exp $';
+d84 1
+a84 1
+unshift(@@INC, "/disks/barad-dur/now/pythia/release/perllib");
+@
+
+
+1.21
+log
+@*** empty log message ***
+@
+text
+@d63 1
+a63 1
+$g{handoff} = 1402;
+d86 1
+d158 1
+a158 1
+                $zz=POSIX::waitpid(-1, $dummy, &WNOHANG);
+@
+
+
+1.20
+log
+@various modularity changes
+@
+text
+@d256 1
+d285 1
+@
+
+
+1.19
+log
+@this is the demo version (also the released version until further notice)
+@
+text
+@a2 11
+#  Digest proxy demo
+#
+#  Listens for incoming HTTP requests on port given on cmd line (def=5555), and
+#  transmits request to "real" server.  If request is for a GIF, *and* size >
+#  threshold, it creates a new GIF by running the original thru a Canny edge
+#  detector.  The new GIF is typically an order of magnitude smaller.  If the
+#  client browser is Java-aware, instead of returning the new GIF, it returns a
+#  Java applet that loads the GIF and allows the user to fetch successive
+#  refinements by outlining a region with the mouse.
+#
+
+d7 1
+a7 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.18 1995/11/28 01:01:40 fox Exp $';
+d52 3
+d75 1
+a75 1
+%Port = (http, 80);
+d84 2
+a85 1
+require ('./gm_sock.pl');
+d87 1
+d117 1
+a117 1
+$Const{StatsURL} = 'proxystats';
+d128 1
+a128 1
+    my($rbits,$wbits,$ebits) = ();
+d208 1
+a208 1
+        unless (($url, $method, $proto, $reqtype, @@hdrs)
+d231 7
+a237 3
+            my($svc,$host,$port) = ($1,$2,$3)
+                if ($url =~ /(\S+)@@(\S+):(\S+)/);
+            $Services->birth($host, $port, $svc);
+d245 2
+a246 2
+            my($svc,$host,$port) = ($1,$2,$3)
+                if ($url =~ /(\S+)@@(\S+):(\S+)/);
+d288 3
+a290 1
+        if ($c = fork()) {
+d300 1
+a300 1
+            &handle_conn($Accept, $url, $method, $proto, $reqtype, @@hdrs);
+d419 1
+d449 5
+d456 1
+a456 1
+            &log("Debugging enabled for @@debug\n");
+d469 1
+a469 1
+    return unless exists $main::Debug{$key};
+d471 1
+a471 1
+    local($") = "\n";
+d512 1
+@
+
+
+1.18
+log
+@Demo code, munged to allow PS to work.  still need to generalize
+"distillation by MIME type" mechanism
+@
+text
+@d18 1
+a18 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.17 1995/11/15 10:10:55 fox Exp $';
+d138 2
+d196 1
+a196 1
+            &log( "*** accept: " . $Listen->last_error());
+d214 2
+a215 1
+        unless (&collect_request($Accept)) {
+d236 1
+a236 1
+        if ($Method =~ /svcadd/i) {
+d238 1
+a238 1
+                if ($URL =~ /(\S+)@@(\S+):(\S+)/);
+d246 1
+a246 1
+        if ($Method =~ /svcdel/i) {
+d248 1
+a248 1
+                if ($URL =~ /(\S+)@@(\S+):(\S+)/);
+d256 1
+a256 1
+        if ($URL =~ s/^$Const{RegisterURL}//o) {
+d261 1
+a261 1
+            $x = &register($URL, $IPaddr) ;
+d275 1
+a275 1
+        if ($URL =~ /^$Const{StatsURL}$/o) {
+d283 1
+a283 1
+        if ($URL =~ /$Const{RegisterPage}/o) {
+d300 1
+a300 1
+            &handle_conn($Accept);
+@
+
+
+1.17
+log
+@various fixes: handoff hack is working, and pstotext converter.  need to
+generalize mechanism for launching distillers and pythia.cf syntax for
+specifying how to call them.
+@
+text
+@d18 1
+a18 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.16 1995/11/10 08:27:48 fox Exp $';
+d105 1
+a105 1
+    or &Die("listensock (TCP): $Err");
+d110 1
+a110 1
+    or &Die("listensock (UDP): $Err");
+@
+
+
+1.16
+log
+@Remapping your prefs from different IP addrs now works. spurious
+pythia.prefs removed once and for all.  tcp_sock.pl and
+unregistered.html are gone (obsolete).  prefs are now read from
+pythia.cf instead of being hardwired in prefs.pl.
+@
+text
+@d18 1
+a18 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.15 1995/11/03 21:46:59 fox Exp $';
+d48 1
+d52 9
+d69 5
+d98 1
+d104 7
+a110 2
+($Listen = listensock gm_sock $g{port}, $g{qsize})
+    or &Die("open_for_listening: $Err");
+d116 1
+d132 8
+a139 5
+    local($addr);
+    local($c,$zz,$dummy);
+    local($rbits,$wbits,$ebits) = ();
+    local($rout,$wout,$eout) = ();
+    local($sockfh) = ($Listen->filehandles)[0];
+d143 2
+d148 1
+a148 1
+    for ($Con = 0; ; $Con++) {
+d152 1
+a152 2
+      SELECT:
+        while (keys(%Children)) {
+d166 22
+a187 1
+                            $Const{SelectTimeout}) > 0);
+d190 2
+d195 1
+a195 1
+            next;
+d200 5
+d208 1
+a208 1
+            next;
+d215 1
+a215 1
+            next;
+d237 1
+a237 1
+            next;
+d247 1
+a247 1
+            next;
+d265 1
+a265 1
+            next;
+d274 1
+a274 1
+            next;
+d284 1
+a284 1
+            next;
+d380 13
+@
+
+
+1.15
+log
+@Registration, etc works well enough to release this version...
+@
+text
+@d18 1
+a18 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.12 1995/09/29 05:40:23 fox Exp $';
+a49 7
+require ('./gm_sock.pl');
+require ('./child.pl');
+require ('./prefs.pl');
+require ('./register.html.pl');
+require ('./munge_html.pl');
+require ('./services.pl');
+
+d69 1
+d77 8
+d259 17
+d303 2
+a304 1
+#  init other global state
+d331 1
+a331 1
+        # read config info
+d333 1
+a333 10
+            s/\s+/ /g;
+            if (/allow host (\d+\.\d+\.\d+\.\d+)/ ) {
+                $AllowHostAddr{$1}++;
+                next;
+            } elsif (/allow subnet (\d+)\.(\d+)\.(\d+)\.(\d+)/ ) {
+                push(@@AllowSubnet, (($1<<24)+($2<<16)+($3<<8)+($4)));
+                next;
+            } elsif (/allow host (\S+)/) {
+                $AllowHostName{$1}++;
+            }
+@
+
+
+1.14
+log
+@the seeds of scalability have been sown.
+@
+text
+@d99 1
+a108 1
+    local($con);
+d119 1
+a119 1
+    for ($con = 0; ; $con++) {
+d170 2
+d213 9
+d227 1
+a227 1
+            &client_disallowed;
+d234 1
+a234 1
+            &debug('fork', "$con: [$c]\n");
+d290 2
+d396 12
+a407 5
+sub statcollect {
+    local(@@args) = @@_;
+    local($") = "\n";
+    print STATS @@args;
+    print STATS "\n" unless ((pop @@args) =~ /\n$/);
+@
+
+
+1.13
+log
+@Closer....basic registration works, remapping doesn't seem to
+@
+text
+@d55 1
+a74 14
+#
+# default booleans
+#
+
+
+$gb{debug} = 0;
+$help{debug} = 'Send debugging messages to stderr';
+
+$gb{echo} = 0;
+$help{echo} = 'Echo control info traffic';
+
+$gb{echoall} = 0;
+$help{echoall} = 'Echo control & data traffic';
+
+d89 5
+d123 1
+d134 1
+a134 1
+                (delete $Children{$zz}, &log("Reaped $zz"))
+d137 1
+a137 1
+            last if (select($rout=$rbits, undef, $eout=$ebits,
+d143 2
+a144 1
+            die "accept: " . $Listen->last_error();
+d156 37
+a192 1
+        &collect_request($Accept) || &http_error("400 Bad request");
+d194 1
+d197 1
+a197 1
+            &log("Registration request from $IPaddr");
+d210 1
+d212 1
+d223 1
+a223 1
+            print STDERR ("$con: [$c]\n");
+d225 3
+d282 13
+d341 1
+a341 1
+
+d352 7
+d367 9
+a376 1
+    # local(@@args) = sprintf(@@_);
+d395 1
+a395 1
+    print STDERR "$0: start proxy server for digest images\n\n";
+d398 7
+d408 6
+a413 4
+    print STDERR "\n  Boolean options (specify -foo or -nofoo):\n";
+    foreach (keys %gb) {
+        printf STDERR ("-$_: $help{$_} (def -%s$_)\n",
+                       $gb{$_}? "": "no");
+a416 2
+
+        
+@
+
+
+1.12
+log
+@Removed some redundant files
+@
+text
+@a14 1
+use Socket;
+d18 1
+a18 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.11 1995/09/27 20:34:29 fox Exp $';
+a24 1
+$Const{RegisterURL} = '^http://full-sail.cs.berkeley.edu:5555/register/\?';
+a25 2
+$Const{UnregisteredUserPage} =
+  'http://www.cs.berkeley.edu/~fox/glomop/register.html';
+d46 3
+a48 2
+$PackedIP = '';                             # packed IP address of client
+$IPaddr = '';                               # IP addr as string
+d50 1
+a50 1
+require ('./tcp_sock.pl');
+d53 1
+a54 3
+# We will also 'require' one of two files depending on whether the remote
+# browser is or is not Java-aware.  We defer the 'require' until after we have
+# parsed the cmd line!
+d95 13
+a107 3
+&open_for_listening(S, $g{port}, $g{qsize})
+    || &Die("open_for_listening: $Err");
+select(NS); $|=1; select(STDOUT); #fake socket for children
+d120 1
+d122 2
+a123 2
+    vec($rbits, fileno(S), 1) = 1;
+    vec($ebits, fileno(S), 1) = 1;
+d125 2
+a126 2
+    &log("Listening on port $g{port}...");
+    select(S); select(NS); $|=1; select(STDOUT);
+d129 2
+d148 6
+a153 1
+        $addr = accept(NS, S) || &Die( "$0: accept: $!");
+a154 3
+        # form the IP address and the packed IP address
+        $PackedIP = (unpack($Const{Sockaddr}, $addr))[2];
+        $IPaddr = join('.', unpack('C4', $PackedIP));
+d161 2
+a162 2
+        $Socket = NS;
+        &collect_request(NS) || &http_error("400 Bad request");
+d164 2
+a165 1
+        if ($URL =~ s/$Const{RegisterURL}//o) {
+d169 15
+a183 1
+            &send_client( &register($URL, $PackedIP, $IPaddr) );
+a186 1
+        # Fall thru for regular (non-registration) request: fork a child.
+d191 1
+a191 1
+            close(NS);
+d194 1
+a194 1
+            &handle_conn(NS, $addr);
+d274 2
+a275 5
+    shutdown(S, 2);
+    close(S);
+    eval 'shutdown(NS,2)';
+    close(NS);
+    close(STATS);
+d314 1
+a314 1
+    local($") = "\n";
+@
+
+
+1.11
+log
+@Successfully uses POSIX nonblocking waitpid to reap children.  Need to
+be sure that POSIX nonblocking waitpid is supported on host, even tho
+Perl5 provides POSIX interface.
+@
+text
+@d19 1
+a19 1
+$Const{Rev} = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.6 1995/09/11 20:23:45 fox Exp $';
+a92 8
+
+#
+# keep track of children and open sockets
+#
+
+sub reap { warn ("*** reap %d ***" , wait); }
+
+@@child = ();
+d146 2
+a147 2
+        unless (&check_privilege($PackedIP, $IPaddr)) {
+            &http_error("503 Your host not authorized to use this service");
+@
+
+
+1.10
+log
+@Registration works.  Misfeature: when updating prefs, you should be able
+to start from your old prefs and make incremental changes, instead of
+starting from a default prefs screen.  Posting still doesn't work.
+@
+text
+@d14 3
+d31 5
+d39 6
+d46 1
+a46 1
+#  one-time-only globals
+d49 3
+a51 2
+$Posix_Setpgrp = 1;                         # nonzero means Posix semantics for
+                                            # setpgrp; otherwise SysV
+a52 1
+use Socket;
+d56 1
+d62 1
+a62 1
+# defaults
+d73 6
+d85 1
+a85 1
+$help{debug} = 'Enable debugging messages';
+d93 1
+d98 2
+a106 7
+if ($gb{'java'}) {                          # browser is Java-aware!
+    die "This version doesn't work with Java!  " .
+        "RCS checkout the EDGES contour instead\n";
+} else {
+    require './munge_html.pl';
+}
+
+d120 6
+a125 1
+    local($c);
+d127 1
+a127 1
+    print STDERR "Listening on port $g{port}...\n";
+d130 18
+d149 9
+d166 1
+a166 1
+            &send_client( &register($URL, $addr) );
+d173 1
+a173 1
+            push(@@child, $c);
+a177 1
+            $Posix_Setpgrp ? setpgrp() : setpgrp(0,$$);
+d184 36
+d225 2
+a226 1
+
+d230 1
+a230 3
+    # Determine if setpgrp has posix or sysV semantics on this system. Yuck.
+    # If posix semantics, setpgrp can't take an argument.  if SysV semantics,
+    # it must take an argument.
+d232 17
+a248 2
+    eval 'setpgrp(0,$$)';
+    $Posix_Setpgrp = 1 if $@@;
+@
+
+
+1.9
+log
+@registration mostly works.  email and name info is currently dropped on
+the floor, but the mechanism for recording prefs info is sound.  prefs
+info is not yet used in distillation decisions though.
+@
+text
+@d23 1
+a23 1
+$Const{RegisterURL} = '^http://www.cs.berkeley.edu/~fox/glomop/register.html/register/\?';
+a48 1
+
+a51 9
+$g{threshold} = 1.0;                 # kbytes
+$help{threshold} = 'Min size graphic that will be compressed (KBytes)';
+
+$g{bboxsize} = 64;
+$help{bboxsize} = 'Max bounding box size in pixels';
+
+$g{stampcolors} = 4;
+$help{stampcolors} = 'Number of colors in thumbnail reduction';
+
+a61 5
+$gb{keepplace} = 0;
+$help{keepplace} = 'When re-rendering after refinement, auto-scroll page to correct position (increases latency)';
+
+$gb{nobackground} = 1;
+$help{nobackground} = 'Omit irritating background GIFs and JPEGs';
+a70 7
+
+$gb{'java'} = 0;
+$help{'java'} = 'Assume client (browser) is Java(tm)-aware';
+
+$gb{'close'} = 0;
+$help{'close'} = 'Unbind socket from port, and exit';
+
+@
+
+
+1.8
+log
+@registration broken because it needs to occur in parent, not child,
+process. d'oh!
+@
+text
+@d20 18
+d131 13
+a147 1
+#            shutdown(NS,2);
+a148 1
+            wait;                           # reap child
+d151 3
+a153 2
+                &handle_conn(NS, $addr);
+                exit 0;
+d167 3
+a169 1
+    #  open stats collection file
+d171 2
+a172 1
+    open(STATS, ">> $g{statfile}") || die $!;
+@
+
+
+1.7
+log
+@Working version that can also do jpeg distillation, and omit irritating
+background patterns on pages.
+@
+text
+@d14 1
+a14 1
+$Rev = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.6 1995/09/11 20:23:45 fox Exp $';
+d16 3
+a18 2
+$Proxy = 'Pythia';                          # name of this agent
+$Rev = $1 if $Rev =~ /,v\s+([\d.]+)/;
+d134 1
+d148 1
+@
+
+
+1.6
+log
+@stable child with "bare GIF" bug fixed
+@
+text
+@d14 1
+a14 1
+$Rev = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.5 1995/09/10 00:34:18 fox Exp $';
+d16 1
+d56 3
+d63 4
+a66 1
+$help{echo} = 'Echo all server traffic to STDERR';
+@
+
+
+1.5
+log
+@various minor changes.
+@
+text
+@d14 1
+a14 1
+$Rev = '$Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.2 1995/08/30 00:00:39 fox Exp $';
+d33 1
+a33 1
+$g{threshold} = 4.0;                 # kbytes
+@
+
+
+1.4
+log
+@selective rerendering seems to sorta work
+@
+text
+@d36 1
+a36 1
+$g{bboxsize} = 128;
+d39 1
+a39 1
+$g{stampcolors} = 8;
+d51 3
+@
+
+
+1.3
+log
+@added http error reporting and robustness
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl5 
+a2 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.2 1995/08/30 00:00:39 fox Exp $
+d14 4
+d53 4
+a56 1
+$help{debug} = 'Echo all server traffic to STDERR';
+d63 1
+@
+
+
+1.2
+log
+@added more robust error recovery for some cases
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl5
+d3 1
+a3 1
+#  $Header: /disks/barad-dur/now/pythia/CVS/webproxy/digestproxy.pl,v 1.1.1.1 1995/08/29 21:44:10 fox Exp $
+d18 1
+d27 1
+a27 1
+$g{statfile} = 'proxy.stats';
+d49 3
+d63 1
+a63 2
+%Socks = ();
+
+d77 3
+a79 2
+&opensock(S);
+select(NS); $|=1; select(stdout); #fake socket for children
+d92 1
+a92 1
+    select(NS); $|=1; select(stdout);
+a109 31
+#----------------------------------------------------------------------
+#  open socket for listening only
+#
+
+sub opensock {
+    local($sock_fh) = shift;
+    local($name,$aliases,$proto) = getprotobyname('tcp');
+
+    $bind = pack($Sockaddr, &AF_INET, $g{port}, "\0\0\0\0");
+
+    # create socket
+
+    select(NS); $| = 1; select(stdout);
+    socket($sock_fh, &PF_INET, &SOCK_STREAM, $proto) ||
+        &Die ("opensock: socket: $!");
+    setsockopt($sock_fh, &SOL_SOCKET, &SO_REUSEADDR, 1);
+    $Socks{$sock_fh}++;
+
+    # Bind socket to addr/port num
+
+    if ($gb{'close'}) {
+        &parent_cleanup;
+    }
+    bind($sock_fh, $bind) || &Die( "opensock: bind: $!");
+
+    # listen for connections
+
+    listen($sock_fh, $g{qsize}) || &Die( "opensock: listen: failed: $!");
+    select($sock_fh); $| = 1; select(stdout);
+}
+
+a116 3
+    $Sockaddr= 'S n a4 x8';
+    $Crlf = "\r\012";
+    %Port = ('http', 80);
+d128 1
+a129 1
+    shutdown(NS, 2);
+d131 1
+a133 13
+    if (0) {
+    if (@@child) {
+        print STDERR "Killing children: ";
+        foreach (@@child) {
+            if (kill 'INT', $_) {
+                print STDERR "$_ ";
+            } else {
+                print STDERR "[$_: failed] ";
+            }
+        }
+        print STDERR "\n";
+    }
+}
+d170 2
+a171 1
+    local(@@args) = sprintf(@@_);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d3 1
+a3 1
+#  $Header: /home/orodruin/j/grad/fox/digest/RCS/digestproxy.pl,v 1.4 1995/05/16 12:36:00 fox Exp $
+d29 1
+a29 1
+$g{threshold} = 10.0;                 # kbytes
+d32 1
+a32 1
+$g{bboxsize} = 32;
+d212 1
+a212 1
+    local(@@args) = @@_;
+@
+
+
+1.1.1.1
+log
+@initial
+@
+text
+@@

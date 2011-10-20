@@ -1,0 +1,257 @@
+head	1.4;
+access;
+symbols
+	ipse-pcap:1.1.1.1
+	ipse-pcap:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.4
+date	97.06.18.01.07.15;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.06.17.18.14.59;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.06.17.01.56.44;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.06.17.01.09.03;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.4
+log
+@Made many changes..
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "packet.h"
+#include "stream.h"
+#include "module.h"
+#include "uifile.h"
+#include "tcpui.h"
+
+static int tcp_ui_choose(stream_t *stream, void *st)
+{
+    state_t *state = (state_t *)st;
+
+    if (state->dp_ops)
+    {
+      stream->ui = &ui_dynaparse_funcs;
+      stream->uistate = ui_dynaparse_state(stream, state->dp_ops);
+    } else if (state->progname)
+    {
+      stream->ui = &ui_proc_funcs;
+      stream->uistate = ui_proc_state(stream, state->progname,
+				      state->asciiesc, state->limitlen);
+    }
+    else
+    {
+      stream->ui = &ui_file_funcs;
+      stream->uistate = ui_file_state(stream, state->asciiesc,
+				      state->limitlen);
+    }
+    return 0;
+}
+
+void *tcp_init(int handid, char *arg)
+{
+    state_t *state = malloc(sizeof(state_t));
+    if (state == NULL) return (INIT_FAIL);
+    state->handid = handid;
+    state->nports = 0;
+    state->ports = NULL;
+    state->asciiesc = 1;
+    state->limitlen = 0;
+    state->progname = NULL;
+    state->dp_ops = NULL;
+    ui_file_init();
+    if (arg) {
+	char *larg = strdup(arg);
+	char *c,*s,*t;
+	int field = 0;
+	if (larg == NULL) return (INIT_FAIL);
+
+	c = larg;
+	while((s = strsep(&c,":")) != NULL && field < 4)
+	{
+	    switch(field)
+	    {
+	    case 0:
+		/* port numbers */
+		while((t = strsep(&s,",")) != NULL)
+		{
+		    state->ports = realloc(state->ports,
+			sizeof(unsigned short)*(state->nports + 1));
+		    state->ports[state->nports] = atoi(t);
+		    ++(state->nports);
+		}
+		break;
+	    case 1:
+		/* raw flag */
+		if (s[0] == 'r') state->asciiesc = 0;
+		break;
+	    case 2:
+		/* limit length */
+		state->limitlen = atoi(s);
+		break;
+	    case 3:
+		/* program name */
+		free(state->progname);
+		state->progname = strdup(s);
+		break;
+	    }
+	    ++field;
+	}
+
+	free(larg);
+    } else {
+      state->ports = realloc(state->ports,
+			     sizeof(unsigned short)*(state->nports+1));
+      state->ports[state->nports] = 0;
+      ++(state->nports);
+    }
+    return state;
+}
+
+int tcp_handle(interface_t *interface, void *st)
+{
+    streamid_t streamid;
+    streamdir packetdir;
+    stream_t *stream;
+    state_t *state = (state_t *)st;
+    int i,res,wd;
+    ip_packet_t *packet;
+    
+    packet = interface->packet;
+    wd = interface->wd;
+
+    if (packet->iphead.ip_p != IPPROTO_TCP) return 0;
+
+    packetdir = STREAM_DIR_NONE;
+    for(i=0; i<state->nports; ++i) {
+	if ((htons(packet->p.tcp.head.th_dport) == state->ports[i]) ||
+	    ((state->ports[i] == 0) &&
+	     (htons(packet->p.tcp.head.th_dport) < IPPORT_RESERVED))) {
+	    memset((char *)&streamid, 0, sizeof(streamid_t));
+	    streamid.laddr = inet_addr(inet_ntoa(packet->iphead.ip_src));
+	    streamid.haddr = inet_addr(inet_ntoa(packet->iphead.ip_dst));
+	    streamid.lport = packet->p.tcp.head.th_sport;
+	    streamid.hport = packet->p.tcp.head.th_dport;
+	    streamid.protocol = IPPROTO_TCP;
+	    streamid.handid = state->handid;
+	    packetdir = STREAM_DIR_LTOH;
+	    break;
+	} else if ((htons(packet->p.tcp.head.th_sport) == state->ports[i]) ||
+		   ((state->ports[i] == 0) &&
+		    (htons(packet->p.tcp.head.th_sport) < IPPORT_RESERVED))) {
+	    memset((char *)&streamid, 0, sizeof(streamid_t));
+	    streamid.haddr = inet_addr(inet_ntoa(packet->iphead.ip_src));
+	    streamid.laddr = inet_addr(inet_ntoa(packet->iphead.ip_dst));
+	    streamid.hport = packet->p.tcp.head.th_sport;
+	    streamid.lport = packet->p.tcp.head.th_dport;
+	    streamid.protocol = IPPROTO_TCP;
+	    streamid.handid = state->handid;
+	    packetdir = STREAM_DIR_HTOL;
+	    break;
+	}
+    }
+    if (packetdir == STREAM_DIR_NONE) return 0;
+    if ((res = stream_get_node(&streamid, &stream, tcp_ui_choose, st))
+	!= 0) return res;
+
+    /* If we just got a brand new node (inuse 1), we should verify that
+       indeed this is a SYN.  If not, it's probably garbage from an old
+       connection or an ACK from a previous FIN.  In this case, we turf
+       the node, and ignore the packet */
+    if (stream->inuse == 1) {
+      if (packet->p.tcp.head.th_flags & TH_SYN)
+	stream->inuse = 2;   /* we're ready to roll */
+      else {
+	/* Turf that puppy */
+	stream_turf(stream);
+	return 0;
+      }
+    }
+/*    fprintf(stderr, "!!!!!|\n");
+    for (i=0; i<sizeof(ip_packet_t); i++) {
+      if ( (i % 8) == 0)
+	fprintf(stderr, "\n");
+      fprintf(stderr, "%.02x ", *(((unsigned char *) packet) + i));
+    }*/
+    return stream_display(stream, packet, packetdir);
+}
+
+void tcp_clean(void *st)
+{
+    state_t *state = (state_t *)st;
+
+    if (state) {
+      free(state->progname);
+      free(state->ports);
+      free(state);
+    }
+}
+
+int nops = 1;
+module_ops oplist[] = { { tcp_init, tcp_handle, tcp_clean } };
+@
+
+
+1.3
+log
+@OK...getting there...
+@
+text
+@d152 6
+@
+
+
+1.2
+log
+@Yes, more changes..
+@
+text
+@a3 1
+/*#include <netinet/protocols.h>*/
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d4 1
+a4 1
+#include <netinet/protocols.h>
+@
+
+
+1.1.1.1
+log
+@Wohoo--ipse over pcap!
+@
+text
+@@

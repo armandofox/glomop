@@ -1,0 +1,243 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.21.01.11.00;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From geweke@@bang.cs.berkeley.edu  Fri Nov 20 13:58:38 1998
+Return-Path: geweke@@bang.cs.berkeley.edu
+Received: from bang.cs.berkeley.edu (bang.CS.Berkeley.EDU [128.32.36.35]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id NAA17487 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 20 Nov 1998 13:58:38 -0800
+Received: (from geweke@@localhost)
+	by bang.cs.berkeley.edu (8.8.7/8.8.7) id NAA17593;
+	Fri, 20 Nov 1998 13:58:53 -0800
+Message-Id: <199811202158.NAA17593@@bang.cs.berkeley.edu>
+Date: Fri, 20 Nov 1998 13:58:51 -0800 (PST)
+From: geweke@@millennium.berkeley.edu
+Subject: HW #3 / geweke@@CS / 12183838
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+cc: geweke@@CS.Berkeley.EDU
+MIME-Version: 1.0
+Content-Type: TEXT/plain; CHARSET=US-ASCII
+Status: RO
+
+Andrew Geweke / 12183838 / geweke@@{CS,millennium}.Berkeley.EDU
+CS 261 / Homework #3 / 20 November 1998
+
+----------------------------------------------------------------------
+
+1. Problems I see:
+
+18, 19. This already looks like you're going to have a /tmp race 
+condition.
+
+34-45. I'm not sure what it is, but all this changing-UID stuff is bound 
+to have a problem in it somewhere. The fundamental issue is that the 
+set{e,r;g,u}id() interfaces are just plain confusing, and are inconsistent 
+among platforms. It would make sense to come up with a consisitent and 
+clear interface for something so important.
+
+84. Indeed you will; if I make the LOCKF be a symlink to someplace else in the 
+file system (like /etc/passwd), I can cause you to overwrite (as root) any file 
+I want.
+
+90. Again, same problem; here, you will unlink any file in the filesystem. 
+Especially nasty is making LOCKF point to a directory, as unlinking a 
+directory (which you can do as root) will cause filesystem damage.
+
+117. vi is executed as root! Ack! This "vi" will run as root; vi has
+plenty of ways to execute commands (":!/bin/rm -rf /", etc.).
+
+157. If the user's pw_name is greater than (512 - strlen ("invoked by ")) 
+characters, you'll get a buffer overflow. Given, this is unlikely, but it 
+is possible.
+
+162-163. There is a slight race condition here; tmpnam() is used to 
+generate a temporary file, and then, separately, copyfile(0 is used to copy 
+to it. Replacing the chosen tempfile name with a symlink somewhere else 
+can exploit the program.
+
+168-169. More problems. First, the fact that you keep opening & closing the 
+tmpfile provides for race conditions; if I can swap the file for a symlink 
+between the looksok() and rename() calls, then I win. 
+
+173. Again, if I can symlink the LOCKF, you're going to unlink an 
+arbitrary file in the filesystem as root, and there is badness.
+
+
+----------------------------------------------------------------------
+
+2. (Comment: nice combination homework exercise/proof why Active Nets are 
+a *bad* idea.)
+
+1. Even in this simplest variant, one encounters the problems that 
+source-routed IP packets incur, only magnified. Because packets route 
+themselves, it is therefore difficult or impossible to make the usual 
+sanity checks -- i.e., assertions like "a packet with IP address 184.x.x.x 
+can't *possibly* have come in over that interface" become false. This sort 
+of routing opens one up to IP spoofing much more than before. Firewall 
+programming becomes harder, as the interface a packet comes in on now no 
+longer means as much. (The key exploit here is that I can create a packet 
+with an arbitrary, fake IP source address and route it as required; before 
+this, a packet with a fake IP source address would still take a path that 
+may easily give it away as being fake.)
+
+Solving this means, basically, putting zero faith in what the IP headers 
+tell you about a packet's source -- don't make decisions about security 
+based upon a packet's source IP address and/or port, nor which interface 
+it came in over. This is probably a good idea anyway.
+
+2. Ack! Now, simply by inserting one packet, I can redirect all your 
+network traffic to anywhere I want. I can play man-in-the middle, and it's 
+not even *hard*. 
+
+The solution here is to use a cryptographically strong signature to 
+validate the instructions given in the "set handler" packet; however, this 
+requires some sort of public-key infrastructure and the storing of CA 
+public keys at routers. On top of this, signature verification (consumes 
+lots of cycles) will slow down routers even further.
+
+3. Now I can crash/hang your router, too. How fun. It's possible to bound 
+packet execution time, but I still suspect I can heavily degrade the 
+performance of any router out there. Combine this with (2), and as long as 
+I can find a flow going into a given subnet *anywhere on the Internet*, I 
+can crash/hang that subnet.
+
+The solution may be to bound packet execution time (hey, your router's 
+already so slow from all this code, making it a bit slower isn't that big a 
+difference), but this does limit the manipulations you can do anyway. 
+There are language-based things to do (like allowing backwards branches 
+only for loops that provably exit after a finite time), but you'll always 
+disallow some otherwise-valid packets.
+
+4. Even worse. Since by (2) it's pretty trivial to modify a flow's handler, 
+this lets me do the equivalent of TCP hijacking without needing to 
+actually be in the middle, and without nearly as much work. I can now 
+re-write your entire stream and "become" you, pretty trivially.
+
+The solution here is the same as for (2); signing the packet handler means 
+you can only re-write your own stream, which poses no security threats.
+
+5. Now I can fill up your router's buffers by sending it lots and lots of 
+flows that allocate a lot of memory each; this will completely hang your 
+router, and by (1) I can do it from anywhere in the network. Further,
+I could insert a packet into the flow that, using the pre-existing,
+signed program, modifies the state on the router; this may corrupt or
+cause serious security holes in subsequent packets.
+
+The only solution I can see here is to ensure that you have sufficient 
+resources that you will always be able to allocate memory no matter how 
+many flows pass through your router; this requires, I believe, an infinite 
+amount of memory. Alternatively, you could drop flows' buffers using LRU, 
+but then this makes the "active nets" programming model that much harder 
+(soft-state only at routers, never hard state). The second problem
+(where I can corrupt the internal state) is not solvable without
+cryptographic signing of the entire flow, which is probably not
+practical.
+
+6. It doesn't get any better. Now I can fabricate entire IP streams from 
+whole cloth, from any point in the network, and send them anywhere I want. 
+This means that if *anything* does *any* security checks based upon IP 
+headers or the interface packets came in on, it is completely insecure. 
+Further, it's now possible for an attacker to "split" a stream at a router 
+and totally transparently read all your traffic; he can do this from any 
+arbitrary point in the Internet.
+
+The solution here is, for the most part, not to do this. Once can consider 
+restricting the new packets' destination IP address/port combination to be 
+the same as that of the original flow. However, depending on how much 
+re-writing you can do using (4), this may be pointless. You'd also have to 
+make sure the new packets went out over the same interface as the original 
+ones.
+
+7. Depending on what's in the JVM, it gets even worse. JVM bytecodes aren't 
+fundamentally more powerful than BPF w/backwards loops, but now you have 
+to run a garbage collector and security managers. If you allow the 
+standard java.* class libraries, I can now do crazy stuff like open a 
+TCP/IP stream from *within* a packet handler, write a file, or whatever. On 
+the other hand, it'd be nice for those key-cracking contests to be able to 
+run on all the routers out there...
+
+Descent into absurdity. The security problems here are simply so huge 
+(resource consumption on the router, possible bugs in Java, allowing 
+access to arbitrary resources, etc.) that trying to "sandbox" the code 
+somehow is probably fruitless. 
+
+
+Note that there are synergistic effects among all these features. Adding 
+these features means that you can't trust *anything* coming off the network; 
+if you own a router with these "active nets" features, it can be crashed 
+from any other point on the Internet with a trivial amount of work. While 
+the first problem can be solved with end-to-end, public-key cryptography, 
+the second problem is largely too complex to solve. It's much like the JVM 
+sandbox, except that now we care about resource consumption, too.
+
+----------------------------------------------------------------------
+
+3.
+
+1. To block all mobile code, I would take a forked approach: on one hand, I 
+would block all explicitly-specified mobile code (HTTP/FTP requests for 
+..class or .jar files), and also try to search for bit-patterns that look 
+like mobile code (.class headers, etc.). 
+
+The problems here make it very difficult to do this well. You really want 
+to discard APPLET, EMBED, and OBJECT HTML tags, but that may be more 
+processing than a firewall can handle. Mobile code may come packaged in and 
+called anything; just because it's not a .class or .jar file doesn't mean 
+it's not mobile code, and it'll escape the first approach above. The second 
+approach is completely foiled by encryption -- and, more importantly, 
+compression; decompressing and examining archives on the fly is not a 
+reasonable thing to try to do.
+
+2. Now one is asked to differentiate between "safe" and "unsafe" mobile 
+code; the only reasonable way to do this is with digital signatures. 
+(Running mobile code to determine if it's safe is the halting problem.) 
+Thus, one must examine all mobile code to see if it's signed, verify the 
+signature using a public-key infrastructure, and make decisions based on 
+that. Anything that doesn't have a valid signature must be tossed, and 
+somehow one must distinguish between valid signatures that are from 
+trusted entities, and valid signatures that are from untrusted entities. 
+
+Trying to do this requires a PKI as *well* as a way of distinguishing 
+trusted from untrusted entities. This is possible, but difficult.
+
+3. I would argue that the problems here aren't the firewall's fault or the 
+end host's fault per se, but rather are a consequence of the fact that 
+firewalls, by their nature, cannot entirely simulate an end host's 
+behaviour. The behaviour of TCP/IP stacks is well-known and understood, so 
+it's easy to filter out packets trying to cause problems at that level; 
+however, mobile code is at such a higher, more complex level that the 
+firewall is relatively impotent against it.
+
+For example, an end host may load an HTML page and, based upon that page, 
+decide to go fetch and execute some mobile code. Even this decision can 
+only be deduced by the firewall if it is kept completely up-to-date with 
+the browsers on the hosts. Detecting that a request is to fetch mobile 
+code is, in general, difficult or impossible; you will get the easy ones, 
+but hackers will put their mobile code in a ".gif" file, accessible via 
+FTP (so no Content-type headers are sent), and it's indistinguishable from 
+a normal GIF image. 
+
+Assuming complete detection of mobile code, verifying signatures and 
+trustworthiness is straightforward but slow and resource-intensive. Humans 
+must indicate the trustworthiness of entities somehow, and signature 
+verification requires a lot of CPU time. 
+
+
+@

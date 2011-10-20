@@ -1,0 +1,184 @@
+#
+#  DistillerInit
+#  Args: none
+#  Returns: DIstillerStatus code (int)
+#
+
+sub DistillerInit {
+    $ICON_STRING = "<A href=\"http://transend.CS.Berkeley.EDU/prefs.html\"><IMG ALIGN=\"right\" BORDER=0 SRC=\"http://transend.CS.Berkeley.EDU/logo2.gif*^i1=1^\" WIDTH=\"45\" HEIGHT=\"25\"></A><P><BR CLEAR=\"BOTH\">";
+
+    0;    
+}
+
+#
+#  DistillerMain
+#  Args: distiller type (MIME string), data (scalar), %args
+#    (%args is argID,value pairs for arguments to distiller)
+#  Returns: (new data, MIME type, optional distillerStatus [default distOk])
+#
+
+sub DistillerMain {
+    my $type = pop;
+    my $data = pop;
+
+    my $noframes = 0;
+    my $frameset = 0;
+    my $head = 0;
+    my $html = 0;
+    my $body = 0;
+
+    my $in_link = "";
+
+    my $outdata = "";
+
+
+    %args = @_;
+   
+    while (!($data =~ /^$/)) {
+	my ($tag, $pretext, $type, $all);
+	# this is an evil regexp.  EVIL...  what it does is match all
+	# text before a tag and one tag.  That tag can have >'s inside of 
+	# quotes or single quotes because of javascript type stuff
+	# just right now I want to say that javascript sucks
+	$data =~ s/^(([^<]*)(<(\/?\w*)(?:(?:[^>"'])|(?:"(?:[^\\"]|(?:\\.))*")|(?:'(?:[^\\']|(?:\\.)*)*'))*[">']?)?)//s;
+	$all = $1;
+	$pretext = $2;
+	$tag = $3;
+	$type = $4;
+	
+	if (!($type =~ /^(?:\/?a)|(?:img)|(?:input)$/i)) {
+	    $outdata .= $all;
+	    if ($type =~ /^body$/i) {
+		$body = 1;
+	    } elsif ($type =~ /^\/head$/i) {
+		$head = 1;
+	    } elsif ($type =~ /^html$/i) {
+		$html = 1;
+	    } elsif ($type =~ /^frameset$/i) {
+		$frameset = 1;
+	    } elsif ($type =~ /^noframes$/i) {
+		$noframes = 1;
+	    }
+	} elsif ($type =~ /^a$/i) {
+	    $outdata .= $all;
+	    if ($tag =~ /href\s*=/i) {
+		$in_link = $tag; 
+	    }
+	} elsif ($type =~ /^img$/i) {
+	    my $magicsrc;
+            my $oldsrc;
+	    $tag =~ /src\s*=\s*['"]?([^ "']*)['"]?/i;
+	    $magicsrc = $1;
+            $oldsrc = $magicsrc;
+            if ($oldsrc !~ /^$/) {
+		if ($tag =~ /(?:ismap)|(?:usemap)/i) {
+		    $magicsrc = &tomagic($magicsrc, "i8=1");
+		}
+		if ($tag !~ /(?:width)|(?:height)/i) {
+		    $magicsrc = &tomagic($magicsrc, "i2=1");
+		}
+		$tag =~ s/$oldsrc/$magicsrc/;
+		$magicsrc = $oldsrc;
+		$magicsrc = &tomagic($magicsrc, "i1=1");
+		
+		$outdata .= $pretext;
+		if ($in_link !~ /^$/) {
+		    $outdata .= "$tag</a><a href=\"$magicsrc\">&\#164;</a>$in_link";
+		} else {
+		    if ($tag =~ /(?:ismap)|(?:usemap)/i) {
+			$outdata .= "$tag<a href=\"$magicsrc\">&\#164;</a>";
+		    } else {
+			$tag =~ s/$type/$type border="0"/;
+			$outdata .= "<a href=\"$magicsrc\">$tag</a>";
+		    }
+		}
+	    } else {
+		$outdata .= $all;
+	    }
+	} elsif ($type =~ /^input$/i) {
+            if ($tag =~ /transendid\s*=\s*['"]?(.)([^ "']+)['"]?/i) {
+                my $type = $1;
+                my $id = $2;
+                my $inputtype;
+                my $transcendval;
+
+                if ($tag =~ /type\s*=\s*['"]?([^ "']+)['"]?/i) {
+		    $inputtype = $1;
+		}
+
+                if ($tag =~ /transendval\s*=\s*['"]?([^ "']+)['"]?/i) {
+		    $transendval = $1;
+		}
+
+         	if (defined($args{"$id"})) {
+
+	            my $val = $args{"$id"};
+	            if (($inputtype !~ /^text$/i) && ($inputtype !~ /^$/)) {
+                        if ($transendval !~ /^$/) {
+                            if ($type =~ /s/) {
+                                if ($transendval =~ $val) {
+		                   $tag =~ s/>/ CHECKED>/;
+		                }
+    		            } else {
+			        if ($transendval == $val) {
+			            $tag =~ s/>/ CHECKED>/;
+			        }			
+		            }		    
+		        } else {
+		            $tag =~ s/>/ VALUE=\"$val\">/;
+	                }
+                    }
+                }
+                $outdata .= $pretext . $tag;
+            } else {
+		$outdata .= $all;
+	    }
+	} elsif ($type =~ /^\/a$/i) {
+	    $in_link = "";
+	    $outdata .= $all;
+	}
+    }
+
+    if ($args{'6'} == 1) {
+
+	if ($noframes) {
+	    $outdata =~ s/(<\s*noframes[^>]*>)/\1$ICON_STRING/i;
+	} elsif ($frameset) {
+	    # do nothing
+	    1;
+	} elsif ($body) {
+	    $outdata =~ s/(<\s*body[^>]*>)/\1$ICON_STRING/i;
+	} elsif ($head) {
+	    $outdata =~ s/(<\s*\/head[^>]*>)/\1$ICON_STRING/i;
+	} elsif ($html) {
+	    $outdata =~ s/(<\s*html[^>]*>)/\1$ICON_STRING/i;
+	} else {
+	    $outdata = $ICON_STRING .  $outdata;
+	}	
+    }
+
+    return ($outdata, 'text/html');
+}
+
+sub tomagic {
+    my $src = shift;
+    my $magic =  shift;
+    my $m;
+
+    if ($src =~ /\*\^(.*)\^(\?.*)?$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\\1/g;
+	$src =~ s/$m/$m\^$magic/;
+    } elsif ($src =~ /\?(.*)$/) {
+	$m = $1;
+	$m =~ s/([\[\\.*?$^()\]])/\\\1/g;
+	$src =~ s/\?$m/\*\^$magic\^\?$m/; 
+    } else {
+	$src .= "*^$magic^";	
+    }
+
+    $src;
+}
+
+1;
+

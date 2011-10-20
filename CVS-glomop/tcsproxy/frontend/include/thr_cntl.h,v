@@ -1,0 +1,574 @@
+head	1.17;
+access;
+symbols
+	Yatin-final:1.17
+	Yatin:1.17.0.2
+	pre-yatin-merge:1.17
+	transend-beta2:1.16
+	fox-dev:1.16.4.2
+	frontend-ng:1.15
+	transend-beta-latest:1.15
+	Aggregators:1.14
+	NoAggregators:1.14
+	iang:1.13.0.2
+	transend-beta:1.12.0.2
+	SOSP:1.12
+	merged_preintegrate:1.4
+	heisenbug:1.4
+	PRE_INTEGRATION:1.4
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.17
+date	97.08.30.21.34.04;	author fox;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.07.25.03.37.37;	author fox;	state Exp;
+branches
+	1.16.4.1;
+next	1.15;
+
+1.15
+date	97.06.04.01.16.38;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.05.11.11.23.28;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.04.28.19.03.45;	author fox;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.03.06.07.18.15;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.03.05.00.30.56;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.03.04.03.05.53;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.03.03.23.36.45;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.03.03.22.38.47;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.13.02.00.49;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.02.05.00.32.57;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.02.04.05.37.21;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.15.00.47.46;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.08.01.50.41;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.10.28.02.05.59;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.25.00.28.43;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.10.25.00.28.43;	author fox;	state Exp;
+branches;
+next	;
+
+1.16.4.1
+date	97.08.11.04.12.01;	author fox;	state Exp;
+branches;
+next	1.16.4.2;
+
+1.16.4.2
+date	97.08.15.03.42.56;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.17
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  Declarations for multithreading control routines
+ */
+
+#ifndef _THR_CNTL_H
+#define _THR_CNTL_H
+#include  <sys/time.h>
+/*
+ *  Structure used for synchronization of worker threads
+ */
+
+typedef void *TaskArg;
+typedef void *ThrFunc(void *);
+typedef ThrFunc *ThrFuncPtr;
+
+typedef struct _task_t {
+  UINT32 task_age;              /* how many stages we've gone thru */
+  TaskArg task_data;
+  UINT32 task_id;
+  UINT16 task_priority;
+  int thrindex;
+  UINT32 task_parent;
+  UINT32 task_child_index;
+  char *task_metadata;
+  ThrFuncPtr task_exc_handler;
+  ThrFuncPtr task_go_proc;
+} task_t, *QUEUE_PTR;
+
+typedef void *GoProc(task_t *);
+
+#define TASK_GO_PROC(t)         (t)->task_go_proc
+#define TASK_EXC_HANDLER(t)     (t)->task_exc_handler
+#define TASK_DATA(t)            (t)->task_data
+#define TASK_ID(t)              (t)->task_id
+#define TASK_METADATA(t)        (t)->task_metadata
+#define TASK_PARENT(t)          (t)->task_parent
+#define TASK_CHILD_INDEX(t)     (t)->task_child_index
+#define TASK_THRINDEX(t)        (t)->thrindex
+#define SET_TASK_GO_PROC(t,p)   (t)->task_go_proc = (p)
+#define SET_TASK_EXC_HANDLER(t,p) (t)->task_exc_handler = (p)
+#define SET_TASK_DATA(t,p)      (t)->task_data = (TaskArg)(p)
+#define SET_TASK_ID(t,p)        (t)->task_id = (UINT32)(p)
+#define SET_TASK_METADATA(t,p)  (t)->task_metadata = (void *)(p)
+#define SET_TASK_PARENT(t,p)    (t)->task_parent = (UINT32)(p)
+#define SET_TASK_CHILD_INDEX(t,p) (t)->task_child_index = (UINT32)(p)
+#define CALL_TASK_GO_PROC(t)    assert(TASK_GO_PROC(t) != (ThrFuncPtr)NULL); \
+                                (*((t)->task_go_proc))(t);
+
+/*
+ *  Thread state instrumentation
+ */
+
+typedef enum { 
+  THR_IDLE=0, THR_ACCEPTED, THR_CACHE, THR_DISTILLER, THR_WRITEBACK, 
+  THR_DISTILLERSEND, THR_DISTILLERWAIT, THREAD_STATE_MAX
+} thread_state_t;
+/*
+ *  end-to-end latency instrumentation.  Each thread maintains a pair of
+ *  buffers of timestamp information ("milestones") and on every N'th  request
+ *  (N is parameterizable) writes into alternating buffers.  The
+ *  m_readable field indicates that this buffer contains a complete set
+ *  of milestones (i.e. timestamps for each point in the thread's life);
+ *  the invariant is that at most one buffer from each pair will have
+ *  this field set at any time.
+ *
+ *  The monitoring thread periodically runs through all buffers that
+ *  have the m_readable field set, and aggregates the information in
+ *  those buffers for reporting running average and variance.   Since
+ *  the monitoring thread does not read the buffers atomically, there is
+ *  still a race condition where the monitoring thread reads
+ *  m_readable, the reporting thread turns off m_readable, and the
+ *  monitor starts reading buffered data even as the reporting thread is
+ *  overwriting it; but this is likely to be rare, and well worth the
+ *  cost of avoiding another critical section and associated mutices.
+ */
+
+struct inst_milestones {
+  struct timeval m_arrival;
+  struct timeval m_headersdone;
+  struct timeval m_cachestart;
+  struct timeval m_cachedone;
+  struct timeval m_distillstart;
+  struct timeval m_wbstart;
+  struct timeval m_wbdone;
+  UINT32 inputsize;
+};
+
+typedef struct {
+  struct inst_milestones ms[2];
+  int readable[2];               /* is each buffer ready to read? */
+  int which_buffer;
+  UINT32 last_report;
+  thread_state_t state;
+} Inst;
+
+extern Inst *thread_inst;
+#ifdef INST
+#define INST_timestamp(ndx,what) \
+ gettimeofday(&thread_inst[(ndx)].ms[thread_inst[(ndx)].which_buffer].what,NULL)
+#define INST_set_size(ndx,size)  \
+ thread_inst[(ndx)].ms[thread_inst[(ndx)].which_buffer].inputsize = (size)
+#else
+#define INST_timestamp(x,y)
+#define INST_set_size(x,y)
+#endif
+/*
+ *  Function prototypes for worker-thread interfaces
+ */
+
+int make_threads(int nthreads, int report_interval);
+int reap_threads(void);
+int dispatch(task_t *newtask);
+/*
+ *  Instrumentation functions
+ */
+void inst_init(void);
+void INST_set_thread_state(int thrindex, thread_state_t state);
+void INST_begin_timestamp(int thrindex);
+void INST_end_timestamp(int thrindex);
+void INST_start_info_munging();
+void INST_munge_info(int thrindex, struct inst_milestones *milestone);
+void INST_end_info_munging();
+
+#ifdef __GNUC__
+
+static int _res  __attribute__ ((unused)) = 0;
+#define THR_OP(what,func) \
+  if ((_res=(func))) { \
+    MON_SEND_4(MON_ERR, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }
+
+#else /* not __GNUC__ */
+
+#define THR_OP(what,func) { int _res=(func); if (_res) { \
+  MON_SEND_4(MON_ERR, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }}
+
+#endif /* __GNUC__ */
+
+#define new_task(t)      (*t) = SAFEMALLOC(1,task_t)
+#define release_task(t) FREE(t)
+
+#endif /* ifndef _THR_CNTL_H */
+@
+
+
+1.16
+log
+@evil bug in parse_status_and_headers was overwriting caller stack and
+causing coredumps....we flushed it out of hiding by forcing everything
+to bypass.  still need to test steve's changes and retrofit the new
+mechanism for dealing with push.jpg.
+@
+text
+@d7 1
+a7 1
+
+d98 1
+a98 1
+#define INST_TIMESTAMP(ndx,what) \
+d100 1
+a100 1
+#define INST_SET_SIZE(ndx,size)  \
+d103 2
+a104 2
+#define INST_TIMESTAMP(x,y)
+#define INST_SET_SIZE(x,y)
+d117 15
+a131 6
+void inst_set_thread_state(int thrindex, thread_state_t state);
+void inst_begin_timestamp(int thrindex);
+void inst_end_timestamp(int thrindex);
+void inst_start_info_munging();
+void inst_munge_info(int thrindex, struct inst_milestones *milestone);
+void inst_end_info_munging();
+d134 3
+a136 1
+  proxy_errlog_4("[%d]%s: %s", pthread_self(), (what), strerror(_res)); }}
+@
+
+
+1.16.4.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d7 1
+a7 1
+#include  <sys/time.h>
+d98 1
+a98 1
+#define INST_timestamp(ndx,what) \
+d100 1
+a100 1
+#define INST_set_size(ndx,size)  \
+d103 2
+a104 2
+#define INST_timestamp(x,y)
+#define INST_set_size(x,y)
+d117 6
+a122 15
+void INST_set_thread_state(int thrindex, thread_state_t state);
+void INST_begin_timestamp(int thrindex);
+void INST_end_timestamp(int thrindex);
+void INST_start_info_munging();
+void INST_munge_info(int thrindex, struct inst_milestones *milestone);
+void INST_end_info_munging();
+
+#ifdef __GNUC__
+
+static int _res  __attribute__ ((unused)) = 0;
+#define THR_OP(what,func) \
+  if ((_res=(func))) { \
+    MON_SEND_4(MON_ERR, "[%d]%s: %s", pthread_self(), (what), strerror(_res)); }
+
+#else /* not __GNUC__ */
+d125 1
+a125 3
+  MON_SEND_4(MON_ERR, "[%d]%s: %s", pthread_self(), (what), strerror(_res)); }}
+
+#endif /* __GNUC__ */
+@
+
+
+1.16.4.2
+log
+@*** empty log message ***
+@
+text
+@d129 1
+a129 1
+    MON_SEND_4(MON_ERR, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }
+d134 1
+a134 1
+  MON_SEND_4(MON_ERR, "[%lu]%s: %s\n", (UINT32)pthread_self(), (what), strerror(_res)); }}
+@
+
+
+1.15
+log
+@merged changes from head of transend-beta branch
+@
+text
+@d97 1
+d102 4
+a105 1
+
+@
+
+
+1.14
+log
+@changes for dataflow stuff, chaining stuff, aggregators
+@
+text
+@d120 2
+a121 2
+#define THR_OP(what,func) if ((_res=(func)) != 0) { \
+  proxy_errlog_4("[%d]%s: %s", pthread_self(), (what), strerror(_res)); }
+@
+
+
+1.13
+log
+@distiller chaining is alive sort of
+@
+text
+@d22 3
+d35 3
+d43 3
+a45 1
+
+a124 4
+
+#ifndef _res
+static int _res = 0;
+#endif
+@
+
+
+1.12
+log
+@Modified the frontend and libptmstub to provide a more detailed "blinking
+light" view of the stuff being done inside the Distill() call
+@
+text
+@d17 1
+a17 3
+  pthread_cond_t task_cond;
+  pthread_mutex_t task_mtx;
+  void *task_result_ptr;
+@
+
+
+1.11
+log
+@Added "loadavg" instrumentation in thr_mon.c, though it doesn't really
+work yet.  Broke out instrumentation into separate funcs for
+readability.  minor bug fix (malloc -> alloca) in httpgo.c.  moved
+monitor debugging macros from proxy.h into debug.h.  frontend now
+bypasses original if size is below default threshold, or if distiller
+cannot be launched.
+@
+text
+@d49 1
+a49 1
+  THR_DISTILLERDONE, THREAD_STATE_MAX
+@
+
+
+1.10
+log
+@Modified thr_mon.c to allow me to hook in my instrumentation code
+@
+text
+@d79 1
+d93 2
+a94 1
+
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d108 3
+@
+
+
+1.8
+log
+@added stuff to do timestamp monitoring at various interesting points in
+a worker thread's lifetime.  also split out monitoring stuff into its
+own file thr_mon.c.
+@
+text
+@d101 4
+@
+
+
+1.7
+log
+@Added the brown color to the thread monitor panel
+@
+text
+@d51 42
+d101 3
+a103 1
+void set_thread_state(int thrindex, thread_state_t state);
+@
+
+
+1.6
+log
+@added thread-monitoring stuff to frontend, fixed thread-monitoring procs in GUI, added proxy autoconfig file target to toplevel Makefile
+@
+text
+@d48 2
+a49 2
+  THR_IDLE=0, THR_ACCEPTED, THR_CACHE, THR_DISTILLER, THR_WRITEBACK,
+  THREAD_STATE_MAX
+@
+
+
+1.5
+log
+@thread state logging added to frontend
+@
+text
+@d48 2
+a49 1
+  THR_IDLE=0, THR_ACCEPTED, THR_CACHE, THR_DISTILLER, THR_WRITEBACK
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d23 1
+d34 1
+d44 8
+d58 1
+@
+
+
+1.3
+log
+@configure script now generates include path automatically
+@
+text
+@d27 1
+@
+
+
+1.2
+log
+@HTTPd thread can accept socket connections, queue them to be handled,
+and have them successfully picked up, done and deallocated.
+@
+text
+@a7 2
+#include <assert.h>
+
+a11 1
+typedef UINT16 TaskPrio;
+d13 1
+a13 1
+typedef void *ThrFunc(TaskArg arg);
+d22 1
+a22 1
+  TaskPrio task_priority;
+d27 1
+d40 6
+a45 1
+int make_threads(int nthreads);
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 38
+a42 1
+int make_threads(void);
+d48 8
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

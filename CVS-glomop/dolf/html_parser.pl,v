@@ -1,0 +1,243 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @# @;
+
+
+1.1
+date     96.11.27.21.34.53;  author fox;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     96.11.27.21.34.53;  author fox;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@# HTML parser driver
+# $Id: html_parser.pl,v 1.6 1996/09/09 23:04:16 fox Exp $
+
+package html_parser;
+@@ISA = qw(HTML::Parser);
+
+=head1 NAME
+
+html_parser - front end for Gisle Aas's libwww-perl HTML::Parser class
+
+=head1 SYNOPSIS
+
+  require "html_parser.pl";
+
+  # Constructors:
+
+  $p = new html_parser ($htmltext,$contentproc,$whitespaceproc,$debugproc);
+
+  # Instance methods:
+
+  $p->tag_begin($tag,$callback_proc);
+  $p->tag_end($tag,$callback_proc);
+
+  $p->html_content_proc($subref);
+  $p->html_whitespace_proc($subref);
+
+  $current_line = $p->line_count;
+  $p->whitespace_significant($arg);
+
+  $p->parse_html_string;
+
+=head1 DESCRIPTION
+
+Implements an HTML parser object that works kind of like a YACC parser: you
+provide the action routines for the different "reductions", and then call the
+parser.  I know it should work differently, e.g. being able to repeatedly call
+something like $p->parse_next_token, but it doesn't yet.
+
+There are two kinds of action routines:
+
+=over 3
+
+=item *
+
+The routine called to emit text.
+
+=item *
+
+The routine called when a begin or end tag is found
+(e.g. "<A HREF=foo>" or "</A>")
+
+=back
+
+You set up these routines in advance, then call the parser.  The parser object
+itself is passed as the first argument to all callbacks; since this
+object is really a reference to a blessed hash, you can use the hash to
+store your own arbitrary state. (If you don't know what that means, see 
+L<perlref(1)> and L<perlobj(1)>.) For example, the simplest callback routine
+for HTML content would simply accumualte content in a string,
+which would be stored in the parser object's hash and could therefore be
+accessed and modified (added to) from within the callback.
+
+=head1 CONSTRUCTOR
+
+=item $h = new html_parser ($text,$content,$tag_begin,$tag_end)
+
+Returns a new HTML parser object that will parse the HTML text stored in
+$text.  $content should be a reference to a procedure to
+call whenever HTML 
+text is parsed; see the descriptions of those
+functions below for details on what arguments they are called with.
+$tag_begin and $tag_end are the default procedures to be called when an opening
+or closing tag respectively is parsed.  They
+can be overridden for specific tags using L<"/tag_begin"> and
+L<"/tag_end">; see those functions for details on how the tag procedure
+is called.
+
+=cut
+
+sub new {
+    my ($class,$text,$content,$tag_begin,$tag_end,$err) = @@_;
+
+    # make a new HTML::Parser object.
+
+    my $self = new HTML::Parser;
+    bless($self, $class);
+
+    $self->{"text"} = $text;
+    $self->{"html_content_proc"} = $content;
+    $self->{"tag_begin_default"} = $tag_begin;
+    $self->{"tag_end_default"} = $tag_end;
+
+    $self;
+}
+
+=item $p->tag_begin($tag,$callback_proc)
+
+=item $p->tag_end($tag,$callback_proc)
+
+Causes $callback_proc (which must be a code reference or name of a
+subroutine)  to be called whenever an opening (resp. closing)
+tag matching $tag 
+is encountered.  (No regexps; exact matches only, case is ignored.)  
+For
+example, $p->C<tag_begin("IMG", "myPkg::imgHandler")> will cause
+procedure C<imgHandler> in package C<myPkg> to be called whenever an
+"IMG" tag is seen.  $p->C<tag_end("HTML", "endHtml")> will cause
+procedure C<endHtml> in the caller's package to be called when an
+"/HTML" tag is seen.
+
+The
+special tag "END" causes the callback to occur after parsing is finished, 
+so you can do cleanup, send HTML to the client, or whatever.
+
+The callback procedure receives four arguments: the
+parser object, the actual 
+tag that was found (e.g. "IMG"), the complete text of the HTML escape
+that begins with the tag (e.g. "IMG SRC=/foo/bar.gif ALIGN=left"), and a
+reference to a hash of the attribute/value pairs (in the example just
+given, there would be a reference to a hash whose key "SRC" has value
+"/foo/bar.gif" and key "ALIGN" has value "left").  The tag_end key receives the
+same four arguments plus an additional argument whose value is true if and only
+if the tag was explicitly closed.  For example, if a "P" tag is followed by
+another "P" without an intervening closing "/P", the closing "/P" will be
+implicitly assumed present, so the tag_end procedure for "P" will be called
+with a final argument whose value is false.  If the closing "/P" had appeared
+in the original HTML, the last arg in the call to the tag_end procedure would
+be true.
+
+The callback can be written like this:
+
+ sub callback {
+    my $parser = shift;
+    my $tag = shift;
+    my $text = shift;
+    my %attribs = % {shift};
+    my $explicit = shift;      # tag_end callback only
+    # ...code...
+ }
+
+The callback's return value is ignored.
+
+=cut
+
+sub tag_begin { $_[0]->{"begin_" . lc $_[1]} = $_[2] }
+sub tag_end { $_[0]->{"end_" . lc $_[1]} = $_[2] }
+
+sub start { &do_tag("begin", @@_) }
+sub end { &do_tag("end", @@_) }
+
+sub do_tag {
+    my($which,$self,$tag,$attr) = @@_;
+    my $procname = "${which}_$tag";
+    my $tagstart = ($which eq 'begin'? "<$tag" : "</$tag");
+    # build up original tag text - a shame that we have to do this.
+    my @@tagattrs = ();
+    for (keys %$attr) { push(@@tagattrs, join('=', $_, "\"$attr->{$_}\"")); }
+    my $tagtext =  join(' ', $tagstart, @@tagattrs) . ">";
+    $tag = lc $tag;
+    if (defined $self->{$procname}) {
+        # add an extra arg to simulate "explicit" for tag_end
+        &{$self->{$procname}}($self,$tag,$tagtext,$attr,1);
+    } else {
+        &{$self->{"tag_${which}_default"}}($self,$tag,$tagtext,$attr,1);
+    }
+}
+
+sub text { goto  &{$_[0]->{"html_content_proc"}} }
+
+sub strict_nesting {}
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $p->parse_html_string
+
+Parses the HTML and returns when done.   Currently, error checking is
+minimal and most warnings have been turned off (go through the code and
+find the commented 'warn' statements if you want to do debugging).
+
+=cut
+
+sub parse_html_string {
+    my $self = shift;
+    $self->parse($self->{"text"} || shift @@_);
+    $self->parse(undef);                    # tell parser we're done
+    # if there was an end_html proc registered, call it.
+    if (defined $self->{"begin_end"}) {
+        &{$self->{"begin_end"}}($self);
+    }
+}
+
+=back
+
+=head1 BUGS
+
+C<html_comment>, C<html_begin_doc> are not yet user-settable
+even though they should be.
+
+This parser is faster than Jim Davis's parser, but not fast enough...
+
+=cut 
+
+1;
+@
+
+
+1.1.1.1
+log
+@cs294-7 DOLF (digital objects) project
+@
+text
+@@

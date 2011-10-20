@@ -1,0 +1,169 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.31.02.12.54;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From nikitab@@glasgow.CS.Berkeley.EDU  Fri Oct 30 17:43:04 1998
+Return-Path: nikitab@@glasgow.CS.Berkeley.EDU
+Received: from glasgow.CS.Berkeley.EDU (glasgow.CS.Berkeley.EDU [128.32.37.64]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id RAA14255 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 30 Oct 1998 17:43:04 -0800
+Received: from glasgow.CS.Berkeley.EDU (localhost [127.0.0.1]) by glasgow.CS.Berkeley.EDU (8.8.3/8.6.9) with ESMTP id RAA04138 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 30 Oct 1998 17:43:18 -0800 (PST)
+From: Nikita Borisov <nikitab@@CS.Berkeley.EDU>
+Message-Id: <199810310143.RAA04138@@glasgow.CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw2
+Date: Fri, 30 Oct 1998 17:43:17 -0800
+Status: RO
+
+Q1.
+
+1. A stateful packet inspection firewall can maintain as much state and
+knowledge about a connection as an application level proxy would - it
+can parse the application-level protocol and perform decisions based on
+this.  The main disadvantage is that since it is a packet filter, it can
+only drop packets, which means that it can't _normalize_ an
+application-level connection to a subset of the protocol (eg. it
+wouldn't send IAC-WONT messages during a telnet session).  
+
+There is another significant difference, other than the fact that the
+only operation of a firewall is "delete".  In a stateful firewall, the
+TCP/IP stack is part of the firewall, while in the application level
+firewall it is separate.  This explicit protocol stack is a two-edged
+sword.
+
+On one edge, we get greatly improved performance.  If an application
+proxy is simply forwarding some information, we have to incur the
+complexity not only of deconstructing a packet into the underlying
+protocols, but the reverse construction of a new, nearly identical
+packet.  In a firewall, we can save on the latter, since we simply send
+out the original packet.  Also, we can more easily forward some
+protocols - for example, while guarding port 22, we know that we're not
+going to be able to parse much, so we can just forward the packets once
+we've determined that they're a TCP packet; so we shortcut our firewall
+around the transport layer.   It also enables us to forward protocols
+which don't make it up to the application level, such as the ICMP
+echo-request/reply protocol, if we want to be able to ping machines
+behind the firewall.
+
+However, each of these optimizations has a disadvantage.  By reusing the
+packet sent by the outside host, we leave ourselves open to various
+TCP/UDP/IP level attacks that we don't know about, since the destination
+system will have to parse a potentially maliciously constructed packet.
+Shortcutting the firewall below the application layer is also, while
+often tempting, usually not a good idea.  Even with SSH, say, you
+probably want to do some minimal verification that the host is indeed
+talking proper SSH protocol, as well as possibly verify any
+post-encryption message formating (I'm not sure if there is any).
+Finally, letting through the ICMP echo-requests is probably a bad idea,
+in light of previous attacks.
+
+2.
+
+A network IDS is basically a passive stateful firewall.  The IDS detects
+attacks by inspecting all of the packets; presumably, it has to keep
+state of the connections it's interested in.  A lot of IDS problems
+apply to stateful firewalls as well - the state maintained tries to be
+an accurate representation of what the protected host thinks the
+connection looks like, but there are many tricks that can be used to
+fool it (some of these are even successful on some stateless packet
+filters, such as IP fragmentation).  
+
+However, the significant difference between an IDS and a stateful
+firewall is that the firewall can stop attacks that it detects, while
+the best that an IDS can do is try to employ countermeasures after
+detection, which may be too late.  Eg. if an IDS notices a suspicious
+looking packet that includes the words 'rm -rf /', it can try to reset
+the connection, but the damage will probably already have been done;
+while a firewall can simply not forward this packet.  As well, a
+properly configured stateful firewall will only allow a small subset of
+ports/protocols through, while it's hard to imagine an IDS that sends a
+RST on every TCP connection to ports it doesn't recognize; and UDP is a
+lost cause.  Finally, a firewall is generally a fail-closed system,
+while IDS is fail-open.
+
+The above are all advantages of a stateful firewall, but they come at a
+price.  The main one is performance; both an IDS and a stateful firewall
+have to be able to _parse_ each packet, but the firewall has to reinject
+it, introducing latency.  Also, you lose some flexibility - a firewall
+requires modifications to the network topology, while you can just slap
+an IDS on an ethernet segment.
+
+Q2. For some of the ways listed on the web page, the direction the stack
+grows in has little effect.  Attacks 1, 2, and 5 basically overwrite
+other variables that are either close by on the stack or are global
+(with a global buffer).  You might see a difference in which variables
+are exploitable - take the following segment:
+
+int i_am_root;
+char buf[256];
+int i_am_toor;
+
+if the stack grows down, "i_am_root" will probably be placed above buf,
+so it will be exploitable.   If stack grows up, the order becomes
+reversed, but now "i_am_toor" is exploitable.  Statistically, it's all
+the same.
+
+Attacks 3 and 4 rely on modifying the return code of the current
+function.  Growing a stack upwards makes that return value unreachable,
+so exactly the same attacks aren't possible.  The good news is that
+those are the most common, most easy to do, and most powerful attacks.
+So is this a big win?
+
+Well, we have a "new" (yet remarkably similar to the original one)
+attack now.  If a function passes a pointer to an automatic buffer to a
+child function, wherein a buffer overflow occurs, we can overwrite the
+child's return address (which ends up above the buffer now).  So
+something that couldn't be exploited before AFAIK is now vulnerable:
+
+int main(void) {
+   char buf[256];
+   foo(buf);
+   exit(0); /* so overwriting main's return address is useless */
+}
+
+void foo(char *s) {
+   /* if stack grows up, we can overwrite the return address of foo */
+   gets(s);
+}
+
+We can still say that upwards growing stacks are an improvement - the
+above example is not the common case; the overflowed buffer usually _is_
+inside the current stack frame.  Or is it?  Notice that the buffer
+overflow actually occurs in gets(), so even if we couldn't change foo's
+return address, we certainly could change the return address of gets().
+Where do most buffer overruns occur?  Usually in functions such as
+sprintf, gets, strcpy, strcat, ..., hence not inside the stack frame
+where the buffer is allocated.  In the case of string functions, you may
+get some help - strcpy, strcat can often be inlined by compilers.  But
+sprintf certainly won't be.
+
+Q3. Run-time pointer verification.  One way to do this 
+is to expand pointers to include the information about the bounds of
+the object they're pointing to; pass along the information during every
+assign, and check it during every dereference.  It may be possible to
+optimize this sufficiently to make this an acceptable solution.
+
+Another option is to lay out arrays on a different stack than the
+rest of the data.  In fact, there was a multi-stacked EGCS recently
+released (cf. bugtraq), which does something like allocate one stack per
+automatic array.  Efficiency is surprisingly not too bad.
+
+- Nikita
+
+@

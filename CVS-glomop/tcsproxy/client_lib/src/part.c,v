@@ -1,0 +1,1417 @@
+head	1.25;
+access;
+symbols
+	Yatin-final:1.25
+	Yatin:1.25.0.2
+	pre-yatin-merge:1.25
+	transend-beta2:1.25
+	fox-dev:1.25
+	client_lib-ng:1.23
+	transend-beta-latest:1.23
+	Aggregators:1.23
+	NoAggregators:1.23
+	iang:1.22.0.2
+	transend-beta:1.20.0.2
+	SOSP:1.17
+	merged_preintegrate:1.7
+	heisenbug:1.7
+	PRE_INTEGRATION:1.7;
+locks; strict;
+comment	@ * @;
+
+
+1.25
+date	97.07.15.02.43.04;	author fox;	state Exp;
+branches;
+next	1.24;
+
+1.24
+date	97.06.06.00.07.49;	author fox;	state Exp;
+branches;
+next	1.23;
+
+1.23
+date	97.05.08.21.47.52;	author fox;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	97.04.29.23.06.32;	author gribble;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	97.04.28.20.54.38;	author gribble;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	97.04.19.00.46.07;	author gribble;	state Exp;
+branches
+	1.20.2.1;
+next	1.19;
+
+1.19
+date	97.04.19.00.16.28;	author gribble;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	97.04.17.21.44.48;	author aspolito;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	97.02.08.02.27.33;	author gribble;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	97.02.05.01.39.44;	author gribble;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	97.01.29.23.55.45;	author fox;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.01.29.05.04.56;	author gribble;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	97.01.29.01.42.52;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.01.28.22.48.52;	author gribble;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.01.28.03.04.31;	author gribble;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.01.28.03.02.41;	author gribble;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.01.28.02.12.40;	author gribble;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.01.28.01.56.32;	author gribble;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.12.06.11.38.44;	author gribble;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.05.01.13.08;	author gribble;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.01.07.02.46;	author gribble;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.28.14.27.40;	author gribble;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.21.02.35.08;	author gribble;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.15.04.48.29;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.10.28.01.14.48;	author gribble;	state Exp;
+branches;
+next	;
+
+1.20.2.1
+date	97.04.28.20.52.47;	author gribble;	state Exp;
+branches;
+next	1.20.2.2;
+
+1.20.2.2
+date	97.04.29.23.05.37;	author gribble;	state Exp;
+branches;
+next	1.20.2.3;
+
+1.20.2.3
+date	97.05.08.21.53.05;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.25
+log
+@makefile changes to link pthreads only at end, which was causing severe bad behaviors under linux since different people were calling different signal()s.  SIGHUP is now used instead of SIGUSR1 to signal components to reinitialize themselves, and SIGTERM is used to kill them gracefully.  Layout stuff for Pilot works but is still inelegant.
+@
+text
+@/*
+ * File:          part.c
+ * Purpose:       Partition management for the Harvest cache substrate
+ * Author:        Steve Gribble
+ * Creation Date: October 23rd, 1996
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
+#include <assert.h>
+
+#include "config_tr.h"
+
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#endif
+
+#include "clib.h"
+#include "icp.h"
+#include "utils.h"
+#include "part.h"
+#include "configure.h"
+#include "md5.h"
+#include "optdb.h"
+
+#include "libmon.h"
+
+extern Monitor *gMon;
+
+/* Various globals used for configuration information */
+pthread_mutex_t config_list_mutex;
+extern ll       config_list;
+
+extern Options part_opts;
+
+/* The structure describing the currently up partitions */
+pthread_mutex_t partition_mutex;
+int             num_partitions = 0;
+ll              partition_list = NULL;
+
+/* Monitor information */
+Monitor        *pMon;
+
+/* Cached TCP information */
+struct sockaddr *localaddr;
+int              localaddrlen;
+struct protoent  tcpproto;
+int              attempt_to_regrow=0;
+
+int  part_compare(void *d1, void *d2);
+void part_nuke(void *nukeMe);
+int  get_part_number(int num_partitions, char *url);
+void regrow_partitionlist(int thesignal);
+void do_regrow(void);
+clib_response do_suck_from_configfile(Options opts);
+void stream_ntoa(unsigned long addr, char *buf);
+
+clib_response Part_Initialize(Options opts, Monitor *defMon)
+{
+  clib_response    retval = CLIB_OK;
+  int              pretval;
+  struct protoent  *foo;
+  cfg_nv           *match;
+  char             *ip, def_ip[20] = "228.9.10.7";
+  char             tmp_ip[20];
+  int              port, def_port = 8884, ttl, def_ttl = 4;
+  ll               tmp;
+
+  signal(SIGHUP, regrow_partitionlist);
+
+  foo = getprotobyname("tcp");
+  memcpy(&tcpproto, foo, sizeof(struct protoent));
+
+  if ((pretval = pthread_mutex_init(&partition_mutex, NULL)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+
+  if ((pretval = pthread_mutex_init(&config_list_mutex, NULL)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+
+  /* Make a local address */
+  localaddr = (struct sockaddr *) malloc(sizeof(struct sockaddr_in));
+  localaddrlen = sizeof(struct sockaddr_in);
+  make_inetaddr(NULL, NULL, (struct sockaddr_in *) localaddr);
+  if ((retval = config_parse(opts)) != CLIB_OK)
+    return retval;
+
+  tmp = config_list; match = get_next_matching("Monitor.listen", &tmp);
+  if (match == NULL) {
+    ip = def_ip;
+    port = def_port;
+    ttl = def_ttl;
+    fprintf(stderr, "Using default IP (%s/%d/%d).\n", ip,port,ttl);
+  }   else {
+    /* format of string is 99.99.99.99/9999/9.  Need the ip addr as string and
+       remaining components as ints.  */
+    int dummy;
+    char *tmp2;
+    strncpy(tmp_ip, match->value, 20);
+    if ((sscanf(tmp_ip, "%d.%d.%d.%d/%d/%d", &dummy,&dummy,&dummy,&dummy,
+                &port, &ttl) == 6)
+        &&  ((tmp2 = strchr(tmp_ip, '/')) != NULL)) {
+      ip = tmp_ip;
+      *tmp2 = '\0';
+    } else {
+      ip = def_ip;
+      port = def_port;
+      ttl = def_ttl;
+    }
+  }
+
+  if (defMon == NULL)
+    gMon = pMon = MonitorClient_Create("client-side harvest library", ip, port, ttl);
+  else
+    pMon = defMon;
+  MonitorClient_SetAsDefault(pMon);
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages",
+			 "Harvest client library initializing.\n", MON_LOG);
+
+  return do_suck_from_configfile(opts);
+}
+
+clib_response do_suck_from_configfile(Options opts)
+{
+  clib_response    retval = CLIB_OK, pretval;
+  part_element    *part_el;
+  ll               tmp;
+  cfg_nv          *cfg_el;
+  char            *tok = NULL;
+  ts_strtok_state *ts_st;
+  char             ipb[100], msgb[200];
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&config_list_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  if ((retval = config_parse(opts)) != CLIB_OK)
+    return retval;
+
+  tmp = config_list;
+  /* Loop through each partition defined in the configuration file
+      and build the correct part_element structure for it */
+  do {
+    cfg_el = get_next_matching("cache.partition", &tmp);
+    if (cfg_el == NULL)
+      break;
+    if (cfg_el->value == NULL)
+      continue;
+    tmp = tmp->next;
+    ts_st = ts_strtok_init(cfg_el->value);
+    tok = ts_strtok(" ", ts_st);
+
+    /* Loop through each token in the name/values tuple */
+    while (tok != NULL) {
+      part_el = (part_element *) malloc(sizeof(part_element));
+      if (part_el == NULL) {
+	fprintf(stderr, "Out of memory in Part_Initialize(1)\n");
+	exit(1);
+      }
+      part_el->addr = (struct sockaddr *) malloc(sizeof(struct sockaddr_in));
+      if (part_el->addr == NULL) {
+	fprintf(stderr, "Out of memory in Part_Initialize(2)\n");
+	exit(1);
+      }
+      part_el->addrlen = sizeof(struct sockaddr_in);
+
+      /* Build a struct sockaddr_in for this harvest partition host */
+      if (make_inetaddr(tok, "3128", (struct sockaddr_in *) part_el->addr)
+	  != 0) {
+	free(part_el->addr);
+	free(part_el);
+	fprintf(stderr, "Bogus partition name in Part_Initialize: %s\n", tok);
+      } else {
+	/* add the structure to our partition list */
+	stream_ntoa(((struct sockaddr_in *) part_el->addr)->sin_addr.s_addr,
+		    ipb);
+	sprintf(msgb, "Adding partition at %s..\n",ipb);
+	MonitorClient_UnitSend(pMon, pMon->unitname, "Messages", msgb,
+			       MON_LOG);
+
+	if (!ll_add_to_end(&partition_list, (void *) part_el)) {
+	  fprintf(stderr, "ll_add_to_end failed in Part_Initialize\n");
+	  exit(1);
+	}
+	num_partitions++;
+      }
+      tok = ts_strtok(" ", ts_st);
+    }
+    ts_strtok_finish(ts_st);
+  } while (cfg_el != NULL);
+
+  if ((pretval = pthread_mutex_unlock(&config_list_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return retval;
+}
+
+clib_response Part_Add(struct sockaddr *addr, int addrlen)
+{
+  part_element *add;
+  int           pretval;
+
+  do_regrow();
+
+  /* Build a part_element structure and add it to our list */
+  add = (part_element *) malloc(sizeof(part_element *));
+  if (add == NULL) {
+    fprintf(stderr, "Out of memory in Part_Add (1)\n");
+    exit(1);
+  }
+
+  add->addr = (struct sockaddr *) malloc(addrlen);
+  if (add->addr == NULL) {
+    fprintf(stderr, "Out of memory in Part_Add (2)\n");
+    free(add);
+    exit(1);
+  }
+
+  memcpy(add->addr, addr, addrlen);
+  add->addrlen = addrlen;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  if (!ll_add_to_end(&partition_list, (void *) add)) {
+    fprintf(stderr, "ll_add_to_end failed in Part_Add\n");
+    exit(1);
+  }
+  num_partitions++;
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  return CLIB_OK;
+}
+
+clib_response Part_Delete(struct sockaddr *addr, int addrlen)
+{
+  part_element    el, *e2;
+  int             pretval;
+  clib_response   rv;
+  char            ipb[100], mon_msg[200];
+  ll              tmp;
+  struct sockaddr *localaddrtmp;
+
+  do_regrow();
+
+  /* Attempt to find a partition that matches, and delete it from list */
+  el.addr = addr;
+  el.addrlen = addrlen;
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+
+  tmp = ll_find(&partition_list, &el, part_compare);
+  if (tmp != NULL) {
+    e2 = (part_element *) tmp->data;
+    localaddrtmp = (struct sockaddr *) e2->addr;
+    stream_ntoa(((struct sockaddr_in *) localaddrtmp)->sin_addr.s_addr,
+		ipb);
+  } else {
+    sprintf(ipb, "(failed)");
+  }
+  
+  if (ll_del(&partition_list, &el, part_compare, part_nuke)) {
+    num_partitions--;
+    rv = CLIB_OK;
+  } else
+    rv = CLIB_NO_SUCH_PART;
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  sprintf(mon_msg, "Deleted partition at %s.\n", ipb);
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages", mon_msg, MON_LOG);
+  return rv;
+}
+
+clib_response Part_GetTCPsock(char *url, int *fd)
+{
+  int              part_num, i, pretval, len=0;
+  struct sockaddr_in addr;
+  ll               tmp;
+  part_element     *el;
+  clib_response    rv = CLIB_OK;
+  struct protoent  *proto;
+
+  do_regrow();
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  /* Find the right structure in the partition list */
+  tmp = partition_list;
+  part_num = get_part_number(num_partitions, url);
+  if (part_num == -1)
+    rv = CLIB_PTHREAD_FAIL;
+  else {
+    for (i=0; i<part_num; i++) {
+      assert(tmp != NULL);
+      tmp = tmp->next;
+    }
+    el = (part_element *) tmp->data;
+    addr = *((struct sockaddr_in *) (el->addr));
+    len = el->addrlen;
+  }
+
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  if (rv != CLIB_OK)
+    return rv;
+
+  /* we have the structure, now make the socket and connect it */
+  proto = &tcpproto;
+  if (proto == NULL) {
+    perror("getprotobyname failed: ");
+    rv = CLIB_NO_FD;
+  } else {
+    *fd = socket(PF_INET, SOCK_STREAM, proto->p_proto);
+    if (*fd < 0) {
+      perror("socket failed: ");
+      rv = CLIB_NO_FD;
+    } else {
+      if (bind(*fd, localaddr, localaddrlen) < 0) {
+	perror("bind failed: ");
+	rv = CLIB_NO_FD;
+      } else {
+	/* set the port to 3128 */
+	addr.sin_port = htons(3128);
+	if (connect(*fd, (struct sockaddr *) &addr, len) < 0) {
+	  perror("connect failed: ");
+          Part_HandleFailureS((struct sockaddr *) &addr, len);
+	  if (num_partitions == 0)
+	    rv = CLIB_NO_FD;
+	  else
+	    return Part_GetTCPsock(url, fd);
+	}
+      }
+    }
+  }
+
+  return rv;
+}
+
+clib_response Part_GetUDPsock(char *url, int *fd)
+{
+  int              part_num, i, pretval, len;
+  struct sockaddr_in addr;
+  ll               tmp;
+  part_element     *el;
+  struct protoent *proto;
+  clib_response    rv = CLIB_OK;
+
+  do_regrow();
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return CLIB_PTHREAD_FAIL;
+  }
+  tmp = partition_list;
+  /* Find the right structure in the partition list */
+  part_num = get_part_number(num_partitions, url);
+  for (i=0; i<part_num; i++) {
+    assert(tmp != NULL);
+    tmp = tmp->next;
+  }
+  el = (part_element *) tmp->data;
+  addr = *((struct sockaddr_in *) (el->addr));
+  len = el->addrlen;
+  
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+  /* we have the structure, now make the socket and connect it */
+  proto = getprotobyname("udp");
+  if (proto == NULL) {
+    perror("getprotobyname failed: ");
+    rv = CLIB_NO_FD;
+  } else {
+    *fd = socket(PF_INET, SOCK_DGRAM, proto->p_proto);
+    if (*fd < 0) {
+      perror("socket failed: ");
+      rv = CLIB_NO_FD;
+    } else {
+      if (bind(*fd, (struct sockaddr *) localaddr, localaddrlen) < 0) {
+	perror("bind failed: ");
+	rv = CLIB_NO_FD;
+      } else {
+	/* set the port to 3130 */
+	addr.sin_port = htons(3130);
+	if (connect(*fd, (struct sockaddr *) &addr, len) < 0) {
+	  perror("connect failed: ");
+	  rv = CLIB_NO_FD;
+	}
+      }
+    }
+  }
+
+  return rv;
+}
+
+clib_response Part_HandleFailureS(struct sockaddr *addr, int addrlen)
+{
+  clib_response dresp;
+
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages",
+			 "Failure detected on partition!\n", MON_LOG);
+  dresp = Part_Delete(addr, addrlen);
+
+  /* Should do clever EPOCH handling routine here */
+
+  return dresp;
+}
+
+clib_response Part_HandleFailure(int fd)
+{
+  int res, namelen;
+  struct sockaddr name;
+  clib_response dresp;
+
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages", 
+		     "Failure detected on partition!\n", MON_LOG);
+  res = getsockname(fd, &name, &namelen);
+  if ((res < 0) || (namelen = 0))
+    return CLIB_SOCKETOP_FAIL;
+
+  dresp = Part_Delete(&name, namelen);
+
+  /* Should do clever EPOCH handling routine here */
+
+  return dresp;
+}
+
+/* Some utility functions used by the linked list routines to find and
+   delete stuff */
+int  part_compare(void *d1, void *d2)
+{
+  part_element    *el1 = (part_element *) d1;
+  part_element    *el2 = (part_element *) d2;
+
+  assert(d1 != NULL);
+  assert(d2 != NULL);
+
+  if (el1->addrlen > el2->addrlen)
+    return 1;
+  if (el1->addrlen < el2->addrlen)
+    return -1;
+
+  if ( ((struct sockaddr_in *) el1->addr)->sin_addr.s_addr >
+       ((struct sockaddr_in *) el2->addr)->sin_addr.s_addr)
+    return 1;
+
+  if ( ((struct sockaddr_in *) el1->addr)->sin_addr.s_addr <
+       ((struct sockaddr_in *) el2->addr)->sin_addr.s_addr)
+    return -1;
+
+  if ( ((struct sockaddr_in *) el1->addr)->sin_port > 
+       ((struct sockaddr_in *) el2->addr)->sin_port)
+    return 1;
+
+  if ( ((struct sockaddr_in *) el1->addr)->sin_port <
+       ((struct sockaddr_in *) el2->addr)->sin_port)
+    return -1;
+
+  return 0;
+
+}
+void part_nuke(void *nukeMe)
+{
+  part_element    *el = (part_element *) nukeMe;
+
+  assert(el != NULL);
+  if (el->addr)
+    free(el->addr);
+  free(el);
+}
+
+/* This function does the MD5 hash of the URL, and computes a partition
+   number from that hash and the number of partitions available. */
+int  get_part_number(int num_partitions, char *url)
+{
+  MD5_CTX  ctx;
+  long int bits;
+  int      got = 0;
+  char     hostnamebuf[1024];
+
+  if (num_partitions == 0)
+    return -1;
+
+  /* Try to MD5 on hostname, not on full URL.  This way, all traffic for
+     a particular host will flow through a single partition. */
+  if (*url == 'h') {
+    char *fslash, *nslash;
+    int   diff;
+
+    fslash = strchr(url, '/');
+    if (fslash == NULL)
+      goto DONE_HTTP_TEST;
+    if (*(fslash+1) != '/')
+      goto DONE_HTTP_TEST;
+    nslash = strchr(fslash+2, '/');
+    if (nslash == NULL) {
+      got = 1;
+      MD5Init(&ctx);
+      MD5Update(&ctx, fslash+2, strlen(fslash+2));
+      MD5Final(&ctx);
+    } else {
+      diff = nslash-fslash-2;
+      if (diff > 0) {
+	if (diff > 1020)
+	  diff = 1020;
+	memcpy(hostnamebuf, fslash+2, diff);
+	hostnamebuf[diff] = '\0';
+	MD5Init(&ctx);
+	MD5Update(&ctx, hostnamebuf, strlen(hostnamebuf));
+	MD5Final(&ctx);
+	got = 1;
+      }
+    }
+  }
+DONE_HTTP_TEST:
+  if (got == 0) {
+    MD5Init(&ctx);
+    MD5Update(&ctx, url, strlen(url));
+    MD5Final(&ctx);
+  }
+
+  memcpy(&bits, &(ctx.digest[0]), sizeof(long int));
+  bits = ntohl(bits);
+  if (bits < 0)
+    bits *= -1;
+
+/*  fprintf(stderr, "Partition number is %d of (0-%d)\n",
+	  (int) (bits % num_partitions), num_partitions-1);*/
+  return ((int) (bits % num_partitions));
+}
+
+void regrow_partitionlist(int thesignal)
+{
+  signal(SIGHUP, regrow_partitionlist);
+  attempt_to_regrow = 1;
+}
+
+void do_regrow(void)
+{
+  int pretval;
+  char mon_msg[75];
+
+  if (attempt_to_regrow == 0)
+    return;
+
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages",
+			 "Regrowing partition list (SIG_HUP)\n", MON_LOG);
+  attempt_to_regrow = 0;
+
+  /* Let's reinitialize... */
+
+  /* CRITICAL SECTION..... */
+  if ((pretval = pthread_mutex_lock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return;
+  }
+  /* delete all partitions */
+  ll_destroy(&partition_list, part_nuke);
+  partition_list = NULL;
+  num_partitions = 0;
+
+  /* add all partitions */
+  do_suck_from_configfile(part_opts);
+
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    return;
+  }
+  /* END CRITICAL SECTION..... */
+  sprintf(mon_msg, "Regrow succeeded, %d partitions loaded\n",
+	  num_partitions);
+  MonitorClient_UnitSend(pMon, pMon->unitname, "Messages", mon_msg, MON_LOG);
+
+}
+
+void stream_ntoa(unsigned long addr, char *buf)
+{
+  sprintf(buf, "%lu.%lu.%lu.%lu",
+	  (addr >> 24),
+	  (addr >> 16) % 256,
+	  (addr >> 8) % 256,
+	  (addr) % 256);
+}
+@
+
+
+1.24
+log
+@Many changes to support SDK, including bin and sbin directories,
+and modified make targets and names of some binary targets.  Calling
+convention changed for perl distillers, so fixed html distiller and
+added it as transend.text.html.  monitor.multicast property is now
+Monitor.listen; all relevant code was changed.  Monitor can now parse
+this from the options file.  Updated all UI changes from branch head.
+@
+text
+@d79 1
+a79 1
+  signal(SIGUSR1, regrow_partitionlist);
+d576 1
+a576 1
+  signal(SIGUSR1, regrow_partitionlist);
+d589 1
+a589 1
+			 "Regrowing partition list (SIG_USR1)\n", MON_LOG);
+@
+
+
+1.23
+log
+@added Clib_Free
+@
+text
+@d101 1
+a101 1
+  tmp = config_list; match = get_next_matching("monitor.multicast", &tmp);
+@
+
+
+1.22
+log
+@Fixed up URL jazz in hashing code.
+@
+text
+@d75 1
+d101 1
+a101 1
+  tmp = config_list; match = get_next_matching("cache.Monitor_ip", &tmp);
+a103 6
+    fprintf(stderr, "Using default IP (%s).\n", ip);
+  }
+  else
+    ip = match->value;
+  tmp = config_list; match = get_next_matching("cache.Monitor_port", &tmp);
+  if (match == NULL) {
+a104 6
+    fprintf(stderr, "Using default port (%d).\n", port);
+  }
+  else
+    sscanf(match->value, "%d", &port);
+  tmp = config_list; match = get_next_matching("cache.Monitor_ttl", &tmp);
+  if (match == NULL) {
+d106 17
+a122 1
+    fprintf(stderr, "Using default TTL (%d).\n", ttl);
+a123 2
+  else
+    sscanf(match->value, "%d", &ttl);
+@
+
+
+1.21
+log
+@hash now based on hostname not full url (boots back to url if can't pull
+out hostname for some reason)
+@
+text
+@d541 1
+a541 1
+      diff = nslash-fslash-1;
+d545 1
+a545 1
+	memcpy(hostnamebuf, fslash+1, diff);
+d567 1
+a567 1
+	  (int) (bits % num_partitions), num_partitions-1); */
+@
+
+
+1.20
+log
+@yaya, more.
+@
+text
+@d517 2
+d523 37
+a559 3
+  MD5Init(&ctx);
+  MD5Update(&ctx, url, strlen(url));
+  MD5Final(&ctx);
+@
+
+
+1.20.2.1
+log
+@hash now based on hostname not full url (boots back to url if can't pull
+out hostname for some reason)
+@
+text
+@a516 2
+  int      got = 0;
+  char     hostnamebuf[1024];
+d521 3
+a523 37
+  /* Try to MD5 on hostname, not on full URL.  This way, all traffic for
+     a particular host will flow through a single partition. */
+  if (*url == 'h') {
+    char *fslash, *nslash;
+    int   diff;
+
+    fslash = strchr(url, '/');
+    if (fslash == NULL)
+      goto DONE_HTTP_TEST;
+    if (*(fslash+1) != '/')
+      goto DONE_HTTP_TEST;
+    nslash = strchr(fslash+2, '/');
+    if (nslash == NULL) {
+      got = 1;
+      MD5Init(&ctx);
+      MD5Update(&ctx, fslash+2, strlen(fslash+2));
+      MD5Final(&ctx);
+    } else {
+      diff = nslash-fslash-1;
+      if (diff > 0) {
+	if (diff > 1020)
+	  diff = 1020;
+	memcpy(hostnamebuf, fslash+1, diff);
+	hostnamebuf[diff] = '\0';
+	MD5Init(&ctx);
+	MD5Update(&ctx, hostnamebuf, strlen(hostnamebuf));
+	MD5Final(&ctx);
+	got = 1;
+      }
+    }
+  }
+DONE_HTTP_TEST:
+  if (got == 0) {
+    MD5Init(&ctx);
+    MD5Update(&ctx, url, strlen(url));
+    MD5Final(&ctx);
+  }
+@
+
+
+1.20.2.2
+log
+@Fixed up URL jazz in hashing code.
+@
+text
+@d541 1
+a541 1
+      diff = nslash-fslash-2;
+d545 1
+a545 1
+	memcpy(hostnamebuf, fslash+2, diff);
+d567 1
+a567 1
+	  (int) (bits % num_partitions), num_partitions-1);*/
+@
+
+
+1.20.2.3
+log
+@More minor fixes.
+@
+text
+@a74 1
+  char             tmp_ip[20];
+d100 1
+a100 1
+  tmp = config_list; match = get_next_matching("monitor.multicast", &tmp);
+d103 6
+d110 6
+d117 1
+a117 17
+    fprintf(stderr, "Using default IP (%s/%d/%d).\n", ip,port,ttl);
+  }   else {
+    /* format of string is 99.99.99.99/9999/9.  Need the ip addr as string and
+       remaining components as ints.  */
+    int dummy;
+    char *tmp2;
+    strncpy(tmp_ip, match->value, 20);
+    if ((sscanf(tmp_ip, "%d.%d.%d.%d/%d/%d", &dummy,&dummy,&dummy,&dummy,
+                &port, &ttl) == 6)
+        &&  ((tmp2 = strchr(tmp_ip, '/')) != NULL)) {
+      ip = tmp_ip;
+      *tmp2 = '\0';
+    } else {
+      ip = def_ip;
+      port = def_port;
+      ttl = def_ttl;
+    }
+d119 2
+@
+
+
+1.19
+log
+@Client lib now uses unified options file.
+@
+text
+@a79 1
+  fprintf(stderr, "In Part_initialize..\n");
+a96 1
+  fprintf(stderr, "About to config_parse\n");
+a100 1
+fprintf(stderr, "monitor_ip: %s\n", match->value);
+a107 1
+fprintf(stderr, "monitor_port: %s\n", match->value);
+a114 1
+fprintf(stderr, "monitor_ttl: %s\n", match->value);
+a147 1
+  fprintf(stderr, "About to config_parse again.\n");
+a159 1
+fprintf(stderr, "Is: %s\n", cfg_el->value);
+@
+
+
+1.18
+log
+@config.h is now config_tr.h
+@
+text
+@d34 1
+d43 2
+a44 1
+extern char    *configfilename;
+d65 1
+a65 1
+clib_response do_suck_from_configfile(char *configfile);
+d68 1
+a68 1
+clib_response Part_Initialize(char *configfile, Monitor *defMon)
+d80 1
+d98 2
+a99 1
+  if ((retval = config_parse(configfile)) != CLIB_OK)
+d102 2
+a103 1
+  tmp = config_list; match = get_next_matching("Monitor_ip", &tmp);
+d110 2
+a111 1
+  tmp = config_list; match = get_next_matching("Monitor_port", &tmp);
+d118 2
+a119 1
+  tmp = config_list; match = get_next_matching("Monitor_ttl", &tmp);
+d135 1
+a135 1
+  return do_suck_from_configfile(configfile);
+d138 1
+a138 1
+clib_response do_suck_from_configfile(char *configfile)
+d153 2
+a154 1
+  if ((retval = config_parse(configfile)) != CLIB_OK)
+d161 1
+a161 1
+    cfg_el = get_next_matching("partition", &tmp);
+d166 1
+d573 1
+a573 1
+  do_suck_from_configfile(configfilename);
+@
+
+
+1.17
+log
+@Stripped "extern int errno" out of much code - left it to errno.h
+@
+text
+@d22 1
+a22 1
+#include "config.h"
+@
+
+
+1.16
+log
+@Changed client library interface to accept a preinitialized monitor
+object.
+@
+text
+@a11 1
+#include <sys/errno.h>
+a36 1
+extern int      errno;
+@
+
+
+1.15
+log
+@fixes to client_lib to compile correctly with new libmon.h
+@
+text
+@d39 1
+d68 1
+a68 1
+clib_response Part_Initialize(char *configfile)
+d122 4
+a125 1
+  pMon = MonitorClient_Create("client-side harvest library", ip, port, ttl);
+@
+
+
+1.14
+log
+@Fixed up so that client-side library reports things to the monitor.
+@
+text
+@d36 1
+a36 1
+#include "mon.h"
+@
+
+
+1.13
+log
+@fixed slight bug in clib.c's analysis of data back from HTTP server;  now
+returns error code in an error condition whereas before it just returned
+NULL data.
+@
+text
+@d51 1
+a51 1
+/*Monitor        *pMon;*/
+d65 1
+a95 1
+
+d102 1
+a102 1
+    fprintf(stderr, "Doing default.\n");
+d107 1
+a107 1
+  if (match == NULL)
+d109 2
+d114 1
+a114 1
+  if (match == NULL)
+d116 2
+d121 4
+a124 1
+/*  pMon = MonitorClient_Create("client-side harvest", ip, port, ttl);*/
+d137 1
+d182 6
+d253 1
+a253 1
+  part_element    el;
+d256 3
+d271 11
+a282 2
+    fprintf(stderr, "Delete succeeded; num partitions left is %d\n",
+	    num_partitions-1);
+d293 2
+d435 2
+a436 1
+  fprintf(stderr, "Failure detected..\n");
+d450 2
+a451 1
+  fprintf(stderr, "Failure detected fd %d\n", fd);
+d526 2
+a527 2
+  fprintf(stderr, "Partition number is %d of (0-%d)\n",
+	  (int) (bits % num_partitions), num_partitions-1);
+d540 1
+d545 2
+a546 1
+  fprintf(stderr, "regrowing partition list\n");
+d569 4
+d575 8
+@
+
+
+1.12
+log
+@Partitions grow as well as shrink now;  grow notification via
+a USR1 signal.
+@
+text
+@d36 2
+d39 2
+d45 1
+d50 3
+d68 1
+d71 4
+d95 23
+@
+
+
+1.11
+log
+@Took out extraneous logging info.
+@
+text
+@d37 1
+a59 1
+  clib_response    retval;
+d73 5
+a82 3
+  if ((retval = config_parse(configfile)) != CLIB_OK)
+    return retval;
+
+d88 1
+a88 1
+  clib_response    retval = CLIB_OK;
+d95 8
+d149 5
+@
+
+
+1.10
+log
+@Fixed up testing of addresses in client_lib/src/part.c;  fault tolerance
+works well now.
+@
+text
+@a127 3
+	fprintf(stderr, "adding %lu %u\n",
+		((struct sockaddr_in *) part_el->addr)->sin_addr.s_addr,
+		((struct sockaddr_in *) part_el->addr)->sin_port);
+@
+
+
+1.9
+log
+@Mumble.
+@
+text
+@d128 3
+d142 1
+a194 1
+  fprintf(stderr, "Doing delete..\n");
+d359 1
+a359 1
+  fprintf(stderr, "Failure detected..\n", fd);
+d399 19
+a417 1
+  return memcmp(el1->addr, el2->addr, el1->addrlen);
+@
+
+
+1.8
+log
+@cool!  partitioning scheme adapts as partitions die, and when you send
+any component using the client library a SIGUSR1, it rereads the partition
+list and assumes the partitioning is back to normal.
+@
+text
+@d191 1
+d356 1
+@
+
+
+1.7
+log
+@Fixed up some performance glitches in client_lib - shrunk critical
+section.
+@
+text
+@d38 1
+d48 1
+d53 3
+a55 1
+
+a59 5
+  part_element    *part_el;
+  ll               tmp;
+  cfg_nv          *cfg_el;
+  char            *tok = NULL;
+  ts_strtok_state *ts_st;
+d63 2
+d80 13
+d147 2
+d191 2
+d203 2
+d220 1
+a220 1
+  int              part_num, i, pretval, len;
+d227 2
+d237 10
+a246 3
+  for (i=0; i<part_num; i++) {
+    assert(tmp != NULL);
+    tmp = tmp->next;
+d248 1
+a248 4
+  el = (part_element *) tmp->data;
+  addr = *((struct sockaddr_in *) (el->addr));
+  len = el->addrlen;
+  
+d255 3
+d277 5
+a281 1
+	  rv = CLIB_NO_FD;
+d299 2
+d351 29
+d413 3
+d425 2
+d429 39
+@
+
+
+1.6
+log
+@Some correctness and performance changes, mostly to do with socket calls.
+@
+text
+@d43 1
+d46 1
+a51 1
+struct protoent tcpproto;
+d200 2
+a201 1
+  int              part_num, i, pretval;
+a214 1
+/*  printf("Getting partition number %d/%d/%s!\n", num_partitions, part_num,url);*/
+d220 2
+d223 6
+d245 2
+a246 2
+	((struct sockaddr_in *) el->addr)->sin_port = htons(3128);
+	if (connect(*fd, el->addr, el->addrlen) < 0) {
+a253 6
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+
+d259 2
+a260 1
+  int              part_num, i, pretval;
+d279 2
+d282 6
+d304 2
+a305 2
+	((struct sockaddr_in *) el->addr)->sin_port = htons(3130);
+	if (connect(*fd, el->addr, el->addrlen) < 0) {
+a311 6
+
+  if ((pretval = pthread_mutex_unlock(&partition_mutex)) != 0) {
+    strerror(pretval);
+    rv = CLIB_PTHREAD_FAIL;
+  }
+  /* END CRITICAL SECTION..... */
+@
+
+
+1.5
+log
+@updated utils.[ch] to include correct_read.
+@
+text
+@d50 2
+d61 4
+a201 1
+  struct protoent *proto;
+d203 1
+d221 1
+a221 1
+  proto = getprotobyname("tcp");
+@
+
+
+1.4
+log
+@Hack hack hack...fixed lots of small buglets..
+@
+text
+@d23 3
+d27 1
+@
+
+
+1.3
+log
+@Fixed up various sniglets.
+@
+text
+@d203 1
+a203 1
+  printf("Getting partition number %d/%d/%s!\n", num_partitions, part_num,url);
+@
+
+
+1.2
+log
+@Woohoo!  Got the partition front end working, fixed a few bugs here and
+there.
+@
+text
+@a6 2
+
+#include <pthread.h>
+d23 1
+@
+
+
+1.1
+log
+@Changed the directory structure around to match armando/yatin's.
+@
+text
+@d8 1
+d22 1
+a24 1
+#include <pthread.h>
+d204 1
+d340 2
+d343 1
+a343 1
+  return (bits % num_partitions);
+@

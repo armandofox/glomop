@@ -1,0 +1,3396 @@
+head	1.23;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.23
+date	99.04.19.05.19.13;	author daw;	state Exp;
+branches;
+next	1.22;
+
+1.22
+date	99.04.19.05.15.45;	author daw;	state Exp;
+branches;
+next	1.21;
+
+1.21
+date	99.04.08.18.51.52;	author daw;	state Exp;
+branches;
+next	1.20;
+
+1.20
+date	99.04.08.17.33.58;	author daw;	state Exp;
+branches;
+next	1.19;
+
+1.19
+date	99.04.02.19.17.30;	author daw;	state Exp;
+branches;
+next	1.18;
+
+1.18
+date	99.04.01.01.51.07;	author daw;	state Exp;
+branches;
+next	1.17;
+
+1.17
+date	99.04.01.01.50.28;	author daw;	state Exp;
+branches;
+next	1.16;
+
+1.16
+date	99.04.01.01.47.39;	author daw;	state Exp;
+branches;
+next	1.15;
+
+1.15
+date	99.04.01.01.33.22;	author daw;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	99.02.26.23.35.25;	author daw;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	99.02.26.23.33.38;	author daw;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	99.02.23.02.03.24;	author daw;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	99.02.23.01.52.12;	author daw;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	99.02.22.22.23.11;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	99.02.22.11.48.31;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.12.14.11.35.23;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.12.14.10.56.46;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.12.14.10.15.53;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.12.14.08.34.02;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.12.14.06.57.01;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.12.01.08.57.17;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.12.01.08.35.52;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.08.11.33.24;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.11.08.11.33.24;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.23
+log
+@*** empty log message ***
+@
+text
+@\documentclass{llncs}
+\usepackage{psfig}
+\newcommand{\xor}{\oplus}
+\newcommand{\Z}{{\bf Z}}
+\def\GF(#1){\mbox{GF}(#1)}
+\begin{document}
+\title{The boomerang attack}
+\author{David Wagner \\ {\em U.C. Berkeley} \\ {\tt daw@@cs.berkeley.edu}}
+\institute{}
+\maketitle
+
+\begin{abstract}
+This paper describes a new differential-style attack,
+which we call the boomerang attack.
+This attack has several interesting applications.
+First, we disprove the oft-repeated claim that
+eliminating all high-probability differentials for the whole cipher
+is sufficient to guarantee security against differential attacks.
+Second, we show how to break COCONUT98, a cipher designed using
+decorrelation techniques to ensure provable security against differential
+attacks, with an advanced differential-style attack that needs just
+$2^{16}$ adaptively chosen texts.
+Also, to illustrate the power of boomerang techniques,
+we give new attacks on Khufu-16, FEAL-6, and 16 rounds of CAST-256.
+\end{abstract}
+
+\section{Introduction}
+One of the most powerful cryptanalytic techniques known
+in the open literature is differential cryptanalysis \cite{BS93}.
+Differential analysis has been used to break many published ciphers.
+It is understandable, then, that block cipher designers are
+typically quite anxious to ensure security against differential
+style attacks.
+
+The usual design procedure goes something like this.
+The algorithm designer obtains somehow an upper bound $p$ on the
+probability of any differential characteristic for the cipher.
+Then the designer invokes an oft-repeated ``folk theorem'' to justify
+that any successful differential attack will require at least $1/p$ texts
+to break the cipher, which is supposed to allow us to conclude that
+the cipher is safe from differential attacks.
+
+Unfortunately, this folk theorem is wrong.
+We exhibit an attack---which we call the boomerang attack---that
+can allow an adversary to beat the $1/p$ bound in some cases\footnote{Note
+that Biham {\em et al.}'s impossible differentials \cite{BBS98,BBS99}
+also disprove the folk theorem.  They show that if one can find a
+differential of sufficiently {\em low} probability, the cipher can
+be broken.  However, the boomerang attack in fact lets us make an
+sharper statement: even if no differential for the whole cipher has
+probability that is too high or too low, the cipher might still be
+vulnerable to differential-style attacks.}.
+In particular, if the best characteristic for half of the
+rounds of the cipher has probability $q$, then the boomerang attack
+can be used in a successful attack needing $O(q^{-4})$ chosen texts.
+In some cases, we may have $q^{-4} \ll p^{-1}$, in which case
+the boomerang attack allows one to beat the folk theorem's bound.
+Also, boomerang attacks sometimes allow for a more extensive use
+of structures than is available in conventional differential attacks,
+which makes boomerang techniques more effective than
+the preceding discussion might suggest.
+
+\begin{table}[t]
+\begin{center}
+\begin{tabular}{lccc}
+\hline
+Cipher & (Rounds) &\multicolumn{2}{c}{Our Attack} \\ \cline{3-4}
+         &      &   Data Complexity      & Time Complexity  \\ \hline
+COCONUT98 &(8) &$2^{16}$ CP &$2^{38}$ \\
+Khufu &(16) &$2^{18}$ CP &$2^{18}$ \\
+CAST-256 &(16) &$2^{49.3}$ KP &$2^{49.3}$ \\
+FEAL &(6) &$4$ CP &- \\
+\hline
+\end{tabular}
+\end{center}
+\begin{center}
+KP --- known-plaintext, CP --- adaptive chosen-plaintext/ciphertext.
+\end{center}
+\caption{\label{results}Summary of our attacks.}
+\end{table}
+
+We give a surprisingly sharp
+example of this possibility in Sections~\ref{sec:coc1}--\ref{sec:coc4}
+below, where we show how to break COCONUT98 \cite{V98}
+with just $2^{16}$ chosen texts and $2^{38}$ work,
+despite a proof that the best characteristic for
+the whole cipher must have probability $p \approx 2^{-64}$.
+Our attack makes crucial use of a characteristic for half of the
+cipher with probability $q \approx 2^{-4}$.
+This shows that the folk theorem can fail spectacularly, even
+for real-world ciphers.
+
+We also extend the boomerang attack to use techniques
+{}from truncated differential analysis (see Section~\ref{sec:trunc}).
+As a result, we are able to analyze ciphers which admit good
+truncated differentials.
+In Section~\ref{sec:khufu} we show how to break 16 rounds of Khufu
+with $2^{18}$ adaptive chosen plaintexts and ciphertexts and very little work.
+We also consider CAST-256 in Section~\ref{sec:cast256inout}, where we
+show how to break 16 rounds with $2^{49.3}$ known texts\footnote{See
+also Appendix~\ref{sec:cast256boom}, where we show that
+CAST-256 would be much weaker if the round ordering was reversed:
+in particular, boomerang attacks would be able to break 24 rounds
+of this variant with $2^{48.5}$ chosen texts.
+Please note that this 24-round boomerang attack does not apply to
+the real CAST-256 AES proposal.}.
+Section~\ref{sec:cast256inout} also briefly sketches the inside-out attack,
+a dual to the boomerang attack.
+Finally, Section~\ref{sec:related} discusses some related work,
+and Section~\ref{sec:conc} concludes the paper.
+See Table~\ref{results} for our table of results.
+
+
+
+\section{The boomerang attack: a generic view}\label{sec:generic}
+The boomerang attack is a differential attack that attempts
+to generate a quartet structure at an intermediate value halfway
+through the cipher.
+
+The attack considers four plaintexts $P,P',Q,Q'$, along with
+their respective ciphertexts $C,C',D,D'$;
+we will defer describing how these are generated until later.
+Let $E(\cdot)$ represent the encryption operation, and decompose
+the cipher into $E = E_1 \circ E_0$, where $E_0$ represents the
+first half of the cipher and $E_1$ represents the last half.
+We will use a differential characteristic, call it $\Delta \to \Delta^*$,
+for $E_0$, as well as a characteristic $\nabla \to \nabla^*$ for $E_1^{-1}$.
+
+We want to cover the pair $P,P'$ with the characteristic for $E_0$,
+and to cover the pairs $P,Q$ and $P',Q'$ with the characteristic for
+$E_1^{-1}$.
+Then (we claim) the pair $Q,Q'$ is perfectly set up to use
+the characteristic $\Delta^* \to \Delta$ for $E_0^{-1}$.
+
+Let's examine why this is so.
+Consider the intermediate value after half of the rounds.
+When the previous three characteristics hold, we have
+\begin{eqnarray*}
+E_0(Q) \xor E_0(Q')
+&=& E_0(P) \xor E_0(P') \xor E_0(P) \xor E_0(Q) \xor E_0(P') \xor E_0(Q') \\
+&=& E_0(P) \xor E_0(P') \xor E_1^{-1}(C) \xor E_1^{-1}(D) \xor E_1^{-1}(C') \xor E_1^{-1}(D') \\
+&=& \Delta^* \xor \nabla^* \xor \nabla^* = \Delta^*,
+\end{eqnarray*}
+Note that this is exactly the condition required to start the
+characteristic $\Delta^* \to \Delta$ for the inverse of the
+first half of the cipher.
+When this characteristic also holds, we will have the same
+difference in the plaintexts $Q,Q'$ as found in the original
+plaintexts $P,P'$.
+This is why we call it the boomerang attack: when you send it
+properly, it always comes back to you.
+
+\begin{figure}
+\begin{center}
+\ \psfig{file=boom-fixed.eps,height=3.3in}\ 
+\end{center}
+\caption{\label{fig:boom}A schematic of the basic boomerang attack.}
+\end{figure}
+
+We define a right quartet as one where all
+four characteristics hold simultaneously.
+The only remaining issue is how to choose the texts
+so they have the right differences.
+We suggest generating $P'=P \xor \Delta$, and getting
+the encryptions $C,C'$ of $P,P'$ with two chosen-plaintext queries.
+Then we generate $D,D'$ as $D = C \xor \nabla$ and $D' = C' \xor \nabla$.
+Finally we decrypt $D,D'$ to obtain the plaintexts $Q,Q'$
+with two adaptive chosen-ciphertext queries.
+See Figure~\ref{fig:boom} for a pictorial depiction of the basic
+boomerang attack.
+
+In the remainder of the paper, we consider several concrete attacks
+using the boomerang attack.
+
+\section{The COCONUT98 algorithm}\label{sec:coc1}
+The COCONUT98 cipher \cite{V98} may be of special interest to some readers
+because of its reliance on the recently-developed theory of decorrelation
+techniques for block cipher design \cite{V97,V98,V98b,GG+98}.
+Using decorrelation techniques,
+\cite{V98} proves that the full COCONUT98 cipher admits no good
+differential characteristics.
+Despite this fact, we observe that there
+are differential characteristics of very high probability for half
+of the cipher, and we make extensive use of these characteristics
+in our attack.
+This suggests that the decorrelation design technique may fail
+to provide security against advanced differential attacks in some cases
+if extra care is not taken.
+This is not to suggest that the decorrelation approach is
+fundamentally flawed---indeed, decorrelation theory seems like
+a very useful tool for the cipher designer---but rather that
+the theoretical results must be interpreted with caution.
+
+We briefly recount the description of the
+COCONUT98 algorithm.
+COCONUT98 uses a 256-bit key $K = (K_1,\ldots,K_8)$.
+The key schedule generates eight round subkeys
+$k_1,\ldots,k_8$ as
+\[ \begin{array}{l|cccc}
+\quad i\quad	&1&2&3&4 \\
+\hline
+\quad k_i\quad	&\quad K_1\quad &\quad K_1\xor K_3\quad
+		&\quad K_1\xor K_3\xor K_4\quad &\quad K_1\xor K_4\quad  \\
+\end{array} \]
+\[ \begin{array}{l|cccc}
+\quad i\quad	&5&6&7&8 \\
+\hline
+\quad k_i\quad	&\quad K_2\quad &\quad K_2\xor K_3\quad
+		&\quad K_2\xor K_3\xor K_4\quad &\quad K_2\xor K_4\quad  \\
+\end{array} \]
+The last four key words are used to build a
+decorrelation module
+\[ M(xy) = (xy \xor K_5 K_6) \times K_7 K_8 \bmod \GF(2^{64}) \]
+where concatenation of symbols (e.g. $xy$)
+represents the concatenation of their values
+as bitstrings.
+
+Next, we build a Feistel network as follows.
+Let
+\begin{eqnarray*}
+\phi(x)	&=&	x + 256 \cdot S(x \bmod 256) \bmod 2^{32} \\
+F_i((x,y))&=&	(y, x \xor \phi(ROL_{11}(\phi(y \xor k_i)) + c \bmod 2^{32})) \\
+\Psi_i	&=&	F_{4i+4} \circ F_{4i+3} \circ F_{4i+2} \circ F_{4i+1}
+\end{eqnarray*}
+where $ROL_{11}(\cdot)$ represents a left rotation
+by 11 bits, $c$ is a public 32-bit constant, and
+$S:\Z_2^8 \to \Z_2^{24}$ is a fixed S-box.
+
+With this notation, COCONUT98 is defined as
+$\Psi_1 \circ M \circ \Psi_0$.
+In other words, COCONUT98 consists of four Feistel rounds
+with subkeys $k_1,\ldots,k_4$, followed by an evaluation
+of the decorrelation module $M$, and finally four more Feistel
+rounds with subkeys $k_5,\ldots,k_8$.
+
+\section{Differential characteristics for COCONUT98}\label{sec:coc2}
+
+This section discusses the differential characteristics of COCONUT98.
+In the following discussion,
+let $e_j = 2^j$ be the 32-bit {\sc xor} difference with
+just the $j$-th bit flipped.
+(Subscripts are taken modulo 32, for convenience in
+modeling the $ROL(\cdot,11)$ operation.)
+
+We note that the Feistel rounds of COCONUT98
+admit very good differential characteristics.
+The main observation is that $e_j \to e_{j + 11}$
+by the Feistel function
+with probability $1/2$
+when $j \in J = \{8,9,\ldots,19,20,29,30,31\}$.\footnote{At
+first glance, it might appear that the probability
+is $1/8$, because there are three additions in the $F$
+function and thus three carry bits to control.
+However, the three carries are not independent, and in fact
+we can handle three carries as easily as one by noting
+that $x \mapsto (x+a \bmod 2^{32})+b \bmod 2^{32}$ (two
+carries) is equivalent to $x \mapsto x + c \bmod 2^{32}$
+(one carry) where $c=a+b$.
+
+The rotate does not destroy this property,
+so long as we avoid the most significant bits, which
+explains our choice of $J$.
+Empirically, the probabilities are $0.47,0.44,0.38$ for
+$j=18,19,20$ and $0.47,0.44$ for $j=29,30$.
+For other values of $j$, the probability is very
+close to $1/2$.}
+Similarly, $e_j \xor e_k \to e_{j + 11} \xor e_{k + 11}$
+with probability $1/4$ when $j,k \in J$ ($j\ne k$).
+
+Using this idea, we can build many good characteristics for
+four rounds of COCONUT98.
+For example, the characteristic
+\[ (e_{19}, e_{18} \xor e_8) \to (e_{18} \xor e_8, e_{29})
+\to (e_{29}, e_{18}) \to (e_{18}, 0) \to (0, e_{18}) \]
+for $\Psi$ has probability $0.83 \cdot 2^{-4} \approx 2^{-4.3}$.
+Of course, by symmetry
+we also get corresponding backwards characteristics
+for decryption through four Feistel rounds.
+
+This suggests that we ought to try to find some way to
+take advantage of these high-probability characteristics for the half-cipher
+in our analysis.
+However, the task is not so easy as it might first look.
+If we try to mount a traditional differential attack on the whole cipher,
+the decorrelation module $M$ will immediately cause serious difficulties.
+When the key words $K_7,K_8$ are unknown, it is very difficult
+to push any differential characteristic through $M$.
+More precisely, every differential $\delta \to \delta^*$ for $M$
+with $\delta,\delta^* \ne 0$ has average probability $1/(2^{64}-1)$,
+where the probability is averaged over all possible key values.
+In short, the decorrelation module prevents us
+{}from pushing a differential characteristic past $M$.
+
+This is where the boomerang attack comes in handy: the
+boomerang quartet property allows us to control the effect of
+the decorrelation module in the middle.
+
+The crucial idea which lets the attack work is that $M$ is affine,
+and thus for any fixed key there are excellent characteristics
+$\nabla^* \to M^{-1}(\nabla^*)$ of probability 1 for $M^{-1}$.
+Take $E_0 = \Psi_0$ and $E_1 = \Psi_1 \circ M$.
+Then if $\nabla \to \nabla^*$ is a good characteristic for $\Psi_1^{-1}$
+we will obtain a good characteristic $\nabla \to M^{-1}(\nabla^*)$
+for $E_1^{-1}$.
+It does not matter that $M^{-1}(\nabla)$ is unknown to the attacker;
+the crucial property is that it depends only on the key (and not
+on the values of the ciphertexts).
+
+ 
+Let us estimate the success probability for this technique.
+We need two characteristics for $\Psi_0$,
+and two for $\Psi_1^{-1}$, to hold.
+Thus, a simple estimate at the probability $p$ of success is
+\[ p \ge \Pr[\Delta \to \Delta^* \mbox{ by } \Psi_0]^2
+\, \Pr[\nabla \to \nabla^* \mbox{ by } \Psi_1^{-1}]^2 \]
+where $\Delta,\Delta^*,\nabla,\nabla^*$ may be chosen
+arbitrarily by the attacker to maximize $p$.
+
+It turns out that this estimate can be refined a bit.
+We note that the same attack works even if we do not predict
+the exact value of $\nabla^*$ ahead of time, but instead
+merely require that the difference after decrypting by
+$\Psi_1$ is the same in the two pairs $P,Q$ and $P',Q'$.
+A similar observation also holds for $\Delta^*$.
+Therefore, we may sum over all values for $\Delta^*,\nabla^*$,
+to obtain
+\[ p \approx \sum_{\Delta^*} \Pr[\Delta \to \Delta^* \mbox{ by } \Psi_0]^2
+\cdot \sum_{\nabla^*} \Pr[\nabla \to \nabla^* \mbox{ by } \Psi_1^{-1}]^2. \]
+For COCONUT98, this can be used to significantly increase
+the probability of attack.
+Empirically, we find that
+$\Delta = \nabla = (e_{10},e_{31})$ provides
+$p \approx 0.023 \cdot 0.023 \approx 1/1900$.
+
+\section{The basic boomerang attack on COCONUT98}\label{sec:coc4}
+Next we show how to use the quartet property
+established above to mount a practical attack on COCONUT98.
+We use a 1-R attack, so the criterion for success
+is that $Q \xor Q' = (?,e_{31})$ where $?$ represents an arbitrary word.
+This improves the success probability $p$ by a factor of two,
+to $1/950$.
+
+It is immediately clear from this discussion
+that COCONUT98 can be easily distinguished
+{}from an ideal cipher with at most about $950 \cdot 4 = 3800$ adaptive
+chosen plaintext/ciphertext queries.
+However, we aim for more: a key-recovery attack.
+
+The key-recovery attack proceeds along relatively standard lines.
+In about $16 \cdot 950$ trials requiring $16 \cdot 950 \cdot 4$
+adaptive chosen plaintext/ciphertext queries, we generate
+about 16 useful quartets.
+Note that the signal-to-noise is extremely high, so we should
+be able to filter out all wrong quartets very effectively.
+
+First, we recover $K_1$.
+We guess $K_1$, and peel off the first round.
+We use the fact that if $P,P',Q,Q'$ form a quartet with
+the property above, then the {\sc xor} difference after
+one round of encryption must be $(e_{31},0)$ for both
+the $P,P'$ pair and the $Q,Q'$ pair.
+This condition holds for 1/2 of the wrong key values.
+Therefore each quartet gives one bit of information on $K_1$
+from the $P,P'$ pair and another bit of information from
+the $Q,Q'$ pair.
+With 16 useful quartets, we expect $K_1$ to be identified uniquely.
+
+Next, we recover $K_2 \xor K_4$ by decrypting up one round
+and examining the {\sc xor} difference in
+the $C,D$ pair and in the $C',D'$ pair.
+The details are very similar to those used to learn $K_1$.
+
+This allows us to peel off the first and last rounds of
+the cipher.
+Then we repeat the attack on the reduced cipher.
+For instance, we can use about $8 \cdot 144 \cdot 4$ more
+adaptive chosen plaintext/ciphertext queries to generate
+about 8 useful quartets for the reduced cipher if we use
+the same settings for $\Delta,\nabla$, since then the success
+probability $p$ increases to about $1/144$.
+Using these 8 useful quartets for the reduced cipher
+we learn $K_3$; and we repeat the attack iteratively until
+the entire key is known.
+
+In all, the complexity of the attack is about
+$16 \cdot 950 \cdot 4 + 8 \cdot 144 \cdot 4 + \ldots \approx 2^{16}$
+adaptive chosen plaintext/ciphertext queries.
+The attack requires $8 \cdot 2 \cdot 32 \cdot 2^{32} = 2^{41}$
+offline computations of the $F$ function,
+which is work comparable to that required for $2^{38}$ trial encryptions.
+The attack can also be converted to a known-plaintext attack, but
+then the complexity increases dramatically to $2^{52}$ texts.
+
+The best conventional attack on COCONUT98 we could find
+was a meet-in-the-middle attack that exploits a weakness in the
+key schedule.
+However, the meet-in-the-middle attack requires approximately
+$2^{96}$ trial encryptions, so our chosen-text boomerang attack compares
+very favorably to it.
+See Appendix~\ref{sec:mitm} for more details on the meet-in-the-middle attack.
+
+
+Fixing the cipher would require careful changes to its internal design.
+One possible approach would be to replace the four-round Feistel
+network $\Psi$ by a transformation with much more strength against
+differential cryptanalysis (say, 16 rounds instead of 4).
+Another possible approach is to use a decorrelation module in each
+round; this seems likely to prevent boomerang-style attacks,
+and is in fact the approach proposed in the DFC AES submission \cite{GG+98}.
+(Using just a decorrelation module before the first round and after
+the last round is not enough---differential-style attacks are still possible.)
+
+It is clear that the mere use of decorrelation techniques is not
+enough to guarantee security against differential-style attacks.
+At the same time, although it does not provide the conjectured
+$2^{64}$ security level, COCONUT98's decorrelation module does seem to
+improve the cipher's security.
+Without a decorrelation module, COCONUT98 would be vulnerable to conventional
+differential attacks requiring on the order of $2^8$ chosen texts,
+so in this case the decorrelation module seems to have approximately
+squared the security level of the base cipher.
+
+
+\section{Extensions to truncated differential analysis}\label{sec:trunc}
+
+So far we have confined the discussion to conventional differential
+characteristics, but it seems natural to wonder whether boomerang
+attacks can also be made to work using truncated differentials.
+The answer is yes, but there are some difficulties.
+
+The pitfall with extensions to truncated differentials is that
+\[ \Pr[\Delta \to \Delta^* \mbox{ by } F]
+= \Pr[\Delta^* \to \Delta \mbox{ by } F^{-1}] \]
+always holds for conventional differential characteristics,
+but can fail to hold for truncated characteristics.
+Note that our analysis in earlier sections assumed
+that if $\Delta \to \Delta^*$ by the first half of the cipher,
+then $\Delta^* \to \Delta$ holds with the same probability for the inverse
+of the first half of the cipher.
+For truncated differentials, this assumption in general is not correct.
+
+A more accurate formula for the success probability $p$ of
+a boomerang attack with truncated differentials is
+\begin{eqnarray*}
+p \approx \sum_{w \xor x \xor y \xor z = 0}
+&&	\Pr[\Delta \to w \mbox{ by } E_0]
+\times	\Pr[\nabla \to x \mbox{ by } E_1^{-1}] \times \\
+&&	\Pr[\nabla \to y \mbox{ by } E_1^{-1}]
+\times	\Pr[z \to \Delta \mbox{ by } E_0^{-1}].
+\end{eqnarray*}
+This formula is rather unwieldy, but fortunately it can often
+be simplified substantially to
+\begin{eqnarray*}
+p \approx && \Pr[\Delta \to \Delta^*] \times \Pr[\nabla \to \nabla^*]^2 \times
+  \Pr[\Delta^* \to \Delta] \times \\
+&& \Pr[w \xor x \xor y \in \Delta^* \mid w \in \Delta^*, x,y \in \nabla^*].
+\end{eqnarray*}
+If the truncated differentials $\Delta^*,\nabla^*$ are linear
+(i.e. closed under $\xor$), as is usually the case,
+the last term in the formula above is easily computed.
+
+
+\section{Khufu}\label{sec:khufu}
+
+We describe a boomerang attack that breaks 16 rounds of Khufu \cite{Mer90}
+with $2^{18}$ adaptively chosen plaintext/ciphertext queries and
+a comparable workfactor.
+This is an improvement over the best previous result,
+a differential attack on Khufu-16 needing $2^{31}$--$2^{43}$
+chosen texts (depending on whether one wants a distinguishing or
+key-recovery attack) \cite{GC94}.
+%However, our attack is already obsolete:
+%Biham {\em et al.} recently gave a better miss-in-the-middle attack that
+%breaks Khufu-16 with $2^{17}$ chosen texts \cite{BBS99},
+%and moreover they note that the attack can be extended to analyze up to 26
+%rounds of Khufu with increased complexity.
+%Despite this fact, we feel that the boomerang attack on Khufu-16 is
+%a nice illustration of boomerang techniques.
+
+In our boomerang attack,
+we exploit that there are excellent truncated differentials
+available for both halves of the cipher.
+For the first half of the cipher, we use
+\[ \Delta = (0,0,0,a,b,c,d,e) \to (0,0,0,a,0,0,0,0) = \Delta^*, \]
+which holds with probability $2^{-32}$ in the forward direction
+and probability $1$ in the reverse direction.
+We will hold $a$ fixed throughout the attack.
+For the inverse of the last half of the cipher, we use
+$\nabla = (0,0,0,a,0,0,0,0) \to (0,0,0,a,f,g,h,i) = \nabla^*$,
+which holds with probability 1.
+Also, due to a careful choice of $\nabla^*,\Delta^*$, we have
+$\Pr[w \xor x \xor y \in \Delta^* \mid w \in \Delta^*, x,y \in \nabla^*] = 1$.
+Thus $2^{-32}$ of the quartets chosen
+according to these differences will form right quartets.
+
+One can use structures to reduce the number of texts needed.
+Choose a pool of $2^{16}$ plaintexts $(L,R_i)$ with $L$ held fixed and $R_i$
+varying.
+Also, form another pool of $2^{16}$ plaintexts as
+$(L',R'_j)$ where $L'=L\xor (0,0,0,a)$ and $R'_j$ varies.
+For each ciphertext $C$ obtained by encrypting one of these $2^{17}$
+plaintexts, we decrypt $D = C\xor \nabla$ to get the plaintext $Q$.
+We look for $Q,Q'$ with a difference of $(0,0,0,a)$ in the left half
+of the block; such a pair probably indicates a right quartet.
+This choice of structures is expected to provide about one right quartet,
+although one wrong quartet will probably also survive the initial
+filtering phase.
+
+Once we have a (suggested) right quartet formed by $(L,R_i)$ and $(L',R'_j)$,
+we can use it to obtain more right quartets at little cost.
+We form another $2^{10}$ quartets by choosing
+$P=(L\xor (\alpha,\beta,0,0),R_i)$, $P'=(L'\xor (\alpha,\beta,0,0),R'_j)$
+where $\alpha,\beta$ take
+on $2^{10}$ possible values; $C,C',D,D',Q,Q'$ are generated from $P,P'$
+as before.
+Now each such quartet is guaranteed to be a right quartet
+(if $(L,R_i),(L',R'_j)$ formed a right quartet) because we have
+successfully bypassed the first round.
+Thus, any wrong quartets which survived the earlier filtering phase
+are easily eliminated.
+Furthermore, given $2^{10}$ right quartets we expect to be able to
+form $2^{10}$ equations of the form $S_1(x)\xor S_1(y)=z$ for
+known values of $x,y,z$, and this should be sufficient to recover $S_1$
+up to a {\sc xor} by a 32-bit constant.
+Then the 8-round reduced cipher can be broken trivially.
+
+In total, this attack on Khufu-16 requires $2^{18} + 4 \times 2^{10}
+\approx 2^{18}$ adaptively chosen texts.  The workfactor is minimal.
+
+
+
+
+
+
+\section{FEAL}
+\label{sec:feal}
+One can also apply boomerang techniques to FEAL.
+There are 3-round differential characteristics with probability one
+\cite{BS93}, so we immediately obtain an efficient boomerang attack
+that distinguishes FEAL-6 from a random permutation
+with only four adaptive chosen plaintext/ciphertext queries.
+(This elegant observation is due to Eli Biham \cite{Bih99}.)
+
+
+
+
+
+\section{Inside-out attacks}\label{sec:cast256inout}
+In this section, we sketch a description of the ``inside-out attack,''
+which may be viewed as a dual to the boomerang attack.
+The difference is that
+the boomerang attack works from the outside in while the inside-out
+attack works from the inside out.
+
+In the inside-out attack, we search for pairs
+of texts which contain a desired difference $\Delta$ at
+the intermediate value after half the rounds.
+We hope that the differential $\Delta \to \Delta'$ for $E_1$
+and the differential $\Delta \to \Delta^*$ for $E_0^{-1}$ both hold.
+In this case, we will have recognizable
+differences $\Delta^*$ and $\Delta'$ in the plaintexts and
+ciphertexts of the pair.
+If we accumulate enough pairs with the difference $\Delta$
+halfway through the cipher, we should be able to find at least
+one right pair where both differentials hold.
+
+To illustrate these ideas in action, we analyze 16
+rounds of CAST-256.
+CAST-256 \cite{Ada98} is a generalized Feistel block cipher, whose
+simplicity makes it a nice test-bed to explore the properties of
+generalized Feistel round structures.
+
+We briefly recall the definition of CAST-256 here.
+The 128-bit block is divided into four 32-bit words, and
+a Feistel function $F:\Z_2^{32} \to \Z_2^{32}$ is used to
+update the block.
+There are two types of rounds, which we shall call ``A rounds''
+and ``B rounds'' in a choice of terminology inspired by Skipjack.
+An A round encrypts the input block $(w,x,y,z)$ to
+$(z,w,x,y\xor F(z))$, and a B round
+encrypts to $(x,y,z\xor F(w),w)$.
+Note that $A \approx B^{-1}$; by this we mean that the structure
+of the inverse of a B round is the same as the structure of an A round,
+not that they are true functional inverses.
+With this terminology, the CAST-256 cipher structure is defined as
+$B^{24} \circ A^{24}$, i.e. 24 A rounds followed by 24 B rounds.
+
+The CAST-256 structure admits many nice truncated differentials.
+In our boomerang attack,
+we will use $\Delta=(0,0,0,a) \to (0,b,c,a)=\Delta'$, which
+holds with probability 1 for 8 B rounds,
+and $\Delta=(0,0,0,a) \to (0,d,e,a)$, which holds with probability 1
+for decrypting though 8 A rounds.
+
+The signal-to-noise ratio of the inside-out attack will be
+reasonably good, because
+right pairs can be recognized by a 96-bit filtering condition.
+
+To implement the attack, we collect $2^{49.3}$ known texts
+encrypted under 16 rounds of CAST-256.
+By the birthday paradox, we expect to see three right pairs among
+those texts, which can be readily recognized.
+(We also expect to get three wrong pairs, but they should be eliminated
+in the next phase.)
+Then we search over the last round subkey.
+Each guess at the 37 key bits entering the last round suggests $2^5$
+possible values for the 37 key bits entering the next-to-last round;
+the three right pairs allow us to uniquely recognize the correct
+values for the last two round subkeys.
+The first two round subkeys can be recovered by analogous techniques.
+Finally, the attack may be repeated on the reduced-round cipher.
+
+To sum up, we see how to break 16 rounds of CAST-256 with an inside-out
+attack that needs just $2^{49.3}$ known texts and very little work.
+This attack is independent of the definition of $F$ function or key schedule,
+and depends only on the round structure.
+
+There are two implications of our analysis.
+First, it indicates that CAST-256 reduced to 16 rounds would
+not be adequately secure.
+Since CAST-256 with 48 rounds is 2--2.5 times slower on high-end
+CPUs than the fastest AES candidates \cite{SK+98},
+this suggests that CAST-256's
+security-to-performance ratio may not be as high as some other
+contenders.
+On the other hand, security clearly must take precedence over
+performance, and here our analysis provides some support for
+the CAST-256 design.
+We have seen that CAST-256's round ordering is ideally-suited
+to resist boomerang attacks (see Appendix~\ref{sec:cast256boom}),
+and due to the sheer number of rounds, it seems very hard to extend our
+inside-out attack to the full cipher.
+
+
+
+\section{Related work}\label{sec:related}
+
+The boomerang attack is closely related to many other
+ideas that have previously occurred in the literature.
+As a result, there are many different ways to think about
+the boomerang attack.
+In this section, we will try to survey the possibilities.
+
+The boomerang attack is related to the differential-linear attack
+of \cite{HL94}.
+In a differential-linear attack, one covers $E_0$ with a
+truncated differential $\Delta \to \Delta^*$, covers $E_1^{-1}$
+with a linear approximation $\Gamma \to \Gamma^*$, and finally
+covers $E_1$ with a second approximation $\Gamma^* \to \Gamma$;
+there is also the additional requirement that
+$\Gamma^* \cdot x$ be constant for all $x \in \Delta^*$.
+{}From this perspective, one could think of the boomerang
+attack as a ``differential-differential'' attack (if the
+reader will indulge a slight abuse of terminology).
+
+A similar observation is that the boomerang attack is closely related
+to higher-order differential techniques \cite{Lai94,Knu95}.
+As noted in Section~\ref{sec:trunc}, the pairs $P,Q$, $P',Q'$ don't
+actually need to follow $\nabla \to \nabla^*$:
+it is sufficient that
+$E_1^{-1}(P) \xor E_1^{-1}(P') \xor E_1^{-1}(Q) \xor E_1^{-1}(Q') = 0$,
+and this may be viewed (in a very approximate sense)
+as a higher-order differential of order two.
+In this way, the boomerang attack can be considered as an intermediate
+step between conventional differential and higher-order differential attacks.
+
+Another precursor of the boomerang attack is
+the ``double-swiping'' attack \cite{KSW97}, a
+differential related-key attack on NewDES-1996
+that can, in retrospect, be viewed as a boomerang-style
+attack (with minor adjustments to take advantages
+of related-key queries, as allowed in \cite{KSW97}'s extended
+threat model).
+
+One of the interesting features of the boomerang attack is
+that it is apparently very well-suited to the analysis of ciphers
+that use asymmetric round functions\footnote{See
+Appendix~\ref{sec:cast256boom} for a concrete example of this.}.
+Asymmetric round functions can be classified into one of two types:
+the A round, which has better diffusion in the forward direction
+than in the reverse direction, and the B round, which has better
+diffusion in the reverse direction.
+We note that when the first half of the cipher is built of B-type
+rounds and the last half is built of A-type rounds, boomerang
+attacks seem to be especially dangerous because they allow one
+to probe from both endpoints at the same time.
+
+This supplies some intuition for how the boomerang attack works.
+It would not be unreasonable to think of
+the boomerang attack as a differential meet-in-the-middle attack
+that uses differentials to work from the outside in; the interesting
+bit is what happens where
+the differentials ``meet'' in the middle of the cipher.
+
+One disadvantage of the boomerang attack is that it inherently
+requires the ability to perform both adaptive chosen-plaintext
+and adaptive chosen-ciphertext queries at once, a rare requirement
+to find in a practical attack.
+We are aware of only two other attacks with this property: (1)
+the adaptive chosen-plaintext/ciphertext attack on the 3-round
+Luby-Rackoff cipher, which is also used to good effect in some
+of Knudsen's work \cite{Knu98} on Luby-Rackoff ciphers with more rounds,
+and (2) Biham {\em et. al}'s yo-yo game \cite{BB+98},
+which is closely related to their more-famous
+miss-in-the-middle attack \cite{BBS98,BBS99}.
+
+
+The relation between the boomerang attack and the
+miss-in-the-middle attack is a close and interesting one.
+It seems that the boomerang attack is
+little more than a chosen-plaintext/ciphertext version of the
+miss-in-the-middle attack.
+In particular, if $\Pr[\Delta \to \Delta^*]=\Pr[\nabla \to \nabla^*]=1$
+and $\Delta^* \cap \nabla^* = \emptyset$, then
+the same pair of differentials can be used to obtain
+either a miss-in-the-middle attack (using the impossible
+differential $\Delta \to \nabla$)
+or a boomerang attack.
+
+This paper showed that in some special cases the boomerang attack can improve
+on the miss-in-the-middle attack, if adaptive chosen plaintext/ciphertext
+queries are available.
+However, this seems to be the exception rather than the rule.
+For several ciphers---including
+% Khufu,
+Skipjack and CAST-256---miss-in-the-middle attacks penetrate through
+more rounds than boomerang attacks \cite{BBS98,BBS99}.
+Though a thorough comparison of the two types of attacks continues
+to elude us, we hope that this work will stimulate further research into
+the interaction between these two attacks.
+
+\section{Conclusions}\label{sec:conc}
+We have described a new way to use differential-style techniques
+for cryptanalysis of block ciphers.
+Our attacks can break some ciphers that are immune to
+ordinary differential cryptanalysis, and can provide a powerful new way
+to analyze ciphers with asymmetrical round structures.
+To protect against these attacks, cipher designers should ensure
+that there are no good differentials for the first or last half of
+their cipher.
+
+
+\section{Acknowledgements}
+We are grateful to a number of readers whose comments
+have improved the paper substantially:
+Serge Vaudenay offered a number of helpful comments on an
+early version of this paper and allowed us to use his
+nice one-line summary of the attack;
+Eli Biham suggested looking at reduced-round versions of FEAL,
+and pointed out the relevance of the 3-round characteristics of
+probability 1;
+Carlisle Adams, Alex Biryukov, and the anonymous reviewers
+gave helpful feedback on the exposition;
+and finally, we would like to thank all those patient readers who
+suggested including Figure~\ref{fig:boom} in this paper.
+
+\begin{thebibliography}{GG+98}
+\small\sloppy\hbadness 2000
+
+% Little trick to make URLs that allow breaks easier to type
+\def\s{\slash}
+
+\bibitem[Ada98]{Ada98}  C. Adams, ``The CAST-256 Encryption Algorithm,''
+NIST AES Proposal, Jun 98.
+
+\bibitem[Ada99]{Ada99} C. Adams, personal communication, Feb 1999.
+
+\bibitem[BBS98]{BBS98} E.~Biham, A.~Biryukov, A.~Shamir.
+``Cryptanalysis of Skipjack Reduced to 31 Rounds using Impossible
+Differentials,'' {\em EUROCRYPT'99}, to appear.
+
+\bibitem[BBS99]{BBS99} E.~Biham, A.~Biryukov, A.~Shamir.
+``Miss in the Middle Attacks on IDEA, Khufu, and Khafre,''
+this volume.
+
+\bibitem[BB+98]{BB+98}
+E.~Biham, A.~Biryukov, O.~Dunkelmann, E.~Richardson, A.~Shamir,
+``Initial Observations on the Skipjack Encryption Algorithm,''
+{\em SAC'98}, Springer-Verlag, 1998.
+
+\bibitem[Bih99]{Bih99} E.~Biham, personal communication, Mar 1999.
+
+\bibitem[BS93]{BS93} E.~Biham, A.~Shamir,
+{\em Differential Cryptanalysis of the Data Encryption Standard},
+Springer-Verlag, 1993.
+
+\bibitem[BC+98]{BC+98}  C. Burwick, D. Coppersmith, E. D'Avignon, R. Gennaro,
+S. Halevi, C. Jutla, S.M. Matyas, L. O'Connor, M. Peyravian, D. Safford, and N.
+Zunic, ``MARS --- A Candidate Cipher for AES,'' NIST AES Proposal, Jun 98.
+
+\bibitem[GG+98]{GG+98} H.~Gilbert, M.~Girault, P.~Hoogvorst,
+F.~Noilhan, T.~Pornin, G.~Poupard, J.~Stern, S.~Vaudenay,
+``Decorrelated Fast Cipher: an AES Candidate,''
+NIST AES Proposal, Jun 98.
+
+\bibitem[GC94]{GC94} H.~Gilbert and P.~Chauvaud,
+``A chosen plaintext attack of the 16-round Khufu cryptosystem,''
+{\em CRYPTO'94}, LNCS 839, Springer-Verlag, 1994.
+
+\bibitem[GLC98]{GLC98}  D. Georgoudis, D. Lerous, and B.S. Chaves, ``The
+`Frog' Encryption Algorithm,'' NIST AES Proposal, Jun 98.
+
+\bibitem[HL94]{HL94} M.~Hellman and S.~Langford.,
+``Differential--linear cryptanalysis,''
+{\em CRYPTO'94}, LNCS 839, Springer-Verlag, 1994.
+
+\bibitem[KSW97]{KSW97}  J.~Kelsey, B.~Schneier, D.~Wagner,
+``Related-Key Cryptanalysis of 3-WAY, Biham-DES, CAST, DES-X, NewDES,
+RC2, and TEA,'' {\em ICICS'97}, Springer-Verlag, 1997.
+
+\bibitem[Knu95]{Knu95}  L.R. Knudsen, ``Truncated and Higher Order
+Differentials,'' {\it Fast Software Encryption, 2nd International Workshop
+Proceedings}, Springer-Verlag, 1995.
+
+\bibitem[Knu98]{Knu98} L.~Knudsen, ``DEAL---A 128-bit Block Cipher,''
+NIST AES Proposal, Jun 98.
+
+\bibitem[Lai94]{Lai94}  X. Lai, ``Higher Order Derivations and Differential
+Cryptanalysis,'' {\it Communications and Cryptography: Two Sides of One
+Tapestry}, Kluwer Academic Publishers, 1994, pp. 227--233.
+
+\bibitem[Mer90]{Mer90}  R.~C.~Merkle, ``Fast Software Encryption Functions'',
+{\em CRYPTO'90}, Springer-Verlag, 1990.
+
+\bibitem[NW97]{NW97}  R.~Needham and D.~Wheeler,
+``TEA Extensions,'' unpublished manuscript, Mar 1997.
+
+\bibitem[NSA98]{NSA98} NSA,
+``Skipjack and {KEA} algorithm specifications,'' May 1998.
+Available from {\tt http:/\s csrc.ncsl.nist.gov/encryption/skipjack-1.pdf}.
+
+\bibitem[Saa98]{Saa98}  M.-J. Saarinen, ``Cryptanalysis of Block Tea,''
+unpublished manuscript, 20 Oct 1998.
+
+\bibitem[SK+98]{SK+98} B.~Schneier, J.~Kelsey, D.~Whiting,
+D.~Wagner, C.~Hall, N.~Ferguson,
+``Performance Comparison of the AES Submissions,''
+{\em Second AES Conference}, 1999.
+
+\bibitem[V97]{V97} S.~Vaudenay,
+``A cheap paradigm for block cipher strengthening,''
+LIENS tech report 97-3, 1997.
+
+\bibitem[V98]{V98} S.~Vaudenay,
+``Provable Security for Block Ciphers by Decorrelation,''
+{\em STACS'98}, Springer-Verlag LNCS 1373, 1998.
+
+\bibitem[V98b]{V98b} S.~Vaudenay,
+``Feistel Ciphers with $L_2$-Decorrelation,''
+{\em SAC'98}, Springer-Verlag, 1998.
+
+\bibitem[Yuv97]{Yuv97} G.~Yuval,
+``Reinventing the Travois: Encryption/ MAC in 30 ROM Bytes,''
+{\em FSE'97}, LNCS 1267, 1997.
+
+
+\end{thebibliography}
+
+\appendix
+\section{Meet-in-the-middle attack on COCONUT98}\label{sec:mitm}
+The very simple key schedule used in COCONUT98 exposes it to
+meet-in-the-middle attacks.
+The problem is that
+there are only 96 bits of entropy in the first four round subkeys,
+and a similar property holds for the last four round subkeys.
+Therefore, with just four known texts and about $2^{96}$ offline
+work, one can break COCONUT98 using standard meet-in-the-middle
+techniques\footnote{Specifically:
+Obtain four known text pairs $P_j,C_j$ for $j=1,2,3,4$.
+Guess $K_3,K_4$.
+For each possibility for $K_1$, store
+$(\Psi_0(P_0)-\Psi_0(P_1))/(\Psi_0(P_2)-\Psi_0(P_3)),K_1$ in a
+lookup table keyed on the first component.
+Finally, for each possibility for $K_2$, we compute
+$(\Psi_1^{-1}(C_0)-\Psi_1^{-1}(C_1))/(\Psi_1^{-1}(C_2)-\Psi_1^{-1}(C_3))$
+and look for a match in the lookup table.}.
+The workfactor of this attack is disappointingly low
+for a cipher with a 256-bit key.
+
+When the key is chosen non-uniformly, e.g. from a passphrase,
+this attack can be even more deadly.
+If we assume a key entropy of 4 bits/byte (probably a gross overestimate
+for most passphrases), the workfactor of the meet-in-the-middle
+attack can be reduced to approximately $2^{48}$ trial encryptions.
+This is much faster than exhaustive keysearch.
+
+
+\section{A CAST-256 variant}\label{sec:cast256boom}
+
+
+In this section, we consider a simple CAST-256 variant
+obtained by exchanging the order of the A rounds and the B rounds.
+(In other words, the variant cipher uses the B rounds first.)
+The primary contribution is that such a variant can be readily
+analyzed using boomerang attacks.
+
+Please note that this attack {\em does not} apply to
+CAST-256 (only to a variant with a different round structure)\footnote{See
+also Section~\ref{sec:cast256inout}, which analyzes 16 rounds of the
+real CAST-256 cipher (without any re-ordering of the rounds).}.
+Since the designers of CAST-256 already knew of the need to apply
+the A rounds first \cite{Ada99}, we feel that the variant does
+injustice to the spirit of the CAST-256 design.
+We focus on CAST-256
+primarily because it makes such a simple, clean platform for analysis
+of novel round structures.
+We believe our attack on this CAST-256 variant gives new
+insights into the properties of various ciphers
+with generalized Feistel round structures
+\cite{NSA98,BC+98,GLC98,Yuv97,NW97,Saa98},
+so we hope the analysis is of independent interest.
+
+The sheer number of rounds makes it hard to mount good attacks
+on the full 48-round CAST-256.
+In this section, we show that boomerang attacks with
+complexity $2^{48.5}$--$2^{65}$ are possible on 24--25 rounds
+of the variant cipher.
+These attacks do not appear to extend to the original CAST-256
+round ordering, so we believe this provides some additional
+justification that CAST-256 is using the right round ordering.
+
+
+{\sc A simple attack on 24 rounds.}
+We use the truncated differential
+$\Delta = (0,0,0,a) \to (b,c,d,a) = \Delta^*$ for the 12 B rounds
+(where $a$ may take on any non-zero value, and $b,c,d$ are arbitrary).
+For the inverse of the last half of the cipher, we use
+a similar truncated differential: namely,
+$\nabla = (0,0,0,e) \to (f,g,h,e) = \nabla^*$.
+
+Using the machinery developed in Section~\ref{sec:trunc},
+the computation of the success probability is straightforward.
+Both of these truncated differentials have probability 1,
+and $\Delta^* \to \Delta$ has probability $2^{-96}$.
+Finally, we note that 
+\[ \Pr[w \xor x \xor y \in \Delta^* \mid w \in \Delta^*, x,y \in \nabla^*]
+   = \Pr[a \xor e \xor e' \ne 0] = 1 - 2^{-32}, \]
+so the overall success probability is $p \approx 2^{-96}$.
+
+We start the attack by choosing $2^{32}$ plaintexts $P_i$ where
+the first three words are held fixed and the last takes on
+all $2^{32}$ possibilities, and we obtain the corresponding ciphertexts $C_i$.
+For each such ciphertext $C_i$, we generate $2^{16.5}$ new ciphertexts
+$D_{i,j}$ by varying the final word.
+Then we decrypt each $D_{i,j}$ to obtain the corresponding
+plaintext $Q_{i,j}$.
+This gives us $2^{63}$ choices for $P,P'$ from the pool of
+plaintexts $P_i$ and another $2^{33}$ choices for $D,D'$ from the $D_{i,j}$.
+In all, there will be $2^{96}$ possible quartets to choose from.
+About $p \approx 2^{-96}$ of them will form right quartets,
+so we expect to see one right quartet.
+The excellent filtering available (we can filter on all 128 bits of
+$Q \xor Q'$) allows us to eliminate all the wrong quartets with high
+probability.
+
+This immediately gives a way to distinguish the
+24-round CAST-256 variant from a ideal cipher with $2^{48.5}$
+adaptively chosen texts and a low workfactor.
+
+{\sc A key-recovery attack on 25 rounds.}
+The same ideas can also be used to develop key recovery attacks.
+For instance, we can break the 25-round variant obtained by
+prepending one more B round at the beginning with $2^{65}$ chosen
+texts and a similar amount of work.
+Due to lack of space, we give only a very brief sketch of the attack:
+we bypass the first round with structures, and then
+in the analysis phase we guess the first-round subkey, peel
+off the first round, and check for the existence of right quartets.
+
+{\sc Discussion.}
+It is worth comparing our results to what is attainable with
+conventional truncated differential cryptanalysis.
+In the case of this CAST-256 variant, boomerang attacks seem
+to compare favorably for up to 24 rounds, due to the asymmetric
+round structure, but for more than 25 rounds conventional techniques
+are at least as good as the boomerang.
+
+The astute reader will have noticed that our truncated differentials
+$\Delta \to \Delta^*$ (for the 12 B rounds) and
+$\nabla^* \to \nabla$ (for the 12 A rounds)
+can be readily concatenated to obtain a truncated differential
+$\Delta = (0,0,0,a) \to (0,0,0,a) = \nabla$ of probability
+$2^{-96}$ for the entire cipher.
+The resulting 24-round differential will have probability $2^{-96}$,
+and can be used in a conventional truncated differential attack
+that
+distinguishes the 24-round CAST-256 variant from
+a ideal cipher with $2^{65}$ (non-adaptive) chosen plaintexts.
+Note that you can also get a miss-in-the-middle attack on the
+24-round variant with the same techniques, since
+$(0,0,0,a)\to (0,0,0,a')$ is an impossible differential when $a\ne a'$.
+This gives an attack that uses $2^{65}$ chosen plaintexts
+and not much work.
+
+Thus, our 24-round boomerang attack ($2^{48.5}$
+adaptive chosen-plaintext and chosen-ciphertext queries)
+seems better than the conventional truncated differential attack
+($2^{65}$ chosen plaintexts) or the miss-in-the-middle attack
+($2^{65}$ chosen plaintexts), but it loses its advantage at 25 rounds.
+
+One reason why the boomerang attack succeeds against the CAST-256 variant
+is that CAST-256 rounds exhibit a definite asymmetry.
+In both Skipjack and CAST-256,
+the A rounds have weaker diffusion in the reverse direction than in
+the forward direction, while the B rounds are stronger in the reverse
+direction.
+Thus, the combination of A and B rounds makes conventional differential
+attacks harder than usual:
+whether we attack the cipher or the inverse cipher, we will have
+to push a differential through 12 ``strong rounds''.
+In contrast, the boomerang attack allows us to follow the path of
+least resistance in both directions,
+because we cover the B rounds with a differential running in the forward
+direction and cover the A rounds with a differential running in the
+reverse direction.
+This makes the boomerang attack especially well-suited to the analysis
+of a cascade of B rounds followed by A rounds.
+
+By the same line of reasoning, boomerang techniques would be especially weak
+at analyzing the real CAST-256 cipher, where the A rounds precede
+the B rounds.
+A boomerang attack on CAST-256 would be attacking the cipher at all of
+its strongest points, and thus boomerang techniques would be a particularly
+poor tool for analyzing the real CAST-256 round structure.
+
+\end{document}
+@
+
+
+1.22
+log
+@*** empty log message ***
+@
+text
+@a61 1
+%which gives boomerang techniques another advantage over standard attacks.
+a106 14
+%To the best of our knowledge, the attacks on COCONUT98, Khufu-16,
+%and CAST-256-16 have lower complexities
+%than any previously reported in the literature.
+%
+%Our paper is organized as follows.
+%Section~\ref{sec:generic} gives a high-level view of a generic
+%boomerang attack.
+%Sections~\ref{sec:coc1}--\ref{sec:coc4} present our analysis of COCONUT98,
+%using conventional differentials and boomerang techniques.
+%Section~\ref{sec:trunc} discusses how to extend the boomerang techniques
+%to work with truncated differentials.
+%With these tools in hand,
+%Section~\ref{sec:khufu} analyzes Khufu-16, and Section~\ref{sec:cast256inout}
+%treats a CAST-256 variant.
+a127 1
+%%%\marginpar{A picture?}
+a196 1
+%with the restriction that $(K_7,K_8) \ne 0$.
+a213 2
+%where the Galois field $E$ is defined as
+%$E = \Z_2[x]/(x^{64}+x^{11}+x^2+x+1)$, and
+a221 5
+%g(x)	&=&	ROL_{11}(\phi(x)) + c \bmod 2^{32} \\
+%f_i(x)	&=&	\phi(g(x \xor k_i)) \\
+%F_i((x,y))&=&	(y, x \xor f_i(y)) \\
+%%%f_i(y)	&=&	\phi(ROL_{11}(\phi(y \xor k_i)) + c \bmod 2^{32}) \\
+%%%F_i((x,y))&=&	(y, x \xor f_i(y)) \\
+a235 9
+%\subsection*{An alternate view}
+%Here is an alternate description for
+%COCONUT98.  Let
+%\[ L((x,y)) = (x \xor K_1 \xor K_2, y \xor K_1 \xor K_2) \]
+%be a purely linear layer.
+%We note that $\Psi_1 = L \circ \Psi_0 \circ L$.
+%Then COCONUT98 can be equivalently expressed as
+%$L \circ \Psi_0 \circ L \circ M \circ \Psi_0$.
+
+a244 4
+%Empirically, we find that
+%$\Delta = \nabla = (e_{10},e_{31})$ provides
+%$p \approx 0.023 \cdot 0.023 \approx 1/1900$.
+
+d250 2
+a251 2
+when $j \in J = \{8,9,\ldots,19,20,29,30,31\}$.\footnote{%
+At first glance, it might appear that the probability
+a275 3
+%(There are also other rotated versions of this characteristic
+%which hold with similar probabilities, though we will
+%not need them in our analysis.)
+a278 16
+%We also get four-round characteristics
+%$(e_{j+1}, e_j \xor e_{j+22}) \to (0, e_j)$
+%for $j=9,18,19,20$ with
+%probabilities $0.76 \cdot 2^{-4}$, $0.83 \cdot 2^{-4}$,
+%$0.68 \cdot 2^{-4}$, and $0.58 \cdot 2^{-4}$.
+%The same characteristics also hold for $\Psi_1$ with the
+%same probabilities.
+
+%We also get corresponding backwards characteristics for decryption
+%through four Feistel rounds by symmetry:
+%for instance, the characteristic $(e_{18},0) \to (e_{18} \xor e_8, e_{19})$
+%for $\Psi^{-1}$ holds with probability $0.83 \cdot 2^{-4}$.
+%$(e_8 \xor e_{30}, e_9) \to (e_8,0)$
+%$(e_j, 0) \to (e_j \xor e_{j+22}, e_{j+1})$
+%by $\Psi_0^{-1}$, and so
+%on; similar results hold for $\Psi_1^{-1}$.
+a290 6
+%footnote{This
+%simple insight allows one to prove that there is no good differential
+%characteristic for the whole cipher.
+%The idea is that any differential characteristic for all 8 rounds
+%must pass through $M$, and thus cannot have good probability.
+%See \cite{V98} for details.}.
+a333 2
+% which is
+% much larger than the $2^{-17.2}$ figure obtained earlier.
+a471 1
+
+a531 25
+%Here's a trunc diff for 12 rounds with prob 2^{-32}:
+%1. (0,0,0,0,h,A,f,g)
+%2. (h,A,f,g,0,0,0,0)  prob 2^{-32}
+%3. (c,d,e,b,f,g,h,A)  A=a \xor i
+%4. (0,0,0,a,b,c,d,e)
+%5. (0,0,0,0,a,0,0,0)
+%.
+%:
+%12.(0,0,0,a,0,0,0,0)
+%13.(j,k,l,m,a,0,0,0)
+%Is it useful?  I don't see how to use it, but maybe there's a way.
+
+%Here's an iterative trunc diff for 4 rounds with prob 2^{-23}:
+%(z,b,0,a,0,0,0,0) -> (a,g,0,i,0,0,0,0) thru 4 rounds with prob 2^{-23}
+%1. (z,b,0,a,0,0,0,0) prob 1
+%2. (c,d,e,f,0,a,z,b) prob 2^{-16}
+%3. (g,0,i,a,e,f,c,d) prob 2^{-7}
+%4. (0,0,0,0,a,g,0,i) prob 1
+%5. (a,g,0,i,0,0,0,0) prob 1
+%Is it useful?  I don't think so.
+%You can try to cover the first 16(or 17)
+%rounds of Khufu-24 with it; cover the last 8 (or 7) rounds with
+%the trivial characteristic of prob 1 \nabla=(0,0,0,a,0,0,0,0) etc.
+%But then p=2^{-92}, p'=2^{-92}, q=1, and so the attack
+%needs too many texts.
+a542 2
+%Compare this to the best-known attack on FEAL-4, which uses
+%20 chosen plaintexts to recover the key \cite{Mur90}.
+a546 1
+%\section{Multiple modes of operation}
+a635 12
+%Since the full 48-round cipher is 2--2.5 times as slow
+%%One
+%%measurement on an Intel 90MHz Pentium showed a $3.9\times$ speed difference,
+%%but this seems to be purely an anomaly.
+%%http://www.dmi.ens.fr/~granboul/recherche/AES.html
+%%Also 3.3x slower than RC6 on PPro/assembly and 3.6x slower than Rijndael on
+%%Ultrasparc/C, according to
+%%http://home.cyber.ee/helger/aes/
+%as the fastest AES candidates \cite{SK+98}, this suggests that the CAST-256
+%round structure may not provide the best possible security/performance
+%tradeoff available.
+
+a636 13
+%
+%The boomerang attack is certainly closely related tojjjjjjjjj
+%
+%Biham's yo-yo attack?
+%
+%Biham's miss-in-the-middle
+%
+%our Skipjack attack
+%
+%These ideas have been seen before in the literature, in
+%larval form.
+%
+%\ldots
+a688 1
+%{}From this point of view,
+a727 6
+%As another example, Biham {\em et al.} noted that CAST-256 has 20-round
+%impossible differentials \cite{BBS99}; these differentials can be
+%used to break 20--22 rounds with $2^{65}$ chosen texts and
+%$2^{65}$--$2^{87}$ work, so we conclude that miss-in-the-middle
+%attacks seem to be a more promising technique for analyzing large
+%numbers of rounds.
+a730 2
+%, to better understand their strengths
+%and weaknesses.
+a824 3
+%\bibitem[Mur90]{Mur90}  S.~Murphy, ``The Cryptanalysis of FEAL-4 using
+%20 chosen plaintexts,'' {\em J. Cryptology}, vol 2 (1990), pp. 145--154.
+
+a909 2
+%CAST-256 is not the only recent design to explore such round structures
+%recently, a number of designs have explored novel round structures
+a969 20
+%We choose $2^{33}$ plaintexts $P_i=(w_i,x,y,z_i)$ where $x,y$ are held fixed
+%and $w_i,z_i$ vary over all possibilities, and get the corresponding
+%ciphertexts $C_i$ with $2^{33}$ chosen-plaintext queries.
+%We generate $2^{32}$ new ciphertexts $D_{i,j}$ for each $C_i$ by
+%varying the final word.
+%
+%In the analysis phase, we guess the first subkey, peel off the first round,
+%and check for right quartets as before.
+%%We expect to get
+%$2^{2 \cdot 33 - 1} \times 2^{2 \cdot 32} \times 2^{-96} \times 2^{-32} = 2$
+%right quartets, which suffices to disclose the
+%correct value of the first round subkey.
+%The filtering is excellent, so we expect to see only two wrong pairs,
+%which are easily recognized because they will not suggest the same
+%value for the first round subkey twice.
+%To sum up, we can recover 37 bits of key material
+%{}from our 25-round CAST-256 variant with $2^{65}$ chosen texts
+%and a similar amount of work.
+%The attack can be iterated to recover the entire key.
+
+a983 3
+%(To the best of our knowledge, there do not appear to be any
+%24-round differentials with probability better than $2^{-96}$.)
+%
+a985 9
+%on the 24-round variant cipher:
+%selecting texts in structures of $2^{32}$ texts where the first three
+%words of the plaintext are held fixed, 
+%we can generate $2^{96}$ potential pairs from $2^{65}$ chosen texts,
+%which is enough to find one right pair;
+%since we have a 128-bit filtering condition on the ciphertexts,
+%the recognition of right pairs is excellent and we do not expect
+%any wrong pairs to survive.
+%This conventional attack allows us to
+a988 1
+%
+a1024 10
+
+
+
+%While boomerang techniques do not always improve on conventional attacks,
+%our analysis of CAST-256 variants suggests that
+%one important advantage of boomerang attacks
+%is the ability to exploit asymmetrical round structures to good effect.
+%Another advantage is the ability to use structures in the choice
+%of both plaintexts and ciphertexts to reduce the complexity of the attack.
+
+@
+
+
+1.21
+log
+@*** empty log message ***
+@
+text
+@a531 1
+
+d536 8
+a543 7
+However, our attack is already obsolete:
+Biham {\em et al.} recently gave a better miss-in-the-middle attack that
+breaks Khufu-16 with $2^{17}$ chosen texts \cite{BBS99},
+and moreover they note that the attack can be extended to analyze up to 26
+rounds of Khufu with increased complexity.
+Despite this fact, we feel that the boomerang attack on Khufu-16 is
+a nice illustration of boomerang techniques.
+d843 3
+a845 2
+For several ciphers---including Khufu, Skipjack,
+and CAST-256---miss-in-the-middle attacks penetrate through
+@
+
+
+1.20
+log
+@*** empty log message ***
+@
+text
+@d194 1
+a194 1
+techniques for block cipher design \cite{V97,V98,V98b,GGH+98}.
+d288 12
+a299 3
+Actually, the behavior is slightly more complicated than that,
+due to boundary effects with carry propagation from the most
+significant bit.
+d302 2
+a303 2
+For other values of $j$, the approximation given
+above is very close.}
+d313 3
+a315 3
+(There are also other rotated versions of this characteristic
+which hold with similar probabilities, though we will
+not need them in our analysis.)
+d473 1
+a473 1
+and is in fact the approach proposed in the DFC AES submission \cite{GGH+98}.
+d538 1
+a538 1
+Biham {\em et al.} recently gave a miss-in-the-middle attack that
+d540 1
+a540 1
+and they note that the attack can be extended to analyze up to 26
+d715 1
+a715 1
+CPUs than the fastest AES candidates \cite{SKW+98},
+d737 1
+a737 1
+%as the fastest AES candidates \cite{SKW+98}, this suggests that the CAST-256
+d785 8
+a813 8
+Another precursor of the boomerang attack is
+the ``double-swiping'' attack \cite{KSW97}, a
+differential related-key attack on NewDES-1996
+that (in retrospect) can be seen as a boomerang-style
+attack (with minor adjustments to take advantages
+of related-key queries, as allowed in \cite{KSW97}'s extended
+threat model).
+
+d822 1
+a822 1
+and (2) Biham {\em et. al}'s yo-yo game \cite{BBD+98},
+d883 1
+a883 1
+\begin{thebibliography}{GGH+98}
+d896 1
+a896 2
+Differentials,''  Technion tech report CS0947.  Available from
+{\tt http:/\s www.cs.technion.ac.il/\~{}biham/Reports/SkipJack/}.
+d902 1
+a902 1
+\bibitem[BBD+98]{BBD+98}
+d909 1
+a909 1
+\bibitem[BS93]{BS93} E.~Biham, A~.Shamir,
+d913 1
+a913 1
+\bibitem[BCD+98]{BCD+98}  C. Burwick, D. Coppersmith, E. D'Avignon, R. Gennaro,
+d917 1
+a917 1
+\bibitem[GGH+98]{GGH+98} H.~Gilbert, M.~Girault, P.~Hoogvorst,
+d931 1
+a931 2
+{\em CRYPTO'94}, Springer-Verlag LNCS 839,
+pages 26--39. Springer Verlag, 1994.
+d939 1
+a939 1
+Proceedings}, Springer-Verlag, 1995, pp. 196--211.
+d954 3
+d961 4
+a964 1
+\bibitem[SKW+98]{SKW+98} B.~Schneier, J.~Kelsey, D.~Whiting,
+d967 1
+a967 1
+Available from {\tt http:/\s www.counterpane.com/AES-performance.html}.
+d975 1
+a975 1
+{\em STACS'98}, Springer-Verlag LNCS 1373, pp.249--275, 1998.
+d981 5
+d1037 2
+a1038 1
+insights into the properties of various generalized Feistel round structures
+d1041 1
+a1041 1
+\cite{NSA98,BCD+98,GLC98},
+@
+
+
+1.19
+log
+@*** empty log message ***
+@
+text
+@d105 1
+a105 1
+of this variant of $2^{48.5}$ chosen texts.
+d619 1
+a619 1
+There are 3-round differential characteristics with probability 1
+@
+
+
+1.18
+log
+@*** empty log message ***
+@
+text
+@d861 12
+a872 6
+We are grateful to Serge Vaudenay for a number of helpful comments on an
+early version of this paper, and for giving a nice one-line summary of
+the attack which we used in this paper.
+Thanks also to Carlisle Adams and the anonymous reviewers for
+helpful feedback, and to Eli Biham for suggesting that we look
+at reduced-round versions of FEAL and DES.
+@
+
+
+1.17
+log
+@*** empty log message ***
+@
+text
+@d24 1
+a24 1
+we give new attacks on Khufu-16 and on 16 rounds of CAST-256.
+@
+
+
+1.16
+log
+@*** empty log message ***
+@
+text
+@d623 1
+a623 1
+(This beautiful observation was pointed out by Biham \cite{Bih99}.)
+@
+
+
+1.15
+log
+@*** empty log message ***
+@
+text
+@d624 2
+a625 2
+Compare this to the best-known attack on FEAL-4, which uses
+20 chosen plaintexts to recover the key \cite{Mur90}.
+d938 2
+a939 2
+\bibitem[Mur90]{Mur90}  S.~Murphy, ``The Cryptanalysis of FEAL-4 using
+20 chosen plaintexts,'' {\em J. Cryptology}, vol 2 (1990), pp. 145--154.
+@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@d2 1
+d64 19
+d126 3
+d169 7
+d185 2
+d510 1
+a510 1
+\times \Pr[\Delta^* \to \Delta] \times \\
+d524 2
+a525 4
+This is the best attack on 16 rounds of Khufu that we know of.
+Previously,
+Gilbert and Chavaud
+gave a differential attack on Khufu-16 needing $2^{31}$--$2^{43}$
+d527 8
+a534 8
+key-recovery attack) \cite{GC94}, and Biham {\em et al.} improved
+this with a miss-in-the-middle attack needing
+$2^{27}$--$2^{41}$ chosen texts \cite{BBS99}.
+Thus, boomerang analysis compares favorably to the other attacks
+in the literature, at least for Khufu-16;
+however, miss-in-the-middle attacks can analyze many more
+rounds (at least 24 \cite{BBS99}) than any other technique we know of,
+so they seem to be more promising in the long run.
+d616 10
+d830 1
+a830 1
+This paper showed that in some cases the boomerang attack can improve
+d833 4
+a836 7
+However, we conjecture that these cases are not representative.
+There is some anecdotal evidence \cite{BBS98}
+to suggest that miss-in-the-middle attacks can often
+penetrate through more rounds than boomerang attacks.
+For instance, we saw one example of this phenomenon
+in our analysis of Khufu, and another example may be
+found in Appendix~\ref{sec:cast256boom}.
+d865 2
+a866 1
+helpful feedback.
+d893 2
+d938 3
+d1012 6
+d1020 1
+a1020 1
+on the full 48-round cipher.
+d1068 27
+a1094 23
+For instance, we can attack the 25-round variant obtained by
+prepending one more B round at the beginning.
+
+The first round of this variant can be bypassed with structures.
+We choose $2^{33}$ plaintexts $P_i=(w_i,x,y,z_i)$ where $x,y$ are held fixed
+and $w_i,z_i$ vary over all possibilities, and get the corresponding
+ciphertexts $C_i$ with $2^{33}$ chosen-plaintext queries.
+We generate $2^{32}$ new ciphertexts $D_{i,j}$ for each $C_i$ by
+varying the final word.
+
+In the analysis phase, we guess the first subkey, peel off the first round,
+and check for right quartets as before.
+We expect to get
+$2^{2 \cdot 33 - 1} \times 2^{2 \cdot 32} \times 2^{-96} \times 2^{-32} = 2$
+right quartets, which suffices to disclose the
+correct value of the first round subkey.
+The filtering is excellent, so we expect to see only two wrong pairs,
+which are easily recognized because they will not suggest the same
+value for the first round subkey twice.
+To sum up, we can recover 37 bits of key material
+{}from our 25-round CAST-256 variant with $2^{65}$ chosen texts
+and a similar amount of work.
+The attack can be iterated to recover the entire key.
+d1100 3
+a1102 2
+to compare favorably, due to the asymmetric round structure,
+but as we shall see this is a relatively special case.
+d1110 3
+a1112 3
+(To the best of our knowledge, there do not appear to be any
+24-round differentials with probability better than $2^{-96}$.)
+
+d1114 12
+a1125 11
+and can be used in a conventional truncated differential
+attack on the 24-round variant cipher:
+selecting texts in structures of $2^{32}$ texts where the first three
+words of the plaintext are held fixed, 
+we can generate $2^{96}$ potential pairs from $2^{65}$ chosen texts,
+which is enough to find one right pair;
+since we have a 128-bit filtering condition on the ciphertexts,
+the recognition of right pairs is excellent and we do not expect
+any wrong pairs to survive.
+This conventional attack
+allows us to distinguish the 24-round CAST-256 variant from
+d1127 1
+a1127 8
+
+Thus, our 24-round boomerang attack ($2^{48.5}$
+adaptive chosen-plaintext and chosen-ciphertext queries) seems
+to compare favorably to the conventional truncated differential attack.
+However, our 25-round attack is
+not much better than what is available with conventional truncated
+differential attacks.
+
+d1131 8
+a1138 4
+The miss-in-the-middle attack seems to require
+$2^{65}$ chosen plaintexts, so again for 24 rounds the boomerang
+attack compares favorably, but the boomerang
+loses its advantage for more than 24 rounds.
+a1164 6
+We believe our attack on this CAST-256 variant gives new
+insights into the properties of various generalized Feistel round structures.
+CAST-256 is not the only recent design to explore such round structures
+%recently, a number of designs have explored novel round structures
+\cite{NSA98,BCD+98,GLC98},
+so this analysis may be of independent interest.
+@
+
+
+1.13
+log
+@Lots of updates.
+@
+text
+@d614 1
+a614 1
+simplicity makes it a nice testbed to explore the properties of
+d797 1
+a797 1
+For instance, we saw one example of this phenomenom
+@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@d45 1
+a45 1
+that Biham {\em et al.}'s impossible differentials \cite{BBS98}
+d88 14
+a101 14
+To the best of our knowledge, the attacks on COCONUT98, Khufu-16,
+and CAST-256-16 have lower complexities
+than any previously reported in the literature.
+
+Our paper is organized as follows.
+Section~\ref{sec:generic} gives a high-level view of a generic
+boomerang attack.
+Sections~\ref{sec:coc1}--\ref{sec:coc4} present our analysis of COCONUT98,
+using conventional differentials and boomerang techniques.
+Section~\ref{sec:trunc} discusses how to extend the boomerang techniques
+to work with truncated differentials.
+With these tools in hand,
+Section~\ref{sec:khufu} analyzes Khufu-16, and Section~\ref{sec:cast256inout}
+treats a CAST-256 variant.
+d104 2
+a105 2
+Section~\ref{sec:related} discusses some related work,
+and finally, Section~\ref{sec:conc} concludes the paper.
+d414 2
+d417 1
+a417 1
+The best conventional attack on COCONUT98 which we could find
+d421 1
+a421 1
+$2^{96}$ trial encryptions, so our boomerang attack compares
+d436 1
+a436 1
+It is clear that the mere use decorrelation techniques is not
+d438 3
+a440 3
+At the same time, though it did not provide the conjectured
+$2^{64}$ module, COCONUT98's decorrelation module does seem to
+help the cipher's security.
+d443 2
+a444 2
+so the decorrelation module seems to have approximately squared
+its security level in this case.
+d488 1
+a488 1
+We describe a boomerang attack that breaks 16 rounds of Khufu
+d492 16
+a507 1
+We exploit that there are excellent truncated differentials
+a555 6
+This boomerang attack on Khufu-16 seems to be better than
+any differential attack or miss-in-the-middle attack \cite{BBS98}
+that we know of.
+On the other hand, it does require a very powerful attack model,
+and we do not know whether it is possible to extend the analysis
+to 24 rounds of Khufu.
+d613 1
+a613 1
+CAST-256 is a generalized Feistel block cipher, whose
+d633 2
+a634 1
+We will use $\Delta=(0,0,0,a) \to (0,b,c,a)=\Delta'$, which
+d661 30
+a690 11
+Since the full 48-round cipher is 2--2.5 times as slow
+%One
+%measurement on an Intel 90MHz Pentium showed a $3.9\times$ speed difference,
+%but this seems to be purely an anomaly.
+%http://www.dmi.ens.fr/~granboul/recherche/AES.html
+%Also 3.3x slower than RC6 on PPro/assembly and 3.6x slower than Rijndael on
+%Ultrasparc/C, according to
+%http://home.cyber.ee/helger/aes/
+as the fastest AES candidates \cite{SKW+98}, this suggests that the CAST-256
+round structure may not provide the best possible security/performance
+tradeoff available.
+d775 1
+a775 1
+miss-in-the-middle attack \cite{BBS98}.
+d779 1
+a779 1
+miss-in-the-middle attack \cite{BBS98} is a close and interesting one.
+d782 1
+a782 1
+miss-in-the-middle attack \cite{BBS98}.
+d790 1
+a790 1
+This paper showed some examples where the boomerang attack improves
+d793 1
+a793 1
+However, we speculate that these examples are not representative.
+d797 9
+d827 2
+d836 1
+a836 1
+\bibitem[A98]{A98}  C. Adams, ``The CAST-256 Encryption Algorithm,''
+d839 2
+d846 4
+d868 4
+d895 3
+d940 1
+a940 1
+for a 256-bit cipher.
+d954 1
+a954 10
+obtained by exchanging the order of the A rounds and the B rounds\footnote{The
+reader might object that re-ordering the A and B rounds
+in CAST-256 is unfair to the cipher.
+We sympathize with this viewpoint, and have focused on CAST-256
+primarily because it makes such a simple, clean platform for analysis
+of novel round structures.
+At the same time, we should mention that
+the ordering of the rounds in CAST-256 was (apparently) chosen to
+address implementation concerns, not security considerations;
+see \cite[Section 2.2]{A98}.}.
+d963 6
+a971 6
+On the other hand, anything can be made secure with enough rounds;
+the research challenge is to design a cipher with both good performance
+and good security.
+As CAST-256 is 2--2.5 times slower than the fastest AES
+candidates \cite{SKW+98}, it seems reasonable to examine the security of
+reduced-round variants.
+d975 3
+d1117 2
+a1118 1
+\cite{NSA98,BCD+98,GLC98}.
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d244 1
+a244 1
+modelling the $ROL(\cdot,11)$ operation.)
+d418 1
+a418 1
+However, the meet-in-the-midle attack requires approximately
+d978 1
+a978 1
+varing the final word.
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d20 1
+a20 1
+attacks, with an advanced differential attack that needs just
+d649 1
+a649 1
+Since the full 48-round cipher is 2--3 times as slow
+d709 1
+a709 1
+Asymetric round functions can be classified into one of two types:
+d789 1
+a789 1
+\sloppy\hbadness 2000
+d820 2
+a821 2
+\bibitem[GLC98]{GLC98}  D. Georgoudis, D. Lerous, and B.S. Chaves, ``The `Frog' 
+Encryption Algorithm,'' NIST AES Proposal, Jun 98.
+d832 3
+a834 3
+\bibitem[Knu95]{Knu95}  L.R. Knudsen, ``Truncated and Higher Order Differentia
+ls,'' {\it Fast Software Encryption, 2nd International Workshop Proceedings}, Sp
+ringer-Verlag, 1995, pp. 196--211.
+d839 3
+a841 3
+\bibitem[Lai94]{Lai94}  X. Lai, ``Higher Order Derivations and Differential Cryp
+tanalysis,'' {\it Communications and Cryptography: Two Sides of One Tapestry}, K
+luwer Academic Publishers, 1994, pp. 227--233.
+d902 7
+a908 8
+While we sympathize with this viewpoint,
+apparently the ordering of the rounds was chosen due to
+performance, not security, considerations.
+(\cite[Section 2.2]{A98} mentions as a design goal
+that encryption and decryption should have similar computation structures,
+for otherwise everyone would be forced to implement the cipher twice
+to support both encryption and decryption, but no security issues were
+listed.)}.
+d923 1
+a923 1
+As CAST-256 is 2--3 times slower than the fastest AES
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d430 1
+a430 1
+and is in fact the approach proposed in the DFC AES submission \cite{DFC}.
+d474 6
+a479 5
+\[ p \approx
+\Pr[\Delta \to \Delta^*] \times \Pr[\nabla \to \nabla^*]^2 \times
+\times \Pr[\Delta^* \to \Delta] \times
+\Pr[w \xor x \xor y \in \Delta^* \mid w \in \Delta^*, x,y \in \nabla^*]. \]
+If the truncated differentials are linear
+d582 1
+a582 1
+In this section, we sketch the ``inside-out attack,''
+d584 2
+a585 1
+The boomerang attack works from the outside in; the inside-out
+d591 3
+a593 5
+We hope that the differential $\Delta \to \Delta'$ for
+the last half of the cipher holds, and similarly for the
+differential $\Delta \to \Delta^*$ for the inverse of the
+first half of the cipher.
+When both differentials hold, we will have the recognizable
+d646 1
+a646 1
+attack that needs just $2^{49.3}$ known texts and about $2^{86.3}$ work.
+d649 1
+a649 1
+Since the full 48-round cipher is $2--3\times$ times as slow
+d676 28
+a703 5
+In this way, the approach could also be considered a higher-order
+differential attack of order two, although we don't use any higher-order
+techniques in the attack.
+
+differential-differential
+d707 3
+a709 2
+that use asymetric round functions.
+Assymetric round functions can be classified into one of two types:
+d725 8
+a732 3
+Alternatively, one could think of the boomerang attack as a
+differential-differential attack (in the same way that \cite{HL94}
+is called a differential-linear attack).
+d741 1
+a741 1
+of Knudsen's work \cite{DEAL} on Luby-Rackoff ciphers with more rounds,
+d746 22
+a767 16
+{}From one perspective the boomerang attack can be viewed
+as little more than a chosen-plaintext/ciphertext version of the
+miss-in-the-middle attack \cite{BBS98} \footnote{The boomerang attack
+has yet another forefather in the literature:
+the differential related-key attack on NewDES-1996,
+which we described in \cite{KSW97} under the name ``double-swiping attack.''
+In retrospect, it is not hard to see that the ``double-swiping attack''
+is roughly a boomerang attack (with minor adjustments to take advantage
+of related-key queries, as allowed by the threat model of \cite{KSW97}).}.
+In fact, in many cases the same differentials can be used for either
+a miss-in-the-middle attack or a boomerang attack.
+We show that, for some ciphers, the boomerang attack appears to improve on the
+miss-in-the-middle attack if adaptive chosen plaintext/ciphertext queries
+are available; but a thorough comparison
+of relative power of the two types of attacks eludes us for now.
+We hope that this work will stimulate further research into
+d777 1
+a777 1
+to analyze ciphers with asymetrical round structures.
+d789 5
+d799 2
+a800 2
+Differentials,''  Technion tech report CS0947.
+Available from \verb+http://www.cs.technion.ac.il/~biham/Reports/SkipJack/+.
+a827 1
+
+d832 11
+d845 1
+a845 1
+Available from \verb+http://csrc.ncsl.nist.gov/encryption/skipjack-1.pdf+.
+d850 1
+a850 1
+Available from \verb+http://www.counterpane.com/AES-performance.html+.
+d871 3
+a873 3
+there are only 96 bits of entropy in the first four round subkeys;
+a similar property holds for the last four round subkeys.
+Therefore, with just a few known texts and about $2^{96}$ offline
+d876 1
+a876 1
+Obtain four known text pairs $P_j,C_j$.
+d884 2
+a885 6
+For a 256-bit cipher, the workfactor of this attack is disappointingly low.
+
+Specifically, 
+It is worth giving some details on a trick for bypassing the
+decorrelation module needed to attain the quoted complexity of attack.
+
+d895 1
+a895 1
+\section{CAST-256}\label{sec:cast256boom}
+d898 8
+a905 8
+Our primary observation is that one can apply the boomerang attack
+to a simple CAST-256 variant obtained by exchanging the order of
+the A rounds and the B rounds.
+In other words, the variant cipher uses the B rounds first.
+
+This re-ordering of the rounds is not entirely unfair.
+Apparently the sole reason for
+the CAST-256 round ordering was to ensure
+d908 10
+a917 15
+to support both encryption and decryption
+(see \cite[Section 2.2]{A98}); security considerations were
+not mentioned.
+The variant does preserve the property that encryption and decryption
+are symmetrical and may be performed with the same implementation,
+so our attack on the variant
+exposes new design criteria for CAST-256-like ciphers.
+
+In any case, we believe our attack on this CAST-256 variant gives new
+insights into the properties of various generalized Feistel round structures.
+CAST-256 is not the only recent design to explore such round structures
+%recently, a number of designs have explored novel round structures
+\cite{NSA98,BCD+98,GLC98}.
+See also Section~\ref{sec:inside}, which analyzes 16 rounds of the
+real CAST-256 cipher (without any re-ordering of the rounds).
+d924 1
+a924 1
+As CAST-256 is nearly three times slower than the fastest AES
+d927 3
+a930 10
+This reasoning suggests that it might make sense to reduce the number
+of rounds by a factor of three, to close the performance gap.
+On the other hand, to us that seems awfully harsh, so
+in this section we content ourselves with merely halving the
+number of rounds.
+Cutting the number of rounds in half gives us a cipher that is still
+a little slower than some other AES contenders,
+but if we can find effective attacks against such a cipher (and we can),
+we will have learned something interesting about the design
+of CAST-256-like ciphers.
+d932 1
+a932 1
+\subsection*{A simple attack}
+d943 1
+a943 2
+so $p=1$.
+Also, $\Delta^* \to \Delta$ has probability $p'=2^{-96}$.
+d945 3
+a947 4
+$\Pr[x\xor y \in \Delta^*] = 1-2^{-32}$ when $x,y$ are uniformly
+distributed (as is approximately the case for $x,y$ chosen from $\nabla^*$),
+so we may compute $q$ as
+$q \approx \Pr[\nabla \to \nabla^*]^2 = 1$.
+d950 1
+a950 1
+the first three words are held fixed and the last takes on over
+d959 1
+a959 1
+About $pp'q = 2^{-96}$ of them will form right quartets,
+d965 1
+a965 1
+This immediately gives a way to distinguish our
+d967 1
+a967 1
+adaptively chosen texts and a similar amount of work.
+d969 1
+a969 1
+\subsection*{A key-recovery attack}
+d977 1
+a977 1
+ciphertexts $C_i$ with $2^{64}$ chosen-plaintext queries.
+d983 3
+a985 1
+We expect to get two right quartets, which suffices to disclose the
+d995 1
+a995 1
+\subsection*{Discussion}
+d998 3
+a1000 3
+We argue that boomerang techniques seem to be more powerful
+than what is achievable with standard truncated differentials,
+at least in some cases.
+d1004 1
+a1004 1
+$\nabla \to \nabla^*$ (for the inverse of the 12 A rounds)
+d1008 1
+a1008 1
+(To the best of my knowledge, there do not appear to be any
+d1013 6
+a1018 7
+attack on the 24-round variant cipher.
+Select texts in structures of $2^{32}$ texts where the first three
+words of the plaintext are held fixed; then we obtain $2^{63}$ pairs
+{}from each structure.
+After $2^{65}$ chosen texts, we will have $2^{96}$ potential pairs,
+and we expect to see one right pair.
+Since we have a 128-bit filtering condition on the ciphertexts,
+d1021 3
+d1025 4
+a1028 5
+This allows us to distinguish the 24-round CAST-256 variant from
+a ideal cipher with $2^{65}$ (non-adaptive) chosen plaintexts.
+Compare this to our boomerang attack, which needs just $2^{48.5}$
+adaptive chosen-plaintext and chosen-ciphertext queries.
+(In contrast, our key-recovery attack on the 25-round variant is
+d1030 1
+a1030 1
+differential attacks.)
+d1033 11
+a1043 7
+24-round variant with the same techniques, but it seems to require
+$2^{64}$ chosen plaintexts, which is substantially more than the
+number needed by our boomerang attack.
+
+Note that (as is also the case for Skipjack) the CAST-256 rounds exhibit
+asymetrical properties.
+The A rounds have weaker diffusion in the reverse direction than in
+d1046 3
+a1048 2
+Thus, the combination of A and B rounds frustrates conventional differential
+attacks: whether we attack the cipher or the inverse cipher, we will have
+d1065 14
+a1078 7
+Our analysis of CAST-256 variants suggests that boomerang attacks
+can be much more powerful than conventional differential techniques in
+some settings.
+One important advantage of boomerang attacks
+is the ability to exploit asymetrical round structures to good effect.
+Another advantage is the ability to use structures in the choice
+of both plaintexts and ciphertexts to reduce the complexity of the attack.
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@a1 2
+%\usepackage{fullpage}
+%\input bbb
+a3 1
+%\newcommand{\Z}{{\bbb Z}}
+d6 1
+a6 1
+\title{The Boomerang Attack}
+d20 1
+a20 1
+attacks, in an advanced differential attack that needs just
+d22 2
+a23 2
+Also, we give new attacks on Khufu-16 and on 24 rounds of a
+CAST-256 variant to illustrate the power of boomerang techniques.
+d36 1
+a36 4
+probability of any differential characteristic which covers
+all the rounds of the cipher (excepting perhaps a few at the
+beginning and end, to account for several standard tricks that
+bypass those rounds).
+d42 1
+a42 1
+Unfortunately, this ``folk theorem'' is wrong.
+d45 2
+a46 2
+that Biham {\em et al.}'s miss-in-the-middle attack \cite{BBS98}
+also disproves the ``folk theorem.''  They show that if one can find a
+d57 1
+a57 1
+Also, quite often boomerang attacks allow for a more extensive use
+d59 1
+a59 1
+which makes boomerang techniques quite a bit more effective than
+d65 3
+a67 3
+below, where we show how to break COCONUT98 with just $2^{16}$ chosen texts
+and $2^{38}$ work,
+despite the fact that \cite{V98} proved that the best characteristic for
+d75 1
+a75 1
+from truncated differential analysis (see Section~\ref{sec:trunc}).
+d80 11
+a90 54
+Then we consider CAST-256 in Section~\ref{sec:cast256}, where we
+show how to break a 24-round variant whose rounds have been reordered
+with $2^{48.5}$ chosen texts.
+At least in some cases, these attacks seem to be better than
+any others we know of.
+
+One of the interesting features of the boomerang attack is
+that it is apparently very well-suited to the analysis of ciphers
+that use assymetric round functions.
+Assymetric round functions can be classified into one of two types:
+the A round, which has better diffusion in the forward direction
+than in the reverse direction, and the B round, which has better
+diffusion in the reverse direction.
+We note that when the first half of the cipher is built of B-type
+rounds and the last half is built of A-type rounds, boomerang
+attacks seem to be especially dangerous because they allow one
+to probe from both endpoints at the same time.
+
+This supplies some intuition for how the boomerang attack works.
+%{}From this point of view,
+It would not be unreasonable to think of
+the boomerang attack as a differential meet-in-the-middle attack
+that uses differentials to work from the outside in; the interesting
+bit is where the differentials ``meet'' in the middle of the cipher.
+Alternatively, one could think of the boomerang attack as a
+differential-differential attack (in the same way that \cite{HL94}
+is called a differential-linear attack).
+
+One disadvantage of the boomerang attack is that it inherently
+requires the ability to perform both adaptive chosen-plaintext
+and adaptive chosen-ciphertext queries at once.
+We find it interesting, though, that this is a rather rare property
+to find in a cryptanalytic attack.
+We are aware of only two other attacks with this property: (1)
+the adaptive chosen-plaintext/ciphertext attack on the 3-round
+Luby-Rackoff cipher, and (2) the yo-yo game of \cite{BBD+98},
+which is closely related to the miss-in-the-middle attack of \cite{BBS98}.
+
+In fact, from one perspective the boomerang attack can be viewed
+as little more than a chosen-plaintext/ciphertext version of the
+miss-in-the-middle attack \cite{BBS98} \footnote{The boomerang attack
+has yet another forefather in the literature:
+the differential related-key attack on NewDES-1996,
+which we described in \cite{KSW97} under the name ``double-swiping attack.''
+In retrospect, it is not hard to see that the ``double-swiping attack''
+is roughly a boomerang attack (with minor adjustments to take advantage
+of related-key queries, as allowed by the threat model of \cite{KSW97}).}.
+We show that, for some ciphers, the boomerang attack appears to improve on the
+miss-in-the-middle attack if adaptive chosen plaintext/ciphertext queries
+are available; but a thorough comparison
+of relative power of the two types of attacks eludes us for now.
+We hope that this work will stimulate further research into
+boomerang-style techniques, to better understand their strengths
+and weaknesses.
+d100 1
+a100 1
+Section~\ref{sec:khufu} analyzes Khufu-16, and Section~\ref{sec:cast256}
+d102 1
+a102 2
+%Then Section~\ref{sec:related} discusses some related work,
+Section~\ref{sec:inside} briefly sketches the inside-out attack,
+d104 2
+a105 1
+Finally, Section~\ref{sec:conc} concludes the paper.
+d108 1
+a108 1
+The boomerang attack is roughly a differential attack that attempts
+a110 3
+In this way, the approach could also be considered a higher-order
+differential attack of order two, although we don't use any higher-order
+techniques in the attack.
+d114 6
+a119 5
+for now, we will defer describing how these are generated until later.
+We also use two differential characteristics:
+one for the first half of the cipher (call it $\Delta \to \Delta^*$),
+and one for the inverse of the last half of the cipher
+(say, $\nabla \to \nabla^*$).
+d122 21
+a142 31
+In the pair $P,P'$, we hope that the first half of the rounds will
+be covered by the $\Delta \to \Delta^*$ characteristic.
+In the pair $P,Q$ (i.e. the pair $C,D$),
+we hope that the last half of the rounds will be covered
+by the $\nabla \to \nabla^*$ characteristic;
+similarly, we hope that the pair $P',Q'$ will be covered
+by the same characteristic in its final rounds.
+
+Suppose this holds. 
+Then consider the intermediate value after half of the rounds.
+In the $P,P'$ pair, the intermediate values exhibit the difference
+$\Delta^*$.
+In the $P,Q$ pair, the intermediate
+values have the difference $\nabla^*$;
+the $P',Q'$ pair also has the difference $\nabla^*$ in its
+intermediate value.
+Now note that this establishes a sort of quartet structure:
+the intermediate values in the $P',Q'$ pair
+must have the difference $\nabla^* \xor \Delta^* \xor \nabla^* = \Delta^*$.
+
+So when the three characteristics above attain,
+we get a quartet structure,
+and the intermediate value after half the rounds
+has difference $\Delta^*$ in the $P',Q'$ pair.
+But this is exactly the condition required to start
+the characteristic $\Delta^* \to \Delta$ for the inverse
+of the first half of the cipher!
+Furthermore, when this last characteristic attains too,
+we will have a recognizable difference in the plaintexts $P',Q'$.
+In fact, this difference will be the same as the difference $\Delta$
+used earlier in the plaintext pair $P,Q$.
+d151 1
+a151 1
+the encryptions $C,C'$ of $P,P'$ with two chosen-ciphertext queries.
+d305 7
+a311 6
+where the probability is averaged over all possible key values\footnote{This
+simple insight allows one to prove that there is no good differential
+characteristic for the whole cipher.
+The idea is that any differential characteristic for all 8 rounds
+must pass through $M$, and thus cannot have good probability.
+See \cite{V98} for details.}.
+d313 16
+a328 1
+from pushing a differential characteristic past $M$.
+a329 94
+For this reason, in our analysis we use a different strategy.
+We use a boomerang characteristic: we cover the first four rounds
+with one differential characteristic, cover the last four rounds with another
+characteristic, and exploit the boomerang quartet property to control
+the effect of the decorrelation module in the middle.
+
+In our analysis we will use two characteristics,
+$\Delta \to \Delta^*$ and $\nabla \to \nabla^*$.
+%Here we let $\Delta = (e_{19}, e_{18} \xor e_8)$ and
+%$\nabla = (e_{18}, 0)$.
+We will leave the values of $\Delta,\Delta^*,\nabla,\nabla^*$
+unspecified for now, and optimize for their best values at the end
+of Section~\ref{sec:coc3}.
+%During the remainder of our analysis of COCONUT98, we adopt
+%this definition of $\Delta$ and $\nabla$.
+
+\section{Boomerang characteristics for COCONUT98}\label{sec:coc3}
+The main idea of our boomerang characteristic is as follows.
+We saw above that the first four rounds ($\Psi_0$) admit a
+differential characteristic $\Delta \to \Delta^*$ of
+surprisingly high probability; and similarly for the last four rounds.
+Therefore, we
+cover the first four rounds with the characteristic $\Delta \to \Delta^*$.
+This ensures (when $\Delta \to \Delta^*$ holds) that the difference after
+four rounds is known.
+
+Since the decorrelation module is an affine transformation,
+the difference after the decorrelation module will also
+be fixed (though unknown) in this case.
+Of course the last four rounds are not covered by the characteristic,
+so we cannot recognize a right pair from the ciphertexts, and
+analysis looks difficult at first glance.
+
+To deal with this this difficulty,
+we modify the two ciphertexts of a right pair slightly
+(taking advantage of the characteristic
+$\nabla \to \nabla^*$ for $\Psi_1^{-1}$)
+and decrypt the modifications up through the whole cipher.
+The modifications are carefully selected so that the
+pre-conditions of the characteristic $\Delta^* \to \Delta$
+for $\Psi_0^{-1}$ will be satisfied in a fourth pair obtained
+from these four texts.
+By covering the first four rounds with the
+characteristic $\Delta^* \to \Delta$ again (this time operating in the
+backwards direction),
+we can force the resulting decryptions to
+have a recognizable {\sc xor} difference.
+
+In more detail, consider a chosen plaintext pair $P,P'$ with
+$P' = P \xor \Delta$.
+When the characteristic $\Delta \to \Delta^*$ holds for the first four rounds,
+we have $\Psi_0(P) \xor \Psi_0(P') = \Delta^*$, and thus
+$(M \circ \Psi_0)(P) \xor (M \circ \Psi_0)(P') = M(\Delta^*)$
+by the linearity of $M$.
+Note that $M(\Delta^*)$ is a fixed (though unknown) constant
+which depends only on the key and not on the plaintexts.
+Therefore, though we cannot control the ciphertext difference,
+we can still control the {\sc xor}
+difference just before the last four rounds
+with good probability.
+
+We get the encryption $C,C'$ of the two plaintexts $P,P'$.
+Next, we modify $C,C'$ to obtain two new ciphertexts $D,D'$
+according to $D = C \xor \nabla$ and $D' = C' \xor \nabla$.
+We obtain the decryptions $Q,Q'$ of the two new ciphertexts $D,D'$.
+
+We claim that with good probability $P,P',C,C',Q,Q',D,D'$ exhibit
+a sort of ``quartet'' structure.
+Namely, suppose that $\nabla \to \nabla^*$ for $\Psi_1^{-1}$
+holds for the ciphertext pair $C,D$ and also simultaneously
+for the ciphertext pair $C',D'$.
+This means that $\Psi_1^{-1}(C) \xor \Psi_1^{-1}(D) = \nabla^*$
+and $\Psi_1^{-1}(C') \xor \Psi_1^{-1}(D') = \nabla^*$.
+Now let us compute the {\sc xor} difference at the input
+to $\Psi_1$ for $D,D'$: we have
+\begin{eqnarray*}
+\Psi_1^{-1}(D) && \xor \quad \Psi_1^{-1}(D') \\
+&&= (\Psi_1^{-1}(D) \xor \Psi_1^{-1}(C))
+  \,\, \xor \,\,
+  (\Psi_1^{-1}(D') \xor \Psi_1^{-1}(C')) \\
+&& \qquad  \,\, \xor \,\,
+  (\Psi_1^{-1}(C) \xor \Psi_1^{-1}(C')) \\
+&&= \nabla^* \xor \nabla^* \xor M(\Delta^*) \\
+&&= M(\Delta^*).
+\end{eqnarray*}
+In other words, $\Psi_0(Q) \xor \Psi_0(Q') = \Delta^*$.
+But this is exactly the property we need to cover the
+inverse $\Psi_0^{-1}$ of the first four rounds with the
+characteristic $\Delta^* \to \Delta$
+for the plaintexts $Q,Q'$.
+
+In other words, we have shown that (when all the characteristics
+are satisfied) we have $Q \xor Q' = \Delta$
+for $Q,Q'$ defined as above.
+d331 3
+a333 8
+Let us compute the probability that this technique
+gives us the predicted {\sc xor} difference for $Q,Q'$.
+We need to cover the first four rounds of the cipher
+when encrypting $P,P'$;
+also, we need to cover the last four rounds for the
+ciphertext pair $C,D$ and also for the ciphertext pair $C',D'$;
+and finally, we need to cover the first four rounds
+one more time for the pair $D,D'$.
+d342 7
+a348 7
+the exact value of $\Delta^*$ ahead of time, but instead
+merely require that $\Delta \to \Delta^*$ attains in two pairs
+of the quartet for some (unknown) value of $\Delta^*$.
+A similar observation also holds for $\nabla^*$.
+Therefore, we may sum over all values for $\Delta^*,\nabla^*$.
+This provides the more accurate estimate
+\[ p = \sum_{\Delta^*} \Pr[\Delta \to \Delta^* \mbox{ by } \Psi_0]^2
+d368 1
+a368 1
+from an ideal cipher with at most about $950 \cdot 4 = 3800$ adaptive
+d370 1
+a370 1
+However, we aim for more: a key-recovery attack is our goal.
+d385 5
+a389 7
+This characteristic holds with probability 1/2 over all
+plaintext pairs.
+Therefore, from each quartet,
+we obtain one bit of information on $K_1$ from the
+$P,P'$ pair and a second bit of information on $K_1$
+from the $Q,Q'$ bit.
+With 16 useful quartets, we expect to learn all of $K_1$.
+d399 1
+a399 1
+For instance, we can use about $4 \cdot 144 \cdot 4$ more
+d409 1
+a409 1
+$16 \cdot 950 \cdot 4 + 4 \cdot 144 \cdot 4 + \ldots \approx 2^{16}$
+d423 1
+d427 1
+a427 5
+differential cryptanalysis (say, 16 rounds instead of 4);
+but this would defeat the entire purpose
+of the cipher, since the point was to demonstrate that use of a
+single decorrelation module suffices for security against differential
+attacks.
+d429 2
+a430 3
+round; this seems more likely to prevent boomerang-style attacks,
+although it is unclear whether one could attain good performance with
+such a design.
+d434 10
+a443 1
+This concludes our analysis of COCONUT98.
+d461 21
+a481 48
+For some truncated differentials, this assumption is false,
+and so the quartet success probability can be worse than calculated
+in earlier sections.
+
+A more reasonable approximation to the success probability is
+\[ \Pr[\Delta \to \Delta^* \mbox{ by } E_0]
+\times \Pr[\Delta^* \to \Delta \mbox{ by } E_0^{-1}]
+\times \sum_{\nabla^*} \Pr[\nabla \to \nabla^* \mbox{ by } E_1^{-1} ]^2, \]
+where $E_0$ represents the first half of the cipher computation
+and $E_1$ represents the last half of the cipher.
+
+However, even this approximation has limitations: it can
+dramatically underestimate the success probability in some cases.
+This is because we don't actually need the same truncated
+differential $\nabla \to \nabla^*$ to hold simultaneously
+in the two pairs $C,D$ and $C',D'$.
+If $u \to x$ holds for one of them
+and $v \to y$ holds in the other pair, where
+$u,v,x,y$ are concrete {\sc xor} differences (not truncated differences)
+with $u,v \in \nabla$ and $x,y \in \nabla^*$,
+then the boomerang attack will succeed so long as we have
+$x \xor y \in \Delta^*$.
+
+This observation is crucial, so it is worth explaining it in more detail.
+For notational convenience, let $M,M',N,N'$ denote the intermediate
+value of the block during the encryption of $P,P',Q,Q'$.
+For a right quartet, we have $M \xor M' \in \Delta^*$,
+$x=M \xor N \in \nabla^*$, $y=M' \xor N'\in \nabla^*$, and so on.
+If $x \xor y \in \Delta^*$ and $M \xor M' \in \Delta^*$,
+then we will also have
+\[ N \xor N' = (M \xor M') \xor x \xor y \in \Delta^*. \]
+(We assume that $a,b \in \Delta$ if and only if $a \xor b \in \Delta$,
+which is the case for the type of truncated differentials most commonly
+used in the literature.)
+Therefore, when decrypting $D,D'$ to obtain $Q,Q'$,
+the difference of the intermediate values $N \xor N'$ will be
+of the form $\Delta^*$, which is exactly what is needed to cover
+the inverse of the first half of the cipher with the
+truncated differential $\Delta^* \to \Delta$.
+
+With this observation in hand, we can finally calculate the true success
+probability of a boomerang attack using truncated differentials.
+Set $p=\Pr[\Delta \to \Delta^* \mbox{ by } E_0]$,
+$p'=\Pr[\Delta^* \to \Delta \mbox{ by } E_0^{-1}]$, and
+\[ q = \Pr[\nabla \to \nabla^*]^2 \times
+  \Pr[x \xor y \in \Delta^*  \mid x,y \in \nabla^*]. \]
+Then the probability that any given quartet is a right quartet
+is $p \times p' \times q$.
+d492 4
+a495 3
+$\Delta = (0,0,0,a,b,c,d,e) \to (0,0,0,a,0,0,0,0) = \Delta^*$,
+which holds with probability $p=2^{-32}$ in the forward direction
+and probability $p'=1$ in the reverse direction.
+d499 4
+a502 4
+Also, due to the choice of differentials, it is readily seen
+that we have $q=1$.
+Thus $p \times p' \times q = 2^{-32}$ of the quartets chosen
+according to these differences will be useful for a boomerang attack.
+d511 2
+a512 2
+We look for $Q,Q'$ with $(0,0,0,a)$ as the left half of $Q\xor Q'$;
+such a pair probably indicates a right quartet.
+d514 2
+a515 1
+although one wrong quartet will probably also survive the filtering phase.
+d525 1
+a525 1
+(if $(L,R_i),(L',R'_j)$ was a right quartet) because we have
+a573 1
+\section{CAST-256}\label{sec:cast256}
+d575 29
+a603 2
+CAST-256 is a generalized Feistel block cipher.
+Its simplicity makes it a nice testbed to explore the properties of
+d612 3
+a614 3
+An A round operates on the input block $(w,x,y,z)$ as
+$(w',x',y',z') = (z,w,x,y\xor F(z))$, and a B round
+operates as $(w',x',y',z') = (x,y,z\xor F(w),w)$.
+d621 231
+d957 1
+a957 1
+from our 25-round CAST-256 variant with $2^{65}$ chosen texts
+d982 1
+a982 1
+from each structure.
+d1003 1
+a1003 1
+assymetrical properties.
+d1029 1
+a1029 1
+is the ability to exploit assymetrical round structures to good effect.
+a1032 164
+
+
+
+
+%\section{Multiple modes of operation}
+
+\section{Inside-out attacks}\label{sec:inside}
+In this section, we sketch the ``inside-out attack,''
+which may be viewed as a dual to the boomerang attack.
+The boomerang attack works from the outside in; the inside-out
+attack works from the inside out.
+
+In the typical inside-out attack, we search for a pair
+of texts which contain a desired difference $\Delta$ at
+the intermediate value after half the rounds.
+We hope that the differential $\Delta \to \Delta'$ for
+the last half of the cipher holds, and similarly for the
+differential $\Delta \to \Delta^*$ for the inverse of the
+first half of the cipher.
+When both differentials hold, we will have the recognizable
+differences $\Delta^*$ and $\Delta'$ in the plaintexts and
+ciphertexts of the pair.
+
+To illustrate these ideas in action, we analyze 16
+rounds of CAST-256 (the real cipher this time, not the
+variant with re-ordered rounds).
+We can use 8-round versions of the truncated differentials
+from Section~\ref{sec:cast256}:
+let $\Delta=(0,0,0,a)$, $\Delta'=(0,b,c,a)$, and
+$\Delta^*=(0,d,e,a)$.
+Right pairs can be recognized by a 96-bit filtering condition.
+
+To implement the attack, we collect $2^{49.3}$ known texts
+encrypted under 16 rounds of CAST-256.
+By the birthday paradox, we expect to see three right pairs among
+those texts, which can be readily recognized.
+(We also expect to get three wrong pairs, but they should be eliminated
+in the next phase.)
+Then we search over the last round subkey.
+Each guess at the 37 bits entering the last round suggests $2^5$
+possible values for the 37 bits entering the next-to-last round;
+the three right pairs allow us to uniquely recognize the correct
+values for the last two round subkeys.
+The first two round subkeys can be recovered by analogous techniques.
+Finally, the attack may be repeated on the reduced-round cipher.
+
+To sum up, we see how to break 16 rounds of CAST-256 with an inside-out
+attack that needs just $2^{49.3}$ known texts and a similar workfactor.
+Since the full 48-round cipher is nearly three times as slow as some
+other AES candidates \cite{SKW+98}, this suggests that the CAST-256
+round structure may not provide the best possible security/performance
+tradeoff available.
+
+%\section{Related work}\label{sec:related}
+%
+%The boomerang attack is certainly closely related tojjjjjjjjj
+%
+%Biham's yo-yo attack?
+%
+%Biham's miss-in-the-middle
+%
+%our Skipjack attack
+%
+%These ideas have been seen before in the literature, in
+%larval form.
+%
+%\ldots
+
+\section{Conclusions}\label{sec:conc}
+We have described a new way to use differential-style techniques
+for cryptanalysis of block ciphers.
+Our attacks can break some ciphers that are immune to
+ordinary differential cryptanalysis, and provide a powerful new way
+to analyze ciphers with assymetrical round structures.
+To protect against these attacks, cipher designers should ensure
+that there are no good differentials for the first or last half of
+their cipher.
+
+
+\section{Acknowledgements}
+We are grateful to Serge Vaudenay for a number of helpful comments on an
+early version of this paper, and for giving a nice one-line summary of
+the attack which we used in this paper.
+
+\begin{thebibliography}{GGH+98}
+\bibitem[A98]{A98}  C. Adams, ``The CAST-256 Encryption Algorithm,''
+NIST AES Proposal, Jun 98.
+
+\bibitem[BBS98]{BBS98} E.~Biham, A.~Biryukov, A.~Shamir.
+``Cryptanalysis of Skipjack Reduced to 31 Rounds using Impossible
+Differentials,''  Technion tech report CS0947.
+Available from \verb+http://www.cs.technion.ac.il/~biham/Reports/SkipJack/+.
+
+\bibitem[BBD+98]{BBD+98}
+E.~Biham, A.~Biryukov, O.~Dunkelmann, E.~Richardson, A.~Shamir,
+``Initial Observations on the Skipjack Encryption Algorithm,''
+{\em SAC'98}, Springer-Verlag, 1998.
+
+\bibitem[BS93]{BS93} E.~Biham, A~.Shamir,
+{\em Differential Cryptanalysis of the Data Encryption Standard},
+Springer-Verlag, 1993.
+
+\bibitem[BCD+98]{BCD+98}  C. Burwick, D. Coppersmith, E. D'Avignon, R. Gennaro,
+S. Halevi, C. Jutla, S.M. Matyas, L. O'Connor, M. Peyravian, D. Safford, and N.
+Zunic, ``MARS --- A Candidate Cipher for AES,'' NIST AES Proposal, Jun 98.
+
+\bibitem[GGH+98]{GGH+98} H.~Gilbert, M.~Girault, P.~Hoogvorst,
+F.~Noilhan, T.~Pornin, G.~Poupard, J.~Stern, S.~Vaudenay,
+``Decorrelated Fast Cipher: an AES Candidate,''
+NIST AES Proposal, Jun 98.
+
+\bibitem[GLC98]{GLC98}  D. Georgoudis, D. Lerous, and B.S. Chaves, ``The `Frog' 
+Encryption Algorithm,'' NIST AES Proposal, Jun 98.
+
+\bibitem[HL94]{HL94} M.~Hellman and S.~Langford.,
+``Differential--linear cryptanalysis,''
+{\em CRYPTO'94}, Springer-Verlag LNCS 839,
+pages 26--39. Springer Verlag, 1994.
+
+
+\bibitem[KSW97]{KSW97}  J.~Kelsey, B.~Schneier, D.~Wagner,
+``Related-Key Cryptanalysis of 3-WAY, Biham-DES, CAST, DES-X, NewDES,
+RC2, and TEA,'' {\em ICICS'97}, Springer-Verlag, 1997.
+
+\bibitem[NSA98]{NSA98} NSA,
+``Skipjack and {KEA} algorithm specifications,'' May 1998.
+Available from \verb+http://csrc.ncsl.nist.gov/encryption/skipjack-1.pdf+.
+
+\bibitem[SKW+98]{SKW+98} B.~Schneier, J.~Kelsey, D.~Whiting,
+D.~Wagner, C.~Hall, N.~Ferguson,
+``Performance Comparison of the AES Submissions,''
+Available from \verb+http://www.counterpane.com/AES-performance.html+.
+
+\bibitem[V97]{V97} S.~Vaudenay,
+``A cheap paradigm for block cipher strengthening,''
+LIENS tech report 97-3, 1997.
+
+\bibitem[V98]{V98} S.~Vaudenay,
+``Provable Security for Block Ciphers by Decorrelation,''
+{\em STACS'98}, Springer-Verlag LNCS 1373, pp.249--275, 1998.
+
+\bibitem[V98b]{V98b} S.~Vaudenay,
+``Feistel Ciphers with $L_2$-Decorrelation,''
+{\em SAC'98}, Springer-Verlag, 1998.
+
+\end{thebibliography}
+
+\appendix
+\section{Meet-in-the-middle attack on COCONUT98}\label{sec:mitm}
+The very simple key schedule used in COCONUT98 exposes it to
+meet-in-the-middle attacks.
+The problem is that
+there are only 96 bits of entropy in the first four round subkeys;
+a similar property holds for the last four round subkeys.
+Therefore, with just a few known texts and about $2^{96}$ offline
+work, one can break COCONUT98 using standard meet-in-the-middle techniques.
+For a 256-bit cipher, the workfactor of this attack is disappointingly low.
+
+When the key is chosen non-uniformly, e.g. from a passphrase,
+this attack can be even more deadly.
+If we assume a key entropy of 4 bits/byte (probably a gross overestimate
+for most passphrases), the workfactor of the meet-in-the-middle
+attack can be reduced to approximately $2^{48}$ trial encryptions.
+This is much faster than exhaustive keysearch.
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d52 1
+a52 1
+also disproves the theorem.  They show that if one can find a
+d152 2
+d784 2
+d948 46
+a993 1
+%\section{Inside-out attacks}\label{sec:inside}
+d1012 1
+a1012 1
+for cryptanalysis.
+d1104 1
+a1104 1
+attack can be reduced to approximately $2^{48}$ trial encryptions,
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d50 8
+a57 1
+can allow an adversary to beat the $1/p$ bound in some cases.
+d74 1
+a74 1
+the whole cipher must have probability $p \le 2^{-64}$ or so.
+d85 1
+a85 1
+with $2^{18}$ adaptive chosen texts and very little work.
+d87 2
+a88 1
+show how to break a 24-round variant whose rounds have been reordered.
+a91 10
+In fact, from one perspective the boomerang attack can be viewed
+as little more a chosen-text version of the miss-in-the-middle attack
+\cite{BBS98}.
+We show that the boomerang attack appears to improve on the
+miss-in-the-middle attack in some cases; but a thorough comparison
+of their relative power eludes us for now.
+We hope that this work will stimulate further research into
+boomerang-style techniques, to better understand their strengths
+and weaknesses.
+
+d93 1
+a93 1
+that it is apparently very well suited to the analysis of designs
+d103 10
+a112 2
+{}From this point of view, it is not unreasonable to think of
+the boomerang attack as a differential meet-in-the-middle attack.
+d121 2
+a122 1
+Luby-Rackoff cipher, and (2) the yo-yo game of \cite{BBD+98}.
+d124 16
+d144 5
+a148 1
+Sections~\ref{sec:coc1}--\ref{sec:coc4} present our analysis of COCONUT98.
+d151 1
+a151 1
+Section~\ref{sec:related} discusses some related work.
+a526 1
+% XXX: check this
+a866 3
+\marginpar{Also compare to miss-in-the-middle.}
+%% Note that you can get a miss-in-the-middle with the same techniques,
+%% but it seems to require $2^{64}$ chosen plaintexts.
+d902 5
+d923 1
+a923 1
+By the same line of reasoning, boomerang techniques are especially poor
+d944 1
+a944 5
+\section{Inside-out attacks}\label{sec:inside}
+
+\section{Related work}\label{sec:related}
+
+The boomerang attack 
+d946 14
+a959 15
+Biham's yo-yo attack?
+
+Biham's miss-in-the-middle
+
+our Skipjack attack
+
+These ideas have been seen before in the literature, in
+larval form.
+For instance, consider our differential related-key attack on NewDES-1996,
+which we described in \cite{KSW97} under the name ``double-swiping attack.''
+In retrospect, it is not hard to see that the ``double-swiping attack''
+is little more than a boomerang attack slightly extended to take advantage
+of the related-key queries allowed in the threat model of [1].
+
+\ldots
+d962 8
+d977 1
+a977 1
+\begin{thebibliography}{19}
+d1006 6
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d25 2
+d31 1
+a31 1
+in the open literature is differential cryptanalysis \cite{?}.
+d63 2
+a64 2
+example of this possibility in Section~\ref{?} below,
+where we show how to break COCONUT98 with just $2^{16}$ chosen texts
+d66 1
+a66 1
+despite the fact that \cite{?} proved that the best characteristic for
+d74 52
+a125 2
+from truncated differential analysis.
+% XXX
+d127 1
+a127 1
+\section{The boomerang attack}
+d142 1
+a142 1
+\marginpar{A picture?}
+d173 6
+a178 1
+Therefore, we define a right quartet as one where all
+a179 1
+
+d191 2
+a192 2
+\section{The COCONUT98 algorithm}
+The COCONUT98 cipher \cite{?} may be of special interest to some readers
+d194 1
+a194 1
+techniques for block cipher design \cite{?}.
+d196 1
+a196 1
+\cite{?} proves that the full COCONUT98 cipher admits no good
+d269 1
+a269 1
+\section{Differential characteristics for COCONUT98}
+d342 1
+a342 1
+See \cite{?} for details.}.
+d358 1
+a358 1
+of Section~\ref{sec:boomchar}.
+d362 1
+a362 1
+\section{Boomerang characteristics for COCONUT98}\label{sec:boomchar}
+d473 1
+a473 1
+\section{The basic boomerang attack on COCONUT98}
+d533 8
+d623 1
+a623 1
+\section{Khufu}
+d632 1
+a632 1
+$\Delta = (0,0,0,a,b,c,d,e) \to (0,0,0,a,0,0,0,0) = \Delta^*$.
+d645 2
+a646 1
+varying; also, form another pool of $2^{16}$ plaintexts as
+d652 2
+a653 2
+This choice of structures is expected to provide about one right quartet;
+one wrong quartet will probably also survive the filtering phase.
+d676 33
+d712 1
+a712 3
+
+
+\section{CAST-256}
+d744 1
+a744 1
+(see \cite[Section 2.2]{cast256}); security considerations were
+d753 1
+a753 1
+CAST-256 is not the only cipher to use such round structures
+d755 1
+a755 1
+\cite{skipjack,mars,?,?}.
+d763 1
+a763 1
+candidates \cite{aes-perf}, it seems reasonable to examine the security of
+d916 5
+a920 1
+\section{Inside-out attacks}
+a921 1
+\section{Related work}
+d931 1
+a931 1
+which we described in [1] under the name ``double-swiping attack.''
+d938 1
+a938 1
+\section{Conclusions}
+d942 60
+a1001 4
+Thanks to Serge Vaudenay for several helpful comments on an
+early version of this paper.
+% Also for his one-line description of the boomerang attack?
+\ldots
+d1004 1
+a1004 1
+\section{Meet-in-the-middle attack on COCONUT98}
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d2 2
+a3 2
+\usepackage{fullpage}
+\input bbb
+d5 2
+a6 2
+%\newcommand{\Z}{{\bf Z}}
+\newcommand{\Z}{{\bbb Z}}
+d9 2
+a10 2
+\title{The Boomerang Attack \\ {\small \sc draft---do not distribute}}
+\author{David Wagner \\ {\em U.C. Berkeley}}
+d41 4
+a44 4
+Then he invokes the oft-repeated ``folk theorem,'' which says that any
+successful differential attack will require at least $1/p$ texts
+to break the cipher, concluding that the cipher is safe from
+differential attacks.
+d46 1
+a46 1
+Unfortunately, this ``folk theorem'' is wrong, as show here.
+d48 1
+a48 1
+allows in some cases to beat the $1/p$ bound.
+d56 3
+a58 1
+which gives boomerang techniques another advantage over standard attacks.
+d60 1
+a60 1
+We give a surprisingly effective
+a70 16
+The COCONUT98 cipher may be of special interest to some readers
+because of its use of the recently-developed theory of decorrelation
+techniques for block cipher design.
+Despite the fact that it is proven that the full COCONUT98 cipher
+admits no good differential characteristics, we observe that there
+are differential characteristics of very high probability for half
+of the cipher, and we make extensive use of these characteristics
+in our attack.
+This suggests that the decorrelation design technique may fail
+to provide security against advanced differential attacks in some cases
+if extra care is not taken.
+This is not to suggest that the decorrelation approach is
+fundamentally flawed---indeed, decorrelation theory seems like
+a very useful tool for the cipher designer---but rather that
+the theoretical results must be interpreted with caution.
+
+d73 1
+d79 2
+a80 2
+In this way, it could also be considered a sort of higher-order
+differential attack of order 4, although we don't use any higher-order
+d121 2
+a122 2
+Therefore, in a right quartet, we require that all
+four characteristics hold.
+d128 1
+a128 1
+Then we generate $D,D'$ as $D = C \xor \nabla$ and $D' = C' \xor \nabla^*$.
+d136 18
+d476 16
+d521 3
+a523 2
+However, even this approximation has limitations.
+In particular, we don't actually need the same truncated
+d533 1
+a533 1
+This observation is crucial, so it is worth explaining it more detail.
+d550 1
+a550 1
+With this observation in hand, we finally calculate the success
+d556 2
+a557 2
+Then the attack will succeed with probability at least
+$p \times p' \times q$.
+d561 55
+d642 2
+a643 1
+This re-ordering is not entirely unfair: apparently the sole reason for
+d648 6
+a653 3
+(see \cite[Section 2.2]{cast256}).
+Our variant does preserve the property that encryption and decryption
+are symmetrical and may be performed with the same implementation.
+d657 2
+a658 2
+CAST-256 is not the only cipher to use such round structures;
+recently, a number of designs have explored novel round structures
+d724 3
+a726 2
+Bypass the first round with structures:
+obtain $2^{33}$ plaintexts $P_i=(w_i,x,y,z_i)$ where $x,y$ are held fixed
+d764 2
+a765 1
+and can be used in an attack on the 24-round variant cipher.
+d800 1
+a800 1
+at analyzing the original CAST-256 cipher, where the A rounds precede
+d804 1
+a804 1
+poor tool for analyzing the original CAST-256 round structure.
+d818 1
+a818 1
+\section{Multiple modes of operation}
+d850 15
+a864 3
+There are only 96 bits of entropy in the first four round subkeys
+(similarly for the last four round subkeys), so with 3 known texts
+one can break COCONUT98 with about $2^{96}$ offline work.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d2 1
+d54 2
+a55 2
+Quite often boomerang attacks allow for a more extensive use of structures
+than is available in conventional differential attacks,
+d560 20
+d581 1
+a581 1
+on the full cipher.
+d591 1
+a591 1
+However, that seems awfully excessive, so
+d597 2
+a598 19
+we will have learned something interesting about the CAST-256
+cipher structure.
+
+Our primary observation is that one can apply the boomerang attack
+to a 24-round CAST-256 variant.
+In the variant we analyze, the order of the A and B rounds is exchanged
+so that the encryption function computes 12 B rounds followed by 12 A rounds.
+
+This re-ordering is not entirely unfair: apparently the sole reason for
+the CAST-256 round ordering was to ensure
+that encryption and decryption should have similar computation structures,
+for otherwise everyone would be forced to implement the cipher twice
+to support both encryption and decryption
+(see \cite[Section 2.2]{cast256}).
+Of course, our variant preserves the property that encryption and decryption
+are symmetrical and may be performed with the same implementation.
+In any case, our attack on this CAST-256 variant gives new insights
+into the properties of generalized Feistel round structures, as we shall
+soon see.
+d614 1
+a614 1
+$\Pr[x\xor y \in \Delta^*] = 1-2^{-16}$ when $x,y$ are uniformly
+d617 1
+a617 1
+$q = \Pr[\nabla \to \nabla^*]^2 = 1$.
+d635 2
+a636 2
+This immediately gives a technique for distinguishing our
+24-round CAST-256 variant from a random cipher with $2^{48.5}$
+d663 3
+d676 2
+a677 1
+$\Delta = (0,0,0,a) \to (0,0,0,a) = \nabla$ for the entire cipher.
+d679 1
+a679 1
+24-round differentials with probabilities greater than $2^{-96}$.)
+d693 1
+a693 1
+a random cipher with $2^{65}$ (non-adaptive) chosen plaintexts.
+d764 6
+@
+
+
+1.2
+log
+@Many many many changes.
+Moved Skipjack stuff to paper with Lars and Matt.  Added lots
+of new analysis.  Tried to make the COCONUT98 attack more readable.
+@
+text
+@d541 4
+d559 17
+a575 10
+The full 48 rounds of CAST-256 makes it hard to mount good attacks
+on the cipher.
+However, CAST-256 is almost three times slower than the fastest AES
+candidates \cite{aes-perf}, so it seems reasonable to consider
+reduced-round variants of CAST-256 and examine their security.
+Of course, anything can be made secure with enough rounds; the challenge
+is to design a cipher with both good performance and good security.
+Therefore, we consider a variant of CAST-256 with only half the rounds.
+The resulting cipher will still be slower than many of the AES contenders,
+so if we can find effective attacks against such a cipher (and we can),
+d579 2
+a580 2
+Our primary observation is that one can use the boomerang attack
+to analyze 24 rounds of a CAST-256 variant.
+d583 9
+a591 7
+This re-ordering is not entirely unreasonable, as the sole consideration for
+the CAST-256 round ordering was apparently that encryption and decryption
+should have similar computation structures so that resource-limited
+platforms need not implement separate encryption and decryption functions
+(see \cite[Section 2.2]{cast256}); of course,
+our variant preserves the property that encryption and decryption are
+symmetrical.
+d625 1
+a625 1
+As we have seen before, $pp'q = 2^{-96}$ of them will form right quartets,
+d659 1
+a659 1
+It is worth comparing this attack to what is attainable with
+d670 1
+a670 1
+(To the best of our knowledge, there do not appear to be any other
+d721 1
+a721 1
+of both plaintexts and ciphertexts to reduce the complexity of the analysis.
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d2 1
+d4 3
+a6 1
+\newcommand{\Z}{{\bf Z}}
+d23 1
+a23 3
+$2^{16}$ chosen texts.
+Finally, we present an analysis of Skipjack
+which may help shed some light on its internal structure.
+d53 3
+d62 1
+a62 1
+the whole cipher must have probability $p \ge 2^{-64}$ or so.
+d85 1
+a85 6
+from truncated differential analysis, and show how to use these
+ideas to mount a new attack on 24 rounds of Skipjack.
+Specifically, we break a simplified 24-round Skipjack variant
+obtained by deleting four rounds from both ends of the real Skipjack cipher.
+This analysis may help shed some light on the design of Skipjack
+and its internal structure.
+d102 1
+d136 1
+a136 1
+The only remaining issue is how to generate the texts
+d141 2
+a142 2
+Then we generate the plaintexts $Q,Q'$ by obtaining the
+decryptions of $D,D'$ with two adaptive chosen-ciphertext queries.
+d150 2
+a151 2
+COCONUT98 uses a 256-bit key $K = (K_1,\ldots,K_8)$,
+with the restriction that $(K_7,K_8) \ne 0$.
+d168 4
+a171 4
+\[ M(xy) = (xy \xor K_5 K_6) \times K_7 K_8 \bmod E \]
+where the Galois field $E$ is defined as
+$E = \Z_2[x]/(x^{64}+x^{11}+x^2+x+1)$,
+and where concatenation of symbols (e.g. $xy$)
+d179 6
+a184 3
+g(x)	&=&	ROL_{11}(\phi(x)) + c \bmod 2^{32} \\
+f_i(x)	&=&	\phi(g(x \xor k_i)) \\
+F_i((x,y))&=&	(y, x \xor f_i(y)) \\
+d193 78
+a270 13
+
+\subsection*{An alternate view}
+Here is an alternate description for
+COCONUT98.  Let
+\[ L((x,y)) = (x \xor K_1 \xor K_2, y \xor K_1 \xor K_2) \]
+be a purely linear layer.
+We note that $\Psi_1 = L \circ \Psi_0 \circ L$.
+Then COCONUT98 can be equivalently expressed as
+$L \circ \Psi_0 \circ L \circ M \circ \Psi_0$.
+
+\section{Boomerang characteristics for COCONUT98}
+The primary difficulty in mounting a traditional differential
+attack on COCONUT98 is the decorrelation module $M$.
+d275 2
+a276 5
+where the probability is averaged over all possible key values.
+In short, the decorrelation module seems to prevent the ability
+from pushing a differential characteristic past $M$.
+
+This allows one to prove that there is no good differential
+d280 3
+d284 24
+a307 8
+For this reason, we use a different strategy.
+We note that the first four rounds (or last four rounds) admit
+differential characteristics of surprisingly high probability.
+We cover the first four rounds with the characteristic $\Delta \to \Delta^*$,
+where the {\sc xor} differences $\Delta$ and $\Delta^*$ will be
+chosen later.
+This ensures (when $\Delta \to \Delta^*$ holds)
+that the difference after
+d309 1
+d313 5
+a317 3
+However, the last four rounds are not covered by the characteristic,
+and so we cannot recognize a right pair from the ciphertexts.
+To deal with this,
+d319 2
+a320 1
+(taking advantage of the characteristic $\nabla \to \nabla^*$ for $\Psi_1^{-1}$)
+d327 2
+a328 1
+characteristic $\Delta^* \to \Delta$ again,
+d336 2
+a337 1
+$(M \circ \Psi_0)(P) \xor (M \circ \Psi_0)(P') = M(\Delta^*)$.
+d470 3
+d474 4
+a477 1
+\section{Extensions to truncated differential analysis}
+d479 1
+a479 3
+Truncated characteristics actually create some problems
+for the boomerang attack.
+The reason is that
+d484 51
+a534 93
+Note that we have assumed above that if $\Delta \to \Delta^*$
+by the first half of the cipher, then $\Delta^* \to \Delta$ by
+the same probability for the inverse of the first half of the cipher.
+For some truncated differentials, this property can fail to
+hold, and so the quartet success probability $p$ can be worse
+than calculated above.
+
+
+\ldots
+
+
+\section{Skipjack}
+
+Consider a simplified 24-round Skipjack variant
+obtained by deleting four rounds from both ends of the real Skipjack cipher.
+This variant is intended to be relatively representative of a
+Skipjack cipher weakened to 24 rounds, in that it maintains the
+symmetry between encryption and decryption and so on.
+
+Observe that there is a truncated differential characteristic
+of probability 1 through four A rounds and eight B rounds:
+$(0,a,0,0) \to (b,b,0,0) \to (c,d,e,0)$.
+Due to the fact that the structure of an A round is almost
+the inverse of the structure of a B round,
+we also obtain a truncated differential characteristic
+of probability 1 for decryption through four B rounds and eight A rounds,
+specifically $(f,0,0,0)\to (g,g,0,0) \to (i,h,0,j)$.
+Finally, the truncated differential characteristic
+$(c,d,e,0) \to (b,b,0,0) \to (0,a,0,0)$ for decrypting
+through eight B rounds and four A rounds has probability
+$2^{-32}$.
+
+We use these truncated characteristics in a boomerang attack.
+Construct a plaintext pair $P,P'$ whose truncated difference
+is of the form $(0,a,0,0)$, and get their encryptions $C,C'$.
+Next we modify obtain $2^{16}$ values for $D$ by varying the
+first word in $C$, and similarly obtain another $2^{16}$ values
+for $D'$ from $C'$.
+We expect to find $2^{16}$ values of $D,D'$ such that
+$(f,0,0,0) \to (i,h,0,j)$ in $C,D$ and $(f',0,0,0)\to(i',h',0,j)$
+in $C',D'$.
+Thus we have a $2^{-16}$ chance of seeing a right pair.
+If a right pair does occur, it can be recognized by the
+truncated differential $(0,a,0,0)$ in $Q,Q'$.
+After repeating the attack $2^{16}$ times,  we expect to
+obtain one right pair and about one wrong pair.
+This enables us to distinguish 24 rounds of Skipjack from a random cipher
+with about $2^{33}$ chosen ciphertexts.
+
+Alternatively, we can use $2^{45}$ chosen texts to break 25 rounds
+of Skipjack with a $2^{56}$ workfactor.
+We consider a Skipjack variant obtained by deleting the first three
+and last four rounds from the real Skipjack.
+Then we can bypass the first round subkey by using structures.
+With $2^{45}$ chosen texts, we expect about 16 right pairs.
+We guess the first round subkey, and peel off the first round,
+checking whether the result has the desired form;
+in this way, we expect to get only about 16 wrong pairs in with
+the right pairs.
+This allows us to distinguish a right guess at the first round
+subkey from a wrong guess with good probability.
+The analysis procedure can be performed with about
+$2^{45} \cdot 2^{16} = 2^{61}$ G-box computations, which is
+a workload roughly equivalent to $2^{56}$ trial encryptions.
+In all, the attack recovers 32 key bits after $2^{56}$ work; the remaining
+48 key bits can be found by trial decryption with $2^{48}$ more work.
+
+It is natural to wonder whether this is the best possible result.
+The truncated differential we used was not especially well-suited to the
+boomerang attack, due to the fact that the inverse characteristic
+$(c,d,e,0) \to (b,b,0,0) \to (0,a,0,0)$ for decryption through 12 rounds
+has quite low probability.
+Perhaps this result can be improved.
+
+\section{Discussion on the Skipjack attack}
+Note that our boomerang attack on 24 rounds of Skipjack was somewhat
+aided by fact that the first half of the cipher was weaker in the
+encryption direction than in the decryption direction.
+Also, a similar property held for the last half of the cipher due to
+symmetry.
+This is because it is much easier (in the encryption direction)
+to pass truncated differentials through the B rounds than the A rounds,
+and the first half of the cipher had twice as many B rounds as A rounds.
+
+Therefore, if Skipjack had been composed of 16 B rounds followed
+by 16 A rounds, it seems likely that it would have been easier to analyze
+with a boomerang attack.
+In contrast, a Skipjack built of 16 A rounds followed by 16 B rounds
+would be much more secure against boomerang-style attacks.
+
+The suggests that the ordering of the A rounds
+and B rounds is quite important to the security of the Skipjack cipher,
+and probably deserves further study.
+d538 176
+d716 2
+d720 12
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

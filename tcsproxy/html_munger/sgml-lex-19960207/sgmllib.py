@@ -1,0 +1,277 @@
+# $Id: sgmllib.py,v 1.1.1.1 1996/10/25 02:37:16 fox Exp $
+# A lexer, parser for SGML, using the derived class as static DTD.
+
+# This only supports those SGML features used by HTML.
+# See W3C tech report: "A lexical analyzer for HTML and Basic SGML"
+# http://www.w3.org/pub/WWW/MarkUp/SGML/sgml-lex/sgml-lex.html
+
+# XXX There should be a way to distinguish between PCDATA (parsed
+# character data -- the normal case), RCDATA (replaceable character
+# data -- only char and entity references and end tags are special)
+# and CDATA (character data -- only end tags are special).
+
+
+import sgml_lex # compiled flex scanner
+import string
+
+def sgml_lex_attrval(v): # @@ this should go in sgml_lex API
+	#@@ deal with spaces, entity/char references
+	return v[1:-1] # strip quotes
+
+
+# SGML lexer base class -- find tags and call handler functions.
+# Usage: p = SGMLLexer(); p.feed(data); ...; p.close().
+# The data
+# between tags is passed to the parser by calling self.handle_data()
+# with some data as argument (the data may be split up in arbutrary
+# chunks).  Entity references are passed by calling
+# self.handle_entityref() with the entity reference as argument.
+
+class SGMLLexer:
+	def __init__(self):
+		self.l = sgml_lex.lexer()
+
+	# Interface -- feed some data to the parser.  Call this as
+	# often as you want, with as little or as much text as you
+	# want (may include '\n').
+	def feed(self, data):
+		self.l.scan(data, self.structure, self.aux, self.err)
+
+	def line(self):
+		return self.l.line()
+
+	def close(self):
+		self.l.scan("", self.structure, self.aux, self.err)
+
+	def structure(self, types, strings):
+		if types[0] is sgml_lex.data:
+			self.handle_data(strings[0])
+
+		elif types[0] is sgml_lex.generalEntity:
+			# strip leading &
+			self.handle_entityref(strings[0][1:])
+
+		elif types[0] is sgml_lex.numCharRef:
+			# strip leading &#, convert to char
+			self.handle_data(chr(string.atoi(strings[0][2:])))
+
+		elif types[0] is sgml_lex.startTag:
+			# strip leading <
+			gi = strings[0][1:]
+
+			attrs = []
+			i = 1
+			while i+1 < len(strings):
+				n, v = strings[i],strings[i+1]
+
+				# HACK for unquoted literals...
+				if types[i+1] is sgml_lex.literal \
+				   and v[0] == '"':
+					v = sgml_lex_attrval(v)
+				attrs.append((n, v))
+				i = i + 2
+
+			self.startTag(gi, attrs)
+
+		elif types[0] is sgml_lex.endTag:
+			# strip leading </
+			gi = strings[0][2:]
+			self.endTag(gi)
+
+	def aux(self, types, strings):
+		if types[0] is sgml_lex.comment:
+			# strip of leading/trailing --
+			self.handle_comment(strings[0][2:-2])
+
+		elif types[0] is sgml_lex.processingInstruction:
+			# strip <? and >
+			self.handle_pi(strings[0][2:-1])
+		else:
+			#XXX markup declarations, etc.
+			pass
+
+	def err(self, types, strings):
+		pass
+
+# SGML parser class -- find tags and call handler functions.
+# Usage: p = SGMLParser(); p.feed(data); ...; p.close().
+# The dtd is defined by deriving a class which defines methods
+# with special names to handle tags: start_foo and end_foo to handle
+# <foo> and </foo>, respectively, or do_foo to handle <foo> by itself.
+# (Tags are converted to lower case for this purpose.)
+# XXX what about periods, hyphens in tag names?
+
+class SGMLParser(SGMLLexer):
+
+	# Interface -- initialize and reset this instance
+	def __init__(self, verbose = 0):
+		self.verbose = verbose
+		SGMLLexer.__init__(self)
+		self.reset()
+
+	# Interface -- reset this instance.  Loses all unprocessed data
+	def reset(self):
+		self.stack = []
+		self.cdata = 0
+
+
+	# For derived classes only -- enter literal mode (CDATA)
+	def setliteral(self, *args):
+		self.cdata = 1 #@@ finish implementing this...
+
+
+	def startTag(self, tag, attrs):
+		try:
+			method = getattr(self, 'start_' + tag)
+		except AttributeError:
+			try:
+				method = getattr(self, 'do_' + tag)
+			except AttributeError:
+				self.unknown_starttag(tag, attrs)
+				return
+			method(attrs)
+			return
+		self.stack.append(tag)
+		method(attrs)
+
+
+	def endTag(self, tag):
+		try:
+			method = getattr(self, 'end_' + tag)
+		except AttributeError:
+			self.unknown_endtag(tag)
+			return
+		if self.stack and self.stack[-1] == tag:
+			del self.stack[-1]
+		else:
+			self.report_unbalanced(tag)
+			# Now repair it
+			found = None
+			for i in range(len(self.stack)):
+				if self.stack[i] == tag: found = i
+			if found <> None:
+				del self.stack[found:]
+		method()
+
+	# Example -- report an unbalanced </...> tag.
+	def report_unbalanced(self, tag):
+		if self.verbose:
+			print '*** Unbalanced </' + tag + '>'
+			print '*** Stack:', self.stack
+
+	# Definition of entities -- derived classes may override
+	entitydefs = \
+		{'lt': '<', 'gt': '>', 'amp': '&', 'quot': '"'}
+
+	# Example -- handle entity reference, no need to override
+	def handle_entityref(self, name):
+		table = self.entitydefs
+		if table.has_key(name):
+			self.handle_data(table[name])
+		else:
+			self.unknown_entityref(name)
+			return
+
+	# Example -- handle data, should be overridden
+	def handle_data(self, data):
+		pass
+
+	# Example -- handle comment, could be overridden
+	def handle_comment(self, data):
+		pass
+
+	# Example -- handle processing instruction, could be overridden
+	def handle_pi(self, data):
+		pass
+
+	# To be overridden -- handlers for unknown objects
+	def unknown_starttag(self, tag, attrs): pass
+	def unknown_endtag(self, tag): pass
+	def unknown_entityref(self, ref): pass
+
+
+class TestSGML(SGMLParser):
+
+	def __init__(self):
+		SGMLParser.__init__(self)
+		# performance measurements
+		self.tokQty = 0
+		self.tokTot = 0
+		self.calls = 0
+
+	def handle_data(self, data):
+		r = repr(data)
+		if len(r) > 72:
+			r = r[:35] + '...' + r[-35:]
+		print 'data:', r
+
+	def handle_comment(self, data):
+		r = repr(data)
+		if len(r) > 68:
+			r = r[:32] + '...' + r[-32:]
+		print 'comment:', r
+
+	def unknown_starttag(self, tag, attrs):
+		print 'start tag: <' + tag,
+		for name, value in attrs:
+			if name: print name + '=' + '"' + value + '"',
+			else: print value,
+		print '>'
+
+	def unknown_endtag(self, tag):
+		print 'end tag: </' + tag + '>'
+
+	def unknown_entityref(self, ref):
+		print '*** unknown entity ref: &' + ref + ';'
+
+	def structure(self, types, strings):
+		self.calls = self.calls + 1
+		self.tokQty = self.tokQty + len(types)
+		self.tokTot = self.tokTot + lenstrings(strings)
+		SGMLParser.structure(self, types, strings)
+
+	def aux(self, types, strings):
+		self.calls = self.calls + 1
+		self.tokQty = self.tokQty + len(types)
+		self.tokTot = self.tokTot + lenstrings(strings)
+
+		SGMLParser.aux(self,types,strings)
+
+	def err(self, types, strings):
+		self.calls = self.calls + 1
+		self.tokQty = self.tokQty + len(types)
+		self.tokTot = self.tokTot + lenstrings(strings)
+
+		SGMLParser.err(self,types,strings)
+
+
+	def close(self):
+		print "Calls: ", self.calls, \
+		      "Tokens:", self.tokQty, \
+		      "Ave TokLen:", self.tokTot/self.tokQty
+
+def lenstrings(strings):
+	try:
+		return len(string.join(strings,''))
+	except TypeError:
+		ret = 0
+		for s in strings:
+			if s:
+				ret = ret + len(s)
+		return ret
+
+
+def test():
+	import sys
+	f = sys.stdin
+	x = TestSGML()
+	while 1:
+		line = f.readline()
+		if not line:
+			x.close()
+			break
+		x.feed(line)
+
+
+if __name__ == '__main__':
+	test()

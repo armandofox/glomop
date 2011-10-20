@@ -1,0 +1,236 @@
+head	1.2;
+access;
+symbols
+	Yatin-final:1.2
+	Yatin:1.2.0.2
+	pre-yatin-merge:1.2
+	transend-beta2:1.1
+	fox-dev:1.1.8.1
+	frontend-ng:1.1
+	transend-beta-latest:1.1
+	Aggregators:1.1
+	NoAggregators:1.1
+	iang:1.1.0.4
+	transend-beta:1.1.0.2
+	SOSP:1.1
+	merged_preintegrate:1.1
+	heisenbug:1.1
+	PRE_INTEGRATION:1.1;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	97.08.30.21.34.22;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.15.00.47.48;	author fox;	state Exp;
+branches
+	1.1.8.1;
+next	;
+
+1.1.8.1
+date	97.08.11.04.12.54;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@#include <config_tr.h>
+#include <stdio.h>
+#include <string.h>
+#include <frontend.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <proxyinterface.h>
+
+void hnd_sigint(int);
+void *distill_loop(void *);
+void *file_go_proc(task_t *);
+pthread_t test_init(FILE *);
+
+/*
+ *  Key:
+ *
+ *  test_init is the one-time initialization of everything.  It spawns a
+ *      single manager thread and calls make_threads() to spawn many
+ *      worker threads.
+ *  distill_loop is the manager thread that repeatedly reads filenames out
+ *      of a file, opens each file, and queues the open FILE* as a task
+ *      for a worker thread to pick up.
+ *  file_go_proc is called by a worker thread that has picked up queued
+ *      work.  Its arg is a task structure whose data field encodes the
+ *      open FILE*.  It reads the contents of the file, closes the file,
+ *      and sends the contents to text/html distiller.
+ */
+int
+main(int ac, char *av[])
+{
+  int num_thr;
+  FILE *f;
+
+  if (ac < 2) {
+    fprintf(stderr, "usage: %s filename [numthreads]\n", av[0]);
+    exit(1);
+  }
+
+  (void)signal(SIGINT, hnd_sigint);
+
+  num_thr = (ac > 2? atoi(av[2]): 20);
+  assert(f = fopen(av[1], "r"));
+  
+  assert(test_init(f));
+  
+  (void)make_threads(num_thr, 10);
+  while (1) 
+    sleep(10);
+}
+
+pthread_t
+test_init(FILE *f)
+{
+  pthread_t thr_distiller_req;
+
+  InitializeDistillerCache("224.9.9.9", 9999, "", 0);
+
+  sleep(4);
+  /* spawn local "manager" thread */
+
+  THR_OP("Thread create test_distiller",
+         pthread_create(&thr_distiller_req, (pthread_attr_t *)NULL,
+                        distill_loop, (void *)f));
+  return thr_distiller_req;
+}
+
+int request_count = 0;
+
+void
+hnd_sigint(int signal)
+{
+  fprintf(stderr, "Caught SIGINT, exiting after %d requests\n",
+          request_count);
+  exit(1);
+}
+
+void *
+distill_loop(void *arg)
+{
+  FILE *f = (FILE *)arg;
+  FILE *html;
+  task_t *request;
+  char url[256];
+  int ss;
+  
+  while (1) {
+    if (feof(f))
+      (void)fseek(f, 0L, SEEK_SET);
+    /* read next URL from file */
+    fgets(url, sizeof(url), f);
+    if (url[ss = strlen(url)-1] == '\n')
+      url[ss] = '\0';
+
+    if ((html = fopen(url, "r")) == NULL) {
+      proxy_errlog_2("Skipping file '%s', couldn't open", url);
+      continue;
+    }
+    new_task(&request);
+    SET_TASK_ID(request, request_count);
+    SET_TASK_GO_PROC(request, file_go_proc);
+    SET_TASK_DATA(request, html);
+    assert(dispatch(request) == 0);
+    request_count++;
+  }
+}
+
+void *
+file_go_proc(task_t *t)
+{
+  FILE *htmlfile = (FILE *)(TASK_DATA(t));
+  C_DistillerType type;
+  Argument ar;
+  size_t inbufsize;
+  UINT32 outbufsize;
+  DistillerStatus status;
+  char *inbuf;
+  char *outbuf;
+  struct stat s;
+  
+  /* get file size */
+
+  (void)fstat(fileno(htmlfile), &s);
+
+  /* allocate input buffer */
+
+  inbufsize = s.st_size;
+  assert(inbuf = (char *)MALLOC(inbufsize));
+  inbufsize = fread((void *)inbuf, sizeof(char), (size_t)inbufsize, htmlfile);
+  fclose(htmlfile);
+
+  SET_DISTILLER_TYPE(type, "text/html");
+  SET_ARG_ID(ar, 1);
+  /* string that will be appended to each target URL in html file */
+  SET_ARG_STRING(ar, "__foo__");
+
+  /* call html distiller */
+
+  status = Distill(type, &ar, 1, (void *)inbuf, (UINT32)inbufsize,
+                   (void *)&outbuf, &outbufsize);
+
+  proxy_debug_3(DBG_HTTP, "Distiller status = %d\n", (int)status);
+  
+  /* dump outbuf to a file */
+
+#if 0
+  if (status == distOk) {
+    assert(htmlfile = fopen("/tmp/foo", "w"));
+    fwrite((void *)outbuf, sizeof(char), (size_t)outbufsize, htmlfile);
+    fclose(htmlfile);
+  }
+#endif
+  FREE((void *)inbuf);
+  FreeOutputBuffer((void *)outbuf);
+
+  return (void *)0;
+}
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+#include <proxy.h>
+d4 1
+a4 1
+#include <httpreq.h>
+@
+
+
+1.1.8.1
+log
+@armandos development version for rebuilding the frontend - do not use
+@
+text
+@d1 1
+a1 1
+#include <config_tr.h>
+d4 1
+a4 1
+#include <frontend.h>
+@

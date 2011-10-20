@@ -1,0 +1,127 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.1
+date	97.06.25.19.10.14;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Added Tbmptopnm.c
+@
+text
+@/* Tbmptopnm.c - read a pilot Tbmp file and write a Portable aNyMap
+ *
+ * Program by Ian Goldberg <iang@@cs.berkeley.edu>
+ */
+
+#include "pnm.h"
+
+int
+main( int argc, char **argv )
+{
+    FILE* ifp;
+    unsigned short rows, cols, color, cpr, flags;
+    unsigned long pad;
+    int i,j;
+    unsigned char *inbyte;
+    unsigned char inbit;
+    int twobit = 0;
+    int format;
+    xel *xelrow;
+    unsigned char *Tbmprow;
+
+    /* Parse default params */
+    pnm_init( &argc, argv );
+
+    if (argc > 1 && !strcmp(argv[1], "-2bit")) {
+	twobit = 1;
+	--argc; ++argv;
+    }
+    if ( argc > 2 || (argc == 2 && argv[1][0] == '-')) {
+	pm_usage( "[-2bit] [Tbmpfile]" );
+    }
+
+    if ( argc == 2 )
+	ifp = pm_openr( argv[1] );
+    else
+	ifp = stdin;
+
+    /* Read the bitmap header */
+    pm_readbigshort( ifp, &cols );
+    pm_readbigshort( ifp, &rows );
+    pm_readbigshort( ifp, &cpr );
+    pm_readbigshort( ifp, &flags );
+    pm_readbiglong( ifp, &pad );
+    pm_readbiglong( ifp, &pad );
+
+    /* Sanity check */
+    if (twobit && (cols & 1)) {
+	pm_error("Odd number of columns in 2-bit mode");
+    }
+    if (twobit) cols >>= 1;
+    if ((twobit && cpr != ((cols+7)/8)*2) ||
+	(!twobit && cpr != ((cols+15)/16)*2)) {
+	pm_error("Wrong number of chars per row");
+    }
+    if (flags) {
+	pm_error("Unknown flags field in bitmap");
+    }
+
+    /* Write the pnm header */
+    format = twobit ? PGM_TYPE : PBM_TYPE;
+    pnm_writepnminit(stdout, cols, rows, 255, format, 0);
+    xelrow = pnm_allocrow(cols);
+
+    /* Read the picture data, one row at a time */
+    Tbmprow = (unsigned char *)malloc(cpr);
+    if (!Tbmprow) {
+	pm_error("Unable to allocate %d bytes", cpr);
+    }
+    for (i=0;i<rows;++i) {
+	if (fread( Tbmprow, 1, cpr, ifp ) != cpr) {
+	    pm_error("Error reading Tbmp file");
+	}
+	inbit = twobit ? 6 : 7;
+	inbyte = Tbmprow;
+	for (j=0; j<cols; ++j) {
+	    if (twobit) {
+		color = ((*inbyte) & (3 << inbit)) >> inbit;
+		switch (color) {
+		    case 0: PNM_ASSIGN1(xelrow[j], 255); break;
+		    case 1: PNM_ASSIGN1(xelrow[j], 170); break;
+		    case 2: PNM_ASSIGN1(xelrow[j], 85); break;
+		    default: PNM_ASSIGN1(xelrow[j], 0); break;
+		}
+	    } else {
+		if ((*inbyte) & (1 << inbit)) {
+		    PNM_ASSIGN1(xelrow[j], 0);
+		} else {
+		    PNM_ASSIGN1(xelrow[j], 255);
+		}
+	    }
+	    if (!inbit) {
+		++inbyte;
+		inbit = twobit ? 6 : 7;
+	    } else {
+		inbit -= (twobit ? 2 : 1);
+	    }
+	}
+	pnm_writepnmrow(stdout, xelrow, cols, 255, format, 0);
+    }
+
+    pm_close( ifp );
+
+    exit( 0 );
+}
+@

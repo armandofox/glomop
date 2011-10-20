@@ -1,0 +1,982 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	95.10.26.04.13.03;	author gribble;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.09.25.00.59.08;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@Bugfixes galore!  This version was the one that Eric took with him to Japan.
+The changelog has been disabled.  This is the final version pre-TCP.
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	MailStore.c
+#
+#    MailStore definition file
+#	  - MailStore is a non-viewable object that stores all of the components of a letter
+#       in abstract form.
+#     - MailStore can decode its stored information from a stream of data (from GloMop)
+#     - MailStore can encode its stored information into a stream of data (to GloMop)
+#     - MailStore can create a MailViewBox with its data on it
+#     - MailStore can extract information from a MailViewBox to store in itself
+#
+#	Version:	1						August 8th, 1995
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "ProxyMail_indexicals.h"
+#include "CMailStore.h"
+
+/*** Note no main defined - is defined in MailClient.c  ***/
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MailStore
+
+Method Boolean
+MailStore_decodeTOCEntry(ObjectID self, ObjectID decodeStream, Boolean *success)  /** Assume bounded by LF **/
+{
+   char  nextLine[128];
+   char *theNL, *theMesNum, *theFlags, *theDate, *fromC, *subjC, *bodyC;
+   int   maxOff;
+   Boolean theSS;
+	
+   ReadNELine(decodeStream, (Pointer) nextLine, 127, 10, &theSS);                   /* get the line */
+   if (theSS == false)
+   {
+      *success = false;
+	  return false;
+   }
+   
+   theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+   if (theNL >= nextLine)
+      *theNL = '\0';
+   Log(("Next summary: %s", nextLine));
+   
+   /* Ok - strip out chunk number */
+   /*theMesNum = nextLine + (long int) ScanForChar(':', nextLine, 127);
+   *theMesNum = '\0';  theMesNum += 1L;*/  /*obselete*/
+   
+   theMesNum = nextLine;
+   while (*theMesNum == ' ')
+      theMesNum += 1L;
+   
+   /* great - we've got the start of the message number */
+   theFlags = theMesNum;
+   while (CharacterIsDecimalDigit(*theFlags))
+       theFlags += 1L;
+   
+   /* theFlags now points to various MH flags next to message numbers.  Deal with here if we must */
+   *theFlags = '\0';
+   
+   /* get other easy fields */
+   theDate = theFlags + 2;
+   *(theDate + 5) = '\0';
+   fromC = theDate + 6;
+   *(fromC + 17) = '\0';
+   subjC = fromC + 16;
+   while (*subjC == ' ')
+   {
+      *subjC = '\0';
+	  subjC -= 1L;
+   }
+   
+   /* pull out and separate subject and body clip */
+   subjC = fromC + 19;
+   maxOff = (int) ScanForChar('\0', subjC, 122);
+   bodyC = subjC + (long int) ScanForChar('<', subjC, maxOff);
+   if (bodyC > subjC)
+      *bodyC = '\0';
+   bodyC += 1L;
+   if (*bodyC == '<')
+     bodyC += 1L;
+   theNL = bodyC + (long int) ScanForChar('\0', bodyC, 122);
+   if (theNL > bodyC)
+   {
+      while ( (*theNL == '\0') || (*theNL == '>'))
+	  {
+	     *theNL = '\0';
+		 theNL -= 1L;
+	  }
+   }
+      
+   /* Add stuff to MS as we wanted */
+   ReplaceTextWithLiteral(From_t(self), fromC);
+   ReplaceTextWithLiteral(To_t(self), "gribble@@cs.berkeley.edu");  /** ? what should go here ? **/
+   ReplaceTextWithLiteral(Subject_t(self), subjC);
+   ReplaceTextWithLiteral(Date_t(self), theDate);
+   ReplaceTextWithLiteral(Body_t(self), bodyC);
+   *success = true;
+   return true;
+}
+
+Private Boolean MSIsWS(char theChar)  /* is this character whitespace? */
+{
+   if ( (theChar == ' ') || (theChar == '\t') || (theChar == '\r') || (theChar == '\n'))
+      return true;
+   
+   return false;
+}
+
+Private void MSToastNL(char *theChars)  /* chop of a trailing NL if it exists */
+{
+   char *theNL;
+   long int theLen;
+   
+   theLen = (long int) ScanForChar(0, theChars, 255);
+   if (theLen < 0)
+      return;
+   theNL = theChars +  (long int) ScanForChar(10, theChars, theLen);      /* knock of trailing NL */
+   if (theNL >= theChars)
+      *theNL = '\0';
+}
+
+Private short MSTestFieldType(char *theLine)  /* is this the declaration of a recognized field? */
+{
+   if (CompareBytes(theLine, "From:", 5, NULL) == 0)
+      return MSP_FROM_FIELD;
+   if (CompareBytes(theLine, "To:", 3, NULL) == 0)
+      return MSP_TO_FIELD;
+   if (CompareBytes(theLine, "cc:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "CC:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "Cc:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "Subject:", 8, NULL) == 0)
+      return MSP_SUBJECT_FIELD;
+   if (CompareBytes(theLine, "-----", 5, NULL) == 0)
+      return MSP_BODY_SEPARATOR;
+   if (CompareBytes(theLine, "Date:", 5, NULL) == 0)
+      return MSP_DATE_FIELD;
+   return MSP_NO_FIELD;
+}
+
+Private Boolean MSTestDoneField(char *theLine)  /* is this the last line in a field? */
+{
+   char *theNL;
+   long int theLen;
+   
+   theLen = (long int) ScanForChar(0, theLine, 256);
+   if (theLen < 0L)
+      return true;  /* by default */
+   
+   theNL = theLine + (long int) ScanForChar(10, theLine, theLen);
+   if (theNL < theLine)
+      return false; /* don't have carriage return - can't be end of a field. */
+   
+   while(theNL >= theLine)
+   {
+      if ( MSIsWS(*theNL))
+	    theNL -= 1L;
+      else
+	  {
+	     if (*theNL == ',')   /* ie. line is  *,[WS][CR] */
+		    return false;
+	     else
+		    return true;
+	  }
+   }
+   /* all is WS - must be end of it by default */
+   return true;
+}
+
+Method Boolean
+MailStore_parseDRTfromStream(ObjectID self, ObjectID decodeStream)
+{
+    char      nextLine[256], *sizePtr;
+	long int  numDRTentries, i, sizeLine, j;
+	ObjectID  theFList;
+	Boolean   theSS;
+	
+	/** Read "NDOCS <#>", extract # **/
+	ReadNELine(decodeStream, (Pointer) nextLine, 255, 10, &theSS);
+	MSToastNL(nextLine);
+	sizePtr = nextLine + 6L;
+	if (CompareBytes(nextLine, "NDOCS ", 6, NULL) != 0)
+	{
+	   Log(("Warning - NDOCS expected but not found!"));
+	   return false;
+	}
+	CtoPString(sizePtr);
+	if (!StringToInt(sizePtr, &numDRTentries))
+	{
+	   PtoCString(sizePtr);
+	   Log(("Couldn't convert %s to int!\n", sizePtr));
+	   return false;
+	}
+	Log(("DRT size is %ld elements.", numDRTentries));
+	
+	/** Read entries one by one **/
+	theFList = Drt_entries(self);
+	for (i=1L; i<=numDRTentries; i++)
+	{
+	   char *newPtr;
+	   
+	   /* Get a DRT entry */
+	   ReadNELine(decodeStream, (Pointer) nextLine, 255, 10, &theSS);
+	   if (theSS == false)
+	      return false;
+	   MSToastNL(nextLine);
+	   sizeLine = CStringLength(nextLine) + 1L;
+	   newPtr = (char *) NewLockedBuffer(sizeLine);      /** Must remember to do DestroyLockedBuffer when reading in MIME **/
+	   
+	   /** Copy string into new buffer.  **/
+	   CopyBytes((Pointer) &(nextLine[0]), (Pointer) newPtr, (Unsigned) sizeLine);
+	   
+	   /***for (j=0L; j< sizeLine; j++)
+	     *(newPtr + j) = *(nextLine + j);****/
+	   
+	   Log(("Copied DRT entry %s", newPtr));
+	   AddElemAt(theFList, i, (Pointer) &newPtr);
+	}
+	
+	/* Done! */
+	return true;
+}
+
+Method Boolean
+MailStore_decodeFromStream(ObjectID self, ObjectID decodeStream, Unsigned MSlength)
+{
+    long int  totalBytes = 0L;
+	char      nextLine[256], *postIdentifier, nextCH;
+	short     lineType;
+	ObjectID  fieldToAddTo;
+	int       done = 0;
+	Boolean theSS;
+		
+	/* Strategy: loop through, line by line, looking for one of To:, From:, Subject:, or cc:.  If get one,
+	   strip off the identifier, add it to a buffer, and continue parsing lines to ensure we get all of the lines.
+	   Parsing format - if get "," + WS + NL, that field must continue on next line, otherwise return to loop. */
+	   
+	while((!done) && (totalBytes < MSlength))
+	{
+	   Log(("totalBytes: %ld, MSlength: %ld", totalBytes, MSlength));
+	   
+	   totalBytes += ReadALine(decodeStream, nextLine, 255, 10, &theSS);
+	   if (theSS == false)
+	     return false;
+		 
+	   Log(("Next line: %s", nextLine));
+	   lineType = MSTestFieldType(nextLine);
+	   switch(lineType)
+	   {
+	      case MSP_FROM_FIELD:
+		      Log(("Is from!"));
+		      fieldToAddTo = From_t(self);
+			  postIdentifier = nextLine + 5L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_TO_FIELD:
+		      Log(("Is to!"));
+		      fieldToAddTo = To_t(self);
+			  postIdentifier = nextLine + 3L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_CC_FIELD:
+		      Log(("Is cc!"));
+		      fieldToAddTo = Cc_t(self);
+			  postIdentifier = nextLine + 3L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_SUBJECT_FIELD:
+		      Log(("Is subject!"));
+		      fieldToAddTo = Subject_t(self);
+			  postIdentifier = nextLine + 8L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_DATE_FIELD:
+		  	  Log(("Is Date!"));
+			  fieldToAddTo = Date_t(self);
+			  postIdentifier =  nextLine + 5L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_BODY_SEPARATOR:
+		  	  done = 1;
+			  continue;
+		  default:
+		      Log(("Isn't recognized. :("));
+		      continue;
+	   }
+	   
+	   ReplaceTextWithLiteral(fieldToAddTo, "");
+	   /* OK - grabbed a field.  Test to see if it's the last field. */
+	   while( MSTestDoneField(postIdentifier) == false)
+	   {
+	      Log(("More to come..."));
+	      /* append to fieldToAddTo */
+		  AppendLiteral(fieldToAddTo, postIdentifier);
+		  totalBytes += ReadALine(decodeStream, nextLine, 255, 10, &theSS);
+		  if (theSS == false)
+		    return false;
+		  Log(("The more is: %s", nextLine));
+		  postIdentifier = nextLine;
+		  while ( MSIsWS(*postIdentifier) == true)
+			 postIdentifier += 1L;
+	   }
+	   /* Strip off last NL, add to field. */
+	   MSToastNL(postIdentifier);
+	   AppendLiteral(fieldToAddTo, postIdentifier);
+	   Log(("Done field"));
+	}
+	
+	Log(("Done headers"));
+	/* Great! Now add rest to body field */
+	fieldToAddTo = Body_t(self);
+	ReplaceTextWithLiteral(fieldToAddTo, "");
+	while (totalBytes < MSlength)
+	{
+	   nextCH = ReadByte(decodeStream, &theSS);
+	   if (theSS == false)
+	      return false;
+	   totalBytes += 1L;
+	   if ( MSIsWS(nextCH) == false)
+	   {
+	      AppendCharacter(fieldToAddTo, nextCH);
+		  break;
+	   }
+	}
+	
+	/* Add characters, one by painful one - this routine should be optimized to read characters in chunks */
+	while (totalBytes < MSlength)
+	{
+	   totalBytes += 1L;
+	   nextCH = ReadByte(decodeStream, &theSS);
+	   if (theSS == false)
+	     return false;
+	   AppendCharacter(fieldToAddTo, nextCH);
+	}
+	Log(("Done body"));
+	return true;
+}
+
+Private void
+MS_WriteOutTF(ObjectID theTF, ObjectID theStream)
+{
+   long int 	len,i,nC;
+   char     	nextBuf[512], regBuf[256];
+   TextRange	nextRange;
+   
+   len = TextLength(theTF);
+   for (i=0L; i<len; )
+   {
+      nextRange.start = i;
+	  nC = len - i;
+	  if (nC > 255L)
+	    nC = 255L;
+	  nextRange.length = nC;
+      CopyTextRangeToBuffer(theTF, &nextRange, (CharactersPointer) nextBuf);
+	  ConvertToMagic8Bit((CharactersPointer) nextBuf, (Pointer) regBuf, nC);
+
+	  Write(theStream, regBuf, nC);
+	  i += nC;
+   }
+}
+
+Method Boolean
+MailStore_encodeIntoStream(ObjectID self, ObjectID encodeStream)
+{
+   long int totLength, nLen, dLen;
+   char NDOCS[32], DSIZE[32];
+   
+   /* What we want to encode is the "NDOCS", "DSIZE", and data components */
+   
+   totLength = 0L;
+   
+   /* Add length of "From: <From_t>\r" */
+   totLength += TextLength(From_t(self));
+   totLength += 7L;
+   Log(("FromLength %ld", totLength));
+   
+   /* Add length of "To: <To_t>\r" */
+   totLength += TextLength(To_t(self));
+   totLength += 5L;
+   Log(("Tolength %ld", totLength));
+   
+   /* Add length of "Cc: <Cc_t>\r" */
+   totLength += TextLength(Cc_t(self));
+   totLength += 5L;
+   Log(("cclength %ld", totLength));
+   
+   /* Add length of "Subject: <Subject_t>\r------\r"*/
+   totLength += TextLength(Subject_t(self));
+   totLength += 17L;
+   Log(("subjectlength %ld", totLength));
+   
+   /* Add length of body field */
+   totLength += TextLength(Body_t(self));
+   Log(("bodylength %ld", totLength));
+   totLength += 1L;  /* for extra \r padded on end */
+   
+   /* Build NDOCS string and DSIZE string */
+   SPrintF(NDOCS, "NDOCS 0\r");  nLen = CStringLength(NDOCS);
+   SPrintF(DSIZE, "DSIZE %ld\r", totLength);   dLen = CStringLength(DSIZE);
+   
+   Write(encodeStream, NDOCS, nLen);
+   Write(encodeStream, DSIZE, dLen);
+   
+   /* Write out "From: " field */
+   Write(encodeStream, "From: ", 6);
+   MS_WriteOutTF(From_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "To: " field */
+   Write(encodeStream, "To: ", 4);
+   MS_WriteOutTF(To_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "Cc: " field */
+   Write(encodeStream, "Cc: ", 4);
+   MS_WriteOutTF(Cc_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "Subject: " field */
+   Write(encodeStream, "Subject: ", 9);
+   MS_WriteOutTF(Subject_t(self), encodeStream);
+   Write(encodeStream, "\r------\r", 8);
+   
+   /* Write out "Body" */
+   MS_WriteOutTF(Body_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   Write(encodeStream, "END\r", 4);
+
+   /* Done! */
+}
+
+Method void
+MailStore_updateInfoText(ObjectID self, Unsigned listPos)
+{
+   Flags theFlags;
+   ObjectID theInfoText;
+   char  numString[5];
+   
+   theFlags = Info_flags(self);
+   theInfoText = Info_t(self);
+   
+   SPrintF(numString, "%ld", listPos);
+   ReplaceTextWithLiteral(theInfoText, numString);
+   
+   if (theFlags & MS_beenDeleted)
+      AppendLiteral(theInfoText, "D");
+   else
+   {
+      if (theFlags & MS_newMessage)
+	     AppendLiteral(theInfoText, "N");
+	  if (theFlags & MS_unreadMess)
+	     AppendLiteral(theInfoText, "U");
+   }
+}
+
+
+Public void
+LocalDateAndTime(long *date, ulong * time)
+{
+	*date = LocalDate();
+	*time = LocalTime();
+}
+
+Private char *
+FindCharacterInLiteral(char *literal, char characterToFind)
+{
+	while (*literal != characterToFind) {
+		if (*literal == 0)
+			break;
+		literal++;
+	}
+	return literal;
+}
+
+Private char *
+SkipWhiteSpace(char *literal)
+{
+	while (*literal == ' ')
+		literal++;
+
+	return literal;
+}
+
+Private ulong
+CountAlpha(char *literal)
+{
+	char c;
+	ulong count = 0;
+
+	while (((c = *literal++) >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+		count++;
+	return count;
+}
+
+Private ulong
+CountDigits(char *literal)
+{
+	char c;
+	ulong count = 0;
+
+	while ((c = *literal++) >= '0' && c <= '9')
+		count++;
+	return count;
+}
+
+Private ulong
+ConvertDigits(char *start, ulong length)
+{
+	ulong count, value;
+
+	value = 0;
+	for (count = 0; count < length; ++count)
+		value = 10 * value + (*start++ - '0');
+
+	return value;
+}
+
+Private void
+AdjustDateAndTime(long *date, ulong * time, char sign, ulong timeOffset)
+{
+	/* similar to ConvertTimeAndDate but we start with an RFC 822
+	 * offset (normally from UT) in the form of our direction ('+' or '-')
+	 * and a magnitude as decimal value hhmm
+	 */
+
+	ulong timeDifference;
+
+	timeDifference = ((timeOffset / 100) * 60 + timeOffset % 100) * kMinuteInMillisecs;
+
+	if (sign == '+') {
+		if (timeDifference > *time) {
+			*date -= 1;
+			*time += kDayInMillisecs;
+		}
+		*time -= timeDifference;
+	} else {
+		*time += timeDifference;
+		if (*time >= kDayInMillisecs) {
+			*date += 1;
+			*time -= kDayInMillisecs;
+		}
+	}
+}
+
+IntrinsicMethod void
+MailStore_ExtractRFC822Date(char *inputLine, long *date, ulong * time)
+{
+	char monthNames[12][4];
+	char *scanPoint;
+	char c;
+	ulong count;
+	Boolean valid;
+	ulong timeArray[4];
+	ulong dateArray[4];
+	char sign;
+	ulong timeOffset;
+	
+	monthNames[0][0] = 'J';  monthNames[0][1] = 'a';  monthNames[0][2] = 'n';  monthNames[0][3] = '\0';
+	monthNames[1][0] = 'F';  monthNames[1][1] = 'e';  monthNames[1][2] = 'b';  monthNames[1][3] = '\0';
+	monthNames[2][0] = 'M';  monthNames[2][1] = 'a';  monthNames[2][2] = 'r';  monthNames[2][3] = '\0';
+	monthNames[3][0] = 'A';  monthNames[3][1] = 'p';  monthNames[3][2] = 'r';  monthNames[3][3] = '\0';
+	monthNames[4][0] = 'M';  monthNames[4][1] = 'a';  monthNames[4][2] = 'y';  monthNames[4][3] = '\0';
+	monthNames[5][0] = 'J';  monthNames[5][1] = 'u';  monthNames[5][2] = 'n';  monthNames[5][3] = '\0';
+	monthNames[6][0] = 'J';  monthNames[6][1] = 'u';  monthNames[6][2] = 'l';  monthNames[6][3] = '\0';
+	monthNames[7][0] = 'A';  monthNames[7][1] = 'u';  monthNames[7][2] = 'g';  monthNames[7][3] = '\0';
+	monthNames[8][0] = 'S';  monthNames[8][1] = 'e';  monthNames[8][2] = 'p';  monthNames[8][3] = '\0';
+	monthNames[9][0] = 'O';  monthNames[9][1] = 'c';  monthNames[9][2] = 't';  monthNames[9][3] = '\0';
+	monthNames[10][0] = 'N';  monthNames[10][1] = 'o';  monthNames[10][2] = 'v';  monthNames[10][3] = '\0';
+	monthNames[11][0] = 'D';  monthNames[11][1] = 'e';  monthNames[11][2] = 'c';  monthNames[11][3] = '\0';
+
+	valid = true;
+	scanPoint = SkipWhiteSpace(inputLine);
+
+	/* day of week */
+	count = CountAlpha(scanPoint);
+	if (count != 0) {			/* skip day of week */
+	    Log(("nonzero count"));
+		if (count != 3)
+		{
+			valid = false;
+			Log(("invalid count of non-three"));
+		}
+		else
+		    Log(("Valid count of 3"));
+		scanPoint = SkipWhiteSpace(scanPoint + count);
+		if (*scanPoint == ',')
+			scanPoint = SkipWhiteSpace(scanPoint + 1);
+		else
+		{
+		    Log(("invalid non-comma"));
+			valid = false;
+		}
+	}
+	/* date */
+	count = CountDigits(scanPoint);
+	if (count < 1 || count > 2)
+	{
+		valid = false;
+		Log(("invalid non 1/2 count"));
+	}
+	else
+	    Log(("valid count of digits"));
+	
+	dateArray[kDayOfMonth] = ConvertDigits(scanPoint, count);
+	Log(("day of month: %ld\n", dateArray[kDayOfMonth]));
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	count = CountAlpha(scanPoint);
+	if (count == 3) {
+		ulong monthIndex;
+
+		for (monthIndex = 0; monthIndex < 12; ++monthIndex)
+			if (CompareBytes(scanPoint, (uchar *) monthNames[monthIndex], 3, nil) == 0)
+				break;
+		if (monthIndex < 12)
+		{
+			dateArray[kMonth] = monthIndex + 1;
+			Log(("Valid month: %s", monthNames[monthIndex]));
+		}
+		else
+		{
+			valid = false;
+			Log(("Invalid month."));
+		}
+	} else
+	{
+		Log(("invalid month count of non3"));
+		valid = false;
+	}
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	count = CountDigits(scanPoint);
+	if (count != 2 && count != 4)
+	{
+		valid = false;
+		Log(("invalid year count of non2/4"));
+	}
+	else
+		Log(("Valid year!"));
+	dateArray[kYear] = ConvertDigits(scanPoint, count);
+	if (count == 2)
+		dateArray[kYear] += 1900;
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+
+	/* time */
+	count = CountDigits(scanPoint);
+	if (count != 2)
+	{
+		valid = false;
+		Log(("Invalid time hour non2 count"));
+	}
+	else
+		Log(("Valid hour."));
+	timeArray[kHour] = ConvertDigits(scanPoint, count);
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	if (*scanPoint == ':')
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+	else
+	{
+		valid = false;
+		Log(("non : between hour/min "));
+	}
+	count = CountDigits(scanPoint);
+	if (count != 2)
+	{
+		valid = false;
+		Log(("Invalid min of non-2"));
+	}
+	timeArray[kMinute] = ConvertDigits(scanPoint, count);
+	scanPoint = SkipWhiteSpace(scanPoint + count);
+	if (*scanPoint == ':') {
+		Log(("Grabbing seconds"));
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+		count = CountDigits(scanPoint);
+		if (count != 2)
+		{
+			valid = false;
+			Log(("invalid min sec count of non-2"));
+		}
+		timeArray[kSecond] = ConvertDigits(scanPoint, count);
+		scanPoint = SkipWhiteSpace(scanPoint + count);
+	} else
+		timeArray[kSecond] = 0;
+	timeArray[kMillisecond] = 0;
+
+	c = *scanPoint;
+	Log(("Now at: %c %c %c", *scanPoint, *(scanPoint + 1L), *(scanPoint + 2L)));
+	if (c == '+' || c == '-') {
+		Log(("+/- sign."));
+		sign = c;
+		scanPoint = SkipWhiteSpace(scanPoint + 1);
+		count = CountDigits(scanPoint);
+		if (count != 4)
+		{
+			valid = false;
+			Log(("invalid non-4 in +/-"));
+		}
+		timeOffset = ConvertDigits(scanPoint, count);
+	} else {
+		sign = '-';
+		Log(("non +/i sign: %c", c));
+		timeOffset = 0;
+		count = CountAlpha(scanPoint);
+		if (count == 2) {
+			Log(("Non +/- sign: 2 count"));
+			if (scanPoint[0] != 'U' || scanPoint[1] != 'T')
+			{
+				valid = 0;
+				Log(("invalid: non+/-, 2 count, not UT"));
+			}
+		} else if (count == 3) {
+			Log(("Non +/- sign, 3 count"));
+			switch (scanPoint[0]) {
+			case 'E':
+				timeOffset = 500;
+				break;			/* NB 0500 is octal */
+			case 'C':
+				timeOffset = 600;
+				break;
+			case 'M':
+				timeOffset = 700;
+				break;
+			case 'P':
+				timeOffset = 800;
+				Log(("PDT!"));
+				break;
+			case 'G':
+				break;
+			default:
+				Log(("invalid: non+/-, 3 count, not in cases."));
+				valid = false;
+			}
+			if (timeOffset != 0) {
+				if (scanPoint[1] == 'D')
+					timeOffset -= 100;
+				else if (scanPoint[1] != 'S')
+				{
+					Log(("3 count, middle not D or S"));
+					valid = false;
+				}
+			}
+			if (scanPoint[2] != 'T')
+			{
+				valid = false;
+				Log(("3 count, end not T"));
+			}
+		} else if (count != 1)	/* don't convert Military (RFC 1123) */
+		{
+			Log(("non +/-, non 3 count, and not 1 count - count is %ld", count));
+			valid = false;
+		}
+	}
+
+	if (valid) {
+		Log(("Overall, valid date."));
+		*date = PackDate(dateArray);
+		*time = PackTime(timeArray);
+		AdjustDateAndTime(date, time, sign, timeOffset);	/* force to UT */
+	} else						/* use current as best available approximation */
+		LocalDateAndTime(date, time);
+}
+
+
+Private long int scanTok(char *theString, char **Tfrom, char **Tnext)
+/** returns number of chars inside token;  kills last delimeter and returns first after **/
+{
+   char theTok;
+   long int offsetT, theLen;
+   
+   Log(("Scanning %s..", theString));
+   theLen = CStringLength(theString);
+   Log(("length %ld", theLen));
+   theTok = *theString;
+   offsetT = 1L+ (long int) ScanForChar(theTok, theString+1L, theLen-1L);
+   Log(("Offset to [%c] is %ld", theTok, offsetT));
+   *Tnext = (char *) (theString + offsetT);
+   **Tnext = '\0';
+   *Tnext = (*Tnext) + 1L;
+   *Tfrom = (*Tfrom) + 1L;
+   return offsetT - 1L;
+}
+
+Method void
+MailStore_ExtractMIMEcomponents(ObjectID self, ObjectID theStream)
+{
+    /** This method must use the Drt_Entries field in self to ask for
+	    and decode the MIME components of the message. **/
+	
+	char      *theDRTentry, *entryTok, *pathTok, *protoTok, *reqTok, *sizeTok, *dummy;
+	long int   entryTS, pathTS, protoTS, reqTS, sizeTS;
+	char       nextLine[256], dummyC;
+	ObjectID   nextImage;
+	ObjectID   theHotFV, msList, MIMEcompList, theMIMEparts;
+	long int   numMIMEentr, i;
+	Boolean    theSS;
+    
+	MIMEcompList = Drt_entries(self);
+	if (!HasObject(MIMEcompList))
+	    return;
+	
+	theMIMEparts = Mime_parts(self);
+	numMIMEentr = Length(MIMEcompList);
+	if (numMIMEentr == 0L)
+	   return;
+	   
+  for(i=1L; i<=numMIMEentr; i++)
+  {
+	/* Send GETDOC request */
+	ElementAt(MIMEcompList, i, &theDRTentry);
+	entryTS = scanTok(theDRTentry, &entryTok, &pathTok);
+	pathTS  = scanTok(pathTok, &pathTok, &protoTok);
+	protoTS = scanTok(protoTok, &protoTok, &reqTok);
+	reqTS   = scanTok(reqTok, &reqTok, &sizeTok);
+	sizeTS  = scanTok(sizeTok, &sizeTok, &dummy);
+	Write(theStream, "GET #", 5);   Write(theStream, pathTok, pathTS);
+	Write(theStream, "##", 2);      Write(theStream, protoTok, protoTS);
+	Write(theStream, "#\r", 2);
+    Write(theStream, "MAX 9999\r", 9);
+    Write(theStream, "TYPES #PGM##GIF##PBM#\r", 22);
+	Write(theStream, "ID ", 3);     Write(theStream, reqTok, reqTS);     Write(theStream, "\r", 1);
+	Write(theStream, "END\r", 4);
+ 	Log(("sent GETDOC"));
+		
+	/* Read in the (dummy) TOC */
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+	Log(("Read in dummy TOC (HERE): %s", nextLine));
+	while(1)
+	{
+	   ReadNELine(theStream, (Pointer) nextLine, 127, 10, &theSS);
+	   if (CompareBytes(nextLine, "END", 3, NULL) == 0)
+          break;
+	   Log(("Ignoring guts of dummy TOC line %s", nextLine));
+	}
+	Log(("Read in dummy TOC (END): %s", nextLine));
+		
+	/* Read in the actual image chunk */
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+	Log(("Read in MIME chunk (HERE): %s", nextLine));
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+	Log(("Read in MIME chunk (NDOCS 0): %s", nextLine));
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+	Log(("Read in MIME chunk (DSIZE ?): %s", nextLine));
+		
+	/* find out length of image chunk - don't use for now, but could be interesting later. */
+	dummy = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+    if (dummy >= nextLine)
+       *dummy = '\0';
+	sizeTok = nextLine + 6;
+	CtoPString(sizeTok);
+	if (!StringToInt(sizeTok, &sizeTS))
+	{
+	   PtoCString(sizeTok);
+	   Log(("Couldn't convert %s to int!\n", sizeTok));
+    }
+	Log(("Length of message is %ld", sizeTS));
+		
+	/* Great!  Now capture the image itself */
+	nextImage = GIFtoIMAGE(theStream, sizeTS-1L);
+	dummyC = ReadByte(theStream, &theSS);
+	Log(("Stripped off newline at end of gif: #[%d]", dummyC));
+		
+	/* Parse off the last "END" */
+		
+	AddLast(theMIMEparts, nextImage);
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10, &theSS);
+	Log(("Read in MIME chunk (END): %s", nextLine));
+		
+	/* Got it - now free up the buffer we allocated before */
+	DestroyLockedBuffer((Pointer) theDRTentry);
+  }
+  
+  Log(("Toasting..."));
+  /* Got 'em all - now toast the MIMEcompList */
+  for (i=1L; i <= numMIMEentr; i++)
+  {
+	   RemoveAt(MIMEcompList, 1L);
+  }
+  Log(("Done toasting."));
+}
+
+#undef CURRENTCLASS  /* this goes at the end of the file */
+@
+
+
+1.1
+log
+@The ProxyMail application - now all mail activites are integrated
+with the MagicCap mail paradigm.
+@
+text
+@d31 1
+a31 1
+MailStore_decodeTOCEntry(ObjectID self, ObjectID decodeStream)  /** Assume bounded by LF **/
+d36 1
+d38 7
+a44 1
+   ReadNELine(decodeStream, (Pointer) nextLine, 127, 10);                   /* get the line */
+d103 1
+d184 1
+d187 1
+a187 1
+	ReadNELine(decodeStream, (Pointer) nextLine, 255, 10);
+d200 1
+d211 3
+a213 1
+	   ReadNELine(decodeStream, (Pointer) nextLine, 255, 10);
+d240 1
+d250 4
+a253 1
+	   totalBytes += ReadALine(decodeStream, nextLine, 255, 10);
+d308 3
+a310 1
+		  totalBytes += ReadALine(decodeStream, nextLine, 255, 10);
+d328 3
+a330 1
+	   nextCH = ReadByte(decodeStream);
+d343 3
+a345 1
+	   nextCH = ReadByte(decodeStream);
+d807 1
+d837 1
+a837 1
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+d841 1
+a841 1
+	   ReadNELine(theStream, (Pointer) nextLine, 127, 10);
+d849 1
+a849 1
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+d851 1
+a851 1
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+d853 1
+a853 1
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+d871 1
+a871 1
+	dummyC = ReadByte(theStream);
+d877 1
+a877 1
+	ReadNELine(theStream, (Pointer) nextLine, 255, 10);
+@

@@ -1,0 +1,1932 @@
+head	1.12;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@% @;
+
+
+1.12
+date	99.08.03.00.45.13;	author daw;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	98.11.16.11.14.37;	author daw;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	98.11.16.07.47.33;	author daw;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	98.11.16.07.29.16;	author daw;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	98.11.16.05.23.14;	author daw;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	98.11.16.00.48.51;	author daw;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	98.11.16.00.33.04;	author daw;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	98.11.15.22.38.41;	author daw;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	98.11.14.12.38.26;	author daw;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	98.11.14.12.04.42;	author daw;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	98.11.14.10.34.45;	author daw;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	98.11.08.11.11.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.12
+log
+@*** empty log message ***
+@
+text
+@\chapter{OS support for Janus}
+\label{lessons}
+
+Janus cannot exist in a vacuum.
+The Janus architecture relies heavily on the ability to
+mediate all interactions between the sandboxed
+application and its environment,
+and these mediation facilities can only come from the operating system.
+Therefore, we require some level of support from the OS if Janus is to
+do its job.
+
+It is then natural to wonder exactly what level of OS support is
+required.
+Operating system designers may wish to decide whether to implement
+special support for Janus---what are the costs?  what tack do current
+commodity OS's take?  is it worth the effort?---and if so, which
+techniques are appropriate?
+In this chapter, we explore various levels of OS support, evaluate
+their value, examine the tradeoffs, and conclude with a
+recommended approach for operating system architects.
+
+We argue that our research provides strong evidence that
+the operating system designer can support Janus with little
+additional cost, if some care is taken
+during the design of the system's process-tracing facility.
+This means that OS designers can offer significant security benefits
+to the user at little extra cost.
+We describe here our experience with implementing Janus on top of several
+existing process-tracing facilities, and develop a list of specific
+features that Janus needs from the OS to work well.
+Roughly speaking, the core requirement is the ability
+to implement system-call interposition; with that proviso,
+we can implement the Janus architecture, and the corresponding
+security benefits will accrue.
+Fortunately, most operating systems already implement some
+form of process tracing, and process tracing takes
+you most of the way towards system-call interposition, so
+not much extra functionality is needed from the OS kernel.
+There are a few subtle traps for the unwary, but our work
+enables us to offer a set of guidelines that should help OS
+builders negotiate the pitfalls with ease.
+Therefore, we claim that folks who build new operating systems
+should endeavor to support the Janus security tool.
+
+This chapter is organized as follows.
+First, we argue that, to be viable, Janus needs some sort
+of support for system-call interposition from the operating system.
+Next, we describe three existing process-tracing facilities,
+analyze what functionality Janus needs to extract from them,
+and use that analysis to provide a detailed evaluation of
+each of the three tracing facilities.
+After that, we describe a tracing primitive that we
+designed and implemented in Linux, and describe what went wrong
+with that effort.
+Finally, we present a list of guidelines on the design of
+tracing primitives that summarize many of the lessons we learned
+from our work.
+
+Implementors should also see \cite{slic} for more insights and
+implementation experience regarding the design of interposition mechanisms.
+
+\section{Theory and foundations}
+
+Janus's goal is quite aggressive: it must transparently protect a
+large legacy system from an untrusted pre-existing application.
+Recall that Janus is unprivileged,
+which means that it cannot---by itself---control the untrusted
+application's interactions with its environment.
+In short, Janus requires outside help to accomplish this task.
+However, most other system entities will not provide any help.
+Neither the untrusted application nor its trusted environment
+are likely to provide special support for Janus.
+In practice, they almost always consist of legacy code, and
+usually will not even be aware of Janus:
+Janus must operate transparently without assistance from them.
+The only remaining entity Janus can look to for help is the operating system.
+
+This argument demonstrates that Janus needs OS support to be viable.
+Specifically, we see two crucial requirements:
+\begin{enumerate}
+\item {\bf Complete mediation:}\,\,
+	The operating system must have the power to mediate all
+	potentially unsafe interactions between the untrusted
+	application and its environment,
+	and
+\item {\bf Extensibility:}\,\,
+	The operating system must allow us to further limit
+	the set of allowed operations.
+	(The OS need not allow us to replace its pre-existing
+	access controls, only to supplement them with additional checks.)
+\end{enumerate}
+These two properties are sufficient to build arbitrarily powerful
+user-level confinement mechanisms.
+
+The requirement for {\bf complete mediation} essentially says
+that the OS must support some form of protection.
+In order to mediate interactions between an application and its
+environment, the OS must first be able to distinguish between applications
+and their environments: we require a well-defined boundary separating
+an application from all other system components.
+Furthermore, we insist that the boundary be drawn so that the OS
+controls (or can control) all interactions across that boundary.
+In today's operating systems, an application is most naturally viewed
+as a process along with its associated address space.
+In this model, applications cannot interfere with each other
+(or with the OS kernel) except by invoking an operating system primitive.
+% access to OS primitives is controlled by a component of the OS
+% known as the reference monitor\footnote{A reference monitor
+% is defined as YYY.}.
+
+Most modern operating systems that are even minimally security-conscious
+implement process-level protection, and so {\bf complete mediation}
+should essentially come for free.
+One important exception is Microsoft's Windows 95 (but not Windows NT),
+which provides no protection:
+all applications have full access to all of the machine's
+memory as well as unmediated access to most of the hardware.
+In other words, Windows 95 fails the first requirement on the OS.
+In principle one might be to work around this by limiting the
+untrusted application's access to memory and hardware with
+software fault isolation (SFI) \cite{sfi},
+but it is not clear how effective SFI+Janus would be in practice.
+
+The second requirement, {\bf extensibility},
+means that a user-level process, such as Janus,
+must be able to extend the operating system's default reference monitor
+in a way that makes it more restrictive.
+(A reference monitor is an abstraction of the mechanisms the OS
+uses to validate applications' requests and enforce protection
+\cite{orange-book}.)
+This is most naturally accomplished through interposition,
+where Janus gets to monitor and filter the application's requests
+to the operating system.
+
+The most straightforward way to implement interposition is by a callback:
+each time the untrusted application invokes a OS primitive, Janus
+is notified and offered the chance to veto (or cancel) unsafe requests.
+In most of today's operating systems, the sole interface to OS primitives
+is through ``system calls''\footnote{Still, one must actually
+verify that there are no other unrestricted ways---such as a
+divide-by-zero hardware trap---to invoke OS functionality.};
+therefore, it suffices to lend Janus the ability to monitor and filter system
+calls issued by untrusted applications.
+
+Of course, for security reasons, access by unprivileged applications
+to system-call monitoring/filtering functionality should be carefully
+controlled and supervised.
+For instance, Janus should not be allowed to
+extend the OS's reference monitor in a way that makes it more permissive.
+
+In the remainder of this section, we explore the available OS support
+for system-call interposition in detail.
+
+\section{Real implementations}
+
+Most operating systems already offer some kind of support for
+monitoring the system calls invoked by a target process,
+in the form of a process-tracing facility.
+Though these facilities were not intended for use as a
+system-call interposition mechanism, often they can be adapted to this end,
+if they are sufficiently general.
+But not all process-tracing facilities are made equal---they
+span a whole range of sophistication and flexibility, and not
+all are adequate for system-call interposition.
+We list here three notable approaches, ordered from the least powerful
+to the most powerful:
+\begin{itemize}
+\item {\tt ptrace} is a very common (though minimal) primitive
+	available in most Unix-based operating systems;
+	it is widely used in debugging tools such as
+	{\tt gdb} and {\tt strace}.
+\item Solaris 2.4's {\tt /proc} filesystem offers very flexible
+	support for fine-grained user-level system-call tracing,
+	with some additional capabilities over {\tt ptrace}.
+	Solaris maintains backwards-compatibility with the older {\tt ptrace}
+	interface by emulating {\tt ptrace} calls
+	using the {\tt /proc} filesystem's newer, more powerful functionality.
+\item {\sc slic} \cite{slic} is a technique for building extensible operating
+	systems via interposition on the system-call interface: instead of
+	receiving a callback from the kernel, with {\sc slic} one may
+	download trusted code into the kernel to be executed before
+	each system call is processed.
+	{\sc slic} offers a powerful OS-independent toolkit to ease
+	the implementation of system-call interposition and free
+	implementors from the painful aspects of writing kernel code.
+	As such, {\sc slic} can be easily used to implement the
+	{\tt ptrace} or {\tt /proc} primitives, or can be
+	used to deploy an efficient, customized solution targeted
+	to Janus's needs.
+\end{itemize}
+We listed the approaches in order of their expressive power,
+but this ordering also reflects the relative costs\footnote{We picture
+cost being measured in some natural measure of interest to the OS designer,
+such as the amount of code one must write to implement the primitive,
+or the amount of interdependencies with the rest of the kernel the
+primitive introduces.}
+of the three primitives, from least expensive to most costly.
+It behooves us to pick the least powerful (and thus least costly)
+primitive that will suffice.
+We concentrate our attention on these three levels of OS support,
+with an eye towards how well they meet the needs of Janus.
+
+\subsection{Which features Janus needs}
+
+First, we examine what OS support Janus needs to be effective.
+We list the minimum required capabilities here:
+\begin{itemize}
+\item {\bf Complete monitoring powers:}
+	We group several related requirements into a single category.
+	First, Janus must be notified whenever the untrusted application
+	attempts to execute a system call.
+	Furthermore, Janus needs to be able to view the
+	arguments of the system call (and to examine the application's
+	data space, if any arguments live there).
+	Last, Janus must be able to view the
+	return value of the system call.
+	These are all essential if Janus is to monitor
+	the untrusted application effectively.
+
+	All three process-tracing facilities support this fully.
+	Both the {\tt ptrace} and {\tt /proc} interfaces implement
+	a callback from the kernel to the tracing process.
+	{\tt ptrace} uses the Unix signals facility: at each tracing
+	event, the tracee blocks with a {\tt SIGTRAP} signal, and the
+	tracer may detect this by calling {\tt wait}.
+	{\tt /proc} uses {\tt ioctl}s on a special file under
+	the {\tt /proc} filesystem: the tracer issues an {\tt ioctl}
+	that blocks until a tracing event is available at the tracee.
+	{\sc slic} offers many different ways of supporting this requirement.
+\item {\bf Fine-grained control:}
+	Janus should be able to specify which system calls to receive
+	a callback on and which system calls should be allowed to execute
+	without delay.
+	This greatly improves performance, because we can apply 
+	the following major optimization.
+	We trace only {\tt open} system calls,
+	and allow {\tt read} and {\tt write} to execute without
+	tracing; a similar technique
+	can be applied to a number of other system calls.
+	This optimization lets {\tt read} and {\tt write} calls,
+	a common case, proceed at full speed, while still safely
+	controlling all file accesses.
+	%Similar optimizations are available for a number of other
+	%common system calls.
+
+	Only the {\tt /proc} filesystem and {\sc slic} support this
+	requirement.
+	In fact, {\sc slic} goes even further, and lets us optimize
+	the performance of Janus by downloading some security checks
+	directly into the kernel.
+\item {\bf Ability to prevent selected system-call invocations from executing:}
+	Merely monitoring the actions of the untrusted application
+	is not enough---Janus also needs to be able to take forceful
+	action against mis-behaving applications.
+	In particular,
+	when the untrusted application calls a system call with arguments
+	that are potentially
+	unsafe---e.g. {\tt open("/etc/passwd",...)}---Janus
+	must be able to abort the system-call request and prevent
+	its execution.
+
+	Only the {\tt /proc} filesystem and {\sc slic} support this
+	requirement; {\tt ptrace} is insufficient.
+\item {\bf Follow all children of the traced application if it forks:}
+	Clearly Janus's efforts would be for naught if a malicious
+	application could merely {\tt fork} and let its child
+	execute unmonitored.
+	Therefore, the operating system must preserve tracing across forks.
+
+	The {\tt proc} and {\sc slic} primitives do support this.
+	In contrast, {\tt ptrace} does not provide adequate support
+	for this requirement, due to subtle technical issues\footnote{Note
+	that, with {\tt ptrace}, one can observe when the application
+	has forked. By checking the return value from the {\tt fork} system
+	call, one can deduce the process id of the child.
+	At this point, one could enable tracing on the child.
+	However, this approach fails due to a serious race condition.
+	By the time we enable tracing on the child, it may already
+	be too late---the child may have already
+	executed an unsafe system call.
+
+	The {\tt strace(1)} utility attempts to remedy this
+	with a messy trick.  When {\tt strace} observes that the tracee is
+	calling {\tt fork}, {\tt strace} sets a {\em breakpoint} at the
+	next instruction after the {\tt fork} invocation, so that both
+	the parent and the child halt temporarily after the {\tt fork}
+	returns. Then {\tt strace} enables tracing on the child, removes
+	the breakpoint, and resumes execution of both processes.
+	However, this is a painful and unreliable hack.
+	It introduces complexity, race conditions, and failure modes
+	that are unacceptable for a security-critical program such as
+	Janus, and so we reject this approach.}.
+\end{itemize}
+These features are the bare minimum required to support Janus.
+
+Next, we list a number of capabilities that would be convenient, though
+not strictly necessary:
+\begin{itemize}
+\item {\bf Multiplexing:} 
+	The ability to monitor many traced processes at once is useful.
+	In our first naive implementation, Janus forked each time the
+	untrusted application did, to maintain the invariant that each
+	Janus process only monitors one traced process.
+	However, this causes process table bloat.
+	Worse, it incurs a large penalty in frequent context switches,
+	and frustrates OS attempts to take advantage of locality.
+	These costs can be mitigated by slightly increasing the complexity
+	of Janus so one Janus process can handle many traced processes
+	at once.
+	Of course, the operating system must support multiplexing for
+	traced processes if we are to achieve this improvement in
+	performance.
+
+	On the other hand, multiplexing does have some tradeoffs.
+	In particular, adding multiplexing to Janus adds complexity,
+	which in turn decreases its assurance level somewhat,
+	so multiplexing might not be appropriate in all environments.
+
+	{\tt ptrace}, {\tt /proc}, and {\sc slic} all support multiplexing.
+\item {\bf Kill on tracer-death:}
+	With many tracing subsystems, if the tracer dies unexpectedly
+	(perhaps because of a bug in its code), the traced process is
+	no longer traced and thereafter executes without interruption.
+	This is clearly an undesirable situation; we would prefer to
+	be able to set a flag so that the traced process (the untrusted
+	application) is killed if the tracer dies unexpectedly.
+	This capability increases the robustness of Janus in case
+	the implementation has minor bugs.
+	
+	Bugs in the OS are also a concern.
+	One bug has recently surfaced
+	in many Unix kernels whereby one process can bypass the usual
+	protection checks and kill any other process.  In this
+	case, a traced program might be able to kill the tracer, which
+	would be a serious problem if the traced program subsequently
+	continued to run untraced.
+	Patches to fix the bug are available, but there will always be
+	legacy systems with old versions of the kernel.
+	
+	More problematically, this brings up the possibility that other
+	such bugs may be found in the future (perhaps even by the hacker
+	community before they are found in the security community).
+	Of course Janus cannot guarantee security in case the OS kernel
+	is buggy, but it seems valuable to add protection against this
+	particular class of bugs.
+	In the interests of robustness, ``kill on tracer-death'' seems
+	important.
+
+	{\tt /proc} supports this feature; {\tt ptrace} unfortunately does not.
+	The {\sc slic} prototype in \cite{slic} does not currently implement
+	this feature \cite{ghorm-chat}.
+\item {\bf Setuid executables forbidden:}
+	We want to prevent the untrusted application from raising its
+	privilege level.
+	In Unix, one gains privilege by executing a setuid (or setgid)
+	program; therefore, it is important that Janus be able to deny the
+	execution of setuid programs (and setgid programs) by traced processes.
+	
+	If the OS does not support this feature, we can admittedly work
+	around the omission at some cost in complexity and assurance,
+	as follows.
+	First, whenever an untrusted application attempts to {\tt exec}
+	a new program, Janus must check that the referenced program is
+	not a setuid (or setgid) executable.
+	This leaves open a race condition: a local process could
+	change permissions on the file (or, more likely, make a symbolic
+	link pointing to a pre-existing setuid executable, and move the
+	symlink around) between the time
+	when Janus checks the program's permissions and when the OS
+	kernel executes the {\tt exec} system call.
+	At first glance, this race condition does not seem to affect
+	security.
+	In the Janus threat model, we assume that the traced
+	untrusted application does not have any local untraced
+	co-conspirators.
+	However, there is a subtlety: the untrusted application might
+	fork and try to exploit the race condition by using the child
+	to change a symlink while the parent {\tt exec}'s the symlink.
+	Therefore, if the OS doesn't prevent execution of setuid
+	executables directly, Janus would also have to prevent creation
+	of links and modifications to file permissions that would enable
+	this race condition.
+
+	We see that Janus can work around a lack of OS support for
+	forbidding access to setuid executables, but
+	the workaround is
+	%painful, deformed, and
+	complex, which makes
+	it potentially susceptible to security holes.
+	In short, the setuid check rightfully belongs in the kernel
+	where it can be made atomic.
+	Therefore, it would be extremely useful for
+	the OS tracing subsystem to support this capability in the kernel.
+
+	All three tracing subsystems provide this support.
+\item {\bf Flexible error codes:}
+	In practice, Janus will often deny many system calls from
+	well-intentioned non-malicious applications, merely because
+	the application unwittingly tried to overstep its bounds.
+	In such cases, we want the application to recover gracefully
+	and continue execution.
+	Most applications do, if we simply abort execution of the system call.
+	However, some applications have problems if the aborted system
+	call returns an error code other than {\tt EPERM}.
+	For instance, on Solaris aborted system calls return {\tt EINTR}.
+	(The {\tt EINTR} return code was originally intended for system
+	calls that are interrupted by a signal and should be restarted
+	by the application.)
+	This occasionally causes problems: applications that
+	dutifully restart such system calls will get into an infinite
+	loop, each time retrying the same system call and each time
+	having it denied by Janus.
+	{\tt EPERM} is a more natural error code that reflects the
+	true cause of the failure (namely, a permission check failed)
+	and thus causes fewer problems.
+	Therefore, to best handle the widest possible array of
+	applications, it would be convenient if the operating system
+	allowed denied system calls to return {\tt EPERM}.
+
+	{\tt ptrace} does not provide the ability to abort system
+	calls, and so control over the error code is moot.
+	{\sc slic} easily handles {\tt EPERM} return codes for aborted
+	system calls.
+	As for the {\tt /proc} tracing subsystem, our original implementation
+	using {\tt /proc} did not have control over the error code returned;
+	however, it is now possible to force a {\tt EPERM} return
+	code under the {\tt /proc} filesystem by using a special trick.
+\end{itemize}
+These optional features enhance the performance, assurance,
+and transparency of Janus.
+
+Lest we lose all sense of perspective in a maze of wish lists
+and required features, we should take care not to forget the
+original reason for enumerating the desired OS support.
+The intent is to analyze the suitability of the three primary
+tracing primitives ({\tt ptrace}, {\tt /proc}, and {\sc slic})
+with a two-step process:
+first, decide what functionality we need from a good tracing primitive,
+and then evaluate how well the available primitives meet
+those needs.
+Having now completed the first step in great detail, we move
+on to evaluate the existing primitives against this checklist.
+
+\subsection{Evaluating {\rm \sc slic}}
+
+As the most powerful mechanism, {\sc slic} is the easiest to evaluate.
+The {\sc slic} primitive can support all of the capabilities we
+need and all of the convenient features we want except
+``kill on tracer-death.''
+Even better, {\sc slic}'s powerful features make it easy to implement
+the support Janus needs with a minimum of fuss and without much
+additional complexity; simplicity is a compelling advantage,
+because it helps wards off bugs in Janus, thus maximizing the
+chances that Janus does correctly confine untrusted code.
+
+Moreover, {\sc slic} can help with security and performance
+by moving permission checks into the kernel when appropriate.
+File permissions, for example, can be checked in the kernel
+to avoid race conditions and to avoid duplicating the existing
+file permissions kernel code.
+
+Duplicating the kernel's standard file permission checks in
+user-space is dangerous: preventing race conditions can be tricky,
+and it is difficult to ensure consistency
+between the kernel and user-space implementations.
+In some cases, duplication is impossible: for instance,
+user-space code cannot get direct access to inode data and so
+some checks are impossible.
+Therefore, we feel that duplication of access control checks
+in both kernel and user-level code is best avoided wherever possible,
+and {\sc slic} makes it possible to avoid this type of duplication.
+
+Security is not the only consideration;
+{\sc slic} can also help with performance in ways that the
+other primitives cannot.
+With {\sc slic}, one can optimize away hot spots by downloading
+code into the kernel to check commonly used system calls.
+Remember that the principle cost of Janus lies in the extra
+context switch incurred on each potentially-unsafe system call.
+If one finds a bottleneck in execution performance---suppose
+one application uses the {\tt sendto} system call
+very frequently, say---then one can eliminate the extra context switch
+for {\tt sendto}, and thus the performance bottleneck,
+by moving the {\tt sendto} security checks into the kernel.
+This ability to tune performance to eliminate hot spots
+is a valuable advantage.
+
+In summary, the power of {\sc slic} provides very strong
+support for Janus, significantly enhancing
+performance and assurance levels.
+The only drawback is that {\sc slic} does add considerable
+complexity to the OS.
+
+\subsection{Evaluating {\tt /proc}}
+
+The Solaris {\tt /proc} filesystem is nearly as powerful as {\sc slic}.
+It supports all the capabilities Janus needs;
+it also supports all the convenient features listed earlier.
+The first implementation of Janus was built using the
+{\tt /proc} tracing mechanism, and the combination has performed beautifully.
+(We will see later some areas where {\tt ptrace} fails due to
+subtle pitfalls while {\tt /proc} excels.)
+In short, the {\tt /proc} tracing primitive is powerful, elegant, and
+well-engineered---it is an excellent choice for use with Janus,
+where available.
+
+\subsection{Evaluating {\tt ptrace}}
+
+In contrast, the {\tt ptrace} primitive has a number of serious
+failings that make it simply unsuitable for our purposes.
+First of all, fine-grained control over which system calls get traced
+is not available---with {\tt ptrace}, it's all or nothing.
+This is very bad for performance.
+Secondly, it is impossible to follow {\tt fork}s
+with {\tt ptrace} securely, so Janus would not be able to confine
+applications that legitimately need to spawn children.
+
+Far worse, {\tt ptrace} doesn't offer the ability to abort
+system-call requests that fail Janus's security checks.
+Without OS help,
+the only alternative is to kill the traced process brutally before
+a dangerous system call is executed.
+This response is far too precipitous.
+In practice, most large applications will occasionally issue
+system-call requests that Janus denies; but those requests are
+typically not critical, and if they are denied
+the application usually recovers gracefully.
+In contrast, if we were to kill the application in response
+to such syscalls, graceful recovery would be impossible, and Janus
+would render most non-trivial applications unusable.
+To drive the nail in the coffin, it is possible that there might
+be a race condition: the system call might be executed before
+the traced process is killed.
+
+Therefore, we find that {\tt ptrace} is totally inadequate:
+it is too slow and far too limited to support Janus's needs.
+
+\subsection{{\tt ptrace++}}
+
+The inadequacy of {\tt ptrace} is very unfortunate,
+for {\tt ptrace} is a sort of ``least-common-denominator''
+standard for process tracing.
+Most operating systems implement the {\tt ptrace} primitive.
+In particular, it is the only tracing primitive supported on Linux, our
+preferred platform.
+However, Linux has a powerful advantage: it comes with source.
+This makes Linux especially well-suited to experimentation with potential
+OS extensions.
+Therefore, we decided to test our analysis of what OS support Janus
+needs by extending {\tt ptrace}.
+We set out to support Janus more effectively by implementing
+a more sophisticated tracing primitive, which we call {\tt ptrace++}.
+
+The new {\tt ptrace++} interface implements a few simple new features
+over and above the standard {\tt ptrace} feature-set.
+First, {\tt ptrace++} allows system-call requests to be aborted before
+they are executed.  The error code is {\tt EPERM} by default,
+though any other code can be easily specified.
+Also, there are two new features that may be enabled on a per-process
+basis: tracing features are inherited across forks when follow-{\tt fork}
+is enabled, and fine-grained control over which system calls are traced
+is available.
+Thus, {\tt ptrace++} is backwards-compatible with {\tt ptrace},
+but the new extended functionality may be invoked by any process (such
+as Janus) that understands the new extensions to the interface.
+
+Implementing {\tt ptrace++} on Linux was not very difficult.
+The primary challenge lay in handling the new requirement for
+per-process state.
+The vanilla {\tt ptrace} interface was stateless, but {\tt ptrace++}
+needs to keep state for which features are enabled and which system
+calls to trace.
+One natural approach for managing state
+would be to add a new entry to the Linux process
+structure; however, the organization of the Linux source makes
+this change very unwieldy\footnote{The size of the process structure
+is hard-coded in a number of places---for example, in some assembly files---and
+adding a new entry would require changes in a number of other places.
+It wasn't clear just how large an avalanche this would create, and we
+weren't anxious to find out, so we avoided changing the process structure
+and instead built a system of shadow structures.}.
+Instead, we followed a more modular and somewhat less preferable
+approach: a separate data structure containing per-process tracing state.
+Our implementation uses
+a linked list in static kernel memory, indexed by process id,
+with an entry for each traced process with extended
+{\tt ptrace++} functionality enabled.
+With this strategy, one has to do some extra work to avoid memory
+leaks.
+In particular, one must ensure that
+a process's tracing state is freed after the process exits.
+
+In the end, our implementation of {\tt ptrace++} added about
+185 lines of C to a 415-line file containing the
+core of the {\tt ptrace} kernel code.
+Most of the new code was dedicated to managing the per-process state.
+The attempt to confine the kernel modifications was largely successful:
+apart from the changes to the core {\tt ptrace} code, only
+two minor additions---one affecting {\tt fork} and one
+to {\tt exit}---were required elsewhere in the Linux kernel.
+
+We then extended Janus to use the {\tt ptrace++} interface.
+The development process was lengthy and painful.
+Most of the effort
+was dedicated to identifying, isolating, and working around obscure
+idiosyncrasies in the {\tt ptrace++} primitive.
+Most of these speed-bumps can be attributed to {\tt ptrace}'s design:
+it overloads the Unix signals mechanism to provide upcalls
+on each system-call event, and
+the tracer receives the ``upcall'' by {\tt wait}ing
+for a {\tt SIGTRAP} signal from the tracee.
+In general, it is well-known in object-oriented circles
+that operator overloading tends to be rife with subtle pitfalls.
+In {\tt ptrace}'s case, the overloading of the signals mechanism
+creates a number of thorny problems for users of {\tt ptrace}.
+
+We list a few of the less-obvious implementation pitfalls here:
+\begin{itemize}
+\item {\bf {\tt ptrace} breaks {\tt wait}:}
+	One serious problem with overloading the signals mechanism
+	is that some signals-related functionality breaks in
+	certain circumstances, ruining the transparency of tracing.
+	In particular, if both child and parent are traced, and the
+	parent {\tt wait}s for a signal from the child, things will break.
+	Due to interference from the tracing,
+	the parent's {\tt wait} may return early,
+	perhaps with notice of a {\em tracing event}
+	from the child (which is only supposed to be received by the
+	tracing application, not the traced parent).
+	In practice, this interference usually confuses the parent
+	enough that it fails to recover and dies.
+	Because of fundamental flaws in the {\tt ptrace} architecture,
+	it is not possible to fix this in the kernel without
+	drastic measures.
+	
+	We attempt to work around this failure mode in the user-level
+	Janus code; unfortunately, heroic efforts are required.
+	Janus traps {\tt wait} calls by all traced parent processes
+	that have traced children.
+	When such a trap occurs, Janus manually suspends the parent
+	(i.e., refrains from resuming the process and leaves the process
+	in a stopped state).
+	Janus doesn't allow the parent to continue execution until
+	one of its children enters a state that might (legitimately) cause 
+	the parent's {\tt wait} to return;
+	then Janus manually restarts the parent and allows its
+	{\tt wait} request to execute and return.
+	This hack has worked well enough, so far.
+	However, we are not happy with it.
+	It adds complexity---about 40 (highly subtle) lines of C code
+	of a 380 line adaption layer.
+	It also leaves us with some nagging doubts about
+	whether the extra code opens up new security holes.
+\item {\bf Can't transfer control securely:}
+	One obscure limitation of {\tt ptrace} is that a traced
+	process may have at most one tracer at any time.
+	This makes it impossible to transfer control
+	of an untrusted application from one Janus process to
+	another atomically\footnote{The
+	obvious approach would have the prior owner
+	detach the untrusted application---causing it to resume
+	execution without any tracing in effect---and then signal
+	the new owner to attach immediately.
+	However, this has a race condition: it leaves open
+	a short window during which the untrusted application may issue
+	an unsafe system call.}.
+	This, in turn, requires that when a Janus instantiation
+	controls an untrusted application, it must also control
+	all its children\footnote{It is worth pointing out that,
+	even if it were possible to
+	transfer control of an untrusted application securely, the {\tt wait}
+	workaround described above would still provide strong pressure
+	for a single Janus process to control not only the untrusted
+	application but also all children it spawns.
+	The reason is obscure: if a Janus process controls a traced parent
+	but not one of its children, the child's controller will need
+	to communicate frequently with the parent's controller so that
+	the parent's controller knows when to let {\tt wait} system
+	calls complete.
+	It is better to avoid the need for inter-process communication and
+	synchronization between Janus processes (which is tricky to get right)
+	by maintaining a one-tracer-many-tracee relationship.
+	The {\tt fork} complication mentioned below would also provide
+	some pressure to maintain a one-tracer-many-tracee relationship,
+	because (again) IPC would otherwise be needed to handle
+ 	a relatively rare race condition.}
+	(since it originally has control of each child created by
+	a {\tt fork} and cannot give away this control securely).
+
+	In fact, the one-tracer-per-tracee limitation of {\tt ptrace}
+	can ultimately be blamed on {\tt ptrace}'s signals-based
+	upcall mechanism.
+	Because the tracer {\tt wait}s for a
+	{\tt SIGTRAP} signal from the tracee, and because the semantics
+	of {\tt wait} are that a process can only {\tt wait} on its
+	children, the tracer must be
+	the ``parent'' of the tracee; but a process can only have
+	one ``parent'', giving rise to the one-tracer limitation.
+	Thus we see that {\tt ptrace}'s architecture fundamentally prevents
+	secure transfer of control, and no extension to {\tt ptrace} can
+	remedy this shortcoming.
+
+	In contrast, our original Janus implementation---which never
+	had any difficulty transferring control of an untrusted application
+	securely, because it used {\tt /proc}---maintained
+	a one-to-one relationship between tracing and traced processes
+	by forking a new Janus process and transferring control of the
+	traced child to the new Janus process
+	each time the untrusted application forked a new child.
+	This invariant simplified the implementation of Janus somewhat.
+	%since complexity leads to bugs, simplicity is clearly a great virtue
+	%in a security-critical tool.
+\item {\bf Kill on tracer-death not supported:}
+	It would be desirable for the tracee to be automatically killed
+	by the kernel if the tracer dies unexpectedly.
+	However, we have not implemented this wish list item;
+	it would require adding too much new complexity to the kernel,
+	and we are concerned that a coding error in our kernel code
+	might open a security hole that allows an attacker to
+	assassinate innocent applications.
+\item {\bf Race condition in fork:}
+	Due to a design oversight on our part, {\tt ptrace++} does not
+	handle {\tt fork} system calls very effectively.
+	The issue is that the tracer does not receive a tracing event
+	when the {\tt fork} returns in the newly created child process;
+	instead, the tracer receives tracing events only on the child's
+	subsequent system calls.
+	This leaves open a race condition:
+	after observing a {\tt fork} syscall entry, the tracer
+	knows to expect a new child process, but will not learn the process
+	id of the child until the {\tt fork} syscall exits in
+	the parent; yet the child may issue system calls before the
+	{\tt fork} returns in the parent.
+	When relying on {\tt ptrace++}, Janus needs to learn the
+	child's process id and connect it to the parent, because
+	Janus keeps track of the full process tree structure\footnote{Janus
+	needs to maintain the full process tree structure to apply the
+	{\tt wait} workaround, for instance.
+	This is an example where two annoying shortcomings of {\tt ptrace}
+	interact to create even more annoyance.}.
+	This opens up a race condition: if two different traced processes
+	fork, and in both cases the {\tt fork} system call returns
+	in the child before returning in the parent, and a child
+	issues another system call before the {\tt fork} returns
+	in the parent, Janus will not be able to establish the
+	process tree structure.
+	We note that Solaris's {\tt /proc} tracing primitive does
+	not have these problems.
+
+	We work around the race condition with some heuristic approaches
+	that work most of the time.
+	When they don't work, the application
+	may fail to work properly, but security won't be breached.
+	
+	This is the only {\tt ptrace++} flaw that can be attributed
+	to our extensions, rather than being a fundamental consequence
+	of the {\tt ptrace} architecture.
+	We know how to fix this flaw, but the fix appears to require
+	some changes to the Linux system-call entry/exit sequence,
+	which is coded in assembly because it is such a commonly used
+	and performance-critical execution path.
+	We are loath to tamper with code this critical, especially
+	to fix such a minor flaw.
+	Still, integrity requires that we describe the unfixed weakness
+	in our implementation.
+\end{itemize}
+As much as we hated to do it, we were forced to
+add substantial complexity to the user-level Janus code to work
+around these pitfalls in {\tt ptrace++}.
+We will detail below how much this affects the assurance level of
+our implementation.
+
+\begin{figure}
+\begin{center}
+\ \psfig{file=organiz.eps,width=3in} \ 
+\end{center}
+\caption{\label{organiz} The high-level organization of Janus.}
+\end{figure}
+
+Our implementation of Janus relies on a thin adaptation layer 
+(which provides a simple interface to the tracing functionality Janus
+needs) to allow Janus to work with whatever tracing primitive may
+be available.
+This simplifies the task of porting Janus to a new operating system,
+as well as simplifying subsequent configuration control issues.
+We summarize the organization of Janus in Figure~\ref{organiz}.
+
+\begin{figure}
+\begin{center}
+\ \psfig{file=codesize.eps,width=6in} \ 
+\end{center}
+\caption{\label{codesize} The code size of key Janus components.
+The figure is divided vertically into portable code, adaption code,
+and kernel code; the latter two categories are divided horizontally
+according to whether they are built for Solaris or Linux.}
+\end{figure}
+
+By comparing the adaption code for {\tt /proc} and for {\tt ptrace++},
+we can meaningfully and fairly compare the suitability of the
+{\tt /proc} and {\tt ptrace++} mechanisms.
+Figure~\ref{codesize} gives a detailed look at the structure of the Janus
+implementation, listing the code size for each key component.
+We can see that the adaption layer for {\tt /proc} is significantly
+smaller---and, incidentally, simpler as well---than the corresponding
+code needed to support {\tt ptrace++}.
+Most of the {\tt /proc} code is legitimately dedicated to adaption
+(e.g. translation of interface formats), while the {\tt ptrace++}
+bloat is explained by the need to work around {\tt ptrace++}'s
+many idiosyncrasies and oddities with extra user-level adaption code.
+Indeed, our {\tt /proc} adaption layer {\em just worked} the first time
+without any debugging needed (apart from correcting a few typos
+that the compiler detected immediately), while our {\tt ptrace++} adaption
+code took a significant amount of effort to debug and fix.
+
+In short, while {\tt ptrace++} is minimally adequate,
+it has a number of severe drawbacks.
+We found that 
+the {\tt /proc} mechanism provides a cleaner, simpler, and
+more powerful interface to the tracing functionality
+Janus demands from the operating system,
+and we would encourage folks to avoid the {\tt ptrace++} approach
+when possible.
+
+Our implementation experience with {\tt ptrace++} taught us that
+it is trickier to design and implement a well-engineered tracing
+primitive than we had originally thought.
+Previous paragraphs enumerated a number of pitfalls in using {\tt ptrace++}
+that unexpectedly\footnote{If we had studied the {\tt strace} source
+code, perhaps we would have been less sanguine about our chances.}
+reared their head during the development of Janus's {\tt ptrace++}
+adaption layer.
+
+Most of the pitfalls in {\tt ptrace++}
+were fundamental in {\tt ptrace}'s original
+design---the primary culprit was the overloading of the Unix
+signals mechanisms---and could not have been avoided by any mechanism
+that attempted to extend {\tt ptrace}.
+%Therefore, we do not find fault with our {\tt ptrace++} design.
+Still, we were surprised by the idiosyncrasies and pitfalls associated
+with {\tt ptrace}-based tracing mechanisms.
+According to the ``principle of least surprise'', this is a strong
+indication of a ill-chosen primitive.
+% It is telling that I thought hard about the design of a suitable
+% tracing primitive, I thought I understood the issues, I expected
+% that it would be straightforward to extend {\tt ptrace} suitably,
+% and yet I still failed to do a good job; experience has taught me humility.
+
+There were two core failures in the {\tt ptrace++} architecture.
+First, {\tt ptrace} and {\tt ptrace++} violate the transparency
+of tracing: when tracing is initiated on a child process,
+the shape of the process tree is modified slightly,
+and the semantics of the Unix signals interface are
+overloaded to communicate tracing events.
+Much user-level adaption code in Janus is dedicated to restoring
+the lost transparency.
+Better event notification primitives could have helped prevent
+these failures.
+Second, {\tt ptrace} and {\tt ptrace++} violate extensibility in a
+subtle way: although it is possible for a single Janus process to extend
+the system reference monitor by tracing the targeted application,
+once the reference monitor has been extended in this way
+it cannot be extended any further,
+because of the one-tracer-per-tracee limitation.
+As a result, it is impossible to transfer control securely from one
+Janus process to another.
+
+Most of {\tt ptrace++}'s problems could have been avoided had it
+fully obeyed both the transparency and extensibility principles.
+Full extensibility would have allowed for secure control transfers.
+Full transparency would have prevented {\tt ptrace++} from
+breaking {\tt wait}, thereby obviating the need for the workaround to
+keep track of the process tree structure and thus rendering
+the {\tt fork} race condition irrelevant.
+The few remaining implementation challenges
+could have been eliminated with some additional support from the OS for
+extending kernel state such as the process data structures.
+
+
+%I conclude that building a well-engineered tracing primitive is
+%not trivial.
+%Nonetheless, it is not infeasible; the graceful power of the
+%{\tt /proc} tracing mechanism attests to that fact.
+We hope that
+future implementors will be able to benefit from our experience
+and avoid the worst of the subtle traps we encountered.
+As a result of our experiences with {\tt ptrace++}, we have identified
+two additional principles for the design of system-call
+interposition: provide transparency, and plan for multiple extensions.
+Also, we suggest that operating systems should provide better
+event notification primitives and better ways to extend internal
+kernel state.
+%: as they say,
+%``forewarned is forearmed.''
+
+\section{Principles for designing interposition facilities}
+\label{os-principles}
+
+We hope that the account of our struggles and the analysis of
+which features Janus needs, as presented above, will help the OS
+designer steer away from the thorniest pitfalls.
+We also offer a few principles to help OS designers select an
+architecture for a system-call interposition primitive:
+\begin{enumerate}
+\item {\bf Be general}: 
+	OS designers should commit to a certain level of
+	generality of mechanism.
+	This means building a facility for system-call interposition,
+	not a facility for debugging.  In particular, the OS designer
+	should target security and extensible reference monitors as one
+	important application.
+	%All the other principles are
+	%subordinate to this central proposal.
+
+	Other benefits of generalized interposition mechanisms
+	are documented in papers describing
+	%restricted execution environments for untrusted
+	%applications \cite{janus-usenix,slic},
+	new filesystems \cite{ufo,slic,jones-sosp,jones-thesis},
+	transparent result caching \cite{trec},
+	emulation of other operating systems \cite{jones-sosp,jones-thesis},
+	transactional software environments \cite{jones-sosp,jones-thesis},
+	and so on.
+	%Because it requires so little extra effort,
+	%it seems reasonable to build an interface
+	%that allows not only process tracing, but also
+	%generalized system-call interposition.
+	Because these applications can be handled with very similar
+	mechanisms, we argue that one generalized mechanism could
+	handle them all with little additional cost.
+
+	On the other hand, security considerations weigh against including
+	unnecessary features, as suggested in the next principle.
+\item {\bf Respect economy of mechanism}: Implement the least powerful
+	interposition mechanism that will suffice; simpler mechanisms are
+	more likely to be correct (and thus secure).
+	The least powerful tracing mechanism will usually also be the one
+	that is the least costly, in terms of design effort,
+	implementation complexity, code bloat, and kernel modularity.
+	Our analysis of which features Janus absolutely needs
+	should help the OS designer maintain economy of mechanism.
+	Also, our analysis of the value of additional features
+	(in terms of added security robustness,
+	savings in user-level complexity,
+	and performance benefits) should help decide when to add
+	extra functionality.
+\item {\bf Transparency is critical}: It is vital that the interposition
+	mechanism be transparent to the application.
+	In particular, the mechanism should not interfere with the
+	traced application's execution environment or overload the
+	meaning of existing interfaces in a way that is visible to
+	the traced application.
+	{\tt ptrace} and {\tt ptrace++} do affect the execution environment
+	slightly by modifying the form of the process tree
+	when tracing is initiated on a child process.
+	Also, to communicate tracing events,
+	{\tt ptrace} and {\tt ptrace++} overload the semantics
+	of the Unix signals interface.
+	Both of these abstraction violations
+	ruined the illusion of transparency in certain cases,
+	and substantial extra code was required in Janus to work around
+	these failures.
+	OS developers should learn from our mistakes;
+	this painful experience is well worth avoiding.
+\item {\bf Provide better event notification primitives}:
+	Event notification and upcalls into user-level applications
+	are not trivial to implement.
+	Had the OS provided better event notification primitives,
+	there would have been no temptation to overload the Unix
+	signals interface to notify tracers of tracing events.
+	This overloading of the semantics of existing interfaces
+	is exactly what led to the violation of transparency in
+	{\tt ptrace} and {\tt ptrace++}.
+	Event notification is one area where OS implementors can help
+	enable security mechanisms based on system-call interposition.
+\item {\bf Plan for multiple extensions}:
+	Where two or three objects of some type
+	can exist, make it easy for outsiders to add a fourth or
+	fifth\footnote{This excellent piece of advice is due to Steve
+	Bellovin \cite{WB96}, and we are grateful to be able to repeat
+	his design principle here.}.
+	Applied narrowly, this just suggests that users ought to be able
+	to extend the system reference monitor by making it more restrictive.
+	However, this also applies more generally.
+	It is not enough to allow a single process to contribute extra
+	access control checks to the extensible reference monitor; the
+	system should allow multiple processes to extend the reference
+	monitor simultaneously.
+	{\tt ptrace} and {\tt ptrace++} do not allow multiple processes
+	to trace a target application, and this has the subtle side effect
+	that transferring control of a traced application atomically is
+	impossible in {\tt ptrace} and {\tt ptrace++}.
+	Once again, OS designers are advised to take note of our mistakes.
+\item {\bf Allow interposing on internal state}:
+	Kernels should make it easy (or at least possible) to extend
+	some internal data structures.
+	Since we were not able to add to the Linux process structure,
+	in {\tt ptrace++} we were forced to construct shadow copies of
+	the process structures; and since we were not able to interpose
+	on process death events or learn when internal data structures
+	were deallocated, to prevent memory leaks from shadow data structures
+	that are never freed we were forced to poll the official kernel data
+	structures regularly.
+	Perhaps if the Linux kernel had been implemented in an
+	object-oriented language
+	such as Java it might have been easier to extend the kernel process
+	structure by, for example, subclassing the {\tt Process} class.
+
+	Also, on a related note, if the kernel could somehow export more
+	of its internal data structures to user-level reference monitors,
+	this would be useful.
+	For instance, direct access to inode structures, the process tree
+	structure, and pathname lookup functions would greatly decrease
+	the amount of duplication of state and code in Janus, and thus
+	increase Janus's assurance level significantly.
+\item {\bf Simplify the system-call interface}:
+	The principles above have all concentrated on
+	the tracing facility's feature set.
+	However, OS developers should be aware that other
+	factors also affect the effectiveness of Janus.
+	In particular, the structure of the system-call interface
+	can significantly impact Janus.
+
+	One of the central insights that we derive from this work
+	is the importance of simplicity in OS interfaces.
+	We took advantage of a powerful methodology for implementing
+	confinement mechanisms:
+	\begin{enumerate}
+	\item Pick a simple, narrow, clean interface.
+		Ensure that all interactions between the untrusted
+		system element and its environment must pass through
+		this interface.
+	\item Enforce the security policy by interposing extra
+		permission checks on this interface.
+	\end{enumerate}
+	On most modern operating systems, the system-call interface is 
+	very convenient for our purposes: it is already
+	relatively simple, narrow, and clean;
+	and all privileged system interactions pass through it.
+	
+	However, the suitability of the system-call interface does vary
+	from system to system.
+	Here are a number of lessons we learned from experience with
+	several operating systems' system-call interfaces:
+	\begin{itemize}
+	\item We learned that it should be simple and clean, to avoid
+	cluttering the Janus implementation with all sorts of
+	code for parsing system calls.
+	\item Also, the interface should be narrow and minimal,
+	rather than rich and complex, to avoid complicated unforeseen
+	interactions between different features of the interface.
+	\item Special cases should be avoided (because they are easy to
+	overlook when implementing Janus).
+	\item Message-passing interfaces should be avoided,
+	because interposing on them typically requires interception
+	and scanning of all data flow, including non-dangerous communication
+	(which is the majority of all data flow);
+	it is much better to explicitly
+	distinguish cross-domain function invocation (e.g. system calls)
+	from communication.
+	\item It is helpful to separate potentially unsafe operations
+	(which must be subjected to permission checks) from
+	frequently used safe operations.
+	For instance, the {\tt open} and {\tt read} system
+	calls are very well chosen in this regard: all permission
+	checks are done at {\tt open} time, and then {\tt read}s
+	on a valid file descriptor may always proceed unchecked.
+	This allows Janus to trap only {\tt open} system calls
+	(which are relatively rare) and not trap {\tt read}s,
+	so {\tt read}s can proceed at full speed.
+
+	The basic paradigm here is the use of early binding:
+	all access checks are done when the resource is bound,
+	and then the application is allowed fast direct access.
+	This paradigm is very well suited to Janus, since it
+	allows permission checks to be separated from operations that
+	must be fast.
+	\item Requests should be {\em context-free}---checking
+	them (and thus executing them) should not require much
+	implicit state---because the more security-critical state
+	Janus relies on, the greater the chance for mistakes
+	and security holes.
+	For example, the Berkeley sockets network interface suffers in
+	this regard: to filter network connections, one must
+	match up {\tt socket} calls to {\tt connect}
+	calls (since the {\tt socket} call specifies whether
+	to use TCP or UDP, and the {\tt connect} call specifies
+	the rest of the destination address).
+	The end result is that Janus ends up saving security-critical
+	state associated with each socket file descriptor.
+	Furthermore,
+	this state is a duplication of information that is already
+	managed by the OS kernel, so any error in handling the state,
+	or any mismatch between Janus's state and the kernel's internal
+	state, could lead to a security compromise.
+	\end{itemize}
+	All of the above criteria are geared towards making Janus as
+	effective and secure as possible; other considerations may be
+	more important in some cases, of course.
+	
+	Our experience with Solaris and Linux showed us the
+	strengths and weaknesses of their respective OS interfaces.
+	We found that {\tt ioctl}s were a serious nuisance on both OS's,
+	because they implement a great variety of functionality
+	that is often simultaneously poorly documented and security-critical.
+	Fortunately, {\tt ioctl}s are a Unix idiosyncrasy.
+
+	However, the majority of our problems with the two system-call
+	interfaces were found in the interface for accessing network
+	functionality.
+	The Solaris STREAMS-based network interface was very
+	poorly suited to monitoring by Janus.
+	The Solaris kernel implements network protocols as a STREAMS
+	module; user-level code interacts with the STREAMS modules
+	by a protocol-independent message-passing interface.
+	A user-level shared library emulates the Berkeley sockets
+	interface by sending messages to the STREAMS modules.
+	Any one socket call may translate
+	into multiple system calls: usually a {\tt putmsg} or
+	two, and occasionally an {\tt open} or several {\tt ioctl}s.
+	This required a lot of security-critical state in Janus
+	to track the progress of the STREAMS module,
+	and match up multiple system calls that were associated
+	with one socket call;
+	also, it was quite a pain to implement, as we had to
+	monitor and parse {\em all} messages sent by {\tt putmsg}.
+	(Fortunately for us, the message-passing interface was
+	implemented with {\tt putmsg}: if it had been implemented
+	with {\tt write}, we would have had to monitor {\em all}
+	{\tt write} calls, with disastrous results for performance.)
+	Linux's networking interface is much better, as it simply offers
+	the Berkeley sockets calls directly as syscalls.
+	There was still the issue of matching {\tt socket}
+	calls to {\tt connect}s, but this was relatively minor.
+
+	In any case, during our studies it became clear to us that Janus
+	is dependent upon the OS designer to pick a simple, clean
+	interface for system calls; any failure on this point forces Janus
+	to implement complex and potentially untrustworthy workarounds.
+\item {\bf Other security-related events}:
+	OS designers might want to consider support for interposition
+	on other security-related events.
+	Currently Janus interposes only on the system-call interface,
+	on the assumption that system calls are the only security-critical
+	ways for untrusted applications to interact with the OS.
+	However, other OS interfaces---such as floating point exceptions,
+	virtual memory events, hardware interrupts, or other traps---might
+	conceivably be relevant to some future application.
+\end{enumerate}
+
+\section{Summary}
+
+The core contribution of this work towards operating systems research
+is the realization that OS designers can enable powerful new security
+tools with just a little extra effort.
+Supporting Janus is cheap: implementing process tracing takes you
+most of the way towards Janus's requirements, and most systems already
+support some form of process tracing; furthermore, we gave above
+some experience and guidelines to help reduce the cost of supporting
+Janus even further.
+At the same time, this support provides great security benefits:
+as we showed in other sections, Janus can be used to secure {\tt sendmail},
+Java, Netscape and its helper applications, as well as other
+vital-yet-dangerous elements of the system.
+In short, OS designers should strongly consider providing support
+for Janus, as this provides great leverage from simple mechanisms.
+
+Currently, many in the security community feel that the operating
+system is
+becoming increasing irrelevant to computer security, especially with
+the advent of firewalls, the shift in emphasis to the security of
+large network applications (such as {\tt sendmail}, Netscape,
+web servers, etc.) instead of the security of the OS kernel,
+and the growing importance of language-based
+techniques for securing mobile code.
+However, our work shows that simple new OS primitives for system-call
+interposition can provide powerful solutions for securing large
+network applications and for confining mobile code.
+By suggesting that OS research still has a lot to offer,
+we suggest this work ought to form a wake-up call to the security community.
+@
+
+
+1.11
+log
+@*** empty log message ***
+@
+text
+@d17 1
+a17 1
+techniques are appropriate.
+d22 1
+a22 1
+We will argue that our research provides strong evidence that
+d243 2
+a244 2
+	Similar optimizations are available for a number of other
+	common system calls.
+d386 3
+a388 1
+	the workaround is painful, deformed, and complex, which makes
+d992 1
+a992 1
+	Once again, OS designers are advised to taken note of our mistakes.
+d1167 3
+a1169 2
+Currently, many in the security community feel that OS mechanisms
+are becoming increasing irrelevant to computer security, especially with
+@
+
+
+1.10
+log
+@*** empty log message ***
+@
+text
+@d394 1
+a394 1
+\item {\bf Aborted system calls return {\tt EPERM}:}
+d962 1
+a962 1
+\item {\bf Better event notification primitives}:
+d979 1
+a979 1
+	Read narrowly, this just suggests that users ought to be able
+d992 2
+a993 2
+	Kernels should make it easier to extend
+	internal data structures.
+d1009 1
+a1009 1
+	For instance, direct access to i-node structures, the process tree
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d114 1
+a114 1
+One important exception is Microsoft's Windows 95 (but not NT),
+d807 1
+a807 1
+many idiosyncracies and oddities with extra user-level adaption code.
+d1103 1
+a1103 1
+	Fortunately, {\tt ioctl}s are a Unix idiosyncracy.
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d591 1
+a591 1
+In the end, my implementation of {\tt ptrace++} added about
+d836 1
+a836 2
+Therefore, we do not find fault with our {\tt ptrace++} design.
+
+d846 46
+a891 7
+I conclude that building a well-engineered tracing primitive is
+not trivial.
+Nonetheless, it is not infeasible; the graceful power of the
+{\tt /proc} tracing mechanism attests to that fact.
+Future implementors should be able to benefit from our experience
+and avoid the worst of the subtle traps we encountered: as they say,
+``forewarned is forearmed.''
+d897 1
+a897 1
+what features Janus needs, as presented above, will help the OS
+d937 1
+a937 1
+	Our analysis of what features Janus absolutely needs
+d946 67
+a1012 5
+	We saw that subtle elements of {\tt ptrace++}'s interface
+	(namely, the overloading of Unix signals) ruined the
+	illusion of transparency in certain cases, and required
+	substantial extra code in Janus to work around this failure.
+	This painful experience is well worth avoiding.
+d1137 9
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d1 2
+a2 2
+\section{OS support for Janus}
+\label{ossupport}
+d18 1
+a18 1
+In this section, we explore various levels of OS support, evaluate
+d45 1
+a45 1
+This section is organized as follows.
+d62 1
+a62 1
+\subsection{Theory and foundations}
+d154 1
+a154 1
+\subsection{Real implementations}
+d203 1
+a203 1
+\subsection{What features Janus needs}
+d855 1
+a855 1
+\subsection{Principles for designing tracing facilities}
+d863 30
+a892 1
+\begin{itemize}
+d894 1
+a894 1
+	tracing mechanism that will suffice; simpler mechanisms are
+d906 1
+a906 1
+\item {\bf Transparency is critical}: It is vital that the tracing
+d913 5
+a917 12
+\item {\bf Be general}: Because it requires so little extra effort,
+	it seems reasonable to build an interface
+	that allows not only process tracing, but also system-call
+	interposition, extensions to the operating system, and so on.
+	Because these applications can be handled with very similar
+	mechanisms, we argue that one generalized mechanism could
+	handle them all with little additional cost.
+	The extensive benefits of generalized interposition mechanisms
+	are documented in \cite{jones-sosp,jones-thesis,slic}.
+\item {\bf Simplify the system-call interface}: OS developers should
+	be aware that the details of supported tracing primitives are not
+	the only issues that affect the effectiveness of Janus.
+d934 3
+a936 2
+	very convenient for our purposes: it is relatively simple, narrow,
+	and clean; and all privileged system interactions pass through it.
+d972 3
+a974 2
+	This allows permission checks to be separated from operations that
+	must be fast, and is therefore very well suited to Janus.
+d987 2
+a988 1
+	state associated with each socket file descriptor; furthermore,
+d990 1
+a990 1
+	managed by the OS kernel; so any error in handling the state,
+d1037 1
+a1037 1
+\end{itemize}
+d1039 1
+a1039 1
+\subsection{Summary}
+@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@d159 2
+a160 2
+Though these facilities were not intended for use as a system
+call interposition mechanism, often they can be adapted to this end,
+d186 1
+a186 1
+	As such, {\sc slic} can be used to easily implement the
+d655 1
+a655 1
+	This makes it impossible to atomically transfer control
+d657 2
+a658 1
+	another\footnote{The obvious approach would have the prior owner
+d668 2
+a669 2
+	even if it were possible to securely
+	transfer control of an untrusted application, the {\tt wait}
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d80 3
+a82 2
+\begin{itemize}
+\item[{\em I.}] The operating system must have the power to mediate all
+d86 6
+a91 4
+\item[{\em II.}] The operating system must allow us to further limit
+	limiting the set of allowed operations.
+	(It need not allow us to replace its pre-existing reference monitor.)
+\end{itemize}
+d95 2
+a96 2
+Requirement {\em I}\ is essentially a requirement that the OS
+support some form of protection.
+d112 1
+a112 1
+implement process-level protection, and so requirement {\em I}\ 
+d114 3
+a116 2
+(One important exception is Microsoft's Windows 95, which provides
+no protection: all applications have full access to all of the machine's
+d118 1
+a118 1
+In other words, Win95 fails the first requirement on the OS.
+d122 1
+a122 1
+but it is not clear how effective SFI+Janus would be in practice.)
+d124 4
+a127 2
+Requirement {\em II}\ says that a user-level process, such as Janus,
+must be able to extend the operating system's default reference monitor.
+d143 3
+a145 2
+calls issued by untrusted applications\footnote{Of course,
+for security reasons, access by unprivileged applications
+d149 3
+a151 2
+extend the OS's reference monitor in a way that makes it more permissive.}.
+In the sequel, we explore the available OS support
+d208 3
+a210 4
+\item {\bf Complete monitoring powers.}
+	This has a number of aspects:
+	\begin{itemize}
+	\item Janus must be notified whenever the untrusted application
+d212 1
+a212 1
+	\item Furthermore, Janus needs to be able to view the
+d215 1
+a215 1
+	\item Last, Janus must be able to view the
+d217 3
+a219 1
+	\end{itemize}
+d230 1
+a230 1
+\item {\bf Fine-grained control.}
+d251 1
+a251 1
+\item {\bf Ability to prevent selected system-call invocations from executing.}
+d264 1
+a264 1
+\item {\bf Follow all children of the traced application if it forks.}
+d299 2
+a300 2
+\item {\bf Multiplexing}, i.e. the ability to monitor many traced processes
+	at once.
+d320 1
+a320 1
+\item {\bf Kill on tracer-death.}
+d352 1
+a352 1
+\item {\bf Setuid executables forbidden.}
+d394 1
+a394 1
+\item {\bf Aborted system calls return {\tt EPERM}.}
+d413 1
+a413 1
+	and thus causes fewer problems with e.g. infinite loops.
+d446 2
+a447 2
+need and all of the convenient features (except
+``kill on tracer-death'') we want.
+d459 1
+d461 10
+a470 4
+user-space is dangerous (what if the two implementations are
+slightly inconsistent?  what about race conditions?) and
+in some cases impossible (how can a user-space
+implementation get direct access to inode data?) so it is best avoided.
+d473 1
+a473 1
+other primitives can't.
+d477 1
+a477 1
+context switch incurred on each unsafe system call.
+d483 1
+a483 1
+This ability to flexibly tune performance to eliminate hot spots
+d486 2
+a487 2
+In summary, the power of {\sc slic} provides all the support
+for Janus one could ever dream of, significantly enhancing
+d512 2
+a513 2
+Secondly, it is impossible to (securely) follow {\tt fork}s
+with {\tt ptrace}, so Janus would not be able to securely confine
+d516 1
+a516 1
+Far worse, {\tt ptrace} doesn't even offer the ability to abort
+d519 1
+a519 1
+the only alternative is to brutally kill the traced process before
+d540 2
+a541 2
+standard for process tracing; most operating systems implement
+the {\tt ptrace} primitive.
+d555 2
+a556 2
+they are executed.  (The error code is {\tt EPERM} by default; any other
+code can be easily specified.)
+d558 3
+a560 3
+basis: follow-{\tt fork} (and, if this is enabled,
+tracing features are inherited on fork), and fine-grained control
+over which system calls are traced.
+d568 1
+a568 1
+(The vanilla {\tt ptrace} interface was stateless, but {\tt ptrace++}
+d570 3
+a572 2
+calls to trace.)
+One natural solution would be to add a new entry to the Linux process
+d577 2
+a578 2
+It wasn't clear just how large an avalanche this would create, and I
+wasn't anxious to find out, so I avoided changing the process structure,
+d580 1
+a580 1
+Instead, I followed a more modular and somewhat less preferable
+d582 2
+a583 1
+I used a linked list in static kernel memory, indexed by process id,
+d601 2
+a602 1
+The development process was lengthy and painful; most of the effort
+d614 2
+a615 1
+We list a few of the non-obvious potholes here:
+d617 1
+a617 1
+\item {\bf {\tt ptrace} breaks {\tt wait}.}
+d627 1
+a627 1
+	tracing application, not the traced parent), for example.
+d634 1
+a634 1
+	We attempt to work around this breakage in the user-level
+d639 1
+a639 1
+	(i.e. refrains from resuming the process and leaves the process
+d652 1
+a652 1
+\item {\bf Can't transfer control securely.}
+d710 1
+a710 1
+\item {\bf Kill on tracer-death not supported.}
+d718 1
+a718 1
+\item {\bf Race condition in fork.}
+d774 1
+a774 1
+\caption{\label{organiz} The high-level organization of Janus}
+d789 4
+a792 1
+\caption{\label{codesize} The code size of key Janus components}
+d938 1
+a938 1
+	calls are very well chosen, in this regard: all permission
+d944 7
+a950 4
+	The basic paradigm here is the use of early binding, so
+	permission checks can be separated from operations that
+	must be fast.
+	\item Requests should be {\em context-free}---i.e., checking
+d985 1
+a985 1
+	module; user level code interacts with the STREAMS modules
+d1028 1
+a1028 1
+for Janus, as this gives an excellent price-to-performance ratio.
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d25 1
+a25 1
+during the design of the system's process tracing facility.
+d29 1
+a29 1
+existing process tracing facilities, and develop a list of specific
+d48 1
+a48 1
+Next, we describe three existing process tracing facilities,
+d85 3
+a87 2
+\item[{\em II.}] The operating system must allow us to delegate this
+	power of mediation to Janus.
+d150 1
+a150 1
+in the form of a ``process tracing'' facility.
+d154 1
+a154 1
+But not all process tracing facilities are made equal---they
+d211 1
+a211 1
+	All three process tracing facilities support this fully.
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d88 1
+a88 1
+These two properties are sufficient to build arbitrarily-powerful
+d458 1
+a458 1
+code into the kernel to check commonly-used system calls.
+d701 1
+a701 1
+	when the {\tt fork} returns in the newly-created child process;
+d736 1
+a736 1
+	which is coded in assembly because it is such a commonly-used
+d831 1
+a831 1
+\ref{os-principles}
+d912 1
+a912 1
+	frequently-used safe operations.
+d949 1
+a949 1
+	that is often simultaneously poorly-documented and security-critical.
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d32 1
+a32 1
+to implement system call interposition; with that proviso,
+d37 1
+a37 1
+you most of the way towards system call interposition, so
+d47 1
+a47 1
+of support for system call interposition from the operating system.
+d138 1
+a138 1
+to system call monitoring/filtering functionality should be carefully
+d143 1
+a143 1
+for system call interposition in detail.
+d155 1
+a155 1
+all are adequate for system call interposition.
+d164 1
+a164 1
+	support for fine-grained user-level system call tracing,
+d170 1
+a170 1
+	systems via interposition on the system call interface: instead of
+d175 1
+a175 1
+	the implementation of system call interposition and free
+d241 1
+a241 1
+\item {\bf Ability to prevent selected system call invocations from executing.}
+d249 1
+a249 1
+	must be able to abort the system call request and prevent
+d500 1
+a500 1
+system call requests that fail Janus's security checks.
+d506 1
+a506 1
+system call requests that Janus denies; but those requests are
+d537 1
+a537 1
+First, {\tt ptrace++} allows system call requests to be aborted before
+d587 1
+a587 1
+on each system call event, and
+d735 1
+a735 1
+	some changes to the Linux system call entry/exit sequence,
+d831 1
+d837 1
+a837 1
+architecture for a system call interposition primitive:
+d861 1
+a861 1
+	that allows not only process tracing, but also system call
+d868 1
+a868 1
+\item {\bf Simplify the system call interface}: OS developers should
+d871 1
+a871 1
+	In particular, the structure of the system call interface
+d886 1
+a886 1
+	On most modern operating systems, the system call interface is 
+d890 1
+a890 1
+	However, the suitability of the system call interface does vary
+d893 1
+a893 1
+	several operating systems' system call interfaces:
+d952 1
+a952 1
+	However, the majority of our problems with the two system call
+d1010 1
+a1010 1
+However, our work shows that simple new OS primitives for system call
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d218 1
+a218 1
+	which blocks until a tracing event is available at the tracee.
+d222 1
+a222 1
+	a callback on, and which should be allowed to execute
+d264 3
+a266 3
+	has forked, and by checking the result value, one can deduce
+	the process id of the child;
+	at that point, one could enable tracing on the child.
+d273 1
+a273 1
+	with a messy trick: when {\tt strace} observes that the tracee is
+d277 1
+a277 1
+	returns; then {\tt strace} enables tracing on the child, removes
+d318 4
+a321 2
+	the implementation has minor bugs\footnote{But note that the
+	problem may be more severe.  Some recent bugs have surfaced
+d323 4
+a326 4
+	protection checks and kill arbitrary other processes.  In this
+	case, a traced program might be able to kill the tracer; this
+	would be a serious problem if the traced program then continued
+	to run untraced.
+d336 2
+a337 3
+
+	Therefore, ``kill on tracer-death'' seems like an
+	important feature to ensure robust security.}.
+d363 1
+a363 1
+	In the Janus threat model, one assumes that the traced
+d378 3
+a380 4
+	(This is a symptom of the fact that the setuid check rightfully
+	belongs in the kernel, and we must jump through hoops to check it
+	in user-space.)
+	Therefore, we see that it would be extremely convenient for
+d394 4
+a397 4
+	The {\tt EINTR} return code was originally intended for system
+	calls that got interrupted by a signal and should be restarted
+	by the process.
+	This occasionally causes problems: applications which
+d402 1
+a402 1
+	true cause of the failure (namely, a permission check failed),
+d458 1
+a458 1
+code into the kernel that checks commonly-used system calls.
+d491 1
+a491 1
+failings which make it simply unsuitable for our purposes.
+d497 1
+a497 1
+applications which legitimately need to spawn children.
+d500 2
+a501 2
+system call requests which fail Janus's security checks.
+Without OS help, in that situation
+d506 1
+a506 1
+system call requests which Janus denies; but those requests are
+d527 2
+a528 2
+However, Linux has the powerful advantage that it
+comes with source and is well-suited to experimentation with potential
+d540 1
+a540 1
+Also, there are two new features which may be enabled on a per-process
+d608 1
+a608 1
+	enough so that it fails to recover and dies.
+d656 3
+a658 3
+	Far better to avoid the need for inter-process communication and
+	synchronization---which is tricky to get right---between Janus
+	processes by maintaining a one-tracer-many-tracee relationship.
+d664 1
+a664 1
+	a {\tt fork}, and cannot give away that control securely).
+d731 1
+a731 1
+	This is the only {\tt ptrace++} flaw which can be attributed
+d786 1
+a786 1
+code took significant amount of effort to debug and fix.
+d802 1
+a802 1
+code, perhaps we would have been more sanguine about our chances.}
+d869 1
+a869 1
+	the only issues which affect the effectiveness of Janus.
+d920 1
+a920 1
+	permission checks can be separated from operations which
+d948 1
+a948 1
+	which is often simultaneously poorly-documented and security-critical.
+@
+
+
+1.1.1.1
+log
+@Adding in my master's to CVS control.
+This version reflects the draft that I gave to Eric (I think).
+
+@
+text
+@@

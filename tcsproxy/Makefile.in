@@ -1,0 +1,221 @@
+WISH = @WISH@
+PERL = @PERL@
+
+USER = $(shell whoami)
+ifndef OPTIONS	
+OPTIONS  = gm_options.$(USER)
+endif
+RATE = 3
+
+#all: gui ptm client_lib frontend html_munger gif_munger playback\
+#     jpg_munger giftojpg_munger cached-1.4.pl3 tags
+
+TARGETS = gui ptm client_lib frontend perl_stub html_munger jpg_munger \
+		giftojpg_munger Tbmp_munger 2bit_munger text2doc \
+		@TCL_STUB_TARGET@ @JAVA_STUB_TARGET@ playback TAGS
+DISTTARGETS =   gui_dist ptm_dist frontend_dist perl_stub_dist \
+		html_munger_dist jpg_munger_dist giftojpg_munger_dist \
+		Tbmp_munger_dist 2bit_munger_dist text2doc_dist 
+DISTTARGETS =   doc_dist gui_dist ptm_dist frontend_dist perl_stub_dist\
+		html_munger_dist jpg_munger_dist giftojpg_munger_dist\
+		Tbmp_munger_dist 2bit_munger_dist text2doc_dist\
+		xs_dist perl_dir_force
+
+# for now omit targets gif_munger,tcp_redirect
+
+CLEANENV = unset SSH_TTY SSH_CLIENT SSH_AUTHENTICATION_SOCKET SSH_AUTH_SOCK
+CLEANDENV = $(CLEANENV); unset DISPLAY
+
+all:  $(TARGETS)
+
+install: $(TARGETS)
+
+wingman: gui ptm client_lib frontend perl_stub 2bit_munger text2doc \
+	@TCL_STUB_TARGET@ TAGS
+
+run_dist: $(DISTTARGETS)
+
+check: FORCE
+	ldd sbin/frontend
+	ldd sbin/ptm
+	ldd sbin/html_munger
+	ldd sbin/giftojpg_munger
+	ldd sbin/gif_munger
+	ldd sbin/jpg_munger
+	ldd sbin/perl_stub
+	ldd sbin/2bit_munger
+	ldd sbin/text2doc
+
+sdk: install
+	tar -cf - bin sbin lib doc gui perl_dir xs | gzip - > sdk.tgz
+
+run: run_monitor run_ptm run_frontend
+
+run_monitor:
+	$(CLEANENV); $(WISH) sbin/monitor.tcl -name monitor ../$(OPTIONS) & 
+
+run_ptm:
+	$(CLEANDENV); sbin/ptm -o $(OPTIONS) 2> ptm.errs &
+
+run_frontend: 
+	$(CLEANDENV); sbin/frontend $(OPTIONS) 2> frontend.errs &
+
+run_fe_check:
+	$(CLEANDENV); $(PERL) frontend/src/fe_check.pl $(OPTIONS) 30 &
+
+run_tcp_redirect:
+	cd tcp_redirect; ./tcp_redirect ../$(OPTIONS) 2> tcp_redirect.errs &
+
+run_tr_check:
+	tcp_redirect/src/tr_check.pl $(OPTIONS) 30 &
+
+run_html_munger:
+	sbin/html_munger -o $(OPTIONS) -t transend/text/html &
+
+run_giftojpg_munger:
+	sbin/giftojpg_munger -o $(OPTIONS) -t transend/image/gif &
+
+run_jpg_munger:
+	sbin/jpg_munger -o $(OPTIONS) -t transend/image/jpeg &
+
+blast: FORCE
+	ulimit descriptors
+	playback/bp_engine 127.0.0.1 $(shell grep -i listen_port $(OPTIONS) | cut -f 2 -d :) $(RATE) 9999 < ~gribble/working/tcsproxy/playback/848220425.log.univ
+
+ptm: FORCE
+	cd ptm; $(MAKE) install
+
+client_lib: FORCE
+	cd client_lib; $(MAKE) install
+
+frontend: client_lib ptm gui FORCE
+	cd frontend; $(MAKE) install
+
+gui: FORCE
+	cd gui; $(MAKE) install
+
+java_stub: ptm gui client_lib FORCE
+	cd java_stub; $(MAKE) install
+
+perl_stub: ptm gui xs client_lib FORCE 
+	cd perl_stub; $(MAKE) install
+
+tcl_stub: ptm gui FORCE
+	cd tcl_stub; $(MAKE) install
+
+xs: client_lib FORCE
+	cd xs; $(PERL) Makefile.PL; $(MAKE) install
+
+html_munger: ptm gui FORCE
+	cd html_munger; $(MAKE) install
+
+tcp_redirect: ptm gui FORCE
+	cd tcp_redirect; $(MAKE) install
+
+gif_munger: ptm gui FORCE
+	cd gif_munger; $(MAKE) install
+
+jpg_munger: ptm gui FORCE
+	cd jpg_munger; $(MAKE) install
+
+Tbmp_munger: ptm gui FORCE
+	cd Tbmp_munger; $(MAKE) install
+
+giftojpg_munger: ptm gui FORCE
+	cd giftojpg_munger; $(MAKE) install
+
+2bit_munger: ptm gui FORCE
+	cd 2bit_munger; $(MAKE) install
+
+text2doc: ptm gui FORCE
+	cd text2doc; $(MAKE) install
+
+playback: client_lib FORCE
+	cd playback; $(MAKE)
+
+cached-1.4.pl3: FORCE
+	-cd cached-1.4.pl3; $(MAKE)
+
+clean: FORCE
+	-cd sbin; /bin/rm -f *
+	cd ptm; $(MAKE) clean
+	cd client_lib; $(MAKE) clean
+	cd frontend; $(MAKE) clean
+	cd gui; $(MAKE) clean
+	cd html_munger; $(MAKE) clean
+	cd tcp_redirect; $(MAKE) clean
+	cd gif_munger; $(MAKE) clean
+	cd jpg_munger; $(MAKE) clean
+	cd perl_stub; $(MAKE) clean
+	-cd xs; /bin/rm -rf blib lib Makefile
+	cd giftojpg_munger; $(MAKE) clean
+	cd 2bit_munger; $(MAKE) clean
+	cd text2doc; $(MAKE) clean
+	cd playback; $(MAKE) clean
+	-/bin/rm config.cache config.log config.status *~
+
+TAGS: FORCE
+	find . -name cached-\* -prune -o -name squid\* -prune -o -name \*.c -print -o -name \*.cc -print -o -name \*.h -print | etags -
+
+FORCE:
+
+doc_dist: FORCE
+	mkdir -p new_dist/doc
+	mkdir -p new_dist/about
+	-cp -f doc/* new_dist/doc
+	-cp -f about/* new_dist/about
+	-cp -f dist/tcsproxy/* new_dist
+
+gui_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f gui/tudp.so new_dist/sbin
+	-cp -f gui/*.tcl new_dist/sbin
+	-chmod +x new_dist/sbin/*.tcl
+
+ptm_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f ptm/ptm new_dist/sbin
+
+frontend_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f frontend/frontend new_dist/sbin
+	-cp -f frontend/src/fe_check.pl new_dist/sbin
+
+perl_stub_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f perl_stub/perl_stub new_dist/sbin
+
+html_munger_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f html_munger/html_munger new_dist/sbin
+
+jpg_munger_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f jpg_munger/jpg_munger new_dist/sbin
+
+giftojpg_munger_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f giftojpg_munger/giftojpg_munger new_dist/sbin
+
+Tbmp_munger_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f Tbmp_munger/Tbmp_munger new_dist/sbin
+
+2bit_munger_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f 2bit_munger/2bit_munger new_dist/sbin
+
+text2doc_dist: FORCE
+	mkdir -p new_dist/sbin
+	-cp -f text2doc/text2doc new_dist/sbin
+
+xs_dist: FORCE
+	mkdir -p new_dist/xs/lib
+	-cp -rf xs/lib/* new_dist/xs/lib
+
+perl_dir_force: FORCE
+	mkdir -p new_dist/perl_dir
+	-cp -f perl_dir/* new_dist/perl_dir
+
+
+

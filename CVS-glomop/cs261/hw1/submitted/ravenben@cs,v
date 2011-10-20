@@ -1,0 +1,189 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.10.02.19.18.07;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From ravenben@@joker.CS.Berkeley.EDU  Fri Oct  2 11:59:02 1998
+Return-Path: ravenben@@joker.CS.Berkeley.EDU
+Received: from joker.CS.Berkeley.EDU (joker.CS.Berkeley.EDU [128.32.37.134]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id LAA10513 for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 11:59:02 -0700
+Received: from localhost (ravenben@@localhost)
+	by joker.CS.Berkeley.EDU (8.9.1/8.9.1) with SMTP id LAA01146
+	for <cs261-homeworks@@joseph.cs.berkeley.edu>; Fri, 2 Oct 1998 11:55:58 -0700
+Date: Fri, 2 Oct 1998 11:55:58 -0700 (PDT)
+From: "Ben Y. Zhao" <ravenben@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.berkeley.edu
+Subject: hw1 submission
+Message-ID: <Pine.LNX.3.96.981002115512.1141A-100000@@joker.CS.Berkeley.EDU>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Status: RO
+
+HW1 follows:
+
+                              CS261 Homework 1
+
+
+Question 1
+
+Below are listed some security holes, which we described in the third
+lecture to illustrate how they violated prudent design principles for secure
+systems. Your task is to fix them from first principles. Don't merely
+propose a narrow patch which just happens to fix this particular problem;
+suggest a broad design pattern which would fix all related holes of this
+class, so that we can have some assurance that similar vulnerabilities won't
+pop in the future. Which, if any, of the principles did you use?
+
+  1. The ftpd/gnutar interaction.
+Problem: to save network bandwidth, ftpd allows client to run tar on ftp
+server, which was fine, until people started using GNU tar which allows
+commands to be executed through RSH.
+Fix: Remove rsh capability from GNU tar.
+Principle used: Applications should do only what they're meant to do, and not
+offer bountiful features just because they can.
+
+  2. Imperfect bookkeeping in sendmail leading to holes in alias expansion
+     and program execution.
+Problem: sendmail treats program execution as an address, so you can send
+mail to an address, and it would be piped as input to a program. Could easily
+fool sendmail into thinking it's sending an innocuous error message to an
+address, when the message itself is a command to be executed by some
+application residing at the address.
+Fix: decouple the notion of addresses and program execution.
+Principle used: Fail-safe defaults. Instead of opening a can of worms like
+the address=program association and trying to check every instance for
+correctness, should decouple, and only check to allow access, not deny.
+
+  3. Complete mediation in Java.
+Problem: Access control in Java is done per access request.  If any of the
+calls forget the security manager check, then it's exploitable.
+Fix: make the security manager be the key to granting access. ie all accesses
+fail without the security manager giving an ok.
+Principle used: Fail-safe defaults. Assuming access denied. If a security
+check is missed, it'll just cause an error when access is denied.
+
+  4. Tractorbeaming wu-ftpd.
+Problem: by definition of ftp protocol, ftpd needs to occasionally suid to
+root so it can assume the identity of the authenicated user to read his
+files. But a signal in the critical section would leave ftpd with root
+privileges.
+Fix: decouple the anonymous ftp and authenticated ftp services.
+Principle used: Isolation of functionality. An application should do one
+thing rather than combine lots of different features that might interact
+badly with each other.
+
+Question 2
+
+Consider a malicious Java applet which somehow manages to get access to
+confidential information. List some covert channels it could use to leak
+that information to a colluder at large somewhere in the network.
+
+If you're not familiar with the intimate details of the Java security model
+and exactly what operations Java applets are allowed to do, that's ok.
+Instead, you can sketch some potential covert channels which you would
+investigate further. In this case, you should brainstorm for channels which
+it would seem plausible might be available to even an untrusted applet with
+very limited privileges. (Basically, the model is that Java applets are
+supposed to be confined to a limited "sandbox" which prevents them from
+doing anything dangerous; for instance, access to the filesystem is
+disallowed; and access to the network is generally prohibited, except that
+the applet is allowed to connect back to the host where it came from.)
+
+Answer:
+There are really a lot of options for the applet.  The really obvious
+solution (probably defeating the point of the question) would be for the
+applet to retrieve the information back to its origin and display it as a
+homepage.  Some less obvious covert channels would probably involve network
+traffic. For instance, the applet could use time to flood the network path in
+a preset time quanta to indicate a 1, and no flood = 0, etc. Another covert
+channel would involve the size and pattern of the traffic, ie the applet
+could send back single bits at a time, indicating 0, or send back 2K chunks,
+indicating 1, and rely on the colluder's packet sniffing ability to pass the
+data. The covert channel might be on the client-side.  The applet might go
+into some mode reading in memory locations linearly ala matrix calculations,
+and cause the VM system under the Java VM to thrash, thereby slowing down the
+client's response time to network connection requests.
+
+Question 3
+
+Imagine a system which does strong authentication at the start of a TCP
+session. (It might be a telnet connection, say, in which case inserting the
+text "echo + + > ~/.rhosts" into the TCP data stream allows for a successful
+break of the system.)
+
+  1. If no other cryptography is used, how do you break this?
+You answered it yourself.  Insert a TCP packet into the stream before the
+real packet, so the real packet will be dropped as the duplicate. It doesn't
+matter if the ACK will lead to a RST, as long as that one packet gets
+through, and the damage is done. Any attack like "echo + + > ~/.rhosts"
+works, as long as it is smaller than a single TCP packet.
+  2. Suppose now that the session (after authentication) is encrypted in
+     Triple-DES ECB mode. How do you break this?
+ECB is single block encrypted, no interaction between the blocks, so it's
+relatively easy to crack. Just wait for enough blocks to fly by to generate
+the codebook by using guesses about the information content.
+  3. What if Triple-DES CBC mode is used instead of Triple-DES ECB mode --
+     how do you break that?
+This is also usable in the ECB case.  You can desynchronize the two
+endpoints, and reestablish a new connection, this time spoofing the other end
+to each endpoint, and get the encryption key that way.
+  4. What is the right way to fix these weaknesses?
+One way to fix this is to periodically reauthenticate the endpoints against
+each other.  But since this is not very practical in practice, it's probably
+easier to just do the encryption end to end at the application level, so that
+even if the attacker gets the network traffic, he/she can't make sense of it.
+
+Question 4
+
+Consider the following proposal for fixing the weaknesses in DNS:
+
+     A DNS record contains not just a hostname and address but also
+     that host's public key. Each DNS record is signed with the
+     relevant authority's public key (so cs.berkeley.edu's record is
+     signed by berkeley.edu, berkeley.edu's record is signed by edu,
+     and edu's record is signed by the root key). The public key for
+     the root ("dot") is assumed to be known to all DNS clients.
+
+This way, when you do a query and get back a DNS record, it will be
+(recursively) self-authenticating.
+
+Suppose that negative responses (of the form "there is no entry for the
+domain www.berkeley.edu") are not signed or authenticated in any way.
+
+  1. Can you see any weaknesses that might result from the lack of
+     authentication for negative responses?
+
+Basically, you can do an easy denial of service attack.  Have someone
+sitting between the DNS server and the target, and respond with a negative
+response everytime a DNS request is made.  
+
+  2. Suppose you wanted to change this, so that negative responses are
+     authenticated. Furthermore, you are worried about performance, so it is
+     a design criterion that these authenticated negative responses should
+     be cacheable. How can this be implemented?
+
+Basically, you just want to post a TTL on each negative response.  At the
+end of the TTL/timeout, the negative responses are no longer valid, and
+requests cannot be satisfied by that cache entry.
+
+
+_____________________________________________________________
+Ben Y. Zhao WWW: www.cs.berkeley.edu/~ravenben  bzhao@@acm.org
+
+@

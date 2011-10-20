@@ -1,0 +1,1540 @@
+head	1.6;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	96.05.02.03.31.49;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.04.28.00.42.54;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.04.26.10.10.53;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.04.09.05.44.58;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.04.09.04.24.24;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.04.08.23.00.47;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.04.08.23.00.47;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@Added save_credentials
+@
+text
+@#include "EXTERN.h"
+#include "perl.h"
+#include "XSUB.h"
+
+/* undefine debug_warn to suppress debugging messages from KerberosIV.so */
+/* #define debug_warn warn*/
+#define debug_warn(x)
+
+/* 
+ *  Amazingly, libkrb defines and exports a logging function called
+ *  log(), which conflicts with  math.h; so redefine it here before
+ *  including krb.h.
+ */
+
+#define log krb_log
+#include "des.h"
+#include "krb.h"
+#include "krb_paths.h"	/* path to krb.srvtab, etc */
+#include "krb_conf.h"	/* byte-ordering macros */
+#include "prot.h"	/* Kerberos return message decomposition macros */
+
+/*
+ * Use the Kerberos "compatibility" functions for sigblock, etc. and flock. 
+ * This is better than linking libucb, which is buggy on Solaris.  
+ * To do this, we must use a modified version of compat-proto.h from
+ * which the prototype for warn() has been deleted, since Perl already 
+ * defines a function by this name.  Warn() is only used by stuff in the
+ * krcmd and kcmd sources, not by kerberos proper, and it is used there
+ * in a way that is compatible (fortuitously) with perl's prototype.  We
+ * include the modified compat-proto.h by placing "." at the head of the
+ * include path.
+ */
+
+/* Must include compat-proto.h explicitly FIRST, so we get the right one. */
+#include "compat-proto.h"
+#include "flock.c"
+#include "sigcompat.c"
+
+/*
+ *  These are used for Kerberos callbacks.
+ *  XXX  should really use perl_call_sv from here
+ */
+
+#define SUBNAME_SIZE 255
+char current_decrypt_proc[SUBNAME_SIZE];
+
+int
+callback_decrypt_proc(user,inst,realm,arg,key_proc,cipp)
+const char *user;
+const char *inst;
+const char *realm;
+const char *arg;        
+int (*key_proc) __P((const char *, const char *, const char *, char *,
+      C_Block));        /* not used */
+KTEXT *cipp;
+{
+        dSP;
+        I32 count;
+        KTEXT cip = *cipp;
+        extern char current_decrypt_proc[];
+        SV *retval;
+        char *str;
+        STRLEN len;
+
+        ENTER ;
+        SAVETMPS ;
+        PUSHMARK(sp);
+
+        /* push the arguments in a perl-digestible form */
+
+        XPUSHs(sv_2mortal(newSVpv((char *)user,0)));
+        XPUSHs(sv_2mortal(newSVpv((char *)inst,0)));
+        XPUSHs(sv_2mortal(newSVpv((char *)realm,0)));
+        XPUSHs(sv_2mortal(newSVpv(cip->dat, cip->length)));
+        XPUSHs(sv_2mortal(newSVpv((char *)arg,0)));
+	PUTBACK ;
+
+        /* do the perl call. */
+
+        count = perl_call_pv(current_decrypt_proc, G_SCALAR);
+        debug_warn("Returned from perl_call_pv");
+        SPAGAIN;
+
+        if (count != 1)
+            croak("get_in_tkt: Decryption routine must return a single scalar");
+
+        /* returned item must be a string and not longer than MAX_KTXT_LEN */
+
+        retval = POPs;
+        str = SvPV(retval,len);
+        cip->length = (int)len;        
+	Move(str, cip->dat, len, unsigned char);
+        cip->mbz = (BIT32)0;
+
+        PUTBACK ;
+        FREETMPS ;
+        LEAVE ;
+        return 0;
+}
+        
+        
+
+char *
+vfy(obj, name, size)
+SV* obj;
+const char *name;
+size_t size;
+{
+    static char err[200];
+    STRLEN len;
+
+    if (SvPOK(obj) && SvPV(obj,len) && (size == (size_t)len)) {
+        /* looks like a reasonable object; return the pointer to the string */
+        return SvPV(obj,len);
+    } else if (! SvTRUE(obj)) {   
+        /* undef means use a NULL pointer */
+        sprintf(err, "%s object is NULL", name);
+        debug_warn(err);
+        return (char *)NULL;
+    } else {
+        /* badness 10000 */
+        sprintf(err, "%s object mungled: length=%d", name, len);
+        /* longjmp the hell out of here */
+        croak(err);
+        return (char *)NULL;      /* should never get here */
+    }
+}
+
+static int
+not_here(s)
+char *s;
+{
+    croak("%s not implemented on this architecture", s);
+    return -1;
+}
+
+static double
+constant(name, arg)
+char *name;
+int arg;
+{
+    errno = 0;
+    switch (*name) {
+    case 'A':
+	if (strEQ(name, "AD_NOTGT"))
+#ifdef AD_NOTGT
+	    return AD_NOTGT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "AD_OK"))
+#ifdef AD_OK
+	    return AD_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "ANAME_SZ"))
+#ifdef ANAME_SZ
+	    return ANAME_SZ;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'B':
+	break;
+    case 'C':
+	if (strEQ(name, "CLIENT_KRB_BUFLEN"))
+#ifdef CLIENT_KRB_BUFLEN
+	    return CLIENT_KRB_BUFLEN;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "CLIENT_KRB_RETRY"))
+#ifdef CLIENT_KRB_RETRY
+	    return CLIENT_KRB_RETRY;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "CLIENT_KRB_TIMEOUT"))
+#ifdef CLIENT_KRB_TIMEOUT
+	    return CLIENT_KRB_TIMEOUT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "CLOCK_SKEW"))
+#ifdef CLOCK_SKEW
+	    return CLOCK_SKEW;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'D':
+	if (strEQ(name, "DATE_SZ"))
+#ifdef DATE_SZ
+	    return DATE_SZ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "DEFAULT_TKT_LIFE"))
+#ifdef DEFAULT_TKT_LIFE
+	    return DEFAULT_TKT_LIFE;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'E':
+	break;
+    case 'F':
+	break;
+    case 'G':
+	if (strEQ(name, "GC_NOTKT"))
+#ifdef GC_NOTKT
+	    return GC_NOTKT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GC_OK"))
+#ifdef GC_OK
+	    return GC_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GC_TKFIL"))
+#ifdef GC_TKFIL
+	    return GC_TKFIL;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_BADPW"))
+#ifdef GT_PW_BADPW
+	    return GT_PW_BADPW;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_KDCERR"))
+#ifdef GT_PW_KDCERR
+	    return GT_PW_KDCERR;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_NULL"))
+#ifdef GT_PW_NULL
+	    return GT_PW_NULL;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_NULLTKT"))
+#ifdef GT_PW_NULLTKT
+	    return GT_PW_NULLTKT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_OK"))
+#ifdef GT_PW_OK
+	    return GT_PW_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "GT_PW_PROT"))
+#ifdef GT_PW_PROT
+	    return GT_PW_PROT;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'H':
+	break;
+    case 'I':
+	if (strEQ(name, "INST_SZ"))
+#ifdef INST_SZ
+	    return INST_SZ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "INTK_BADPW"))
+#ifdef INTK_BADPW
+	    return INTK_BADPW;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "INTK_ERR"))
+#ifdef INTK_ERR
+	    return INTK_ERR;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "INTK_OK"))
+#ifdef INTK_OK
+	    return INTK_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "INTK_PROT"))
+#ifdef INTK_PROT
+	    return INTK_PROT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "INTK_W_NOTALL"))
+#ifdef INTK_W_NOTALL
+	    return INTK_W_NOTALL;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'J':
+	break;
+    case 'K':
+	if (strEQ(name, "KDC_AUTH_EXP"))
+#ifdef KDC_AUTH_EXP
+	    return KDC_AUTH_EXP;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_BYTE_ORDER"))
+#ifdef KDC_BYTE_ORDER
+	    return KDC_BYTE_ORDER;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_GEN_ERR"))
+#ifdef KDC_GEN_ERR
+	    return KDC_GEN_ERR;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_NAME_EXP"))
+#ifdef KDC_NAME_EXP
+	    return KDC_NAME_EXP;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_NULL_KEY"))
+#ifdef KDC_NULL_KEY
+	    return KDC_NULL_KEY;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_OK"))
+#ifdef KDC_OK
+	    return KDC_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_PKT_VER"))
+#ifdef KDC_PKT_VER
+	    return KDC_PKT_VER;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_PR_N_UNIQUE"))
+#ifdef KDC_PR_N_UNIQUE
+	    return KDC_PR_N_UNIQUE;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_PR_UNKNOWN"))
+#ifdef KDC_PR_UNKNOWN
+	    return KDC_PR_UNKNOWN;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_P_MKEY_VER"))
+#ifdef KDC_P_MKEY_VER
+	    return KDC_P_MKEY_VER;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_SERVICE_EXP"))
+#ifdef KDC_SERVICE_EXP
+	    return KDC_SERVICE_EXP;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KDC_S_MKEY_VER"))
+#ifdef KDC_S_MKEY_VER
+	    return KDC_S_MKEY_VER;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KFAILURE"))
+#ifdef KFAILURE
+	    return KFAILURE;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KKEY_SZ"))
+#ifdef KKEY_SZ
+	    return KKEY_SZ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KNAME_FMT"))
+#ifdef KNAME_FMT
+	    return KNAME_FMT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KOPT_DONT_CANON"))
+#ifdef KOPT_DONT_CANON
+	    return KOPT_DONT_CANON;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KOPT_DONT_MK_REQ"))
+#ifdef KOPT_DONT_MK_REQ
+	    return KOPT_DONT_MK_REQ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KOPT_DO_MUTUAL"))
+#ifdef KOPT_DO_MUTUAL
+	    return KOPT_DO_MUTUAL;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KOPT_DO_OLDSTYLE"))
+#ifdef KOPT_DO_OLDSTYLE
+	    return KOPT_DO_OLDSTYLE;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KRB_DEFS"))
+#ifdef KRB_DEFS
+	    return KRB_DEFS;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KRB_SENDAUTH_VLEN"))
+#ifdef KRB_SENDAUTH_VLEN
+	    return KRB_SENDAUTH_VLEN;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "KSUCCESS"))
+#ifdef KSUCCESS
+	    return KSUCCESS;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_1"))
+#ifdef K_FLAG_1
+	    return K_FLAG_1;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_2"))
+#ifdef K_FLAG_2
+	    return K_FLAG_2;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_3"))
+#ifdef K_FLAG_3
+	    return K_FLAG_3;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_4"))
+#ifdef K_FLAG_4
+	    return K_FLAG_4;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_5"))
+#ifdef K_FLAG_5
+	    return K_FLAG_5;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_6"))
+#ifdef K_FLAG_6
+	    return K_FLAG_6;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_7"))
+#ifdef K_FLAG_7
+	    return K_FLAG_7;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "K_FLAG_ORDER"))
+#ifdef K_FLAG_ORDER
+	    return K_FLAG_ORDER;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'L':
+	break;
+    case 'M':
+	if (strEQ(name, "MAX_HSTNM"))
+#ifdef MAX_HSTNM
+	    return MAX_HSTNM;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MAX_KRB_ERRORS"))
+#ifdef MAX_KRB_ERRORS
+	    return MAX_KRB_ERRORS;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MAX_KTXT_LEN"))
+#ifdef MAX_KTXT_LEN
+	    return MAX_KTXT_LEN;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MAX_K_NAME_SZ"))
+#ifdef MAX_K_NAME_SZ
+	    return MAX_K_NAME_SZ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MK_AP_OK"))
+#ifdef MK_AP_OK
+	    return MK_AP_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MK_AP_TGTEXP"))
+#ifdef MK_AP_TGTEXP
+	    return MK_AP_TGTEXP;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "MSG_TYPE_SZ"))
+#ifdef MSG_TYPE_SZ
+	    return MSG_TYPE_SZ;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'N':
+	if (strEQ(name, "NO_TKT_FIL"))
+#ifdef NO_TKT_FIL
+	    return NO_TKT_FIL;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'O':
+	break;
+    case 'P':
+	break;
+    case 'Q':
+	break;
+    case 'R':
+	if (strEQ(name, "RD_AP_BADD"))
+#ifdef RD_AP_BADD
+	    return RD_AP_BADD;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_EXP"))
+#ifdef RD_AP_EXP
+	    return RD_AP_EXP;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_INCON"))
+#ifdef RD_AP_INCON
+	    return RD_AP_INCON;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_MODIFIED"))
+#ifdef RD_AP_MODIFIED
+	    return RD_AP_MODIFIED;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_MSG_TYPE"))
+#ifdef RD_AP_MSG_TYPE
+	    return RD_AP_MSG_TYPE;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_NOT_US"))
+#ifdef RD_AP_NOT_US
+	    return RD_AP_NOT_US;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_NYV"))
+#ifdef RD_AP_NYV
+	    return RD_AP_NYV;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_OK"))
+#ifdef RD_AP_OK
+	    return RD_AP_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_ORDER"))
+#ifdef RD_AP_ORDER
+	    return RD_AP_ORDER;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_REPEAT"))
+#ifdef RD_AP_REPEAT
+	    return RD_AP_REPEAT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_TIME"))
+#ifdef RD_AP_TIME
+	    return RD_AP_TIME;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_UNAUTHOR"))
+#ifdef RD_AP_UNAUTHOR
+	    return RD_AP_UNAUTHOR;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_UNDEC"))
+#ifdef RD_AP_UNDEC
+	    return RD_AP_UNDEC;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RD_AP_VERSION"))
+#ifdef RD_AP_VERSION
+	    return RD_AP_VERSION;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "REALM_SZ"))
+#ifdef REALM_SZ
+	    return REALM_SZ;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RET_NOTKT"))
+#ifdef RET_NOTKT
+	    return RET_NOTKT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RET_OK"))
+#ifdef RET_OK
+	    return RET_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "RET_TKFIL"))
+#ifdef RET_TKFIL
+	    return RET_TKFIL;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "R_TKT_FIL"))
+#ifdef R_TKT_FIL
+	    return R_TKT_FIL;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'S':
+	if (strEQ(name, "SAFE_PRIV_ERROR"))
+#ifdef SAFE_PRIV_ERROR
+	    return SAFE_PRIV_ERROR;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "SKDC_CANT"))
+#ifdef SKDC_CANT
+	    return SKDC_CANT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "SKDC_OK"))
+#ifdef SKDC_OK
+	    return SKDC_OK;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "SKDC_RETRY"))
+#ifdef SKDC_RETRY
+	    return SKDC_RETRY;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "SNAME_SZ"))
+#ifdef SNAME_SZ
+	    return SNAME_SZ;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'T':
+	if (strEQ(name, "TKT_FIL_ACC"))
+#ifdef TKT_FIL_ACC
+	    return TKT_FIL_ACC;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "TKT_FIL_FMT"))
+#ifdef TKT_FIL_FMT
+	    return TKT_FIL_FMT;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "TKT_FIL_INI"))
+#ifdef TKT_FIL_INI
+	    return TKT_FIL_INI;
+#else
+	    goto not_there;
+#endif
+	if (strEQ(name, "TKT_FIL_LCK"))
+#ifdef TKT_FIL_LCK
+	    return TKT_FIL_LCK;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'U':
+	break;
+    case 'V':
+	if (strEQ(name, "VERSION_SZ"))
+#ifdef VERSION_SZ
+	    return VERSION_SZ;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'W':
+	if (strEQ(name, "W_TKT_FIL"))
+#ifdef W_TKT_FIL
+	    return W_TKT_FIL;
+#else
+	    goto not_there;
+#endif
+	break;
+    case 'X':
+    case 'Y':
+    case 'Z':
+    case 'a':
+    case 'b':
+    case 'c':
+    case 'd':
+    case 'e':
+    case 'f':
+    case 'g':
+    case 'h':
+    case 'i':
+    case 'j':
+    case 'k':
+    case 'l':
+    case 'm':
+    case 'n':
+    case 'o':
+    case 'p':
+    case 'q':
+    case 'r':
+    case 's':
+    case 't':
+    case 'u':
+    case 'v':
+    case 'w':
+    case 'x':
+    case 'y':
+    case 'z':
+    }
+    errno = EINVAL;
+    return 0;
+
+not_there:
+    errno = ENOENT;
+    return 0;
+}
+
+/*
+ *  Provide a function to translate Kerberos error codes
+ */
+char*
+krb_strerror(errcode)
+int errcode;
+{
+  return (errcode >= MAX_KRB_ERRORS)
+    ? "Kerberos error code out of range!"
+    : (char *)(krb_err_txt[errcode]);
+}
+
+MODULE = KerberosIV		PACKAGE = Kutil
+
+#
+#  Functions that construct/decompose the various Kerberos data structures
+#
+
+KTEXT_ST
+make_ktext(glob)
+	unsigned char *	glob
+	PREINIT:
+	int len;
+	CODE:
+	(void)SvPV(ST(0),len);
+	if (len <= MAX_KTXT_LEN) {
+		RETVAL.length = len;
+		Copy(glob, RETVAL.dat, len, unsigned char);
+		RETVAL.mbz = (BIT32)0;
+	} else {
+		croak("Scalar exceeds MAX_KTXT_LEN=%d", MAX_KTXT_LEN);
+	}
+	OUTPUT:
+	RETVAL
+
+int
+decomp_cred(cred)
+	CREDENTIALS	cred
+	PREINIT:
+	CREDENTIALS *	cred_p;
+	PPCODE:
+	EXTEND(sp,10);
+	PUSHs(sv_2mortal(newSVpv(cred_p->service,0)));
+	PUSHs(sv_2mortal(newSVpv(cred_p->instance,0)));
+	PUSHs(sv_2mortal(newSVpv(cred_p->realm,0)));
+	PUSHs(sv_2mortal(newSVpv((char*)cred_p->session,sizeof(C_Block))));
+	PUSHs(sv_2mortal(newSViv(cred_p->lifetime)));
+	PUSHs(sv_2mortal(newSViv(cred_p->kvno)));
+	PUSHs(sv_2mortal(newSVpv((char*)&cred_p->ticket_st, sizeof(KTEXT_ST))));
+	PUSHs(sv_2mortal(newSViv((int)cred_p->issue_date)));
+	PUSHs(sv_2mortal(newSVpv(cred_p->pname,0)));
+	PUSHs(sv_2mortal(newSVpv(cred_p->pinst,0)));
+	XSRETURN(10);
+
+int
+decomp_rpkt(pkt)
+	KTEXT_ST	pkt
+	PREINIT:
+	KTEXT		pkt_p;
+	int		l;
+	char *		cp;
+	PPCODE:
+	EXTEND(sp,5);	
+	/* Based on macros in prot.h */
+	PUSHs(sv_2mortal(newSViv(pkt_version(pkt_p))));
+	PUSHs(sv_2mortal(newSViv(pkt_msg_type(pkt_p))));
+	cp = pkt_p->dat+2;
+	PUSHs(sv_2mortal(newSVpv(cp,0)));
+	l = 1+strlen(cp);
+	cp += l;
+	PUSHs(sv_2mortal(newSVpv(cp,0)));
+	l = 1+strlen(cp);
+	cp += l;
+	PUSHs(sv_2mortal(newSVpv(cp,0)));
+	XSRETURN(5);
+
+MODULE = KerberosIV		PACKAGE = KerberosIV
+PROTOTYPES: DISABLE
+
+double
+constant(name,arg)
+	char *		name
+	int		arg
+
+char*
+krb_strerror(errcode)
+	int	errcode
+
+#
+#  Access to the des_pcbc_encrypt and des_key_sched functions
+#
+int
+des_pcbc_encrypt(in,length,key,iv,encrypt)
+	C_Block		in
+	S_BIT32		length
+	Key_schedule	key
+	C_Block		iv
+	int		encrypt
+	PREINIT:
+	C_Block *	in_p;
+	C_Block *	iv_p;
+	char *		out_p;
+	PPCODE:
+	New(0, out_p, ((length+7)/8)*8, char);
+	des_pcbc_encrypt(in_p,(C_Block *)out_p,length,key,iv_p,encrypt);
+	EXTEND(sp,1);
+	PUSHs(sv_2mortal(newSVpv(out_p,((length+7)/8)*8)));
+	Safefree(out_p);
+	XSRETURN(1);
+
+
+int
+des_key_sched(k)
+	C_Block		k
+	PREINIT:
+	C_Block *	k_p;
+	Key_schedule schedule;
+	PPCODE:
+	RETVAL = des_key_sched(*k_p,schedule);
+	EXTEND(sp,1);
+	if (RETVAL == 0) {	/* success */
+		PUSHs(sv_2mortal(newSVpv((char*)schedule,sizeof(Key_schedule))));
+	} else {    /* error occurred in des_key_sched: return undef */
+		PUSHs(&sv_undef);
+	}
+	XSRETURN(1);
+
+# 
+#  First the simple functions that require no special return code
+#
+char*
+krb_realmofhost(host)
+	const char *	host
+
+int
+save_credentials(service,instance,realm,session,lifetime,kvno,ticket,issue_date)
+        const char *	service
+	const char *	instance
+	const char *	realm
+	C_Block		session
+	int		lifetime
+	int		kvno
+	KTEXT_ST	ticket
+	S_BIT32		issue_date
+	PREINIT:
+	C_Block *	session_p;
+	KTEXT		ticket_p;
+	CODE:
+	RETVAL = save_credentials(service,instance,realm,*session_p,lifetime,
+			kvno,ticket_p,issue_date);
+	OUTPUT:
+	RETVAL
+
+int
+krb_get_krbhst(r,n)
+	char*	r
+	int	n
+	PREINIT:
+	char    h[MAX_HSTNM];
+	PPCODE:
+	RETVAL = krb_get_krbhst(h, r, n);
+	EXTEND(sp,2);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv(h,0)));
+	XSRETURN(2);
+
+int
+krb_get_admhst(r,n)
+	char*	r
+	int	n
+	PREINIT:
+	char	h[MAX_HSTNM];
+	PPCODE:
+	RETVAL = krb_get_admhst(h, r, n);
+	EXTEND(sp,2);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv(h,0)));
+	XSRETURN(2);
+	
+int
+krb_get_lrealm(n)
+	int	n
+	PREINIT:
+	char	r[MAX_HSTNM];
+	PPCODE:
+	RETVAL = krb_get_lrealm(r, n);
+	EXTEND(sp,2);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv(r,0)));
+	XSRETURN(2);
+	
+char*
+krb_get_phost(alias)
+	const char *	alias
+
+KTEXT_ST
+pkt_cipher(pkt)
+	KTEXT_ST	pkt
+	PREINIT:
+	KTEXT		pkt_p;
+	extern int	swap_bytes;	/* set by kerberos for byte ordering */
+	PPCODE:
+	/* setup correct value of swap_bytes for pkt_clen */
+	if ((pkt_msg_type(pkt_p) & 1) != HOST_BYTE_ORDER) {
+		swap_bytes = 1;
+	} else {
+		swap_bytes = 0;
+	}
+	EXTEND(sp,1);
+	PUSHs(sv_2mortal(newSVpv((char*)(pkt_cipher(pkt_p)), pkt_clen(pkt_p))));
+	XSRETURN(1);
+
+
+int
+krb_get_tf_fullname(ticket_file)
+	const char *	ticket_file
+	PREINIT:
+	char name[ANAME_SZ];
+	char inst[INST_SZ];
+	char realm[REALM_SZ];
+	PPCODE:
+	RETVAL = krb_get_tf_fullname(ticket_file, name, inst, realm);
+	EXTEND(sp,4);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv(name,0)));
+	PUSHs(sv_2mortal(newSVpv(inst,0)));
+	PUSHs(sv_2mortal(newSVpv(realm,0)));
+	XSRETURN(4);
+
+int
+dest_tkt()
+
+int
+krb_mk_req(service,sinstance,realm,checksum)
+	const char *	service
+	const char *	sinstance
+	const char *	realm
+	S_BIT32		checksum
+	PREINIT:
+	KTEXT_ST	authent;
+	PPCODE:
+	RETVAL = krb_mk_req((KTEXT)(&authent), service, sinstance, realm, 
+			checksum);
+	EXTEND(sp,2);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv((char*)&authent, sizeof(KTEXT_ST))));
+	XSRETURN(2);
+
+int
+send_to_kdc(pkt,realm)
+	KTEXT_ST	pkt
+	const char *	realm
+	PREINIT:
+	KTEXT		pkt_p;
+	KTEXT_ST	rpkt;
+	PPCODE:
+	rpkt.length = 0;
+	RETVAL = send_to_kdc(pkt_p, &rpkt, realm);
+	EXTEND(sp,2);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv((char*)&rpkt, sizeof(KTEXT_ST))));
+	XSRETURN(2);
+	
+
+int
+get_ad_tkt(service,sinstance,realm,lifetime)
+	const char *	service
+	const char *	sinstance
+	const char *	realm
+	int		lifetime
+
+int
+krb_get_pw_in_tkt(user,instance,realm,service,sinstance,life,password)
+	const char *	user
+	const char *	instance
+	const char *	realm
+	const char *	service
+	const char *	sinstance
+	int		life
+	char *		password
+
+int
+decomp_ticket(tkt,key,key_s)
+	KTEXT_ST	tkt
+	C_Block		key
+	Key_schedule	key_s
+	PREINIT:
+	KTEXT		tkt_p;
+	C_Block *	key_p;
+	unsigned char	flags;
+	char		pname[ANAME_SZ];
+	char		pinstance[INST_SZ];
+	char		prealm[REALM_SZ];
+	BIT32		paddress;
+	C_Block		session;
+	int		life;
+	BIT32		time_sec;
+	char		sname[ANAME_SZ];
+	char		sinstance[INST_SZ];
+	PPCODE:
+	RETVAL = decomp_ticket(tkt_p,&flags,pname,pinstance,prealm,&paddress,
+		session,&life,&time_sec,sname,sinstance, *key_p, key_s);
+	EXTEND(sp,11);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSViv((int)flags)));
+	PUSHs(sv_2mortal(newSVpv(pname,0)));
+	PUSHs(sv_2mortal(newSVpv(pinstance,0)));
+	PUSHs(sv_2mortal(newSVpv(prealm,0)));
+	PUSHs(sv_2mortal(newSViv((BIT32)paddress)));
+	PUSHs(sv_2mortal(newSVpv((char *)session, sizeof(C_Block))));
+	PUSHs(sv_2mortal(newSViv(life)));
+	PUSHs(sv_2mortal(newSViv((int)time_sec)));
+	PUSHs(sv_2mortal(newSVpv(sname,0)));
+	PUSHs(sv_2mortal(newSVpv(sinstance,0)));
+	XSRETURN(11);
+
+
+#
+#  Functions with well-behaved arguments that return weird stuff or otherwise
+#  misbehave
+#
+
+int
+krb_get_in_tkt(user,instance,realm,service,sinstance,life,decrypt_proc,arg)
+	const char *	user
+	const char *	instance
+	const char *	realm
+	const char *	service
+	const char *	sinstance
+	int		life
+	char *		decrypt_proc
+	char *		arg
+        PREINIT:
+	extern char     current_decrypt_proc[];
+	char		debug_str[255];
+	CODE:
+	/* XXX should verify that decrypt_proc is a real procedure */
+	if (strlen(decrypt_proc) > 0)  {
+	    (void)strncpy(current_decrypt_proc,decrypt_proc,
+				sizeof(current_decrypt_proc));
+	    sprintf(debug_str, "user=[%s] inst=[%s] realm=[%s] svc=[%s] sis=[%s]\n",
+		user,instance,realm,service,sinstance);
+	    debug_warn(debug_str);
+  	    RETVAL = krb_get_in_tkt(user, instance, realm, service, sinstance, life,
+		NULL, callback_decrypt_proc, arg);
+	} else {
+	    RETVAL = krb_get_pw_in_tkt(user, instance, realm, service, sinstance, 
+		life, 0);
+	}
+	OUTPUT:
+	RETVAL
+        
+
+int
+krb_get_cred(service,instance,realm)
+	const char *	service
+	const char *	instance
+	const char *	realm
+        PREINIT:
+        CREDENTIALS     cred;
+        PPCODE:
+        RETVAL = krb_get_cred(service, instance, realm, &cred);
+        EXTEND(sp,2);
+        PUSHs(sv_2mortal(newSViv(RETVAL)));
+        PUSHs(sv_2mortal(newSVpv((char *)&cred, sizeof(CREDENTIALS))));
+        XSRETURN(2);
+
+int
+read_service_key(service,instance,realm,kvno,file)
+	const char *	service
+	char *		instance
+	const char *	realm
+	int		kvno
+	const char *	file
+	PREINIT:
+	char		found_instance[INST_SZ];
+	C_Block		key;
+	PPCODE:
+	strncpy(found_instance,instance,INST_SZ);
+	RETVAL = read_service_key(service,found_instance,realm,kvno,file,
+			(char*)key);
+	EXTEND(sp,3);
+	PUSHs(sv_2mortal(newSViv(RETVAL)));
+	PUSHs(sv_2mortal(newSVpv(key, sizeof(C_Block))));
+	PUSHs(sv_2mortal(newSVpv(found_instance,0)));
+	XSRETURN(3);
+
+
+
+#
+#  ($errcode,$msg_data,$cred,$schedule)
+#    = &krb_sendauth($options,$fd,$ticket,$service,$inst,$realm,$checksum,
+#      $laddr,$faddr,$version)
+#  $canoninstance: canonicalized name of instance (unless KOPT_DONT_CANON is set in
+#		   $options; then value is not guarnateed)
+#  $ticket: filled in with ticket obtained for the server (unless KOPT_DONT_MK_REQ
+#		    is set in $options, indicating $ticket arg is valid; 
+#		    then value is not guaranteed)
+#  $msg_data,$cred,$schedule: auth info from remote server, if KOPT_DO_MUTUAL is set
+#	           in $options; otherwise they are not returned.
+
+int
+krb_sendauth(options,fd,ticket,service,inst,realm,checksum,laddr,faddr,version)
+	S_BIT32		options
+	int		fd
+	KTEXT_ST	ticket
+	const char *	service
+	const char *	inst
+	const char *	realm
+	BIT32		checksum
+        const char *    laddr
+        const char *    faddr
+	const char *	version
+	PREINIT:
+        KTEXT           ticket_p;
+	MSG_DAT		msg_data;
+	CREDENTIALS	cred;
+	Key_schedule	schedule;
+	PPCODE:
+        
+	RETVAL = krb_sendauth(options, fd, &ticket, service, inst, realm,
+			      checksum, &msg_data, &cred, schedule,
+			      (struct sockaddr_in *)laddr, 
+                              (struct sockaddr_in *)faddr, version);
+        /* if KOPT_DONT_MK_REQ was *not* specified, and ticket pointer
+         *  appears to be valid, make the ticket update visible to Perl.
+         */
+        if (! (options & KOPT_DONT_MK_REQ) 
+            && (ticket_p != (KTEXT)NULL)) {
+           sv_setpvn(ST(2), (char *)ticket_p, sizeof(KTEXT_ST));
+           debug_warn("Updating KTEXT_ST");
+        }
+        if (options & KOPT_DO_MUTUAL) {
+           EXTEND(sp, 4);
+           PUSHs(sv_2mortal(newSViv(RETVAL)));
+           PUSHs(sv_2mortal(newSVpv((char *)&msg_data, sizeof(MSG_DAT))));
+           PUSHs(sv_2mortal(newSVpv((char *)&cred, sizeof(CREDENTIALS))));
+           PUSHs(sv_2mortal(newSVpv((char *)&schedule, sizeof(Key_schedule))));
+           XSRETURN(4);
+        } else {
+           EXTEND(sp, 1);
+           PUSHs(sv_2mortal(newSViv(RETVAL)));
+           XSRETURN(1);
+        }
+@
+
+
+1.5
+log
+@Kerberos handshake works, so the functions in here seem sane.  Still
+need to document a few of them
+@
+text
+@d908 1
+a908 1
+#  First the simple functions that require no pointer mangling
+d913 19
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d6 2
+a7 1
+#define debug_warn warn
+d18 3
+a20 2
+#include "krb_paths.h"
+#include "krb_conf.h"
+d795 1
+a795 1
+#  Functions that decompose the various Kerberos data structures
+d798 16
+d844 2
+a845 2
+	PUSHs(sv_2mortal(newSViv((unsigned int)(*(pkt_p->dat)))));
+	PUSHs(sv_2mortal(newSViv((unsigned int)(*(pkt_p->dat+1)))));
+d898 1
+a898 1
+	RETVAL = des_key_sched(k,schedule);
+d900 1
+a900 1
+	if (RETVAL) {
+d957 1
+a957 1
+pkt_cipher(pkt,host_byte_order)
+a958 1
+	int		host_byte_order
+d964 1
+a964 1
+	if (host_byte_order & 1 != HOST_BYTE_ORDER) {
+d1041 35
+@
+
+
+1.3
+log
+@sort of works, sort of
+@
+text
+@d17 2
+d791 1
+d816 21
+d850 39
+d938 19
+d977 32
+d1075 22
+@
+
+
+1.2
+log
+@Sort of works with callback proc for krb_get_in_tkt
+@
+text
+@a16 2
+#include "kcmd.c"
+#include "krcmd.c"
+d29 3
+a86 1
+
+d88 1
+a88 1
+        strncpy(cip->dat, str, MAX_KTXT_LEN);
+d929 1
+d932 7
+a938 2
+	(void)strncpy(current_decrypt_proc,decrypt_proc,sizeof(current_decrypt_proc));
+	RETVAL = krb_get_in_tkt(user, instance, realm, service, sinstance, life,
+d940 4
+a1016 79
+
+
+MODULE = KerberosIV	PACKAGE = Krcmd
+# 
+# int
+# krcmd(ahost,rport,remuser,cmd,fd2p,realm)
+# 	char *		&ahost
+# 	u_short		rport
+# 	const char *	remuser
+# 	const char *	cmd
+# 	int 		&fd2p
+# 	const char *	realm
+# 	OUTPUT:
+# 	ahost
+# 	fd2p
+# 
+int
+krcmd_mutual(host,rport,remuser,cmd,fd2p,realm)
+	char *		host
+	u_short		rport
+	const char *	remuser
+	const char *	cmd
+	int 		fd2p
+	const char *	realm
+	PREINIT:
+	CREDENTIALS 	cred;
+	Key_schedule	sched;
+	static char	ahost[MAX_HSTNM];
+	static char	*ahost_p = &ahost[0];
+	PPCODE:
+	(void)strncpy(ahost, host, MAX_HSTNM-1);
+	RETVAL = krcmd_mutual(&ahost_p, rport, remuser, cmd, 
+				(fd2p? &fd2p : NULL), realm, &cred, sched);
+        if (RETVAL > 0) {
+                EXTEND(sp,4);
+                PUSHs(sv_2mortal(newSViv(RETVAL)));
+                PUSHs(sv_2mortal(newSViv(fd2p)));         /* dup socket fd */
+                PUSHs(sv_2mortal(newSVpv((char*)&cred,sizeof(CREDENTIALS))));
+                PUSHs(sv_2mortal(newSVpv((char*)sched,sizeof(Key_schedule))));
+                XSRETURN(5);
+        } else {
+                EXTEND(sp,1);
+                PUSHs(sv_2mortal(newSViv(RETVAL)));
+                XSRETURN(1);
+        }
+
+# #
+# #  kcmd implements the generic remote-authentication functionality.  
+# 
+# int
+# kcmd(sock,ahost,rport,locuser,remuser,cmd,fd2p,ticket,service,realm,cred,schedule,msg_data,laddr,faddr,authopts)
+# 	int		&sock = NO_INIT
+# 	char *		&ahost
+# 	u_short		rport
+# 	const char *	locuser
+# 	const char *	remuser
+# 	const char *	cmd
+# 	int		&fd2p
+# 	KTEXT_ST	&ticket 
+# 	const char *	service
+# 	const char *	realm
+# 	CREDENTIALS 	&cred = NO_INIT
+# 	Key_schedule	&schedule
+# 	MSG_DAT 	&msg_data
+# 	struct sockaddr_in 	&laddr = NO_INIT
+# 	struct sockaddr_in 	&faddr = NO_INIT
+# 	long authopts
+# 	OUTPUT:
+# 	sock
+# 	ahost
+# 	fd2p
+# 	ticket
+# 	cred
+# 	schedule
+# 	msg_data
+# 	laddr
+# 	faddr
+# 
+# 
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d34 65
+d108 1
+a108 1
+    if (SvPOK(obj) && SvPV(obj,len) && (sizeof(obj) == (size_t)len)) {
+d118 1
+a118 1
+        sprintf(err, "%s object mungled", name);
+d785 1
+a785 1
+    : krb_err_txt[errcode];
+d788 25
+d826 7
+d834 62
+a895 1
+krb_get_cred(service,instance,realm)
+d897 1
+a897 1
+	const char *	instance
+d899 1
+a899 9
+        PREINIT:
+        CREDENTIALS     cred;
+        int             retcode;
+        PPCODE:
+        retcode = krb_get_cred(service, instance, realm, &cred);
+        EXTEND(sp,2);
+        PUSHs(sv_2mortal(newSViv(retcode)));
+        PUSHs(sv_2mortal(newSVpv((char *)&cred, sizeof(CREDENTIALS))));
+        XSRETURN(2);
+d911 6
+d918 5
+a922 11
+krb_create_ticket(tkt,flags,pname,pinstance,prealm,paddress,session,life,time_sec,sname,sinstance,key)
+        KTEXT           tkt
+	unsigned char	flags
+	const char *	pname
+	const char *	pinstance
+        const char *	prealm
+	S_BIT32		paddress
+	const char *	session
+	short		life
+	S_BIT32		time_sec
+	const char *	sname
+d924 10
+a933 2
+# type of 'key' changed from des_cblock to unsigned char *
+	unsigned char *	key
+d935 16
+a950 1
+	tkt
+a1006 1
+  
+a1007 3
+char*
+krb_realmofhost(host)
+	const char *	host
+d1009 1
+a1009 1
+# MODULE = KerberosIV	PACKAGE = Rcmd
+d1023 30
+a1052 15
+# int
+# krcmd_mutual(ahost,rport,remuser,cmd,fd2p,realm,cred,sched)
+# 	char *		&ahost
+# 	u_short		rport
+# 	const char *	remuser
+# 	const char *	cmd
+# 	int 		&fd2p
+# 	const char *	realm
+# 	CREDENTIALS *	cred
+# # type of 'sched' changed from Key_schedule to unsigned char *
+# 	unsigned char *	sched
+# 	OUTPUT:
+# 	ahost
+# 	fd2p
+# 
+@
+
+
+1.1.1.1
+log
+@KerberosIV for Perl5 sources
+@
+text
+@@

@@ -1,0 +1,712 @@
+head	1.15;
+access;
+symbols
+	Yatin-final:1.14.2.1
+	Yatin:1.14.0.2
+	pre-yatin-merge:1.14
+	transend-beta2:1.13
+	fox-dev:1.13
+	ptm-ng:1.12
+	transend-beta-latest:1.12
+	Aggregators:1.12
+	NoAggregators:1.12
+	iang:1.12.0.4
+	transend-beta:1.12.0.2
+	SOSP:1.11
+	stable_ptm:1.7
+	merged_preintegrate:1.6
+	heisenbug:1.5
+	PRE_INTEGRATION:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.15
+date	98.01.16.22.16.12;	author yatin;	state Exp;
+branches;
+next	1.14;
+
+1.14
+date	97.09.15.03.09.31;	author yatin;	state Exp;
+branches
+	1.14.2.1;
+next	1.13;
+
+1.13
+date	97.06.14.05.05.41;	author yatin;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	97.04.18.19.26.40;	author yatin;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	97.03.09.05.51.03;	author yatin;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	97.03.06.02.49.12;	author yatin;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	97.02.26.04.14.49;	author yatin;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.02.17.03.01.04;	author yatin;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.02.07.21.54.47;	author yatin;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.12.15.13.46.35;	author yatin;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.05.01.27.08;	author yatin;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.11.24.08.12.08;	author yatin;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.11.22.08.21.32;	author yatin;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.11.08.21.27.44;	author yatin;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.11.06.23.42.31;	author yatin;	state Exp;
+branches;
+next	;
+
+1.14.2.1
+date	97.11.17.22.06.59;	author yatin;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.15
+log
+@- new wingman frontend
+- new wingman aggregators mechanism
+- DistillAsync
+
+(merged from branch Yatin-final)
+@
+text
+@#ifndef __DISTLAUNCH_H__
+#define __DISTLAUNCH_H__
+
+#include "distdb.h"
+#include "ptm.h"
+#include "options.h"
+#include "rexec.h"
+#include "utils.h"
+
+
+struct LaunchRecord : public DatabaseRecord {
+  LaunchRecord(DistillerType &t, const char *optionsLine)
+    : type(t), argv(NULL), argc(0), autoLaunchLimit(DefaultAutoLaunchLimit), 
+      notificationTimeout_ms(DefaultNotificationTimeout_ms),
+      loadHistorySize(DefaultLoadHistorySize),
+      numberOfActiveDistillers(0), marked(gm_False), mustDie(gm_False) {
+
+	gettimeofday(&lastLaunch, NULL);
+	Parse(optionsLine);
+  }
+  ~LaunchRecord() {
+    for (int i=0; i < argc; i++) delete [] argv[i];
+    delete [] argv;
+  }
+
+  void Die();
+  gm_Bool Launch(UINT32 requestID);
+  void EvRegisterDistiller(DistillerRecord */*dist*/) {
+    numberOfActiveDistillers++;
+  }
+  void EvDeregisterDistiller(DistillerRecord *dist) {
+    numberOfActiveDistillers--;
+    totalLoad -= dist->load;
+  }
+  void UpdateLoad(Load &newLoad, Load &prevLoad);
+  gm_Bool Parse(const char *optionsLine);
+  void ParseParam(ts_strtok_state *state, char *&token, UINT32 &variable, 
+		   UINT32 defaultValue);
+
+  DistillerType type;
+  char    executable[MAXPATH];
+  char    **argv;
+  int     argc;
+  UINT32  autoLaunchLimit, notificationTimeout_ms;
+  int     loadHistorySize;
+  timeval lastLaunch;
+
+  void TryToAutoLaunch();
+  void Relaunch();
+
+  Load totalLoad;
+  int  numberOfActiveDistillers;
+
+
+  gm_Bool marked, mustDie;
+
+
+  static OptionDatabase *options;
+};
+
+
+class LaunchDatabase : public Database {
+public:
+  LaunchDatabase() { }
+  ~LaunchDatabase() { }
+  gm_Bool Create(OptionDatabase *options) { 
+    return options->ForEach(ForEachCreate, this);
+  }
+  gm_Bool Update(OptionDatabase *options) {
+    gm_Log("Updating the auto-launch database:1\n");
+    if (Mark()==gm_False) return gm_False;
+    gm_Log("Updating the auto-launch database:2\n");
+    if (options->ForEach(ForEachUpdate, this)==gm_False) return gm_False;
+    gm_Log("Updating the auto-launch database:3\n");
+    if (Sweep()==gm_False) return gm_False;
+    gm_Log("Updating the auto-launch database:done\n");
+    return gm_True;
+  }
+
+  LaunchRecord *FindMatchingDistiller(DistillerType *type);
+  LaunchRecord *getLaunchRecord(DistillerType *type);
+private:
+  DatabaseRecord *CreateRecord(const char *key, const char *value);
+  gm_Bool UpdateRecord(LaunchRecord *record, const char *optionsLine);
+
+  struct MatchingDistillerFinder {
+    MatchingDistillerFinder(DistillerType *type) 
+      : distillerType(type), launchRecord(NULL) { };
+
+    DistillerType *distillerType;
+    LaunchRecord  *launchRecord;
+  };
+
+
+  gm_Bool Mark() { return ForEach(MarkHelper, NULL); }
+  gm_Bool Sweep();
+  gm_Bool Unmark(LaunchRecord *record) { 
+    record->marked = gm_False; 
+    return gm_True; 
+  }
+
+  static gm_Bool MarkHelper(Database */*db*/, DatabaseRecord *record, 
+			    void */*args*/) {
+    ((LaunchRecord*)record)->marked = gm_True;
+    return gm_True;
+  }
+
+  static gm_Bool SweepHelper(Database *db, DatabaseRecord *record, 
+			     void *args);
+  static gm_Bool MatchEachDistiller(Database *db, DatabaseRecord *record, 
+				    void *args);
+  static gm_Bool getLRHelper(Database *db, DatabaseRecord *record, 
+			     void *args);
+  static gm_Bool ForEachCreate(OptionDatabase *options, const char *key,
+			       const char *value, void *args);
+  static gm_Bool ForEachUpdate(OptionDatabase *options, const char *key,
+			       const char *value, void *args);
+};
+
+
+
+#ifdef OLD
+class LaunchDatabase : public BasicOptionDatabase {
+public:
+  LaunchRecord *FindMatchingDistiller(DistillerType *type);
+  LaunchRecord *getLaunchRecord(DistillerType *type);
+protected:
+  DatabaseRecord *CreateRecord(const char *key, const char *value);
+  
+  struct MatchingDistillerFinder {
+    MatchingDistillerFinder(DistillerType *type) 
+      : distillerType(type), launchRecord(NULL) { };
+
+    DistillerType *distillerType;
+    LaunchRecord  *launchRecord;
+  };
+
+  static gm_Bool MatchEachDistiller(Database *db, DatabaseRecord *record, 
+				    void *args);
+  static gm_Bool getLRHelper(Database *db, DatabaseRecord *record, 
+			     void *args);
+};
+#endif
+
+
+
+struct LaunchRequest {
+  LaunchRequest(PrivateConnection *object, UINT32 id)
+    : replyObject(object), replyID(id) { };
+  PrivateConnection *replyObject;
+  UINT32 replyID;
+};
+
+
+
+
+struct PendingLaunch : public RequestReply {
+  PendingLaunch(LaunchRecord *r, DistillerLauncher *launcher);
+  virtual ~PendingLaunch();
+
+  gm_Bool Append(PrivateConnection *replyObject, UINT32 replyID);
+  gm_Bool LaunchFailed();
+
+  virtual gm_Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args);
+  virtual gm_Bool EvTimer(RequestReplyEventSystem *evs);
+
+  LaunchRecord *launchRecord;
+  int countOfTimeouts;
+  List<LaunchRequest> waitingList;
+
+  static DistillerLauncher *distillerLauncher;
+};
+
+
+
+
+
+class DistillerLauncher {
+public:
+  DistillerLauncher(OptionDatabase *options);
+  gm_Bool OptionsUpdate(OptionDatabase *options);
+  /*gm_Bool UpdateDatabase(char *dbFilename) 
+  { launchDB.DeleteAllRecords(); return launchDB.Create(dbFilename); };*/
+
+  RExec *getRExec() { return &rexec; };
+  gm_Bool TryToLaunch(DistillerType *type, 
+		   PrivateConnection *replyObject, UINT32 replyID);
+  void RemoveBrokenConnection(PrivateConnection *object);
+
+  gm_Bool AddPendingLaunch(PendingLaunch *pendingLaunch) 
+  { return pendingList.InsertAtHead(pendingLaunch); };
+  void RemovePendingLaunch(PendingLaunch *pendingLaunch)
+  { pendingList.Remove(pendingLaunch); };
+  LaunchRecord *getLaunchRecord(DistillerType *type, gm_Bool matchAny) {
+    if (matchAny==gm_True) {
+      return launchDB.FindMatchingDistiller(type);
+    } else {
+      return launchDB.getLaunchRecord(type);
+    }
+  }
+  PendingLaunch *FindPendingLaunch(LaunchRecord *record);
+protected:
+  List<PendingLaunch> pendingList;
+  LaunchDatabase launchDB;
+  RExec rexec;
+};
+
+
+
+
+#endif // __DISTLAUNCH_H_
+@
+
+
+1.14
+log
+@PTM Changes:
+
+* libdist.a now includes libptmstub.a. If you wish to invoke other
+distillers from a distiller, you must call InitializeDistillerCache in
+your DistillerInit method.
+
+Please note that the arguments to InitializeDistillerCache have changed
+slightly. Check out ptm/src/dist/distengine.c for an example of invoking
+distillers from other distillers. I have updated the frontend to
+reflect the change in arguments.
+
+* DistillerMain times out after a certain time interval. The default
+timeout is 60 seconds. You can override that on a per-distiller basis
+through the gm_options file (See ahead).
+
+* The "dist.blah:" line format has changed slightly. Here's the new
+format:
+
+dist.transend/foo/bar: sbin/foobar_munger <auto-launch-limit-ms> \
+			<averaging-interval-ms> <distiller args ...> \
+			-- <additional args>
+
+Currently the auto-launch-limit-ms param is the max tolerable queue
+length. Set it to zero if you want to disable auto-launching.
+
+For both <auto-launch-limit-ms> and <averaging-interval-ms>, you can
+specify - or 0 to use the built-in default value.
+
+<distiller-args> can be any of the command line arguments that the
+distiller can understand. Specifically you can use the -n argument to se
+the notification timeout and -m to set the DistillerMain timeout.
+
+Please update your gm_options file to the new format. Look at
+gm_options.yatin for examples.
+
+
+* The PTM Makefile does dependencies correctly (finally!!!). The
+dependency file has been generated currently for Linux. If you are
+compiling on a Solaris box, it might complain about not finding some of
+the linux .h files. Simply run "make depend" in the ptm subdirectory on
+your solaris box. Hopefully it'll work. If it doesn't work, comment out
+the "source Makefile.depend" line from your Makefile.
+@
+text
+@d49 1
+d194 6
+a199 2
+  LaunchRecord *getLaunchRecord(DistillerType *type) {
+    return launchDB.getLaunchRecord(type);
+@
+
+
+1.14.2.1
+log
+@- Modularized the wingman frontend by splitting wing_go_proc into
+  multiple smaller functions
+
+- New aggregator mechanism for wingman proxies. The WingDispatch worker
+  receives a request with a special content-type application/x-wingman-agg.
+  The body of the request contains the full aggregator url
+
+  The worker should return a valid HTTP response, which might be a
+  pilot-ready document (i.e. an x-wingman/* document) or an HTTP
+  redirect to a new URL, or whatever it chooses!)
+
+- The WingDispatcher is now expected to weed out unintelligible content-types
+  and return a content-type of x-wingman/<integer> to the frontend, where
+  <integer> represents the integral content type returned to the pilot client.
+
+- Agglist: this appears at the dispatcher as a special aggregator request
+  with a url of agg://agglist/ (this URL is actually defined in the
+  gm_options file, so the worker should check against the gm_options
+  entry, rather than a hard-coded entry). The worker that handles this
+  request *MUST* return a document with content type
+  x-wingman/2 and the actual agglist as part of the data.
+
+  For old browsers, the data part of this response is stuffed into an
+  appropriate metadata field by the frontend before sending the reply to
+  the client (i.e. it is backward compatible). For browsers with the new
+  version number, the browser will no longer set any special flags in the
+  metadata field of the client request. Instead it will explicitly request
+  for the agg://agglist/ url. It'll check the ContentType field in the
+  response for content type 2 to match up the correct response.
+
+- Created a new version number for the agglist changes:
+  #define CLIENT_VERSION_NEWAGG 0x01050200
+
+- gm_options changes:
+  Here are the three new gm_options entries for wingman: (the
+  wingman.text.prefetch_href replaces the old prefetch.href entry)
+
+  wingman.about_url: http://www.isaac.cs.berkeley.edu/pilot/wingman/about-
+  wingman.agglist_url: agg://agglist/
+  wingman.text.prefetch_href: 10
+
+- PTM changes:
+  - Background distillers work. Specify the -e flag before the -- in the
+    gm_options line for the distiller. The PTM will IMMEDIATELY respawn the
+    distiller if it crashes. This mechanism is still very simple and naive
+  - Distillers can rename themselves: API function DistillerReregister.
+@
+text
+@a48 1
+  void Relaunch();
+d193 2
+a194 6
+  LaunchRecord *getLaunchRecord(DistillerType *type, gm_Bool matchAny) {
+    if (matchAny==gm_True) {
+      return launchDB.FindMatchingDistiller(type);
+    } else {
+      return launchDB.getLaunchRecord(type);
+    }
+@
+
+
+1.13
+log
+@combined distillers.db into gm_options
+added re-reading of the options file to the PTM, thru a SIGUSR1
+added arbitrary arguments capability to distillers. Extra args are passed
+on to DistillerInit()
+added functionality to flush the negative cache when the PTM re-reads the
+options file or when it restarts
+@
+text
+@d8 1
+d37 2
+@
+
+
+1.12
+log
+@Added rexec.args, so now you can pass arguments to rsh
+Cleaned up the ptm to always read options from the options file
+@
+text
+@d11 12
+a22 8
+  LaunchRecord(DistillerType &t, const char *pathname,
+	       UINT32 autoLaunchLimit_, int historySize, UINT32 timeout_ms) 
+    : type(t), autoLaunchLimit(autoLaunchLimit_), 
+      notificationTimeout_ms(timeout_ms),
+      loadHistorySize(historySize),
+      numberOfActiveDistillers(0){ 
+      gettimeofday(&lastLaunch, NULL);
+      strcpy(executable, pathname); 
+d24 2
+d35 1
+d39 2
+a44 1
+//private:
+d49 65
+d117 2
+d139 1
+d176 4
+a179 4
+  DistillerLauncher(const char *dbFilename, const char *rsh="", 
+		    const char *rshArgs="", const char *hosts="");
+  gm_Bool UpdateDatabase(char *dbFilename) 
+  { launchDB.DeleteAllRecords(); return launchDB.Create(dbFilename); };
+d193 1
+a194 2
+  PendingLaunch *FindPendingLaunch(LaunchRecord *record);
+
+@
+
+
+1.11
+log
+@Modified distiller side code for instrumentation
+Added stuff to the frontend side code to do predicting of the queue length
+@
+text
+@d100 2
+a101 1
+  DistillerLauncher(char *dbFilename, char *rsh="", char *hosts="");
+@
+
+
+1.10
+log
+@Modified the PTM code to make a whole bunch of #defines customizable thru
+the gm_options/distillers.db file
+@
+text
+@d36 1
+a36 1
+private:
+@
+
+
+1.9
+log
+@Major changes to the PTM. The PTM can now auto-launch new distillers when
+the load on the system gets too high. The frontend stub has a separate
+thread per connection to the distillers and PTM to handle network events
+@
+text
+@d11 6
+a16 2
+  LaunchRecord(DistillerType &t, const char *pathname,UINT32 autoLaunchLimit_) 
+    : type(t), autoLaunchLimit(autoLaunchLimit_), numberOfActiveDistillers(0){ 
+d31 3
+a33 2
+  char executable[MAXPATH];
+  UINT32 autoLaunchLimit;
+@
+
+
+1.8
+log
+@Major changes to the PTM stuff. The previous version has been tagged
+stable_ptm.
+
+The new version uses a new LinkedList library; the distiller-cache at
+the frontend was rewritten to remove some concurrency bugs
+@
+text
+@d11 5
+a15 2
+  LaunchRecord(DistillerType &t, const char *pathname) 
+    : type(t) { strcpy(executable, pathname); };
+d17 8
+d28 8
+d42 1
+a42 1
+
+d55 3
+a57 2
+				 void *args);
+
+a101 1
+
+d108 3
+@
+
+
+1.7
+log
+@Modified the PTM stuff to enable remote execution of processes
+Currently using rsh and round-robin to select machines
+@
+text
+@d64 1
+a64 1
+  LinkedList<LaunchRequest> waitingList;
+d92 1
+a92 1
+  LinkedList<PendingLaunch> pendingList;
+@
+
+
+1.6
+log
+@Yatin's first commit from India
+@
+text
+@d7 1
+d75 1
+a75 1
+  DistillerLauncher(char *dbFilename);
+d79 1
+d94 1
+@
+
+
+1.5
+log
+@Modified Bool, FALSE and TRUE to gm_Bool, gm_False and gm_True respectively
+@
+text
+@d74 1
+a74 1
+  DistillerLauncher(char *dbFilename, char *monitor);
+a86 2
+
+  char *getMonitor() { return monitorMulticast; };
+a91 1
+  char monitorMulticast[MAXIP+30];
+@
+
+
+1.4
+log
+@Added load balancing stuff to the distiller and ptm. Still need to add
+lottery scheduling to the cache manager
+@
+text
+@d12 1
+a12 1
+  Bool Launch(UINT32 requestID);
+d34 1
+a34 1
+  static Bool MatchEachDistiller(Database *db, DatabaseRecord *record, 
+d55 2
+a56 2
+  Bool Append(PrivateConnection *replyObject, UINT32 replyID);
+  Bool LaunchFailed();
+d58 2
+a59 2
+  virtual Bool EvReplyReceived(RequestReplyEventSystem *evs, void *args);
+  virtual Bool EvTimer(RequestReplyEventSystem *evs);
+d75 1
+a75 1
+  Bool UpdateDatabase(char *dbFilename) 
+d78 1
+a78 1
+  Bool TryToLaunch(DistillerType *type, 
+d83 1
+a83 1
+  Bool AddPendingLaunch(PendingLaunch *pendingLaunch) 
+@
+
+
+1.3
+log
+@Modified the logging mechanism to use the monitor entity
+Multiple PTM detect each other and die gracefully
+Still need to do auto start of PTM by the proxy front end
+@
+text
+@d6 1
+d10 1
+a10 1
+  LaunchRecord(DistillerType &t, char *pathname) 
+d19 1
+a19 1
+class LaunchDatabase : public Database {
+a21 1
+  Bool Create(char *filename);
+d24 2
+@
+
+
+1.2
+log
+@Distiller and proxy communication layers are working.
+PTM can auto-spawn distillers
+Glurun and load balancing not yet implemented
+@
+text
+@d72 1
+a72 1
+  DistillerLauncher(char *dbFilename);
+d85 2
+d92 1
+@
+
+
+1.1
+log
+@Distiller front end working
+Cache manager broken
+PTM network stuff not completely done
+@
+text
+@d32 2
+a33 1
+  static Bool MatchEachDistiller(DatabaseRecord *record, void *args);
+d40 1
+a40 1
+  LaunchRequest(CommunicationObject *object, UINT32 id)
+d42 1
+a42 1
+  CommunicationObject *replyObject;
+d53 1
+a53 1
+  Bool Append(CommunicationObject *replyObject, UINT32 replyID);
+d72 1
+a72 1
+  DistillerLauncher(char *dbFilename) { launchDB.Create(dbFilename); };
+d77 1
+a77 1
+		   CommunicationObject *replyObject, UINT32 replyID);
+d79 1
+a79 1
+  void RemoveBrokenConnection(CommunicationObject *object);
+@

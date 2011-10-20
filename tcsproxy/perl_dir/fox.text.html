@@ -1,0 +1,66 @@
+# -*- perl -*-
+#
+#  A regexp based distiller that converts keywords identified by arg id 9050
+#  to have the formatting specified by arg id 9051.
+#
+
+use TACCutils;
+use clib;
+
+sub DistillerInit {
+    0;    
+}
+
+sub DistillerMain {
+    my($data,$headers,$type,%args) = @_;
+    my $url = &get_my_url($headers);
+    my($pattern,$replacement,$opentags,$closetags);
+    my $regexp;
+    
+    if ($url =~ m/\bPREFS\b/) {
+        return(&htmlify(&make_prefs_form("Regular expression to hilite",
+                                         "s9050",
+                                         "text",
+                                         "",
+
+                                         "Replacement regexp",
+                                         "s9052",
+                                         "text",
+                                         "",
+
+                                         "Tags to apply",
+                                         "s9051",
+                                         "text",
+                                         "<B><FONT COLOR=RED>",
+                                         )),
+               "", "text/html", 0);
+    }
+
+    # regexp to highlight
+    $pattern = &unescape($args{9050}) or return($data,'','text/html',0);
+    $replacement = &unescape($args{9052});
+    $opentags = &unescape($args{9051})  or return($data,'','text/html',0);
+    #warn "Regexp=$pattern  tags=$opentags\n";
+    my $tag = '<([^> \t]+)[^>]*>';
+
+    $pattern = quotemeta($pattern);
+    $replacement = quotemeta($replacement);
+
+    if ($replacement) {
+        $regexp = "s!$pattern!$replacement!isg";
+    } else {
+        ($closetags = $opentags) =~ s!$tag!</$1>!sg;
+        # reverse order of tags
+        $closetags = join('', reverse(split(/(?=<)/, $closetags)));
+        $regexp = "s!($pattern)!$opentags\$1$closetags!ig";
+    }
+
+    $data = &html_regsub($data,$regexp);
+    # since this is a simple distiller, return an empty string and let the
+    # frontend construct the headers.
+    return($data, "", "text/html", 0);
+}
+
+
+1;
+

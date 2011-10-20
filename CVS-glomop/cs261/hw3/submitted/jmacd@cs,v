@@ -1,0 +1,140 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	98.11.20.19.41.55;	author daw;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@From jmacd@@helen.CS.Berkeley.EDU  Thu Nov 19 15:27:53 1998
+Return-Path: jmacd@@helen.CS.Berkeley.EDU
+Received: from helen.CS.Berkeley.EDU (helen.CS.Berkeley.EDU [128.32.131.251]) by joseph.cs.berkeley.edu (8.8.5/local) with ESMTP id PAA14429 for <cs261-homeworks@@joseph.cs.Berkeley.EDU>; Thu, 19 Nov 1998 15:27:52 -0800
+Received: (from jmacd@@localhost)
+	by helen.CS.Berkeley.EDU (8.9.1a/8.9.1) id PAA00529;
+	Thu, 19 Nov 1998 15:28:06 -0800 (PST)
+Message-ID: <19981119152806.25228@@helen.CS.Berkeley.EDU>
+Date: Thu, 19 Nov 1998 15:28:06 -0800
+From: Josh MacDonald <jmacd@@CS.Berkeley.EDU>
+To: cs261-homeworks@@joseph.cs.Berkeley.EDU
+Subject: hw3
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+Status: RO
+
+Josh MacDonald
+CS261 Homework
+
+1.
+
+The call to grablock() is performed as root.  This is suspicious.
+Though O_EXCL is set, which prevents it from clobbering an existing
+file (in theory, in practice it can break over NFS, I believe), if the
+program is interupted after the open, it will leave an empty file
+owned by root (similarly for the temporary edit file).
+
+copyfile() copies the moderators file as root.  This allows any user
+to read the moderators file.  The result of fputs() and fclose() are
+not tested, allowing a full disk or other condition to truncate the
+moderators file.
+
+The call to getgroups() should use a length of NGROUPS_MAX.  The
+recovered group priviledges may be less than the user truly has.  This
+results in a loss of priviledges only.
+
+A SIGCHLD can be delivered by some external source immediately after
+the signal handler is installed on line 110 in the call to debug() on
+line 111.  After the first setgroups() in secure_open_as_user() and
+before the fopen() call on line 38.  The call to sigchld_handler()
+calls debug() which calls secure_open_as_user (a second activation),
+and RETURNS the euid to 0.  The fopen is then executed as root.  Since
+the debugging log file is being opened and it was intended to be
+opened anyway, this only allows the user to violate quotas, perhaps
+more.
+
+The looksok() function claims to only weakly verify the file's
+syntax.  Since I don't know the syntax, I can't comment.
+
+Once running vi (as root), the user is free to do anything he wants:
+read and write arbitrary files, run subshells, etc.
+
+Misc bugs and bad practices:
+
+Manually delivering a SIGCHLD signal will prematurely set done=1, and
+cause the parent to exit its busy loop early.  It should use wait to
+know that the child exited.  The call to sleep is extremely bogus.
+
+The call to rename is not tested.
+
+It is okay to ignore the return value of close() for files opened for
+reading, but not writing, because thats when failures can be raised.
+
+The return values of the logging functions are not tested.
+
+Call to getpwuid() in line 157 can return NULL, this is not tested.
+Failure will cause seg fault.  Probably no vulnerability.
+
+The sprintf on line 157 is into a fixed size buffer, but presumably
+user names are restricted in length.  This and others are passed to
+debug(), which also uses a fixed size buffer.  Probably no
+vulnerability.
+
+Result of tmpnam() is not tested, failure will cause seg fault.
+Probably no vulnerability.
+
+And probably lots more.
+
+2. This sounds like a nightmare.
+
+2.1. Denial of Service attacks become extremely simple, as the network
+can be flooded with packets which route themselves circularly.
+
+2.2. Flows and a set-handler packet make re-routing someone else's IP
+stream to anywhere they want.  The set-handler operation needs to be
+carefully secured.
+
+2.3. The router already requires stateful packet inspection from 2.2,
+this doesn't help.  Now, in addition to requiring per-flow memory
+resources, each packet's delivery is potentially unbounded in
+computation resources.  DOS attacks are simple.
+
+2.4. Why not put this directly in the router, implement it in
+hardware?  Allowing packets to rewrite themselves probably does not
+mix well with all modes of IPSec operation.
+
+2.5. Similar to allowing packets to modify themselves, allowing
+packets to produce other packets suffers the same problems as above.
+
+2.6. Using the more expressive JVML and Java libraries opens up new
+attacks similar to the browser attacks we've already seen.  There are
+many potential problems, all similar in concept to those attacks.
+
+3.
+
+3.1. I would block mobile code with an http proxy.  I would expect it
+to cause problems when browsing the effected pages.
+
+3.2. The problem is undecidable.  One might reject all Java classes
+which use a ClassLoader, calls to Class.forName(), the reflective
+interface, file system calls, or network calls.  For non-Java mobile
+code, I don't know.  Additional problems?  The problems are similar to
+in 3.1, only fewer.
+
+3.3. I blame the end-host implementations of safe and secure languages
+when mobile code must be rejected.
+
+@

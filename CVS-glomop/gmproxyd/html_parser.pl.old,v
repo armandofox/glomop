@@ -1,0 +1,782 @@
+head	1.1;
+access;
+symbols
+	current:1.1;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.08.23.19.36.04;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@# HTML parser
+# Jim Davis, July 15 1994
+# Modified and objectified: Armando Fox, July 1996
+# $Id: html_parser.pl,v 1.1 96/08/19 14:37:52 glomop Exp $
+
+# This is an HTML parser not an SGML parser.  It does not parse a DTD,
+# The DTD is implicit in the code, and specific to HTML.  
+# The processing of the HTML can be customized by the user by
+#   1) Defining routines to be called for various tags (see Begin and End arrays)
+#   2) Defining routines html_content and html_whitespace
+
+# This is not a validating parser.   It does not check the content model
+# eg you can use DT outside a DL and it won't know.  It is too liberal in
+# what tags are allowed to minimize what other tags.
+
+# Bugs - can't parse the prolog or whatever you call it
+#   <!DOCTYPE HTML [
+#     <!entity % HTML.Minimal "INCLUDE">
+#     <!-- Include standard HTML DTD -->
+#     <!ENTITY % html PUBLIC "-//connolly hal.com//DTD WWW HTML 1.8//EN">
+#     %html;
+#     ]>
+
+# modified 3 Aug to add a bunch of HTML 2.0 tags
+# modified 3 Sept to print HTML stack to STDERR not STDOUT, to add new
+#  routines html_begin_doc and html_end_doc for application specific cleanup
+#  and to break parse_html into two pieces.
+# modified 30 Sept 94.  parse_attributes now handles tag attributes that
+#   don't have values.  thanks to  Bill Simpson-Young <bill@@syd.dit.csiro.au>
+#   for the code.
+# modified 17 Apr 95 to support FORMS tags.
+
+=head1 NAME
+
+html_parser - "objectified" version of Jim Davis's free Perl4 HTML parser
+
+=head1 SYNOPSIS
+
+  require "html_parser.pl";
+
+  # Constructors:
+
+  $p = new html_parser ($htmltext,$contentproc,$whitespaceproc,$debugproc);
+
+  # Instance methods:
+
+  $p->tag_begin($tag,$callback_proc);
+  $p->tag_end($tag,$callback_proc);
+
+  $p->html_content_proc($subref);
+  $p->html_whitespace_proc($subref);
+
+  $current_line = $p->line_count;
+
+  $p->strict_nesting([$arg]);
+  $p->strict_empty(@@tags);
+
+  $p->parse_html_string;
+
+=head1 DESCRIPTION
+
+Implements an HTML parser object that works kind of like a YACC parser: you
+provide the action routines for the different "reductions", and then call the
+parser.  I know it should work differently, e.g. being able to repeatedly call
+something like $p->parse_next_token, but it doesn't yet.
+
+There are four kinds of action routines, all of which default to "no-op" if
+not explicitly set:
+
+=over 3
+
+=item *
+
+The routine called when whitespace is found in the text.  
+
+=item *
+
+The routine called to emit non-whitespace text.
+
+=item *
+
+The routine called when a tag is found that begins a new
+environment (e.g. "<BODY>")
+
+=item *
+
+The routine called when a tag is found that ends an environment
+(e.g. "</BODY>").
+
+=back
+
+You set up these routines in advance, then call the parser.  The parser object
+itself is passed as the first argument to all callbacks; since this
+object is really a reference to a blessed hash, you can use the hash to
+store your own arbitrary state.  For example, the simplest callback routine
+for HTML content would simply append the content to a cumulative string,
+which is stored in the parser object's hash and can therefore be
+accessed and modified (added to) from within the callback.
+
+=cut
+
+package html_parser;
+use strict 'vars';
+use Carp;
+
+sub instvars {
+    my $class = shift;
+    my $var;
+    my $action;
+    foreach $var (@@_) {
+        if ($var =~ /(\S+):r/) {
+            # read-only variable
+            $var = $1;
+            $action = qq!carp "Can't set instance variable `$var' this way, ignored"!;
+        } else {
+            $action = qq!\$self->{"$var"} = shift!;
+        }
+        eval "sub ${class}::${var}"  . qq!{
+            my \$self = shift;
+            $action if defined \$_[0];
+            return \$self->{"$var"}; }! ;
+    }
+}
+
+&html_parser::instvars(qw(html_parser whitespace_significant line_count:r
+                          strict_nesting 
+                          html_content_proc html_whitespace_proc
+                          tag_begin_default tag_end_default
+                          debug_proc));
+
+=head1 CONSTRUCTORS
+
+=over 3
+
+=item new html_parser ($text,$content,$whitespace,$tag_begin,$tag_end,$debug)
+
+Returns a new HTML parser object that will parse the HTML text stored in
+$text.  $content and $whitespace should be references or names of procedures to
+be called whenever HTML 
+text or whitespace respectively is parsed; see the descriptions of those
+functions below for details on what arguments they are called with.
+$tag_begin and $tag_end are the default procedures to be called when an opening
+or closing tag respectively is parsed.  They
+can be overridden for specific tags using L<"/tag_begin"> and
+L<"/tag_end">; see those functions for details on how the tag procedure
+is called.
+$debug  will be called if a warning or error occurs.  All functions
+default to "no-op" if unspecified.
+
+=back
+
+=cut
+
+sub new {
+    my $class = shift;
+    my $content = shift;
+    my ($html_content_proc,$html_whitespace_proc,
+        $default_tag_begin_proc, $default_tag_end_proc, $debugproc) = @@_;
+
+    $debugproc ||= \&html_parser::Noop;
+    $html_content_proc ||= \&html_parser::Noop;
+    $html_whitespace_proc ||= \&html_parser::Noop;
+    $default_tag_begin_proc ||= \&html_parser::Noop;
+    $default_tag_end_proc ||= \&html_parser::Noop;
+
+    my $self = {
+        "strict_nesting" => 0,
+        "strict_empty" => [],
+        "whitespace_significant" => 1,
+        "line_buffer" => $content,                # line buffer
+        "line_count" => 0,                  # input line number
+        "stack" => [],
+        "debug_proc" => $debugproc,
+        "html_content_proc" => $html_content_proc,
+        "html_whitespace_proc" => $html_whitespace_proc,
+        "tag_begin_default" => $default_tag_begin_proc,
+        "tag_end_default" => $default_tag_end_proc,
+    };
+    return bless($self);
+}
+
+
+=head1 INSTANCE VARIABLES
+
+To set instance variable $foo, say $p->foo($newvalue); to get its current
+value, say $value = $p->foo.
+
+=over 3
+
+=item $p->strict_nesting
+
+Controls what happens when tags do not nest properly.  Suppose tags are seen in
+the order FOO, BAR, /FOO, /BAR, and suppose the parser is examining
+tag /FOO, i.e. BAR is at the top of the parse stack.
+
+If strict_nesting is 0 (the default), then
+when /FOO is seen, BAR will be popped from the parse stack I<and
+implicitly closed>, i.e. as if /BAR had already been seen, and then FOO
+will be popped.   Warnings will be generated by calling the L<debug_proc>.
+When /BAR is seen later, another warning will be
+generated as the parser starts popping tags looking for BAR (which it
+may not find).
+
+If strict_nesting is 1, then when /FOO is seen, it will simply be
+discarded because the top of stack (BAR) does not match it.  Now when
+/BAR is seen, it will correctly match BAR, but FOO will still be on top
+of the stack, and if no further /FOO is seen, FOO will still be on top
+of the stack at the end of the parse (and an appropriate warning will be
+generated).
+
+Either way you lose, but that's what happens with badly-formed HTML.
+
+=item $p->strict_empty(@@tags)
+
+Controls what happens when an "empty" tag is seen (i.e. one that usually is not
+accompanied by a closing tag, such as <IMG> or <HR>).   The parser
+maintains a list of tags it thinks have this property.  When such a tag
+is seen, the default behavior is to  assume it is immediately
+followed by an implicit close, i.e. the parser will do callbacks as if
+it had seen <IMG ...></IMG>  or <HR></HR>.  But if the tag has been
+added to the strict_empty list using this function call, the parser will
+treat the tag as any other tag, not doing a callback for the tag close
+until one is explicitly seen or the tag is minimized by another open
+tag.
+
+To remove tags from the strict_empty list, call L<no_strict_entry>.
+
+=cut
+
+sub strict_empty {
+    my($self,@@tags) = @@_;
+    my @@strict_empty = @@{$self->{"strict_empty"}};
+    for (@@tags) {
+        push(@@strict_empty, uc $_) unless grep(uc $_, @@strict_empty);
+    }
+    1;
+}
+
+=back
+
+=head1 INSTANCE METHODS
+
+=over 3
+
+=item $p->parse_html_string
+
+Parses the HTML and returns when done.   Currently, error checking is
+minimal and most warnings have been turned off (go through the code and
+find the commented 'warn' statements if you want to do debugging).
+
+=cut
+
+sub parse_html_string {
+    my $self = shift;
+    my ($token, $new);
+    ## initialization
+    $self->{"line_count"} = 0;
+    $self->{"last_content"} = '';
+    #$line_buffer = "";
+
+    ## application specific initialization
+    $self->html_begin_doc();
+  main:
+    while (1) {
+
+	# if whitespace does not matter, trim any leading space.
+	if (! $self->{"whitespace_significant"}) {
+	    $self->{"line_buffer"} =~ s/^\s+//;}
+
+	# now dispatch on the type of token
+
+	if ($self->{"line_buffer"} =~ /^(\s+)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+	    $self->html_whitespace ($token);}
+
+	# This will lose if there is more than one comment on the line!
+	# elsif ($self->{"line_buffer"} =~ /^(\<!--(.|\n)*-->)/m ) {
+        elsif ($self->{"line_buffer"} =~ /^(\<!--)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+            my($pos)  = index($self->{"line_buffer"}, "-->");
+            if ($pos < 0) {
+                &{$self->{"debug_proc"}}($self,
+                                         $self->near("Comment has no ending!"));
+            } else {
+                $token .= substr($self->{"line_buffer"}, 0, $pos+3);
+                $self->{"line_buffer"} = substr($self->{"line_buffer"}, $pos+3);
+                $self->html_comment ($token);
+            }
+        }
+	elsif ($self->{"line_buffer"} =~ /^(\<![^-][^\>]*\>)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+	    $self->html_comment ($token);}
+
+	elsif ($self->{"line_buffer"} =~ /^(\<\/[^\>]*\>)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+	    $self->html_etag ($token);}
+
+	elsif ($self->{"line_buffer"} =~ /^(\<[^!\/][^\>]*\>)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+	    $self->html_tag ($token);}
+
+	elsif ($self->{"line_buffer"} =~ /^([^\s<]+)/) {
+	    $token = $1;
+	    $self->{"line_buffer"} = $';
+	    $token = &substitute_entities($token);
+	    $self->html_content ($token); }
+
+        elsif ($self->{"line_buffer"} eq '') {
+            last;
+        } else {
+            die "No valid token! Line: " . $self->{"line_buffer"};
+        }
+
+    }
+
+    ## cleanup
+    $self->html_end_doc();
+
+    if ($#{$self->{"stack"}} > -1) {
+	&{$self->{"debug_proc"}}($self, "Stack not empty at end of document\n");
+	$self->print_html_stack();}
+}
+
+=item $p->stack( [arg] )
+
+With no argument, returns an object representing the current state of the
+parser stack.  With an argument, also sets the parser stack to that state (the
+argument must be something previously returned as the result of this call).  
+Intended to be used in conjunction with L<stop_parse>.
+
+=cut    
+
+sub stack {
+    my $self = shift;
+    my $newstack = shift;
+
+    $self->{"stack"} = $newstack
+        if (ref($newstack) eq 'ARRAY');
+    $self->{"stack"};
+}
+
+    
+=item $p->stop_parse()
+
+Causes the parser to return immediately.  Intended to be called from inside a
+parser callback.  The parser's stack may be nonempty at the time this happens;
+if you intend to resume parsing later, be sure to first call the L</"stack">
+method, and when you resume parsing, call the method again to set the stack.
+Returns the remaining contents of the parser's buffer.
+
+=cut
+
+sub stop_parse {
+    my $self = shift;
+    my $res = $self->{"line_buffer"};
+    $self->{"line_buffer"} = '';
+    $res;
+}
+
+sub html_tag {
+    my $self = shift;
+    my ($tag) = shift;
+    my ($element) = &tag_element ($tag);
+    my (%attributes) = &tag_attributes ($tag);
+
+    # the tag might minimize (be an implicit end) for the previous tag
+    my ($prev_element);
+    while (&html_parser::Minimizes($self->stack_top_element(), $element)) {
+	$prev_element = $self->stack_pop_element ();
+        &{$self->{"debug_proc"}} ($self,
+                                  $self->near("New tag $element implicitly ".
+                                              "closes $prev_element"));
+	$self->html_end ($prev_element, 0);
+    }
+
+    $self->stack_push($tag);
+
+    $self->html_begin ($element, $tag, \%attributes);
+
+    # If this is an "empty" element (eg IMG or HR), determine whether to do an
+    # immediate implicit close (and pop the stack).
+    if (&html_parser::Empty($element)
+        && ! grep($element, @@{$self->{"strict_empty"}})) {
+        $self->stack_pop;
+	$self->html_end ($element, 0);
+    }
+}
+
+sub html_etag {
+    my $self = shift;
+    my ($tag) = @@_;
+    my ($element) = &tag_element ($tag);
+
+    # pop stack until find matching tag.  This is probably a bad idea,
+    # or at least too general.
+    my ( $prev_element) = $self->stack_pop_element();
+
+    if ($self->strict_nesting) {
+        if ((uc $prev_element) eq (uc $element)) {
+            # matching pair of <foo>...</foo>
+            $self->html_end(uc $element, 1);
+        } else {
+            &{$self->{"debug_proc"}}
+            ($self, $self->near("No match found for /$element" .
+                                "(stack: $prev_element)"));
+        }
+        return;
+    } else {
+        #
+        # no strict nesting: just pop stack until we see the matching open, and
+        # assume all intervening tags on the stack are implicitly closed.
+        #
+        until ((uc $prev_element) eq (uc $element)) {
+            &{$self->{"debug_proc"}}($self,
+                                     $self->near("Closing tag /$element also implicitly closes preceding $prev_element"));
+            $self->html_end ($prev_element, 0);
+            
+            if ($#{$self->{"stack"}} == -1) {
+                &{$self->{"debug_proc"}}($self,
+                                         $self->near("No match found for /$element"));
+                last;
+            }
+            
+            $prev_element = $self->stack_pop_element();
+        }
+        $self->html_end ($element, 1);
+    }
+}
+
+
+# For each element, the names of elements which minimize it.
+# This is of course totally HTML dependent and probably I have it wrong too
+
+%html_parser::Minimize = ("DT" => "DT:DD",
+                          "DD" => "DT",
+                          "LI" => "LI",
+                          "B"  => "P:DT:LI:H1:H2:H3:H4:BLOCKQUOTE:UL:OL:DL",
+                          "I"  => "P:DT:LI:H1:H2:H3:H4:BLOCKQUOTE:UL:OL:DL",
+                          "P"  => "P:DT:LI:H1:H2:H3:H4:BLOCKQUOTE:UL:OL:DL",
+                          );
+
+# Following tags are "empty", i.e. you do not typically see a /TAG to close
+# them off even though HTML strictly says you should....
+
+%html_parser::Empty = ("BASE" => 1,
+                       "BR" => 1,
+                       "HR" => 1,
+                       "IMG" => 1,
+                       "ISINDEX" => 1,
+                       "LINK" => 1,
+                       "META" => 1,
+                       "NEXTID" => 1,
+                       "PARAM" => 1,
+                       "INPUT" => 1,
+                       );
+
+# Does element E2 minimize E1?
+sub Minimizes {
+    my ($e1, $e2) = @@_;
+    $e1 = uc $e1;
+    $e2 = uc $e2;
+    my ($value) = 0;
+    return 0 unless defined $html_parser::Minimize{$e1};
+    my $elt;
+    foreach $elt (split (":", $html_parser::Minimize{$e1})) {
+	if ($elt eq $e2) {$value = 1;}}
+    $value;
+}
+
+# Empty tags have no content and hence no end tags
+sub Empty {
+    my ($element) = uc(shift);
+    $html_parser::Empty{$element};
+}
+
+
+
+=item $self->print_html_stack($fh)
+
+Prints the HTML stack to filehandle $fh (or STDERR if not given), top to
+bottom, one element per line.  Useful primarily for debugging.
+
+=cut 
+
+sub print_html_stack {
+    my $self = shift;
+    my $fh = shift || STDERR;
+    my @@stack  = @@ {$self->{"stack"}};
+    my $elt;
+    foreach $elt (reverse @@stack) {
+        print $fh  "$elt\n";
+    }
+}
+
+# The element on top of stack, if any.
+sub stack_top_element {
+    my $self = shift;
+    my $count = $#{$self->{"stack"}};
+    if ($count >= 0) {
+	&tag_element ($self->{"stack"}->[$count]);}
+}
+
+sub stack_push {
+    push (@@ {$_[0]->{"stack"}}, $_[1]);
+}
+
+sub stack_pop {
+    my $tag = pop(@@ {$_[0]->{"stack"}});
+    $tag;
+}
+
+sub stack_pop_element {
+    my $tag = pop (@@ {$_[0]->{"stack"}});
+    &tag_element($tag) ;
+}
+
+# The element from the tag, normalized.
+sub tag_element {
+    my ($tag) = shift || return;
+    $tag =~ /<\/?([^\s>]+)/;
+    uc $1;
+}
+
+# associative array of the attributes of a tag.
+sub tag_attributes {
+    my ($tag) = @@_;
+
+    # make attribute parsing work even when tag is split across newlines.
+    # this uses Perl 5 syntax for multiline match.
+    $tag =~ s/\n/ /mg;
+    
+    $tag =~ /^<[A-Za-z]+\s+(.*)>$/;
+    &parse_attributes($1);
+}
+
+# string should be something like
+# KEY="value" KEY2="longer value"  KEY3="tags o doom"
+# output is an associative array (like a lisp property list)
+# attributes names are not case sensitive, do I downcase them
+# Maybe (probably) I should substitute for entities when parsing attributes.
+
+sub parse_attributes {
+    my ($string) = @@_;
+    my (%attributes);
+    my ($name, $val);
+
+    while (1) {
+        if ($string =~ s/^\s*([A-Za-z]+)\s*=\s*\"([^\"]*)\"// ) { #"
+            $name = uc $1;
+            $val = $2;
+            $attributes{$name} = $val;
+            next;
+        } elsif ($string =~ s/^\s*([A-Za-z]+)\s*=\s*(\S*)//) {
+            $name = uc $1;
+            $val = $2;
+            $attributes{$name} = $val;
+            next;
+        } elsif ($string =~ s/^\s*([A-Za-z]+)//) {
+            $name = uc $1;
+            $val = "";
+            $attributes{$name} = $val;
+            next;
+        } else {
+            # bug: should print warning here
+            last;
+        }
+    }
+    return(%attributes);
+}
+
+sub substitute_entities {
+    my ($string) = @@_;
+    $string =~ s/&amp;/&/g;
+    $string =~ s/&lt;/</g;
+    $string =~ s/&gt;/>/g;
+    $string =~ s/&quot;/\"/g;               #" 
+    $string;
+}
+
+=item $p->tag_begin($tag,$callback_proc)
+
+=item $p->tag_end($tag,$callback_proc)
+
+Causes $callback_proc (which must be a code reference or name of a
+subroutine)  to be called whenever an opening (resp. closing)
+tag matching $tag 
+is encountered.  (No regexps; exact matches only, case is ignored.)  
+For
+example, $p->C<tag_begin("IMG", "myPkg::imgHandler")> will cause
+procedure C<imgHandler> in package C<myPkg> to be called whenever an
+"IMG" tag is seen.  $p->C<tag_end("HTML", "endHtml")> will cause
+procedure C<endHtml> in the caller's package to be called when an
+"/HTML" tag is seen.
+
+The
+special tag "END" causes the callback to occur after parsing is finished, 
+so you can do cleanup, send HTML to the client, or whatever.
+
+The callback procedure receives four arguments: the
+parser object, the actual 
+tag that was found (e.g. "IMG"), the complete text of the HTML escape
+that begins with the tag (e.g. "IMG SRC=/foo/bar.gif ALIGN=left"), and a
+reference to a hash of the attribute/value pairs (in the example just
+given, there would be a reference to a hash whose key "SRC" has value
+"/foo/bar.gif" and key "ALIGN" has value "left").  The tag_end key receives the
+same four arguments plus an additional argument whose value is true if and only
+if the tag was explicitly closed.  For example, if a "P" tag is followed by
+another "P" without an intervening closing "/P", the closing "/P" will be
+implicitly assumed present, so the tag_end procedure for "P" will be called
+with a final argument whose value is false.  If the closing "/P" had appeared
+in the original HTML, the last arg in the call to the tag_end procedure would
+be true.
+
+The callback can be written like this:
+
+ sub callback {
+    my $parser = shift;
+    my $tag = shift;
+    my $text = shift;
+    my %attribs = % {shift};
+    my $explicit = shift;      # tag_end callback only
+    # ...code...
+ }
+
+The callback's return value is ignored.
+
+=cut
+
+sub tag_begin {
+    my ($self,$element,$beginproc) = @@_;
+    $self->{Begin}->{uc $element} = $beginproc;
+}
+sub tag_end {
+    my ($self,$element,$endproc) = @@_;
+    $self->{End}->{uc $element} = $endproc;
+}
+
+=item $p->tag_begin_default($callback_proc)
+
+=item $p->tag_end_default($callback_proc)
+
+Sets $callback_proc as the default callback for the begin or end of any tags
+that have not 
+been explicitly assigned a callback using L<"/tag_begin"> or L<"/tag_end">.
+If $callback_proc is null, a default "no-op" procedure is substituted.
+
+=cut
+
+# do nothing
+sub Noop {
+    my ($element, $xxx) = @@_;
+}
+
+# called when a tag begins.  Dispatches using Begin
+sub html_begin {
+    my $self = shift;
+    my ($element, $tag, $attributes_ref) = @@_;
+
+    my $routine = ($self->{Begin}->{uc $element}  ||
+                        $self->{"tag_begin_default"} ||
+                        \&html_parser::Noop);
+    &$routine($self, $element, $tag, $attributes_ref);
+}
+
+# called when a tag ends.  Explicit is 0 if tag end is because of minimization
+# not that you should care.
+sub html_end {
+    my $self = shift;
+    my ($element, $explicit) = @@_;
+    my $routine = ($self->{End}->{uc $element}
+                        || $self->{"tag_end_default"}
+                        || \&html_parser::Noop);
+    &$routine ($self, $element, "</$element>", {}, $explicit);
+}
+
+=item $p->html_content_proc($proc)
+
+=item $p->html_whitespace_proc($proc)
+
+=item $p->debug_proc($proc)
+
+Change the content, whitespace, or debugging callback procedure, respectively, to
+$proc, which must be either the name of a subroutine or a code reference.  Each
+of these callbacks receives two arguments: the parser object, and the text,
+whitespace, or error message respectively.
+
+=cut
+
+sub html_content {
+    my $self = shift;
+    my $content = shift;
+    my $HtmlContent = $self->{"html_content_proc"};
+    $self->{"last_content"} .= $content;
+    if (defined $HtmlContent) {
+        &$HtmlContent($self, $content);
+    }
+}
+
+sub html_whitespace {
+    my $self = shift;
+    my $ws = shift;
+    my $HtmlWhitespace = $self->{"html_whitespace_proc"};
+    $self->{"last_content"} .= ' ';
+    if (defined $HtmlWhitespace) {
+        &$HtmlWhitespace($self, $ws);
+    }
+}
+
+sub near {
+    my ($self,$msg) = @@_;
+    my $last = $self->{"last_content"};
+    return sprintf("(after '...%s') $msg",
+                   (length($last) > 15
+                    ? substr($last,-15)
+                    : $last));
+}
+
+sub html_comment {
+    my $self=shift;
+    my ($tag) = @@_;
+}
+
+# redefine these for application-specific initialization and cleanup
+
+sub html_begin_doc {
+    my $self = shift;
+}
+
+sub html_end_doc {
+    my $self = shift;
+    my $routine;
+
+    if ($routine = $self->{Begin}->{"END"} || $self->{End}->{"END"}) {
+        &{$routine}($self, "END");
+    }
+}
+
+=back
+
+=head1 BUGS
+
+C<html_comment>, C<html_begin_doc> are not yet user-settable
+even though they should be.
+
+=cut 
+
+# return a "true value" when loaded by perl.
+1;
+
+@

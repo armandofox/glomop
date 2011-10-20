@@ -1,0 +1,560 @@
+head	1.14;
+access;
+symbols
+	current:1.13
+	prewink:1.10
+	stable:1.6;
+locks; strict;
+comment	@# @;
+
+
+1.14
+date	96.11.06.08.07.28;	author fox;	state Exp;
+branches;
+next	1.13;
+
+1.13
+date	96.08.23.19.37.25;	author gribble;	state Exp;
+branches;
+next	1.12;
+
+1.12
+date	96.07.26.20.32.15;	author fox;	state Exp;
+branches;
+next	1.11;
+
+1.11
+date	96.07.07.00.04.02;	author fox;	state Exp;
+branches;
+next	1.10;
+
+1.10
+date	96.06.16.01.41.40;	author fox;	state Exp;
+branches;
+next	1.9;
+
+1.9
+date	96.06.15.01.49.30;	author fox;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	96.06.14.23.53.54;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	96.06.14.07.08.05;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.06.14.06.39.50;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.06.13.22.34.09;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.06.13.09.15.53;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.06.11.02.17.50;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.06.10.22.50.39;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.06.07.00.34.18;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.14
+log
+@*** empty log message ***
+@
+text
+@#
+#  Image document type
+#  $Id: Image.pl,v 1.13 1996/08/23 19:37:25 gribble Exp $
+#
+#  BUGS:
+#  If we unlink tmp files on exiting segment(), segment manager complains of
+#  'read from closed filehandle' at line 84.
+
+
+package doc::Image;
+
+# Prefs recognized by this module:
+#   mtu: maximum size (bytes) of a chunk
+#   bpp: bits/pixel, 1-24
+#   scale: 1/reduction, 1-100 (1=orig size, 30=70% of size, etc)
+#   maxx,maxy: maximum x,y
+#   bw: nonzero means monochrome/gray display
+#   lat: latency of delivery
+
+
+# The segmentation function for a generic image converts it to PPM, then chops
+# it into a rectangular grid of subregions.  User prefs determine how to do the
+# chunking.
+#
+#  BUG::for now, just chunk into 2x2 matrix.
+#  BUG::real args should be document filename, user prefs handle
+
+sub segment {
+    my ($doc,$client,$prefs) = @@_;
+    my $doc_id = $doc->id;
+    my $filename = $doc->filename;
+    # filename to use if refinement of this doc is requested
+    my $refine_filename = $filename;
+
+    # For Image module, if $prefs is defined, it's a comma-separated list of
+    # (left,top,foo,bar) indicating desired subregion of an image.
+    
+    # BUG::need_convert is a hack - indicates if PPM conversion needs to be
+    # done. 
+    my $need_convert = 1;
+    my @@chunks;
+    my @@tmpfiles;
+    my $ppmdata;
+    my ($width,$height);
+
+    open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+        or die "giftopnm: $!";
+    # BUG::error checking?
+    local($/) = undef;
+    $ppmdata =  <GIFTOPNM>;
+    close GIFTOPNM;
+    # parse size from ppm data
+    $ppmdata =~ /(\S+)\s+(\d+)\s+(\d+)/m
+        or die "Can't parse width/height in ". substr($ppmdata,0,40);
+    ($width,$height) = ($2,$3);
+
+    if ($prefs =~ /^(\d+),(\d+),(\d+),(\d+)$/) {
+        # first run pnmcut
+        my $tmp2 = &util::mkcached;
+        my ($xsize,$ysize,$left,$top,$wd,$ht);
+        $xsize = &util::ceil($width/$2);
+        $ysize = &util::ceil($height/$4);
+        $left = $xsize * $1;
+        $top = $ysize * $3;
+        $wd = &util::min($xsize, $width-$left);
+        $ht = &util::min($ysize, $height-$top);
+        my $cmd =
+            "$FromGif $filename | $Cutprog $left $top $wd $ht | $ToGif> $tmp2";
+        system($cmd) and die "Cut: $!";
+        $refine_filename = $filename = $tmp2;
+    } elsif (defined $prefs) {
+        &Mon::doc_status($doc_id, "Bad refinement info '$prefs'");
+        return ("Bad refinement info '$prefs'");
+    }
+
+    my $maxsize = &prefs::get("Image","lat") * (&network::bandwidth)/8;
+    my $bw = &prefs::get("Image","bw");
+
+    # if original is too large, AND the latency added by distillation is still
+    # a net win, then 
+    # call gifmunch to compute a representation of smaller size.  If black &
+    # white is specified, do that too.
+    # BUG::we're ignoring bits/pixel vs. scaling weight!
+
+    if ((-s $filename) > $maxsize) {
+        my $data = &util::slurp($filename);
+        &Mon::doc_status($doc_id, "Distilling");
+
+        # first cut: just try to get the size right.
+        # BUG::should be contacting a distiller, not running one!
+
+        warn "Newsize=$maxsize minx=40 miny=40 numcolors=0 padcolor=0";
+        $filename = &util::mktemp;
+        push(@@tmpfiles,$filename);
+        open(G, "| $Gifmunch >$filename") or die $!;
+        # BUG::error checking??
+        print G "$maxsize 40 40 0 0 $data";
+        close G;
+    }
+    # Segment -- should really be done inside gifmunch.
+
+    &Mon::doc_status($doc_id, "Segmenting");
+
+    # chunking factor.  If mtu was set, try to observe it by assuming that the
+    # whole image will break down into approximately equal size chunks.  Try to
+    # find a perfect square that keeps chunks smaller than the requested size,
+    # e.g. solve x^2 <= totalsize/mtu  subject to x>0.
+    # BUG::should consider aspect ratio.
+
+    my($across,$down,$nchunks);
+    my($x,$y,$w,$h,$by_x,$by_y);
+    my $chunkfile;
+    my $cmd;
+    my $chunknum = 0;
+    my $t= &util::mktemp;
+    push(@@tmpfiles, $t);
+    
+    # BUG::this is wasteful, we already did this for the original! need a
+    # better system for managing gif and ppm....
+    open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+        or die "giftopnm: $!";
+    # BUG::error checking?
+    local($/) = undef;
+    $ppmdata =  <GIFTOPNM>;
+    close GIFTOPNM;
+    # parse size from ppm data
+    $ppmdata =~ /(\S+)\s+(\d+)\s+(\d+)/m
+        or die "Can't parse width/height in ". substr($ppmdata,0,40);
+    ($width,$height) = ($2,$3);
+
+    $nchunks = &util::ceil(length($ppmdata) / ($mtu || 1e12));
+    $across = $down = &util::ceil(0.5 + sqrt($nchunks));
+    $by_x = int($width/$across);
+    $by_y = int($height/$down);
+    
+    open(T,">$t"); print T $ppmdata; close T;
+
+    for ($x=0,$left=0; $x<$across; $x++,$left+=$by_x) {
+        for ($y=0,$top=0; $y<$down; $y++,$top+=$by_y) {
+            # BUG::should be fork && exec
+            push(@@tmpfiles, $chunkfile = &util::mktemp);
+            $xsize = &util::min($by_x, $width-$left);
+            $ysize = &util::min($by_y, $height-$top);
+            $cmd = "$Cutprog $left $top $xsize $ysize $t | $ToGif >$chunkfile";
+            warn $cmd;
+            system ($cmd) and die "Cut: $!";
+            # Create the chunk
+            push(@@chunks, (new chunk "image/gif", undef, $doc_id, $chunknum,
+                           undef, $chunkfile,
+                           "refine:$refine_filename/$x,$across,$y,$down",
+                           "GIF image chunk ($x,$y)"));
+            $chunknum++;
+        }
+    }
+    # now make the table of contents
+    unshift(@@chunks, (toc chunk $doc_id, "2 2", @@chunks));
+    # and we are done
+    # unlink(@@tmpfiles);
+    return @@chunks;
+}
+
+# Initialization
+# BUG::should really be an init functioncalled explicitly from doc.pl
+
+$bindir = "/usr/sww/bin";
+
+$Cutprog = "$bindir/pnmcut";
+$FromGif = "$bindir/giftopnm";
+$ToGif = "$bindir/ppmtogif";
+$Gifmunch = "/var/home/fox/work/gmproxyd/tm/gifmunch_s";
+
+1;
+@
+
+
+1.13
+log
+@Did a complete merge with the source tree from Wink, and got refinement and
+Kerberos authentication working again.  Many, many little subtle changes.
+The refinement path was changed to "./gmtmpXXX/I1" from an absolute path
+name, which broke some regexps.  Fixing that helped, as well as calling
+the determine_htype function with a filename instead of undef.
+@
+text
+@d3 1
+a3 1
+#  $Id: Image.pl,v 1.1 96/08/19 14:40:26 glomop Exp $
+d170 1
+a170 1
+$Gifmunch = "/disks/barad-dur/now/pythia/release/bin/gifmunch_s.SunOS";
+@
+
+
+1.12
+log
+@WebPage can now actually parse web pages, sort of.... html_parser was
+moved (perhaps unwisely?) to gmproxyd main directory.
+@
+text
+@d3 1
+d165 7
+a171 8
+# $Cutprog = "/staff/glomop/bin/pnmcut";
+# $FromGif = "/staff/glomop/bin/giftopnm";
+# $ToGif = "/staff/glomop/bin/ppmtogif";
+# $Gifmunch = "/staff/glomop/bin/gifmunch_s";
+$Cutprog = "pnmcut";
+$FromGif = "giftopnm";
+$ToGif = "ppmtogif";
+$Gifmunch = "/disks/barad-dur/now/pythia/fox/work/gifmunch/gifmunch_s";
+@
+
+
+1.11
+log
+@Various bugs fixed in html parser; new IcapImage module (for testing
+only right now)
+@
+text
+@d164 8
+a171 4
+$Cutprog = "/staff/glomop/bin/pnmcut";
+$FromGif = "/staff/glomop/bin/giftopnm";
+$ToGif = "/staff/glomop/bin/ppmtogif";
+$Gifmunch = "/staff/glomop/bin/gifmunch_s";
+@
+
+
+1.10
+log
+@minimal refinement seems to work, albeit bad management of ppm's and
+gifs results in lots of wasteful shell processes to determinme simple
+properties of the orig file. Lesson: need to keep properties with each
+file/chunk.
+@
+text
+@d28 3
+a30 1
+    my ($doc_id,$filename,$prefs) = @@_;
+d164 4
+a167 4
+$Cutprog = "/usr/sww/bin/pnmcut";
+$FromGif = "/usr/sww/bin/giftopnm";
+$ToGif = "/usr/sww/bin/ppmtogif";
+$Gifmunch = "/disks/barad-dur/now/pythia/fox/work/gifmunch/gifmunch_s";
+@
+
+
+1.9
+log
+@*** empty log message ***
+@
+text
+@d29 2
+d32 6
+d41 32
+a72 1
+    
+a99 10
+    open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+        or die "giftopnm: $!";
+    # BUG::error checking?
+    local($/) = undef;
+    $ppmdata .=  <GIFTOPNM>;
+    close GIFTOPNM;
+    # parse size from ppm data
+    $ppmdata =~ /(\S+)\s+(\d+)\s+(\d+)/m
+        or die "Can't parse width/height in ". substr($ppmdata,0,40);
+    my($width,$height) = ($2,$3);
+a108 1
+    my($left,$top,$xsize,$ysize);
+d115 13
+d134 1
+a134 1
+    
+d146 3
+a148 1
+                           undef, $chunkfile, "PPM image chunk"));
+@
+
+
+1.8
+log
+@*** empty log message ***
+@
+text
+@d45 1
+d60 1
+d79 1
+a79 3
+    my($x,$y,$w,$h);
+    my($by_x) = int($width/$across);
+    my($by_y) = int($height/$down);
+d87 4
+a90 2
+    $nchunks = int(0.5 + length($ppmdata) / $mtu);
+    $across = $down = int(0.5 + sqrt($nchunks));
+@
+
+
+1.7
+log
+@*** empty log message ***
+@
+text
+@d32 1
+d36 4
+a39 3
+    my $data = &util::slurp($filename);
+    my $ppmdata;
+    # call gifmunch to compute a representation of about that size.  If black &
+d43 2
+a44 2
+    # first cut: just try to get the size right.
+    # BUG::should be contacting a distiller, not running one!
+d46 2
+a47 6
+    warn "Newsize=$maxsize minx=40 miny=40 numcolors=0 padcolor=0";
+    my $smallgif = &util::mktemp;
+    push(@@tmpfiles,$smallgif);
+    open(G, "| $Gifmunch >$smallgif") or die $!;
+    print G "$maxsize 40 40 0 0 $data";
+    close G;
+d49 9
+a57 1
+    # rip, smash
+d59 1
+a59 1
+    open(GIFTOPNM, "$FromGif $smallgif 2>/dev/null |")
+d61 1
+d63 1
+a63 1
+    $ppmdata .= $_ while <GIFTOPNM>;
+d70 7
+a76 2
+    # chunking factor
+    my($across,$down) = (2,2);
+d86 3
+@
+
+
+1.6
+log
+@added Image.prefs file: where default prefs live.
+@
+text
+@d36 1
+a36 1
+
+@
+
+
+1.5
+log
+@more support for standalone gifmunch
+@
+text
+@d4 4
+a10 6
+%prefs = ();
+%prefweight = ();
+
+# The set_prefs function receives two references to hashes; the first hash maps
+# prefs names to values, the second prefs names to weights.
+#
+a18 10
+sub set_prefs {
+    %prefs = % {shift @@_};
+    %prefweight = % {shift @@_};
+    my $str;
+    foreach $k (keys %prefs) {
+        $str .= "$k: $prefs{$k} ($prefweight{$k})\n";
+    }
+    &util::debug('image', "Image prefs:\n$str");
+}
+
+d28 2
+a29 3
+    my $doc_id = shift;
+    my $filename = shift;
+    my $prefs = shift;
+d31 1
+d33 1
+a33 1
+    my $maxsize = &prefs::get("Image","lat") * &network::bandwidth/8;
+d35 1
+d41 9
+a49 1
+    
+d53 1
+a53 2
+    my($ppmdata) = '';
+    open(GIFTOPNM, "$FromGif $filename 2>/dev/null |")
+d73 2
+d80 1
+a80 1
+            $chunkfile = &util::mktemp;
+a91 1
+    unlink $ppm;
+d95 1
+d105 1
+@
+
+
+1.4
+log
+@Added support for setting some prefs for the image module, but nothing
+is done with them, yet.
+@
+text
+@d18 2
+d44 8
+@
+
+
+1.3
+log
+@Image fetching and segmenting works end-to-end, but no error checking in
+place yet.  still need some work
+@
+text
+@d7 23
+a42 3
+    # Harebrained and simple.  Make the GIF into a PPM (with invented MIME type
+    # "image/p{pgb}m", since there is no official MIME type for this) and split
+    # into quadrants.
+@
+
+
+1.2
+log
+@image segmenter successfuly calls pnmcut, but leaves chunks in ppm
+format for now
+@
+text
+@d18 2
+a19 1
+
+d27 1
+a27 1
+    open(GIFTOPNM, "$Gifprog $filename 2>/dev/null |")
+d55 1
+a55 1
+            $cmd = "$Cutprog $left $top $xsize $ysize $t >$chunkfile";
+d59 2
+a60 2
+            push(@@chunks, (new chunk "image/ppm", undef, $doc_id, $chunknum,
+                           undef, $chunkfile));
+d65 2
+d72 1
+a72 2
+# BUG::should really be an init function that knows to call itself only once;
+# should be managed from doc.pl.
+d75 2
+a76 1
+$Gifprog = "/usr/sww/bin/giftopnm";
+@
+
+
+1.1
+log
+@Added files for Image and WebPage document types (htypes).
+@
+text
+@d7 6
+a12 1
+sub segment {}
+d14 4
+d19 55
+@

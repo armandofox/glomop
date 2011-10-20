@@ -1,0 +1,307 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.12.03.03.16.35;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@#
+#  util.pl - utility functions
+#  $Id: util.pl,v 1.16 1996/09/23 07:06:45 fox Exp $
+#
+
+
+=head1 NAME
+
+util - utility functions for gmproxyd
+
+=head1 SYNOPSIS
+
+ require "util.pl";
+
+ # Configuration
+
+ $fullpath = &util::configfile($filename);
+ &util::configpath(@@dirs);
+
+ # Miscellany
+
+ $maxval = &util::max(@@values);
+ $minval = &util::min(@@values);
+ $ceil = &util::ceil($val);
+
+ # File manipulation
+
+ $tmpfile = &util::mktemp;
+ $permfile = &util::mkimmortal;
+ $mkcached = &util::mkcached;
+
+ $contents = &util::slurp($filename);
+ $filename = &util::dump($data);
+ $mime = &util::mime_type_of_file($filename);
+
+ # Debugging and logging
+
+ &util::debug($keyword, @@args);
+
+=head1 DESCRIPTION
+
+Various utility functions that support the GloMop proxy.
+
+=head1 MISCELLANEOUS FUNCTIONS
+
+=item $maxval = &util::max(@@values);
+=item $minval = &util::min(@@values);
+
+Return maximum or minimum item from list, which must be numeric values.  Ties
+are broken arbitrarily.
+
+=item $ceil = &util::ceil($val);
+
+Return smallest integer greater than or equal to $val.
+
+=head1 FILE MANIPULATION FUNCTIONS
+
+=item $tmpfile = &util::mktemp;
+=item $permfile = &util::mkimmortal;
+=item $mkcached = &util::mkcached;
+
+Return a unique filename for a temporary, immortal, or cached file.  Temporary
+files may be deleted as soon as the function that requested them has exited.
+Immortal files last the life of the proxy process.  Cached files are like
+immortal files but a hint is given that the contents should be cached in memory
+if there is enough room.
+
+=item $contents = &util::slurp($filename);
+
+Returns the entire contents of $filename as a scalar, or undef if the contents
+could not be read; call L</"util::error"> to get the error message.
+
+=item $filename = &util::dump($data [,$type])
+
+Dumps the data (a scalar) into a file and returns the full pathname to the
+file.  The file will be created as a temporary file by default, but specifying
+a type of C<util::CACHED> or C<util::IMMORTAL> will create it that way
+instead. 
+
+=item $mime = &util::mime_type_of_file($filename);
+
+Try to determine a file's MIME type by examining the contents (using, among
+other things, the L<file(1)> command), and return the type/subtype
+(e.g. "image/gif"), the null string if it couldn't be determined, or undef if
+the file couldn't be read; in the latter case see L</"util::error">.
+
+=head1 DEBUGGING AND LOGGING FUNCTIONS
+
+=item &util::debug($keyword, @@args);
+
+Log the debugging message given by I<printf> (@@args) if and only if $keyword is
+enabled for debugging output.
+
+=item $lasterror = &util::error;
+
+Return the error message text, if any, corresponding to the last error
+encountered by a util function that did not succeed.
+
+=head1 BUGS
+
+The file caching hint is currently ignored.  Temporary and immortal files are
+not properly cleaned up at proxy exit time.    
+
+=cut
+
+package util;
+use Carp;
+use LWP::MediaTypes;
+$Lasterror = '';
+$Tmpname = 0;
+$Immname = 0;
+$Cachename = 0;
+$Wd = '.';
+@@Cfgpath = ('./config');
+umask 077;
+
+# find the 'file' binary
+$File = (-x '/bin/file' && "/bin/file")
+    || (-x '/usr/bin/file' && "/usr/bin/file")
+    || (-x '/usr/ucb/file' && "/usr/ucb/file")
+    || (-x '/usr/local/bin/file' && "/usr/local/bin/file")
+    || die "No 'file' program: can't determine types of refinement files";
+
+# Make a temp directory for files
+
+sub init {
+    $Wd = shift || '.';
+    umask 0;
+    mkdir("$Wd/gmtmp$$", 0777)
+        or die "util: can't make temp dir $Wd/gmtmp$$ : $!";
+    $Wd = "$Wd/gmtmp$$";
+}
+
+sub TEMP { 11 }
+sub CACHED { 12 }
+sub IMMORTAL { 13 }
+
+sub instvars {
+    my $class = shift;
+    foreach $var (@@_) {
+        if ($var =~ /(\S+):r/) {
+            # read-only variable
+            $var = $1;
+            $action = qq!carp "Can't set instance variable `$var' this way, ignored"!;
+        } else {
+            $action = qq!\$self->{"$var"} = shift!;
+        }
+        eval "sub ${class}::${var}"  . qq!{
+            my \$self = shift;
+            $action if defined \$_[0];
+            return \$self->{"$var"}; }! ;
+    }
+}
+
+sub mktemp {  ++$util::Tmpname && return "$util::Wd/T$util::Tmpname"  }
+sub mkimmortal { ++$util::Immname && return "$util::Wd/I$util::Immname"  }
+sub mkcached { ++$util::Cachename && return "$util::Wd/C$util::Cachename"  }
+
+sub error { $Lasterror }
+
+sub max {
+    my $max = shift;
+    for (@@_) { $max = $_ if $max < $_; }
+    return $max;
+}
+sub min {
+    my $min = shift;
+    for (@@_) { $min = $_ if $min > $_; }
+    return $min;
+}
+
+sub dbg_list {
+    my @@list = split(/,/ , shift);
+    my $str = "Debugging: ";
+    for (@@list) {
+        $util::DebugList{$_}++;
+        $str .= $_ . " ";
+        $util::DebugAll++, $str = "Debugging: (all)", last if /^all$/;
+    }
+    warn "$str\n";
+}
+
+sub debug {
+    my $dbg = shift;
+    warn "$dbg: @@_\n" if  $util::DebugList{$dbg} || $util::DebugAll;
+}    
+
+sub log {
+    my $dbg = shift;
+    warn "*** $dbg: @@_\n";
+}
+
+sub ceil {  $_[0] == int($_[0])? $_[0] : int(1+$_[0]) }
+
+sub slurp {
+    my $file = shift;
+    unless (open(FILE, $file)) {
+        $Lasterror = $!;
+        return undef;
+    }
+    local($/) = undef;
+    my $res = <FILE>;
+    close FILE;
+    return $res;
+}
+
+sub dump {
+    my $data = shift;
+    my $type = shift || &util::TEMP;
+
+    my $fn = ($type == &util::IMMORTAL
+              ? &util::mkimmortal
+              : $type == &util::CACHED
+              ? &util::mkcached
+              : &util::mktemp);
+    open(F, ">$fn");
+    print F $data;
+    close F;
+    $fn;
+}
+
+#
+#  Set or query config path
+#
+
+sub configpath { for (@@_) { push(@@Cfgpath, split(/:/, $_)) } }
+
+sub configfile {
+    my $file = shift;
+    for (@@Cfgpath) {
+        return "$_/$file" if -e "$_/$file";
+    }
+    &util::log("configfile","no $file in " . join(':',@@Cfgpath));
+    return undef;
+}
+
+#
+#  Try to determine MIME type of a file by analyzing a few bytes
+#
+
+sub mime_type_of_file {
+    my $filename = shift;
+
+    &util::debug("util", "Guessing mimetype from filename $filename");
+    # First try guessing from LWP support
+    my $guess = &LWP::MediaTypes::guess_media_type($filename);
+
+    &util::debug("util", "LWP returned $guess");
+    if ($guess eq "application/octet-stream") {
+        # try to do better
+        $_ = `$File $filename`;
+        $Lasterror = $?, return undef if ($? >> 8);
+        return ((/\bgif\b/i && "image/gif")
+                || (/\bgif\d\d/i && "image/gif")
+                || (/\bjpeg\b/i && "image/jpeg")
+                || "");
+    } else {
+        return $guess;
+    }
+}
+
+#
+# cleanup in preparation for exit
+#
+
+sub cleanup {
+    &Mon::status("Cleaning up temporary files");
+    system "/bin/rm -rf $Wd"
+        and warn "Util: /bin/rm -rf $Wd: exit $?";
+}
+
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996 by the Regents of the University of California.
+Commercial and non-commercial licenses to use this software must be arranged by
+the GloMop Group at UC Berkeley.  For inquiries email Armando Fox
+<fox@@cs.berkeley.edu>, Prof. Eric Brewer <brewer@@cs.berkeley.edu>, or
+Prof. Randy Katz <randy@@cs.berkeley.edu>.
+
+=cut    
+
+1;
+
+@

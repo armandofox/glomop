@@ -1,0 +1,1345 @@
+head	1.9;
+access;
+symbols
+	Yatin-final:1.9
+	Yatin:1.9.0.2
+	pre-yatin-merge:1.9
+	transend-beta2:1.5
+	fox-dev:1.5
+	transend-beta-reallylatest:1.5
+	browser-ng:1.5
+	transend-beta-latest:1.5
+	Aggregators:1.4
+	NoAggregators:1.4
+	iang:1.1.1.1.0.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.9
+date	97.10.17.19.54.16;	author achuang;	state Exp;
+branches;
+next	1.8;
+
+1.8
+date	97.10.17.19.34.07;	author achuang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.10.17.18.25.07;	author achuang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.10.17.18.19.32;	author achuang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.05.27.03.53.27;	author achuang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.05.12.07.05.44;	author achuang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.05.12.04.58.13;	author achuang;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.05.10.20.23.48;	author achuang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.04.29.21.37.12;	author achuang;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.04.29.21.37.12;	author achuang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@changed the proxy host to be all lower case.
+@
+text
+@import java.applet.*;
+import java.awt.*;
+import java.net.*;
+import java.io.*;
+
+// Things to change for integrating with TranSend:
+// - Replace every instance of "gif" with "gif*^i1=1^"
+// - Change proxyHost String to "http://transend.CS.Berkeley.EDU/"
+// - Take out !!! comments
+
+public class gui extends Applet {
+
+private static AppletContext appletContext;
+private static URL codeBase;
+
+// Change the proxyHost if the proxy is relocated.  proxyHost
+// is used to specify the server portion of links and set prefs
+// requests.
+private static String proxyHost = "http://transend.cs.berkeley.edu/";
+
+// A string which holds the status message to be printed out in
+// the browser's dialog box.
+private String status = "Status: ";	
+
+// enabled is true if the proxy is enabled. This field is used
+// so that the applet knows whether to paint the dashboard with
+// the current settings or the darkened dashboard.
+private static boolean enabled = true;
+
+// Dashboard dimensions
+private int height = 453;
+private int width = 45;		// Browser width
+
+// Dashboard panels
+private int numPanels = 3;	// Number of panels
+private static int imgQ = 3;	// Current image quality
+
+// Panel gifs: panels[i] holds the ith panel corresponding to 
+// the current settings.  State such as the current image quality
+// is stored in this array, but some panels may never change such
+// as the links panel.
+private Image[] panels;
+
+// Panel gifs for when proxy is disabled. Note that these never
+// change.
+private Image[] offpanels;
+private int[] origins;		// Panel x-origins
+private int[] heights;		// Panel heights
+
+// Menu bar buttons
+private int numButtons = 13;	// Number of buttons
+
+// An array of button2's.  This array is traversed in the mouseDown()
+// function to see whether a mouse click occurred in one of the
+// dashboard's button2's.
+private button2[] buttons;	
+
+// Buttons that still work when the proxy is disabled.  These are
+// used as special cases in the function mouseDown().
+private button2 enableButton;
+
+public void init() {
+
+  appletContext = getAppletContext();
+  codeBase = getCodeBase();
+
+  width = size().width;
+
+  // Initialize the panel arrays and get the information needed to
+  // draw the panels.
+  panels = new Image[numPanels];
+  offpanels = new Image[numPanels];
+  origins = new int[numPanels];
+  heights = new int[numPanels];
+
+  int i = 0;
+  int origin = 0;
+  panels[i] = getImage(codeBase, "enable.gif*^i1=1^");
+  offpanels[i] = getImage(codeBase, "disable.gif*^i1=1^");
+  heights[i] = 42;
+  origins[i] = origin;
+
+  origin += heights[i];
+  i += 1;
+  panels[i] = getImage(codeBase, "img"+ imgQ + ".gif*^i1=1^");
+  offpanels[i] = getImage(codeBase, "img-off.gif*^i1=1^");
+  heights[i] = 150;
+  origins[i] = origin;
+
+  origin += heights[i];
+  i += 1;
+  panels[i] = getImage(codeBase, "links.gif*^i1=1^");
+  offpanels[i] = getImage(codeBase, "links-off.gif*^i1=1^");
+  heights[i] = 261;
+  origins[i] = origin;
+
+  // Initialize the button array and get the information needed to
+  // associate URLS to buttons.
+  buttons = new button2[numButtons];
+
+  int panelnum = 0;
+  i = 0;
+  buttons[i] = new button2(8, 5, 28, 11, panelnum, 
+			   getImage(codeBase, "enable.gif*^i1=1^"),
+			   "on-off", "Proxy Enabled", 
+			   proxyHost + "SetPrefs/?i1=0");
+  enableButton = buttons[i];
+  i += 1;
+  buttons[i] = new button2(8, 19, 28, 11, panelnum, 
+			   getImage(codeBase, "disable.gif*^i1=1^"),
+			   "on-off", "Proxy Disabled", 
+			   proxyHost + "SetPrefs/?i1=1"); 
+  panelnum += 1;
+  i += 1;
+  buttons[i] = new button2(14, 37, 13, 12, panelnum,
+			   getImage(codeBase, "img5.gif*^i1=1^"),
+			   "image", "Image Quality Increased", 
+			   proxyHost + "SetPrefs/?i5=5");
+  i += 1;
+  buttons[i] = new button2(15, 54, 11, 11, panelnum,
+			   getImage(codeBase, "img5.gif*^i1=1^"),
+			   "image", "Image Quality Set", 
+			   proxyHost + "SetPrefs/?i5=5");
+  i += 1;
+  buttons[i] = new button2(15, 68, 11, 11, panelnum, 
+			   getImage(codeBase, "img4.gif*^i1=1^"),
+			   "image", "Image Quality Set", 
+			   proxyHost + "SetPrefs/?i5=4");
+  i += 1;
+  buttons[i] = new button2(15, 82, 11, 11, panelnum, 
+			   getImage(codeBase, "img3.gif*^i1=1^"),
+			   "image", "Image Quality Set", 
+			   proxyHost + "SetPrefs/?i5=3"); 
+  i += 1;
+  buttons[i] = new button2(15, 96, 11, 11, panelnum, 
+			   getImage(codeBase, "img2.gif*^i1=1^"),
+			   "image", "Image Quality Set", 
+			   proxyHost + "SetPrefs/?i5=2");
+  i += 1;
+  buttons[i] = new button2(15, 110, 11, 11, panelnum, 
+			   getImage(codeBase, "img1.gif*^i1=1^"),
+			   "image", "Image Quality Set", 
+			   proxyHost + "SetPrefs/?i5=1");
+  i += 1;
+  buttons[i] = new button2(14, 126, 13, 12, panelnum,
+			   getImage(codeBase, "img1.gif*^i1=1^"),
+			   "image", "Image Quality Decreased", 
+			   proxyHost + "SetPrefs/?i5=1");
+  panelnum += 1;
+  i += 1;
+  buttons[i] = new button2(3, 6, 36, 58, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^"),
+			   "refine", "Refining All Images",
+			   "javascript:Refine()");
+  i += 1;
+  buttons[i] = new button2(0, 81, 45, 57, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^"),
+			   "link", "Send Comments", 
+			   "javascript:Comments()");
+  i += 1;
+  buttons[i] = new button2(10, 155, 26, 53, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^"),
+			   "link", "Help Page", 
+			   "javascript:Help()");
+  i += 1;
+  buttons[i] = new button2(4, 225, 35, 30, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^"),
+			   "link", "About Page", 
+			   "javascript:About()");
+
+  /* !!!
+*/
+  // Each time init is called, we must poll the proxy for the current
+  // user settings -- image quality and proxy enabled/disabled.
+  try {
+    URL prefsURL = new URL(proxyHost + "GetPrefs.html");
+    URLConnection prefsConnection = prefsURL.openConnection();
+    DataInputStream prefsStream = new DataInputStream(prefsConnection.getInputStream());
+    String inputLine;
+    int mySetting;
+
+    inputLine = prefsStream.readLine();
+    if (inputLine.startsWith("true")) {
+      enabled = true;
+    }
+    else if (inputLine.startsWith("false")) {
+      enabled = false;
+    }
+
+    inputLine = prefsStream.readLine();
+    imgQ = Integer.parseInt(inputLine);
+
+    prefsStream.close();
+  }
+  catch (MalformedURLException me) {
+    System.err.println("new URL failed");
+    return;
+  }
+  catch (IOException ioex) {
+    System.err.println("IO exception");
+    return;
+  }
+/*
+  !! */
+
+  // Find out the current state of the image quality preference and 
+  // select the right panel.
+  panels[1] = getImage(codeBase, "img"+ imgQ + ".gif*^i1=1^");
+}
+
+public void paint(Graphics g) {
+  // If the proxy is currently disabled, we use the offpanels array
+  // to draw the dashboard.  This results in the darkened dashboard.
+  int i;
+  if (!enabled) {
+    for (i = 0; i < numPanels; i += 1) {
+      g.drawImage(offpanels[i], 0, origins[i], this);
+    }
+  }     
+  // Otherwise, the panel is not minmized and the proxy is enabled,
+  // so use the panels array to paint the dashboard.
+  else {
+    for (i = 0; i < numPanels; i += 1) {
+      g.drawImage(panels[i], 0, origins[i], this);
+    }
+  }
+  // This paints the last panel flush right.
+  /*
+  g.setColor(Color.black);
+  g.fillRect(origins[i-1]+heights[i-1], 0, origins[i], height);
+  g.drawImage(offpanels[i], origins[i], 0, this);
+  */
+}
+
+// Repaints panel number "panelNum"
+public void repaintPanel(int panelNum) {
+  repaint(0, origins[panelNum], width, heights[panelNum]);
+}
+
+public boolean mouseDown(Event e, int x, int y) {
+
+  // If the proxy is enabled, go through each button2 to
+  // see if the click occurred in that button2.  Do the same if
+  // the proxy is disabled but the click occurs in one of the button2's
+  // that can still be pressed while disabled; e.g. enableButton and
+  // minButton.
+  button2 b;
+  String action = "";
+  String mesg = "";
+
+  if (enabled || enableButton.inButton(x, y - origins[enableButton.panel])) {
+  for (int i = 0; i < numButtons; i += 1) {
+
+    b = buttons[i];
+    int p = b.panel;
+
+    if (b.inButton(x, y - origins[p])) {
+
+      action = b.action;
+      mesg = b.mesg;
+      status = "Status: " + b.mesg;
+
+      // If the buttton action equals "link" or "refine" we can call
+      // showDocument to get the desired behavior.
+      if (action.equals("link") || action.equals("refine")) {
+        appletContext.showDocument(b.url);
+	appletContext.showStatus(status);
+        return false;
+      }
+
+      // If we are setting a preference:
+      else if ((action.equals("on-off")) || (action.equals("image"))) {
+
+        // Check if we are setting the image quality explicitly.  
+	// This is a HACK!!
+        if (mesg.equals("Image Quality Set")) {	
+          imgQ = 8 - i;
+        }
+	else if (mesg.equals("Image Quality Increased")) {
+	  if (imgQ < 5) {
+	    imgQ += 1;
+	  }
+	  b = buttons[8-imgQ];
+	}
+	else if (mesg.equals("Image Quality Decreased")) {
+	  if (imgQ > 1) {
+	    imgQ -= 1;
+	  }
+	  b = buttons[8-imgQ];
+	}
+
+	/* !!!
+*/
+        // Next we send a GET request to the proxy to set this preference.
+        try {
+          b.url.openConnection();
+        }
+        catch (IOException ioex) {
+          System.err.println("Open Connection failed");
+          return false;
+        }
+        try {
+          DataInputStream prefsStream = new DataInputStream(b.url.openStream());
+          String inputLine;
+          while((inputLine = prefsStream.readLine()) != null) {
+          }
+          prefsStream.close();
+        }
+        catch (IOException ioex) {
+          System.err.println("Open Stream failed");
+          return false;
+        }
+/*
+	!!! */
+
+        // If we are enabling or disabling the proxy, we have to set
+        // some state variables and repaint the entire applet.
+        panels[p] = b.gif;
+        if (mesg.equals("Proxy Enabled")) {
+          enabled = true;
+          repaint();
+        }
+        else if (mesg.equals("Proxy Disabled")) {
+          enabled = false;
+          repaint();
+        }
+
+        // Otherwise, we can just repaint one panel.
+        else {
+          repaintPanel(p);
+        }
+      }
+    }	
+  }
+  }
+  appletContext.showStatus(status);
+  return false;
+}
+}
+
+
+@
+
+
+1.8
+log
+@Changed the gui so that image quality defaults to 3.
+@
+text
+@d19 1
+a19 1
+private static String proxyHost = "http://transend.CS.Berkeley.EDU/";
+@
+
+
+1.7
+log
+@Changed the proxy host to point to transend rather than HTTP.CS.
+@
+text
+@d36 1
+a36 1
+private static int imgQ;	// Current image quality
+@
+
+
+1.6
+log
+@Added new files for the floating toolbar and updated some of the gifs.
+@
+text
+@d19 1
+a19 2
+private static String proxyHost = "http://HTTP.CS.Berkeley.EDU/";
+// private static String proxyHost = "http://transend.CS.Berkeley.EDU/";
+@
+
+
+1.5
+log
+@new java files to make the java gui work with transend.cs as the server; these files also have more thorough documentation.
+@
+text
+@d6 5
+d19 2
+a20 1
+private static String proxyHost = "http://transend.CS.Berkeley.EDU/";
+a25 5
+// minimizing is true if the toolbar is minimized or about to be 
+// minimized. This field is used so that the applet knows whether 
+// to paint the dashboard or the logo
+private static boolean minimizing = false;
+
+d32 2
+a33 3
+private int height = 30;      	// Menu bar height
+private int width;		// Browser width
+private int minwidth = 455;   	// Minimum applet width
+d36 2
+a37 2
+private int numPanels = 5;	// Number of panels
+private static int imgQ = 3;	// Current image quality
+d49 1
+a49 1
+private int[] widths;		// Panel widths
+d52 1
+a52 1
+private int numButtons = 12;	// Number of buttons
+a58 3
+// Minimized button: when this is clicked, the dashboard is repainted.
+private button2 logoButton;
+
+a61 1
+private button2 minButton;
+a66 1
+  setBackground(Color.white);
+a67 3
+  // Set the width equal to the browser's width if the browser's
+  // with is greater than the minimumm width required to paint
+  // the dashboard.
+a68 3
+  if (width < minwidth) {
+    width = minwidth;
+  }
+d70 2
+a71 1
+  // Initialize the panel arrays.
+d75 1
+a75 1
+  widths = new int[numPanels];
+a76 2
+  // PANELS: Get information needed to draw panels and initialize
+  // the needed arrays.
+d79 3
+a81 10
+  panels[i] = getImage(codeBase, "img"+ imgQ + ".gif*^i1=1^i2=1^");
+  offpanels[i] = getImage(codeBase, "img-off.gif*^i1=1^i2=1^");
+  widths[i] = 118;
+  origins[i] = origin;
+
+  origin += widths[i];
+  i += 1;
+  panels[i] = getImage(codeBase, "enable.gif*^i1=1^i2=1^");
+  offpanels[i] = getImage(codeBase, "disable.gif*^i1=1^i2=1^");
+  widths[i] = 101;
+d84 1
+a84 1
+  origin += widths[i];
+d86 3
+a88 3
+  panels[i] = getImage(codeBase, "refine.gif*^i1=1^i2=1^");
+  offpanels[i] = getImage(codeBase, "refine-off.gif*^i1=1^i2=1^");
+  widths[i] = 49;
+d91 1
+a91 1
+  origin += widths[i];
+d93 3
+a95 3
+  panels[i] = getImage(codeBase, "links.gif*^i1=1^i2=1^");
+  offpanels[i] = getImage(codeBase, "links-off.gif*^i1=1^i2=1^");
+  widths[i] = 114;
+d98 2
+a99 8
+  origin += widths[i];
+  i += 1;
+  panels[i] = getImage(codeBase, "title.gif*^i1=1^i2=1^");
+  offpanels[i] = getImage(codeBase, "title-off.gif*^i1=1^i2=1^");
+  widths[i] = 73;
+  origins[i] = width - widths[numPanels-1];
+
+  // Initialize the button array.
+a101 1
+  // BUTTONS: Get the information needed to associate URLS to buttons
+a102 4
+  logoButton = new button2(0, 0, 45, 25, panelnum, 
+			   getImage(codeBase, "logo.gif*^i1=1^i2=1^"), 
+			   "maximize", "Toolbar Maximized");
+
+d104 11
+a114 4
+  buttons[i] = new button2(9, 16, 11, 11, panelnum,
+			   getImage(codeBase, "img1.gif*^i1=1^i2=1^"), 
+			   "setpref", "Image Quality = 1", 
+			   proxyHost + "SetPrefs/?i5=1");
+d116 4
+a119 4
+  buttons[i] = new button2(30, 16, 11, 11, panelnum, 
+			   getImage(codeBase, "img2.gif*^i1=1^i2=1^"), 
+			   "setpref", "Image Quality = 2", 
+			   proxyHost + "SetPrefs/?i5=2");
+d121 4
+a124 4
+  buttons[i] = new button2(51, 16, 11, 11, panelnum, 
+			   getImage(codeBase, "img3.gif*^i1=1^i2=1^"), 
+			   "setpref", "Image Quality = 3", 
+			   proxyHost + "SetPrefs/?i5=3"); 
+d126 3
+a128 3
+  buttons[i] = new button2(72, 16, 11, 11, panelnum, 
+			   getImage(codeBase, "img4.gif*^i1=1^i2=1^"), 
+			   "setpref", "Image Quality = 4", 
+d131 9
+a139 6
+  buttons[i] = new button2(93, 16, 11, 11, panelnum, 
+			   getImage(codeBase, "img5.gif*^i1=1^i2=1^"), 
+			   "setpref", "Image Quality = 5", 
+			   proxyHost + "SetPrefs/?i5=5");
+
+  panelnum += 1;
+d141 4
+a144 6
+  buttons[i] = new button2(5, 3, 11, 11, panelnum, 
+			   getImage(codeBase, "enable.gif*^i1=1^i2=1^"), 
+			   "setpref", "Proxy Enabled", 
+			   proxyHost + "SetPrefs/?i1=0");
+  enableButton = buttons[i];
+
+d146 4
+a149 5
+  buttons[i] = new button2(5, 16, 11, 11, panelnum, 
+			   getImage(codeBase, "disable.gif*^i1=1^i2=1^"), 
+			   "setpref", "Proxy Disabled", 
+			   proxyHost + "SetPrefs/?i1=1"); 
+
+d152 2
+a153 2
+  buttons[i] = new button2(7, 3, 31, 22, panelnum, 
+			   getImage(codeBase, "refine.gif*^i1=1^i2=1^"), 
+d155 1
+a155 3
+			   "javascript:A()");
+
+  panelnum += 1;
+d157 2
+a158 2
+  buttons[i] = new button2(5, 4, 57, 24, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^i2=1^"), 
+d160 1
+a160 1
+			   proxyHost + "comments.html");
+d162 2
+a163 2
+  buttons[i] = new button2(76, 4, 29, 25, panelnum, 
+			   getImage(codeBase, "links.gif*^i1=1^i2=1^"), 
+d165 1
+a165 3
+			   proxyHost + "help.html");
+
+  panelnum += 1;
+d167 2
+a168 2
+  buttons[i] = new button2(5, 4, 59, 24, panelnum, 
+			   getImage(codeBase, "title.gif*^i1=1^i2=1^"), 
+d170 1
+a170 7
+			   proxyHost + "about/index.html");
+  i += 1;
+  buttons[i] = new button2(64, 1, 8, 12, panelnum, 
+			   getImage(codeBase, "logo.gif*^i1=1^i2=1^"), 
+			   "minimize", "Toolbar Minimized");
+  minButton = buttons[i];  
+}
+d172 3
+a174 3
+public void start() {
+
+  // Each time start is called, we must poll the proxy for the current
+a181 7
+    while((inputLine = prefsStream.readLine()) != null) {
+      if (inputLine.startsWith("true")) {
+	enabled = true;
+      }
+      else {
+	enabled = false;
+      }
+d183 6
+a188 20
+      // Get the current setting for image quality.
+      int len = inputLine.length();
+      if (inputLine.charAt(len - 1) == '3') {
+	imgQ = 3;
+      }
+      else if (inputLine.charAt(len - 1) == '1') {
+	imgQ = 1;
+      }
+      else if (inputLine.charAt(len - 1) == '2') {
+	imgQ = 2;
+      }
+      else if (inputLine.charAt(len - 1) == '4') {
+	imgQ = 4;
+      }
+      else if (inputLine.charAt(len - 1) == '5') {
+	imgQ = 5;
+      }
+      else {
+	imgQ = 3;
+      }
+d190 4
+d204 2
+d209 1
+a209 1
+  panels[0] = getImage(codeBase, "img"+ imgQ + ".gif*^i1=1^i2=1^");
+a212 7
+
+  // If the dashboard is currently minimized or being minimized, only
+  // paint the image corresponding to the minButton.
+  if (minimizing) {
+    g.drawImage(minButton.gif, 0, 0, this);
+  }
+
+d215 4
+a218 4
+  else if (!enabled) {
+    int i;
+    for (i = 0; i < numPanels-1; i += 1) {
+      g.drawImage(offpanels[i], origins[i], 0, this);
+a219 4
+    // This paints the last panel flush right.
+    g.setColor(Color.black);
+    g.fillRect(origins[i-1]+widths[i-1], 0, origins[i], height);
+    g.drawImage(offpanels[i], origins[i], 0, this);
+a220 1
+
+d224 2
+a225 3
+    int i;
+    for (i = 0; i < numPanels-1; i += 1) {
+      g.drawImage(panels[i], origins[i], 0, this);
+a226 4
+    // This paints the last panel flush right.
+    g.setColor(Color.black);
+    g.fillRect(origins[i-1]+widths[i-1], 0, origins[i], height);
+    g.drawImage(panels[i], origins[i], 0, this);
+d228 6
+d238 1
+a238 1
+  repaint(origins[panelNum], 0, widths[panelNum], height);
+d243 1
+a243 14
+  // Begin by checking if the dashboard is minmized.  If it is, then
+  // check whether the mouse click occurred within the logoButton.
+  // If thse are true, then we maximize the dashboard by setting
+  // some state variables and repainting the entire applet.
+  button2 b = logoButton;
+  if (minimizing && b.inButton(x, y) && b.action.equals("maximize")) {
+    minimizing = false;
+    status = "Status: " + b.mesg;
+    appletContext.showStatus(status);
+    repaint();
+    return false;
+  }
+
+  // Otherwise, if the proxy is enable, go through each button2 to
+d248 20
+a267 13
+  else if (enabled || 
+	   enableButton.inButton(x-origins[enableButton.panel], y) ||
+	   minButton.inButton(x-origins[minButton.panel], y)) {
+    for (int i = 0; i < numButtons; i += 1) {
+
+      b = buttons[i];
+      int p = b.panel;
+
+      if (b.inButton(x - origins[p], y)) {
+
+	String action = b.action;
+	String mesg = b.mesg;
+	status = "Status: " + b.mesg;
+d269 2
+d272 2
+a273 7
+	// If the action equals "minmize," then we se some state variables
+	// and repaint the entire applet.
+	if (action.equals("minimize")) {
+	  minimizing = true;
+	  repaint();
+	  return false;
+	}
+d275 10
+a284 5
+	// If the buttton action equals "link" or "refine" we can call
+	// showDocument to get the desired behavior.
+	else if (action.equals("link") || action.equals("refine")) {
+	  appletContext.showDocument(b.url);
+	  return false;
+d286 3
+a288 31
+
+	// If we are setting a preference:
+	else if (action.equals("setpref")) {
+
+	  // Check if we are setting the image quality.  This is a hack
+	  // which works since we know that the image quality is set with the
+	  // first 5 button2's in the applet.  If we are setting the 
+	  // quality, then the imgQ variable has to be updated.
+	  if (i <= 4) {	
+	    imgQ = i+1;
+	  }
+
+	  // Next we send a GET request to the proxy to set this preference.
+	  try {
+	    b.url.openConnection();
+	  }
+	  catch (IOException ioex) {
+	    System.err.println("Open Connection failed");
+	    return false;
+	  }
+	  try {
+	    DataInputStream prefsStream = new DataInputStream(b.url.openStream());
+	    String inputLine;
+	    while((inputLine = prefsStream.readLine()) != null) {
+	    }
+	    prefsStream.close();
+
+	  }
+	  catch (IOException ioex) {
+	    System.err.println("Open Stream failed");
+	    return false;
+d290 2
+d293 40
+a332 21
+	  // If we are enabling or disabling the proxy, we have to set
+	  // some state variables and repaint the entire applet.
+	  panels[p] = b.gif;
+	  if (mesg.equals("Proxy Enabled")) {
+	    enabled = true;
+	    repaint();
+	  }
+	  else if (mesg.equals("Proxy Disabled")) {
+	    enabled = false;
+	    repaint();
+	  }
+
+	  // Otherwise, we can just repaint one panel.
+	  else {
+	    repaintPanel(p);
+	  }
+	}
+	else {
+	  panels[p] = b.gif;
+	  repaintPanel(p);
+	}
+d334 2
+a335 1
+    }
+d341 1
+@
+
+
+1.4
+log
+@A little bug fix to gui.java
+@
+text
+@a9 1
+private static String proxyHost = "http://HTTP.CS.Berkeley.EDU/";
+d11 7
+a17 1
+  /* Status bar message */
+d20 3
+a22 4
+  /* True if we are initializing this applet */
+private static boolean initialized = false;
+
+  /* True if the toolbar is minimized */
+d25 3
+a27 1
+  /* True if the proxy is enabled */
+d30 36
+a65 23
+  /* Menu bar dimensions */
+private int height = 30;      /* Menu bar height */
+private int width;		/* Browser width -- assigned in init() */
+private int minwidth = 455;   /* Minimum applet width */
+
+  /* Manu bar panels */
+private int numPanels = 5;	/* Number of panels */
+private static int imgQ = 3;
+private Image[] panels;	/* Panel gifs -- initialized in init() */
+private Image[] offpanels;	/* Panel gifs when proxy is disabled */
+private int[] origins;	/* Panel x-origins -- initialized in init() */
+private int[] widths;		/* Panel widths -- initializedin init() */
+
+  /* Menu bar buttons */
+private int numButtons = 12;	/* Number of buttons */
+private button2[] buttons;	/* Actual buttons -- initialized in init() */
+
+  /* Special buttons */
+private button2 logoButton;	/* Special minimized button */
+private Image minIcon;
+
+private button2 enableButton;	/* Buttons that still work when the proxy */
+private button2 minButton;	/* is disabled */
+a68 3
+  System.out.println("in init()");
+  System.out.println("img quality = " + imgQ);
+
+d73 3
+d81 1
+a81 1
+  /* Initialize the panel arrays. */
+d87 3
+a89 72
+  /* Initialize the button array. */
+  buttons = new button2[numButtons];
+
+  if (!initialized) {
+    System.out.println("init =" + initialized);
+    System.out.println("getting preferences");
+    initialized = true;
+    try {
+      URL prefsURL = new URL(proxyHost + "GetPrefs.html");
+      URLConnection prefsConnection = prefsURL.openConnection();
+      DataInputStream prefsStream = new DataInputStream(prefsConnection.getInputStream());
+      String inputLine;
+      int mySetting;
+      while((inputLine = prefsStream.readLine()) != null) {
+	if (inputLine.startsWith("true")) {
+		System.out.println("true");
+		enabled = true;
+	}
+	else {
+		System.out.println("false");
+		enabled = false;
+	}
+
+	// get the value of the setting
+	int len = inputLine.length();
+	if (inputLine.charAt(len - 1) == '3') {
+		System.out.println("The value is three!!!!!!");
+		imgQ = 3;
+	}
+	else if (inputLine.charAt(len - 1) == '1') {
+		System.out.println("The value is one!!!!!!");
+		imgQ = 1;
+	}
+	else if (inputLine.charAt(len - 1) == '2') {
+		System.out.println("The value is two!!!!!!");
+		imgQ = 2;
+	}
+	else if (inputLine.charAt(len - 1) == '4') {
+		System.out.println("The value is four!!!!!!");
+		imgQ = 4;
+	}
+	else if (inputLine.charAt(len - 1) == '5') {
+		System.out.println("The value is five!!!!!!");
+		imgQ = 5;
+	}
+	else {
+		System.out.println("YOU MESSED UP!!!");
+		imgQ = 3;
+	}
+	System.out.println(inputLine);
+      }
+      prefsStream.close();
+    }
+    catch (MalformedURLException me) {
+      System.err.println("new URL failed");
+      return;
+    }
+    catch (IOException ioex) {
+      System.err.println("IO exception");
+      return;
+    }
+  }
+  System.out.println("init =" + initialized);
+}
+
+public void start() {
+
+  System.out.println("in start()");
+  System.out.println("img quality = " + imgQ);
+
+  /* PANELS: Get information needed to draw panels and initialize */
+  /* the needed arrays. */
+a90 1
+  int i = 0;
+d124 4
+a127 1
+  /* BUTTONS: Get the information needed to associate URLS to buttons */
+d205 55
+d262 2
+d267 3
+d275 1
+d280 3
+d288 1
+d295 1
+a295 1
+  /* Repaints panel number "panelNum." */
+d302 4
+d310 1
+d312 1
+d314 6
+d333 1
+d335 2
+a338 1
+	  status = "Status: " + b.mesg;
+d342 3
+d349 2
+a350 5
+	/*
+	else if (action.equals("refine")) {
+	  netscape.javascript.JSObject.getWindow().call(A);
+	}
+	*/
+d353 4
+a356 1
+	  /* Check if we are setting the image quality. */
+a358 1
+	    System.out.println("changed" + imgQ);
+d361 1
+a370 1
+	    /*
+a372 1
+	      System.out.println(inputLine);
+d375 1
+a375 1
+	    */
+d382 2
+d393 2
+a409 1
+
+@
+
+
+1.3
+log
+@new gui.class and gui.java that adds functionality to the refine all button
+@
+text
+@d54 1
+a54 1
+  URL codeBase = getCodeBase();
+d72 1
+a72 1
+    System.out.println(initialized);
+d74 1
+a74 2
+    //    initialized = true;
+    System.out.println(initialized);
+d130 1
+d134 3
+@
+
+
+1.2
+log
+@new gui.java and gui.class
+@
+text
+@a5 1
+
+d8 1
+a8 1
+private static AppletContext appletContext;  
+d16 1
+a16 1
+private static boolean init = true;
+d54 1
+a55 1
+  codeBase = getCodeBase();
+d71 5
+a75 1
+  if (init) {
+a117 1
+
+a119 3
+      //      enabled = prefsStream.readBoolean();
+      //      imgQ = prefsStream.readInt();
+      //      System.out.println("Prefs obtained: " + imgQ + " " + enabled);
+a129 1
+    init = false;
+d312 5
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d6 1
+d9 9
+a17 2
+  private AppletContext appletContext;  
+  private URL codeBase;
+d19 5
+a23 4
+  /* Some state variables */
+  private String status = "Status: ";	/* Status bar message */
+  private boolean minimizing = false;	/* True if the toolbar is minimized */
+  private boolean enabled = true;	/* True if the proxy is enabled */
+d26 3
+a28 3
+  private int height = 30;      /* Menu bar height */
+  private int width;		/* Browser width -- assigned in init() */
+  private int minwidth = 463;   /* Minimum applet width */
+d31 6
+a36 5
+  private int numPanels = 5;	/* Number of panels */
+  private Image[] panels;	/* Panel gifs -- initialized in init() */
+  private Image[] offpanels;    /* Panel gifs when proxy is disabled */
+  private int[] origins;	/* Panel x-origins -- initialized in init() */
+  private int[] widths;		/* Panel widths -- initializedin init() */
+d39 2
+a40 2
+  private int numButtons = 12;	/* Number of buttons */
+  private button2[] buttons;	/* Actual buttons -- initialized in init() */
+d43 5
+a47 2
+  private button2 logoButton;	/* Special minimized button */
+  private Image minIcon;
+d49 1
+a49 2
+  private button2 enableButton;	/* Buttons that still work when the proxy */
+  private button2 minButton;	/* is disabled */
+d51 2
+d54 3
+a56 1
+  public void init() {
+d58 4
+a61 3
+    setBackground(Color.white);
+    appletContext = getAppletContext();
+    codeBase = getCodeBase();
+d63 63
+a125 3
+    width = size().width;
+    if (width < minwidth) {
+      width = minwidth;
+d127 7
+d135 121
+a255 120
+    /* PANELS: Get information needed to draw panels and initialize */
+    /* the needed arrays. */
+    panels = new Image[numPanels];
+    offpanels = new Image[numPanels];
+    origins = new int[numPanels];
+    widths = new int[numPanels];
+
+    int origin = 0;
+    int i = 0;
+    panels[i] = getImage(codeBase, "img3.gif*^i1=1^i2=1^");
+    offpanels[i] = getImage(codeBase, "img-off.gif*^i1=1^i2=1^");
+    widths[i] = 118;
+    origins[i] = origin;
+
+    origin += widths[i];
+    i += 1;
+    panels[i] = getImage(codeBase, "enable.gif*^i1=1^i2=1^");
+    offpanels[i] = getImage(codeBase, "disable.gif*^i1=1^i2=1^");
+    widths[i] = 101;
+    origins[i] = origin;
+
+    origin += widths[i];
+    i += 1;
+    panels[i] = getImage(codeBase, "loadorig.gif*^i1=1^i2=1^");
+    offpanels[i] = getImage(codeBase, "loadorig-off.gif*^i1=1^i2=1^");
+    widths[i] = 57;
+    origins[i] = origin;
+
+    origin += widths[i];
+    i += 1;
+    panels[i] = getImage(codeBase, "links.gif*^i1=1^i2=1^");
+    offpanels[i] = getImage(codeBase, "links-off.gif*^i1=1^i2=1^");
+    widths[i] = 114;
+    origins[i] = origin;
+
+    origin += widths[i];
+    i += 1;
+    panels[i] = getImage(codeBase, "title.gif*^i1=1^i2=1^");
+    offpanels[i] = getImage(codeBase, "title-off.gif*^i1=1^i2=1^");
+    widths[i] = 73;
+    origins[i] = width - widths[numPanels-1];
+
+
+    /* BUTTONS: Get the information needed to associate URLS to buttons */
+    buttons = new button2[numButtons];
+
+    int panelnum = 0;
+    logoButton = new button2(0, 0, 45, 25, panelnum, 
+                             getImage(codeBase, "logo.gif*^i1=1^i2=1^"), 
+                             "maximize", "Toolbar Maximized");
+
+    i = 0;
+    buttons[i] = new button2(9, 16, 11, 11, panelnum,
+                             getImage(codeBase, "img1.gif*^i1=1^i2=1^"), 
+			     "setpref", "Image Quality = 1", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i5=1");
+    i += 1;
+    buttons[i] = new button2(30, 16, 11, 11, panelnum, 
+                             getImage(codeBase, "img2.gif*^i1=1^i2=1^"), 
+			     "setpref", "Image Quality = 2", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i5=2");
+    i += 1;
+    buttons[i] = new button2(51, 16, 11, 11, panelnum, 
+                             getImage(codeBase, "img3.gif*^i1=1^i2=1^"), 
+                             "setpref", "Image Quality = 3", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i5=3"); 
+    i += 1;
+    buttons[i] = new button2(72, 16, 11, 11, panelnum, 
+                             getImage(codeBase, "img4.gif*^i1=1^i2=1^"), 
+                             "setpref", "Image Quality = 4", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i5=4");
+    i += 1;
+    buttons[i] = new button2(93, 16, 11, 11, panelnum, 
+                             getImage(codeBase, "img5.gif*^i1=1^i2=1^"), 
+			     "setpref", "Image Quality = 5", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i5=5");
+
+    panelnum += 1;
+    i += 1;
+    buttons[i] = new button2(5, 3, 11, 11, panelnum, 
+                             getImage(codeBase, "enable.gif*^i1=1^i2=1^"), 
+			     "setpref", "Proxy Enabled", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i1=0");
+    enableButton = buttons[i];
+    i += 1;
+    buttons[i] = new button2(5, 16, 11, 11, panelnum, 
+                             getImage(codeBase, "disable.gif*^i1=1^i2=1^"), 
+			     "setpref", "Proxy Disabled", 
+			     "http://HTTP.CS.Berkeley.EDU/SetPrefs/?i1=1"); 
+
+    panelnum += 1;
+    i += 1;
+    buttons[i] = new button2(6, 3, 45, 25, panelnum, 
+                             getImage(codeBase, "loadorig.gif*^i1=1^i2=1^"), 
+			     "loadorig", "Loading Original Document", 
+			     "http://Original");
+
+    panelnum += 1;
+    i += 1;
+    buttons[i] = new button2(5, 4, 57, 24, panelnum, 
+                             getImage(codeBase, "links.gif*^i1=1^i2=1^"), 
+			     "link", "Send Comments", 
+		 	     "http://transend.CS.Berkeley.EDU/comments.html");
+    i += 1;
+    buttons[i] = new button2(76, 4, 29, 25, panelnum, 
+                             getImage(codeBase, "links.gif*^i1=1^i2=1^"), 
+			     "link", "Help Page", 
+			     "http://transend.CS.Berkeley.EDU/help.html");
+    
+    panelnum += 1;
+    i += 1;
+    buttons[i] = new button2(5, 4, 59, 24, panelnum, 
+                             getImage(codeBase, "title.gif*^i1=1^i2=1^"), 
+			     "link", "About Page", 
+			     "http://transend.CS.Berkeley.EDU/about/index.html");
+    i += 1;
+    buttons[i] = new button2(64, 1, 8, 12, panelnum, 
+                             getImage(codeBase, "logo.gif*^i1=1^i2=1^"), 
+ 	 	     	     "minimize", "Toolbar Minimized");
+    minButton = buttons[i];  
+d257 4
+a260 4
+
+  public void paint(Graphics g) {
+    if (minimizing) {
+      g.drawImage(minButton.gif, 0, 0, this);
+d262 7
+a268 16
+    else if (!enabled) {
+      int i;
+      for (i = 0; i < numPanels-1; i += 1) {
+        g.drawImage(offpanels[i], origins[i], 0, this);
+      }
+      g.setColor(Color.black);
+      g.fillRect(origins[i-1]+widths[i-1], 0, origins[i], height);
+      g.drawImage(offpanels[i], origins[i], 0, this);
+    }     
+    else {
+      int i;
+      for (i = 0; i < numPanels-1; i += 1) {
+        g.drawImage(panels[i], origins[i], 0, this);
+      }
+      g.setColor(Color.black);
+      g.fillRect(origins[i-1]+widths[i-1], 0, origins[i], height);
+d271 3
+d275 1
+d278 11
+a288 2
+  public void repaintPanel(int panelNum) {
+    repaint(origins[panelNum], 0, widths[panelNum], height);
+d290 71
+a360 66
+
+  public boolean mouseDown(Event e, int x, int y) {
+    button2 b = logoButton;
+    if (minimizing && b.inButton(x, y) && b.action.equals("maximize")) {
+      minimizing = false;
+      status = "Status: " + b.mesg;
+      repaint();
+    }
+    else if (enabled || 
+        enableButton.inButton(x-origins[enableButton.panel], y) ||
+        minButton.inButton(x-origins[minButton.panel], y)) {
+      for (int i = 0; i < numButtons; i += 1) {
+
+        b = buttons[i];
+        int p = b.panel;
+
+        if (b.inButton(x - origins[p], y)) {
+    
+          String action = b.action;
+          String mesg = b.mesg;
+          status = "Status: " + b.mesg;
+
+          if (action.equals("minimize")) {
+            minimizing = true;
+            status = "Status: " + b.mesg;
+            repaint();
+            return false;
+          }
+          else if (action.equals("link")) {
+            appletContext.showDocument(b.url);
+            return false;
+          }
+          else if (action.equals("setpref")) {
+            try {
+	      b.url.openConnection();
+            }
+            catch (IOException ioex) {
+              System.err.println("Open Connection failed");
+              return false;
+            }
+            try {
+              b.url.openStream();
+            }
+            catch (IOException ioex) {
+              System.err.println("Open Stream failed");
+              return false;
+            }
+
+            panels[p] = b.gif;
+            if (mesg.equals("Proxy Enabled")) {
+              enabled = true;
+              repaint();
+            }
+            else if (mesg.equals("Proxy Disabled")) {
+              enabled = false;
+              repaint();
+            }
+            else {
+              repaintPanel(p);
+            }
+          }
+          else {
+            panels[p] = b.gif;
+            repaintPanel(p);
+          }
+        }
+a362 2
+    appletContext.showStatus(status);
+    return false;
+d364 3
+@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@

@@ -1,0 +1,799 @@
+head	1.6;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.6
+date	96.12.04.03.49.29;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	96.12.03.20.22.50;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.12.03.09.39.05;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.03.07.51.18;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.03.03.40.19;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.03.03.16.28;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.6
+log
+@*** empty log message ***
+@
+text
+@#!/usr/bin/perl -w
+
+=head1 NAME
+
+DOLF - GloMop Project proxy for Digital Objects with Lazy Fixations
+
+=head1 SYNOPSIS
+
+To start DOLF, say "C<main.pl -help>" to see runtime options.    
+
+=head1 DESCRIPTION
+
+Synopsis goes here for Web page
+
+=head1 COPYRIGHT
+
+Copyright (C) 1994-1996, the Regents of the University
+of California.  Non-commercial and commercial licensing of this code must be
+arranged with the GloMop group.  For inquiries email Armando Fox
+(fox@@cs.berkeley.edu), Prof. Eric Brewer (brewer@@cs.berkeley.edu), or
+Prof. Randy Katz (randy@@cs.berkeley.edu).
+
+=cut
+
+
+BEGIN { unshift(@@INC, ".", "/disks/barad-dur/now/pythia/release/lib/perl-5.002")
+    }
+use POSIX;
+use MD5;
+use LWP;
+
+
+
+sub conn::new {
+    bless {
+        "IPaddr"        => undef,
+        "URL"           => undef,
+        "proto"         => undef,
+        "request"       => undef,
+        "reqtype"       => undef,
+        "client_headers" => {},
+        "sock"          => undef,
+        "data"          => undef,
+        "resp"          => undef,
+    }
+}
+
+#
+# Globals reused frequently
+#
+
+%Children = ();                             # outstanding unreaped children
+$Listen = '';                               # listening socket object
+$Accept = '';                               # accepted socket object
+
+#
+# defaults  for cmd line options
+#
+$gb{neverfork} = 0;
+$help{neverfork} = 'Run in debugging mode: never fork';
+
+$g{statfile} = '/dev/null';
+$help{statfile} = 'File in which to write distillation statistics';
+
+$g{port}  = 5555;                     # http port
+$help{port} = 'HTTP port';
+
+$g{sport} = 9100;
+$help{sport} = 'Default port for starting local services';
+
+$g{qsize} = 10;
+$help{qsize} = 'Socket queue size';
+
+$g{gateway} = '';
+$help{gateway} = 'Firewall gateway machine (host:port) (CURRENTLY BROKEN)';
+
+$g{config} = './dolf.cf';
+$help{config} = 'DOLF configuration file';
+
+$gb{keeptemp} = 0;
+$help{keeptemp} = "Don't delete temp files after exiting";
+
+#
+#  startup
+#
+
+foreach $file (qw(gm_sock
+                  util
+                  typegraph
+                  tgconfig
+                  do
+                  child
+                  errors
+                  prefs
+                  register.html
+                  ))  {
+    require "${file}.pl";
+}
+
+&util::instvars('conn',
+                qw(IPaddr URL method proto request reqtype sock data resp));
+&parse_args;
+&read_config;
+
+#
+#  Open a socket for listening.
+#
+($Listen = listensock gm_sock $g{port}, 'tcp', $g{qsize})
+    or die("listensock (TCP): " . &gm_sock::lasterror);
+
+&init;
+&mainloop;
+
+#------------------------------------------------------------
+#  main loop: listen for connections, and fork child to handle them
+#
+
+sub mainloop {
+    my($addr);
+    my($c,$zz,$dummy);
+    my($rbits,$ebits) = ('','');
+    my($rout,$eout) = ();
+    my($vec);
+    my($from, $hmsg);
+    my($url, $method, $proto, $reqtype, @@hdrs);
+
+    my($sockfh) = ($Listen->filehandles)[0];
+    vec($rbits, fileno($sockfh), 1) = 1;
+    vec($ebits, fileno($sockfh), 1) = 1;
+
+    &log(sprintf("Listening on port %d/tcp",
+                 ($Listen->endpoints)[3]));
+
+    CON: for ($Con = 0; ; $Con++) {
+
+        $Accept->closesock() if (ref($Accept) eq gm_sock);
+
+      SELECT: while (1) {
+          #
+          # Idle loop: while there are outstanding children, loop between
+          # waiting on select() and reaping the children.  NOTE: Real POSIX
+          # waitpid should allow us to specify 0 as the first arg, to check
+          # for status of other processes in our process group, but it
+          # doesn't seem to work in perl....
+          #
+          unless ($gb{neverfork}) {
+              $zz = 1;
+              while ($zz > 0) {
+                  # BUG::for some reason the perl installation at geoworks
+                  # cannot properly import waitpid from auto/POSIX/waitpid.al.
+                  # Happily, under solaris, waitpid is provided directly, so we
+                  # don't need to explicitly import it from the POSIX package.
+                  $zz = waitpid(-1, &WNOHANG);
+                  (delete $Children{$zz}, &debug('fork', "Reaped $zz"))
+                      if $zz > 0;
+              }
+          }
+          #$sel = select($rout=$rbits,undef,$eout=$ebits,$Const{SelectTimeout});
+          $sel = select($rout=$rbits,undef,$eout=$ebits,undef);
+          if ($sel == -1) { &log("*** select() error: $!"); }
+          last SELECT if (($sel > 0) &&
+                          (vec($rout,fileno($sockfh),1)));
+      }
+        
+        next CON unless (vec($rout, fileno($sockfh), 1));
+
+        $Accept = $Listen->acceptsock();
+        unless ($Accept) {
+            &log( "*** accept: " . $Listen->lasterror());
+            next CON;
+        }
+        # get the client's IP addr.
+        $con = new conn;
+        $con->{"sock"} = $Accept;
+        $con->{"IPaddr"} = ($Accept->endpoints())[0];
+
+        # collect HTTP request line.
+        
+        unless (&collect_request($con)) {
+            &log("*** Bad request: " . $con->{"request"});
+            &http_error($con,"500 Bad request");
+            next CON;
+        }
+
+        #  Determine request type.  Possible requests:
+        #   New service added or removed:
+        #        SVCADD servicename@@host:port
+        #        SVCDEL servicename@@host:port
+        #   Registration
+        #        GET url (where url is the magic "registration" URL)
+        #   Prefs change
+        #        GET url (where url is the "generate prefs page" URL)
+        #   Stats query
+        #        GET url (where url is "magic proxystats URL")
+        #   Regular http
+
+        #
+        # If this is a login:
+        #
+        if ($con->{"URL"} =~ s/^$main::Const{MatchLoginURL}//o) {
+            $con->{"sock"} = $Accept;
+            &debug('register', "Login request from " . $con->{"IPaddr"});
+            # login function will return HTML text giving status of login
+            # transaction.
+            &send_client($con, &html_wrap("",&login($con)));
+            #&send_status($con, "200 OK (DOLF login)");
+            #&send_html($con,&login($con));
+            next CON;
+        }
+
+        #
+        # If this is a change of prefs:
+        #
+        if ($con->{"URL"} =~ s/^$main::Const{MatchRegisterURL}//o) {
+            my $username = $1;
+            my($x);
+            $con->{"sock"} = $Accept;
+            &debug('register',
+                   join("Registration request from",
+                        $con->{"IPaddr"}, "(user $username):",
+                        $con->{"URL"}));
+            # call register function, which returns HTML text giving status of
+            # registration transaction.
+            $x = &register($con->{"URL"}, $con->{"IPaddr"}, $username) ;
+            if (defined $x) {
+                &send_client($con, &html_wrap("",$x));
+            } else {
+                # registration failed!
+                &client_disallowed;
+            }
+            next CON;
+        }
+
+        #
+        # If this is a stats request, return some stats.
+        #
+
+        if ($con->{"URL"} =~ /^$main::Const{StatsURL}$/o) {
+            $Accept->writesock( &get_stats );
+            next CON;
+        }
+
+        #
+        # If this is a request for a Prefs Change form or Login form:
+        #
+        if ($con->{"URL"} =~ /$main::Const{RegisterRequest}/o) {
+            $con->{"sock"} = $Accept;
+            &send_client($con, &do_register($con));
+            next CON;
+        }
+        if ($con->{"URL"} =~ /$main::Const{LoginRequest}/o) {
+            $con->{"sock"} = $Accept;
+            &send_client($con, &do_login);
+            next CON;
+        }
+
+        #
+        #  Normal request case.
+        #
+        if ($gb{neverfork}) {
+            &debug('http', "Handling client request");
+            # since we're ignoring SIGPIPE when in neverfork mode, protect the
+            #  request processing from 'broken pipe' and similar system errors.
+            &handle_conn($con);
+        } elsif ($c = fork()) {
+            # this is the parent
+            $Children{$c}++;
+            &debug('fork', "$Con: [$c]\n");
+            $Accept->closesock;
+        } elsif (! defined ($c)) {
+            # fork failed!
+            die "*** $$: Fatal: fork failed!\n";
+        } else {
+            # this is the child
+            $SIG{PIPE} = \&child_cleanup;
+            &handle_conn($con); 
+            exit 0;
+        }
+    }
+}
+
+
+#--------------------------------------------------------------------
+#  init other global state, and set up the @@Config array to contain the
+#  noncomment contents of the configuration file.
+#
+
+sub init {
+    my @@uname;
+
+    @@uname = &uname
+        or die "Uname failed; $!";
+
+    $SIG{'INT'} = $SIG{'KILL'} = 'parent_cleanup';
+    #
+    #  Read config info from file.
+    #
+    if (open(CFG, $g{config})) {
+        @@Config = ();
+        while(<CFG>) {
+            push(@@Config, $_) unless /^#/;
+        }
+    } else {
+        &log("Warning: can't read config file '$g{config}', using defaults");
+    }
+    #
+    #  For all config entries except 'prefs', set them up as a hash.
+    #
+    my %cfg;
+    for (@@Config) {
+        $cfg{$1} = $2 if ( ! /^prefs/
+                          && /^\s*(\S+)\s+(.*)$/ );
+    }
+    #
+    #  Initialize prefs manager.
+    #
+    &prefs::init;
+    my $host = ($Listen->endpoints)[2];
+    my $rev = '$Id: main.pl,v 1.5 1996/12/03 20:22:50 fox Exp $';  #'
+    $rev = $1 if $rev =~ /,v\s+([\d.]+)/;
+    my $uptime = `/bin/date`;
+    %main::Const = (%main::Const,
+                    (
+                    Crlf => "\r\012",
+                    HTTPVersion => "HTTP/1.0",
+                    Uptime => chomp($uptime),
+                    Rev => $rev,
+                    Arch => $uname[$#uname],
+                    Hostname => $uname[1],
+                    Proxy => 'DOLF',
+                    SelectTimeout  => undef,
+                    Ppid => $$,
+                    RegisterRequest => "http://DolfPrefs",
+                    LoginRequest =>    "http://DolfLogin",
+                    StatsURL =>        "http://dolfstats",
+                    ProxyHost => $host,
+                    ProxyPort => ($Listen->endpoints)[3],
+                    GenerateRegisterURL =>
+                    "http://$host:$g{port}/DolfPrefs/%s/",
+                    MatchRegisterURL =>
+                    "(http://$host:$g{port})?/DolfPrefs/([^/]+)/",
+                    LoginURL =>
+                    "http://$host:$g{port}/DolfLogin/",
+                     MatchLoginURL =>
+                     "(http://$host:$g{port})?/DolfLogin/",
+                     
+                    ));
+    #
+    #  initialize registration/login stuff.
+    #
+    &register::init;
+    1;
+}
+
+#----------------------------------------------------------------------
+#  cleanup and die
+#
+
+sub parent_cleanup {
+    &main::log("*** Proxy shutting down\n");
+    &checkpoint;                            # sync prefs file before leaving
+    unless (exists $main::Debug{'keeptemp'}) {
+        &main::log( "*** Cleaning temp directory $main::Tempdir\n");
+        system("/bin/rm -rf $main::Tempdir");
+    }
+    eval {$Listen->killsock()};
+    eval {$Accept->killsock()};
+    exit 0;
+}
+
+#---------------------------------------------------------------------------
+# parse cmd line
+#
+
+sub parse_args {
+    local(@@debug);
+    &usage if (grep(/-help/, @@ARGV));
+
+    # setup default args first
+
+    while ($_ = shift @@ARGV) {
+
+        s/^-//;
+        $g{$_} = shift @@ARGV, next if defined $g{$_};
+        $gb{$_} = 1, next if defined $gb{$_};
+        $gb{$_} = 0, next if (s/^no// && defined $gb{$_});
+        &util::dbg_list(shift @@ARGV), next if (/^debug/);
+        &main::log( "$0: arg '$_' ignored\n");
+    }
+}
+
+#------------------------------------------------------------
+#  Log
+#
+
+sub debug { goto &util::debug }
+
+# sub debug {
+#     local($key, @@args) = @@_;
+#     return unless ((exists $main::Debug{$key}) || $main::DebugAll);
+#     print STDERR "$$" . "[$key]: ";
+#     local($") = "\n";                       # "
+#     print STDERR "@@args";
+#     print STDERR "\n" unless ((pop @@args) =~ /\n$/);
+# }
+
+sub log {
+    local(@@args) = @@_;
+    local($") = "\n";                       #" 
+    print STDERR "$$:@@args";
+    print STDERR "\n" unless ((pop @@args) =~ /\n$/);
+}
+
+sub get_stats {
+    # Return a string (possibly including newlines) of interesting stats
+    my @@x;
+
+    push(@@x, "DOLF (pid=$$) served $Con requests since $main::Const{Uptime}");
+    push(@@x, sprintf("%d registered users (%d new this session)",
+                     &prefs::register_info));
+    my $svcs = &distiller::listall();
+    push(@@x, "Services:");
+    push(@@x, $svcs);
+    push(@@x, '');
+    return join("\n", @@x);
+}
+
+#------------------------------------------------------------------
+#  usage
+#
+
+sub usage {
+    print STDERR "$0: HTTP proxy\n\n";
+    print STDERR "  Usage: $0 [options]\n\n";
+
+    print STDERR
+        "-debug key[,key,...]: print debugging messages related to 'key':\n";
+    print STDERR "                  tg - DOLF typegraph messages\n";
+    print STDERR "                  do - DOLF DO/fixation messages\n";
+    print STDERR "                  stats - bytes saved by distillation\n";
+    print STDERR "                  reg - login/prefs changes\n";
+    print STDERR "                  conn - HTTP control traffic\n";
+    print STDERR "                  echo - HTTP data traffic\n";
+    print STDERR "                  echoall - all content traffic (verbose!)\n";
+    print STDERR "                  fork - child process spawning/reaping\n";
+    print STDERR "                  all - everything (really verbose!)\n";
+    foreach (keys %g) {
+        print STDERR "-$_: $help{$_} (default $g{$_})\n";
+    }
+    if (%gb) {
+        print STDERR "\n  Boolean options (specify -foo or -nofoo):\n";
+        foreach (keys %gb) {
+            printf STDERR ("-$_: $help{$_} (def -%s$_)\n",
+                           $gb{$_}? "": "no");
+        }
+    }
+    exit 0;
+}
+@
+
+
+1.5
+log
+@*** empty log message ***
+@
+text
+@d200 1
+a200 1
+        if ($con->{"URL"} =~ s/^$main::Const{LoginURL}//o) {
+d205 3
+a207 2
+            &send_status($con, "200 OK (DOLF login)");
+            &send_html($con,&login($con));
+d226 1
+a226 2
+                &send_status($con, "200 OK (DOLF prefs change)");
+                &send_html($con, $x);
+d319 1
+a319 1
+    my $rev = '$Id: main.pl,v 1.4 1996/12/03 09:39:05 fox Exp $';  #'
+d341 1
+a341 1
+                    "http://$host:$g{port}/DolfPrefs/([^/]+)/",
+d344 3
+@
+
+
+1.4
+log
+@*** empty log message ***
+@
+text
+@d78 1
+a78 1
+$help{config} = 'Pythia configuration file';
+a94 2
+                  services
+                  client
+d205 1
+a205 1
+            &send_status($con, "200 OK (Pythia login)");
+d225 1
+a225 1
+                &send_status($con, "200 OK (Pythia prefs change)");
+d319 1
+a319 1
+    my $rev = '$Id: main.pl,v 1.3 1996/12/03 07:51:18 fox Exp $';  #'
+d330 1
+a330 1
+                    Proxy => 'Pythia',
+d333 3
+a335 3
+                    RegisterRequest => "http://PythiaPrefs",
+                    LoginRequest =>    "http://PythiaLogin",
+                    StatsURL =>        "http://proxystats",
+d339 1
+a339 1
+                    "http://$host:$g{port}/PythiaPrefs/%s/",
+d341 1
+a341 1
+                    "http://$host:$g{port}/PythiaPrefs/([^/]+)/",
+d343 1
+a343 1
+                    "http://$host:$g{port}/PythiaLogin/",
+d415 1
+a415 1
+    push(@@x, "Pythia (pid=$$) served $Con requests since $main::Const{Uptime}");
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d90 1
+a90 1
+                  dolf
+d321 1
+a321 1
+    my $rev = '$Id: main.pl,v 1.2 1996/12/03 03:40:19 fox Exp $';  #'
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+#!/usr/sww/bin/perl -w
+a32 22
+#
+#  Per-connection "globals"
+#
+sub instvars {
+    my $class = shift;
+    foreach $var (@@_) {
+        if ($var =~ /(\S+):r/) {
+            # read-only variable
+            $var = $1;
+            $action = qq!carp "Can't set instance variable `$var' this way, ign\
+ored"!;
+        } else {
+            $action = qq!\$self->{"$var"} = shift!;
+        }
+        eval "sub ${class}::${var}"  . qq!{
+            my \$self = shift;
+            $action if defined \$_[0];
+            return \$self->{"$var"}; }! ;
+    }
+}
+
+&instvars('conn', qw(IPaddr URL method proto request reqtype sock data resp));
+d89 1
+d102 2
+d105 1
+a319 15
+    #
+    # Make a temporary directory for segment files.
+    #
+    $main::Tempdir = $cfg{"tempdir"} || "/tmp";
+
+    $main::Tempdir = "/tmp"
+        unless (-d $main::Tempdir) && (-w $main::Tempdir);
+    $main::Tempdir .= "/pyth$$";
+    mkdir($main::Tempdir, 0700) or die "Can't make $main::Tempdir: $!";
+    &debug('seg', "Made directory $main::Tempdir for page segment files");
+    #
+    #  Where to find distillation programs.
+    #
+    $main::Bin = $cfg{"bin"} || "/bin";
+
+d321 1
+a321 1
+    my $rev = '$Id: $';  #'
+a366 2
+    eval {$Cache->trash()};                 # delete page cache 
+    eval {&distiller::killall()};            # shut down distillation svrs
+d386 1
+a386 12
+        if (/^debug/) {
+            @@debug = split(/\s*,\s*/, shift @@ARGV);
+            if (grep (/^all$/, @@debug)) {
+                &main::log("All debugging messages enabled");
+                $main::DebugAll = 1;
+            } else {
+                for (@@debug) { $Debug{$_}++; }
+                local($") = ",";                #" 
+                &log("Debugging enabled for @@debug");
+            }
+            next;
+        }
+d395 10
+a404 8
+sub debug {
+    local($key, @@args) = @@_;
+    return unless ((exists $main::Debug{$key}) || $main::DebugAll);
+    print STDERR "$$" . "[$key]: ";
+    local($") = "\n";                       # "
+    print STDERR "@@args";
+    print STDERR "\n" unless ((pop @@args) =~ /\n$/);
+}
+@
+
+
+1.1
+log
+@*** empty log message ***
+@
+text
+@d1 1
+a1 1
+#! perl -w
+d5 1
+a5 1
+pythia - GloMop Project HTTP-compliant distillation proxy
+d9 1
+a9 11
+Pythia is a proxy that performs distillation of images, HTML, and other
+data for commodity browsers running on impoverished devices or over an
+impoverished connection.  It is one of the software components developed
+as part of the UC Berkeley GloMop research project
+(http://www.cs.berkeley.edu/~fox/glomop).
+
+Pythia requires the MD5 and LWP Perl modules, both of which are freely available
+from your local CPAN mirror.  If you don't know what this is, try
+C<http://www.metronet.com/perlinfo/> for help.
+
+To start Pythia, say "C<pythia.pl -help>" to see runtime options.    
+d13 1
+a13 26
+Pythia exports two API's of interest, each with its own man page:
+
+=over 3
+
+=item *
+
+HTML distillation and page "segmenting": L<munge_html>.  Using this API also
+requires some familiarity with L<html_parser>.
+
+=item *
+
+Distillation service API for other datatypes: L<services>
+
+=back
+
+=head1 REFERENCES
+
+Armando Fox and Eric A. Brewer, I<Reducing WWW Latency and Bandwidth
+Requirements via Real-Time Distillation>.  Proc. Fifth International
+World Wide Web Conference (WWW-5), Paris, May 1996.
+
+Armando Fox, Steven D. Gribble, Eric A. Brewer, and Elan Amir.
+I<Adapting to Network and Client Variability via On-Demand Dynamic
+Transcoding>.  Proc. Seventh International Conference on Architectural
+Support for Programming Languages and Operating Systems (ASPLOS-VII),
+Boston, October 1996 (to appear).
+d17 1
+a17 1
+All the Pythia code is Copyright (C) 1994-1996, the Regents of the University
+d26 2
+a27 4
+    BEGIN { unshift(@@INC, "/export/home/gnu/lib/perl-5.002/sun4-solaris/5.002",
+                          ".", "/staff/pcgeos/Pythia/pythia");
+            
+        }
+a217 24
+        # If a new service is being added:
+        #
+        if ($con->{"method"} =~ /svcadd/i) {
+            # the "URL" encodes the service name and location, e.g.
+            #    "gifmunch@@foobar.com:9999"
+            my $svc = $con->{"URL"};
+            my $ipad = ($Accept->endpoints())[0];
+            my $port = $con->{"proto"};
+            &distiller::birth($ipad,$port,$svc);
+            next CON;
+        }
+
+        #
+        # If a new service is being removed:
+        #
+        if ($con->{"method"} =~ /svcdel/i) {
+            my $svc = $con->{"URL"};
+            my $port = $con->{"proto"};
+            my $ipad = ($Accept->endpoints())[0];
+            &distiller::death($ipad, $port, $svc);
+            next CON;
+        }
+
+        #
+a338 8
+    #  Read clients.
+    #
+    &client::read_clients;
+    #
+    #  Initialize the refinement-icon imagemap stuff.
+    #
+    &ismap_icon::init;
+    #
+a348 7
+    #  Make a temporary directory for cache.  (For now, we use the same dir for
+    #  both seg files and cache files.)
+    #
+    $main::Cache = new cache ($main::Tempdir,
+                              (sub { substr(MD5->hexhash(shift),0,8) }),
+                              10e6);
+    #
+a351 10
+    #
+    #  Read the parser actions file.  If none was given in the config,
+    #  use a default.
+    #
+    my $actions = $cfg{"html_actions"} || "./munge_html.pl";
+    eval { require $actions };
+    if ($@@) {
+        &main::log("Warning: can't read $actions ($@@); using default");
+        require "munge_html.pl";
+    }
+d354 1
+a354 1
+    my $rev = '$Id: pythia.pl,v 1.1.1.1 1996/11/27 21:34:54 fox Exp $';  #'
+a383 6
+    #
+    #  Start services collector.
+    #
+    &distiller::startdefault($main::Const{Hostname},
+                             $main::Const{ProxyPort},
+                             $main::Const{Arch});
+@

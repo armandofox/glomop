@@ -1,0 +1,143 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	96.03.06.04.36.16;	author gribble;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@run.pl: modified gifmunch runner and spawner
+scripto.sh: used to coordinate all other pieces
+spawner.pl:  spawns a number of gifmunchers on the local machine
+stresser.pl: stress tests a number of gifmunchers with a file
+stats.pl: computes mean, stddev, variance, etc.
+@
+text
+@#
+#  run.pl - run something through a distiller
+#
+
+require "gm_sock.pl";
+
+package run;
+
+$gListenport = 0;
+$gHost = '';
+
+# modified init:  args are   port spawnBool [prog] 
+# if spawnBool true, spawn muncher on local machine with listenport =
+# port+1
+
+sub init {
+    my $port = shift;
+   # was my $port = 8888;
+    my $spawnBool = shift;
+    my $prog = shift ||
+        '/disks/barad-dur/now/pythia/fox/work/gifmunch/gifmunch';
+    my $lis;
+    
+    my $arch = `uname` || `/bin/uname` || `/usr/ucb/uname` ||
+        die "can't get archtype from uname";
+
+    # find an unused port
+    # srand(time);
+    #$port = 32767+rand(32000);
+    # $port++ until $lis = listensock gm_sock $port;
+    # $gListenport = $port+1;
+    $lis = listensock gm_sock $port or
+	die "Couldn't open port $port for listening on muncher reg.\n";
+
+    $gListenport = $port + 1;
+    $gHost = `hostname` || `/usr/ucb/hostname` || `/bin/hostname` ||
+        die "can't get hostname";
+    
+    # if told to do so, spawn a gifmuncher on the local machine
+    if ($spawnBool) {
+	warn "Spawning muncher...\n";
+	
+	chop $gHost;
+	chop $arch;
+	unless (fork()) {
+	    exec "${prog}.${arch} $gListenport $gHost $port";
+	    die "Exec failed: $!";
+	}
+    }
+
+    # now wait for birth of gifmuncher
+    warn "Waiting for birth on port $port...\n";
+    my $l2 = $lis->acceptsock();
+    my $birth;
+    $birth .= $_ while $_=$l2->readsock();
+    die "Bad msg: $birth\n"
+        unless $birth =~ /svcadd\s+\S+\s+(\d+)/;
+    $gListenport = $1;
+    $gHost = ($l2->endpoints)[0];
+    warn("Connected $gHost at $gListenport\n");
+    $l2->closesock();
+    return 1;
+}
+
+
+sub slurp {
+    my $filename = shift;
+    my $data;
+    
+    warn ("open file: $!"), return 0
+        unless open(FH, $filename);
+    $data .= $_ while ($_ = <FH>);
+    close FH;
+    warn ("Data is null!") unless $data;
+    return ($data);
+}
+
+## run is modified to take args $gHost, $gListenport, $params, $data
+sub run {
+    my ($gmHost, $gmListenport, $params,$data) = @@_;
+    my $output;
+    
+    my $nsock = connectsock gm_sock $gmHost,$gmListenport;
+
+    warn ("connect: $!"), return undef unless $nsock;
+
+    $nsock->writesock("d $params $data");
+    return undef unless ($nsock->readsock());     # discard content-type line
+    $output .= $_ while ($_ = $nsock->readsock_raw());
+    $nsock->closesock();
+    return $output;
+}
+
+%gif = ();
+sub gifattribs {
+    my $f = shift;                          # gif data blob
+    %gif = ();
+
+    $gif{size} = length($f);
+    $gif{x} = ord(substr($f,6,1))+(ord(substr($f,7,1))<<8);
+    $gif{y} = ord(substr($f,8,1))+(ord(substr($f,9,1))<<8);
+    $gif{bpp} = 1+(ord(substr($f,10,1)) & 7);
+    $gif{cr} = 1+(((ord(substr($f,10,1))) >> 4) & 7);
+    $gif{h_0} = (-.08363 + 0.1841 * $gif{bpp});
+    $gif{h} = $gif{size} / ($gif{x} * $gif{y});
+    $gif{h_eff} = $gif{h} / $gif{h_0};
+    return %gif;
+}
+
+
+1;
+
+  
+    
+    
+    
+@

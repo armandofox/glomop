@@ -1,0 +1,331 @@
+head	1.9;
+access;
+symbols
+	transend-beta2:1.8
+	frontend-ng:1.8
+	transend-beta-latest:1.8
+	Aggregators:1.8
+	NoAggregators:1.8
+	iang:1.7.0.4
+	transend-beta:1.7.0.2
+	SOSP:1.4
+	merged_preintegrate:1.3
+	heisenbug:1.3
+	PRE_INTEGRATION:1.3;
+locks; strict;
+comment	@ * @;
+
+
+1.9
+date	97.08.30.21.34.17;	author fox;	state dead;
+branches;
+next	1.8;
+
+1.8
+date	97.05.06.21.30.03;	author fox;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.04.22.22.28.05;	author fox;	state Exp;
+branches
+	1.7.2.1
+	1.7.4.1;
+next	1.6;
+
+1.6
+date	97.04.21.21.14.15;	author fox;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.04.09.01.31.21;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.02.07.22.47.55;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	96.12.12.02.16.51;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	96.12.11.01.12.15;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	96.12.09.04.53.49;	author fox;	state Exp;
+branches;
+next	;
+
+1.7.2.1
+date	97.05.06.21.30.36;	author fox;	state Exp;
+branches;
+next	;
+
+1.7.4.1
+date	97.05.06.23.49.34;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.9
+log
+@reintegrated from branch fox-dev; bug remaining in dispatch.c which should always return a DistillerStatus and not an HTTP_Status
+@
+text
+@/*
+ *  http_error.c: return error conditions directly to client by
+ *  returning an appropriate status line and HTML document.
+ */
+
+#include "proxy.h"
+#include "thr_cntl.h"
+#include "userpref.h"
+#include "debug.h"
+#include "httpreq.h"
+#include "utils.h"
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+
+/*
+ *  http_error_return: return an HTTP error directly to client socket
+ *
+ *  ARGS:
+ *    i: file descriptor (socket)
+ *    i: HTTP version token
+ *    i: HTTP status token
+ *    i: string to substitute into "long" message (NULL=none)
+ */
+  
+
+void
+http_error_return(int sock, HTTP_Version version, HTTP_Status status,
+                  char *subst)
+{
+  char *str, *tmpstr;
+  size_t tmpstrlen;
+  static const char http_error_template[] = {
+    "<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n"
+  };
+  tmpstrlen = (subst ? strlen(subst) : 3);
+  tmpstr = (char *)ALLOCA(strlen(http_returns[status].longmessage)
+                          + tmpstrlen
+                          + 1);
+  tmpstrlen = sprintf(tmpstr, http_returns[status].longmessage, subst);
+
+  str = (char *)ALLOCA(sizeof(http_error_template)
+                       + (strlen(http_returns[status].message) << 1)
+                       + tmpstrlen
+                       + 2);
+
+  sprintf(str, http_error_template,
+          http_returns[status].message, http_returns[status].message, tmpstr);
+  
+  /* BUG::HTTP version detection needs to be correct here */
+  if (1 || version != HTTP_VERSION_09_OR_EARLIER) {
+    char *str2  = (char *)ALLOCA(strlen("HTTP/1.0 \r\n")
+                                 + strlen(http_returns[status].message)
+                                 + 80);
+    /* note, +80 gets minimum size needed for minimal headers. */
+    sprintf(str2, "HTTP/1.0 %s\r\n", http_returns[status].message);
+    if (correct_write(sock, str2, -1) < 0)
+      return;
+    sprintf(str2, "Content-type: text/html\r\nContent-length: %d\r\n\r\n",
+            strlen(str));
+    if (correct_write(sock, str2, -1) < 0)
+      return;
+  }
+  proxy_debug_2(DBG_HTTP, str);
+  (void)correct_write(sock, str, -1);
+}
+
+@
+
+
+1.8
+log
+@fixed sizeof() bug found by ian in http_error_return
+@
+text
+@@
+
+
+1.7
+log
+@one more string related bug fix in http_error.c
+@
+text
+@d33 3
+a35 3
+  static const char *http_error_template = 
+    "<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n";
+  
+@
+
+
+1.7.4.1
+log
+@L0 works; sending and registering encrypted URLs works
+@
+text
+@d33 2
+a34 2
+  static const char http_error_template[] = 
+    { "<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n" };
+@
+
+
+1.7.2.1
+log
+@fixed sizeof() bug found by ian in http_error_return
+@
+text
+@d33 3
+a35 3
+  static const char http_error_template[] = {
+    "<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n"
+  };
+@
+
+
+1.6
+log
+@fixed string bugs in http_error_return
+@
+text
+@a26 3
+#define HTTP_MAXSUBST 255       /* maximum length of a substitution into an
+                                   http error message  */
+
+d35 2
+a36 1
+
+d38 3
+a40 4
+                          + HTTP_MAXSUBST-1);
+
+  tmpstrlen = sprintf(tmpstr, http_returns[status].longmessage,
+                      (subst?subst:""));
+@
+
+
+1.5
+log
+@added logging, which also resulted in shuffling around a lot of .h files and what goes into each
+@
+text
+@d27 3
+d34 10
+a43 1
+  char str[HTTP_RESPONSE_BODY_MAX], tmpstr[HTTP_RESPONSE_BODY_MAX];
+d45 4
+a48 1
+  sprintf(tmpstr, http_returns[status].longmessage, (subst?subst:""));
+d50 1
+a50 2
+  sprintf(str,
+          "<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n",
+d55 4
+a58 3
+    char str2[HTTP_RESPONSE_BODY_MAX];
+    /* output status line */
+    /* BUG::should get http version exactly */
+@
+
+
+1.4
+log
+@User prefs skeleton working
+@
+text
+@d6 4
+@
+
+
+1.3
+log
+@End to end path works via dispatch.c, some error reporting still broken and some things still hardcoded that shouldn't be
+@
+text
+@d36 1
+a36 1
+  if (1 || version != HTTP_09_OR_EARLIER) {
+@
+
+
+1.2
+log
+@*** empty log message ***
+@
+text
+@a12 17
+ *  The following list must match the order of the enum HTTP_Status in
+ *  httpreq.h. 
+ */
+
+const static struct {
+  const char *message;
+  const char *longmessage;
+} http_returns[HTTP_OTHER+1] = {
+  { "000 Should never happen",
+    "Should never get this status (%s)" },
+  { "500 Malformed request or URL",
+    "Request malformed: {%s}" },
+  { "501 Miscellaneous",
+    "Unspecified internal proxy error on {%s}" },
+};
+
+/*
+d32 1
+a32 1
+          (const char *)"<HTML><HEAD><TITLE>%s</TITLE></HEAD><BODY><H1>%s</H1>%s</BODY></HTML>\r\n",
+d35 2
+a36 1
+  if (version != HTTP_09_OR_EARLIER) {
+d48 1
+@
+
+
+1.1
+log
+@http header parsing distinguishes http version and method. minor fixes to config files.
+@
+text
+@d7 1
+a28 15
+static int
+write_string(int fd, const char *str)
+{
+  register size_t len = strlen(str);
+  register size_t res;
+
+  res = write(fd, str, len);
+  if (res == -1) {
+    proxy_errlog_4("%s (writing '%s' to fd %d)", strerror(errno), str, fd);
+  } else if (res != len) {
+    proxy_errlog_3("Wrote only %d bytes (expected %d)", (int)res,(int)len);
+  }
+  return (res == len);
+}
+
+d57 1
+a57 1
+    if (! write_string(sock, str2))
+d61 1
+a61 1
+    if (! write_string(sock, str2))
+d64 1
+a64 1
+  write_string(sock, str);
+@

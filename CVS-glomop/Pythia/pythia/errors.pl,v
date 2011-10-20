@@ -1,0 +1,170 @@
+head	1.2;
+access;
+symbols
+	V1_1_2:1.2
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.02.26.09.31.33;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	97.02.05.23.02.14;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@cleaned up and added docs for 1.1.2 ftp release
+@
+text
+@#
+#  these routines are in the same package as those of child.pl.
+#  they deal with error and signal handling and reporting.
+#
+#  $Id: errors.pl,v 1.1.1.1 1997/02/05 23:02:14 fox Exp $
+#
+
+=head1 NAME
+
+errors.pl - report erors to HTTP client
+
+=head1 SYNOPSIS
+
+  $stuff = &html_wrap($msg_title,$msg_body,$page_title);
+  &http_error($msg_title,$msg_body,$page_title);
+
+=head1 DESCRIPTION
+
+This file contains routines to construct valid HTML content and
+headers given an error or informational message.
+
+=cut
+
+$errors::GenericError = <<EndHtml;
+    <p>This error was reported by <I>Pythia</I>,
+    not by the remote HTTP server.</P>
+    If you believe you have reached this recording in error,
+    <A HREF=mailto:fox\@@cs.berkeley.edu>send us email</A>
+    explaining how to reproduce this problem.
+EndHtml
+
+
+
+sub client_disallowed {
+    local($con) = shift;
+    local($ipaddr) = $con->{"IPaddr"};                 # ip addr that was denied
+    local($html) = &regpage_with_prefs("default");
+    &http_error($con,"502 Unregistered Host $ipaddr", $html,
+                "$Const{Proxy} Registration");
+    1;
+}
+
+=head2 $stuff = &html_wrap($msg_title,[$msg_body[,$page_title]])
+
+Given a title whose one-line summary is $msg_title, body is $msg_body,
+and HTML page name is $page_title, return a complete set of HTML headers
+and content (including an HTTP status line) suitable for immediate
+return to the client.  If $msg_body or $page_title are omitted, they
+assume some default values.
+
+NOTE: Most of the time you probably just want to use L</http_error>.
+
+=cut
+
+sub html_wrap {
+    local($msg) = shift;
+    local($body) = shift || $errors::GenericError;
+    local($title) = shift || "Pythia Error";
+    local($errstr);
+    local(@@errstr) = ($msg ? "$Const{HTTPVersion} $msg"
+                      : "$Const{HTTPVersion} 505 Pythia Internal Intercept") ;
+    push(@@errstr, "Server: $Const{Proxy} $Const{Rev}");
+    push(@@errstr, "Content-type: text/html");
+    push(@@errstr, "");                      # blank line separator
+    push(@@errstr,"<HTML><HEAD><TITLE>$title</TITLE></HEAD><BODY>");
+    push(@@errstr,"<H1>$msg</H1>") if $msg;
+    push(@@errstr, $body);
+    push(@@errstr,"</BODY></HTML>");
+    return join($Const{Crlf}, @@errstr);
+}
+
+=head2 $stuff = html_error($con,$msg_title,[$msg_body[,$page_title]])
+
+Same as L</html_wrap>, but actually sends the message to the client
+described by the connection object (see L<child.pl>), and then cleans up
+and closes that connection object.  Use this to deliver an error message
+via HTTP and then close down the client.  You can call this
+as either a subroutine or an object method call for the connection object.
+
+=cut
+
+sub http_error {
+    my $con = shift;
+    my $msg;
+    &send_client($con, ($msg = &html_wrap(@@_)));
+    &send_client($con,"$Const{Crlf}$Const{Crlf}");
+    &debug('http',$msg);
+    &child_cleanup($con);                         # never returns
+}
+    
+#
+#  This subr is called if SIGINT is received by an executing child
+#
+sub child_interrupted {
+    &http_error($con,"500 someone sent me a SIGINT, bye bye...");
+    &child_cleanup;
+}
+
+sub child_cleanup {
+    my $con = shift;
+    eval { $con->{"sock"}->killsock() };
+    &debug('fork', "*** Cleaned up child $$\n");
+    # only exit if we are a child.
+    exit 0 unless $$ == $Const{Ppid};
+}
+
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d5 1
+a5 1
+#  $Id: errors.pl,v 1.6 1996/09/09 23:04:13 fox Exp $
+d8 15
+d33 1
+d35 2
+a36 1
+    local($ipaddr) = shift;                 # ip addr that was denied
+d43 12
+d71 10
+@
+
+
+1.1.1.1
+log
+@New, distribution version of Pythia with a real directory structure and
+real documentation
+@
+text
+@@

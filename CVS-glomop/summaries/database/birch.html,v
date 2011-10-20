@@ -1,0 +1,210 @@
+head	1.1;
+access;
+symbols;
+locks; strict;
+comment	@# @;
+
+
+1.1
+date	97.05.06.17.33.25;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.1
+log
+@added BIRCH
+@
+text
+@<html>
+<title>
+Birch
+</title>
+<body>
+<a href="index.html"><i>Back to index</i></a>
+<h1>
+BIRCH: An Efficient Data Clustering Method for Very Large Databases
+</h1>
+<strong>
+Tian Zhang, Raghu Ramakrishnan, Miron Livny, UW Madison
+</strong>
+
+
+<b>Summary by:</b> Armando Fox and Steve Gribble<p>
+
+
+<p><b>One-line summary:</b>
+Scan data and build balanced trees representing data clusters; each
+point is inserted into a cluster based on a local decision, and may
+cause the cluster to split/merge (like GiST); when done, do a little
+polishing, toss some outliers (all using heuristics with no statistical
+basis), and <i>voila</i>, you have data clustering.
+</p>
+
+<h2>Overview/Main Points</h2>
+
+<ul>
+  <li> Clustering: identification of densely populated regions of a
+       large sparse multidimensional dataset.  This paper (and most
+       related work) does clustering based on <i>metric attributes</i>,
+       i.e. those that satisfy Euclidian space requirements of
+       self-identity and triangle inequality.
+       <ul>
+         <li> Goal: minimize running time and space requirements
+         <li> Goal: handle "noise" (outliers of clusters) well
+         <li> Formally: Given desired number of clusters K and N points,
+              and distance-based measurement function that measures the
+              cluster sizes (see below), partition the dataset
+              such that the measurement function is minimized.
+       </ul>
+  <li> Related work
+       <ul>
+         <li> Probability-based approaches: typically assume that
+              prob. distributions on different attributes are
+              statistically independent, which is often false.
+         <li> Distance-based approaches inspect all data points or
+              existing clusters equally for each clustering decision,
+              rather than looking only at "best" candidates; therefore
+              don't enjoy linear scaling.
+         <li> CLARANS, a randomized-search approach: search a graph in
+              which each node is a K-partition reprsented by a set of K
+              <i>medoids</i> (point closest to partition center); for
+              each node, check at most <i>maxneighbors</i> clusters that
+              differ from it by only 1 medoid; if better neighbor found,
+              choose 
+              it; otherwise record this node as a local min.  Continue
+              until <i>numlocal</i> local mins have been found and
+              return the best subset of these.
+       </ul>
+  <li> BIRCH properties:
+       <ul>
+         <li> Local decisions at each step give scalability
+         <li> Points in sparse regions treated as outliers, thrown away
+         <li> Incremental method: doesn't require entire dataset in
+              advance, and only scans dataset once
+       </ul>
+  <li> Definitions of distances for clusters: 
+       <ul>
+         <li> Centroid: Euclidean
+         <li> Radius: avg distance from any member point to centroid
+         <li> Diameter: avg pairwise distance in cluster
+              <br><i>Any of the following can be used as distance metric
+              to compare a new data point to existing clusters:
+              in BIRCH algorithm:</i><br>
+         <li> D0=Euclidean distance from centroid
+         <li> D1=Manhattan distance from centroid (only motion along
+              axes permitted)
+              <br><i>ANd for deciding whether to merge clusters:</i><br>
+         <li> D2=Average Inter-cluster distance between 2 clusters
+         <li> D3=Average intra-cluster distance inside a cluster
+              (geometrically, the diameter of new cluster if 2 clusters
+              are merged)
+         <li> D4=Variance increase distance: (?) amount by which the
+              intracluster distance variance changes if 2 clusters are merged
+       </ul>
+  <li> Clustering features and CF trees:
+       <UL>
+         <li> CF is a 3-vector (N,LS,SS) where N is num of data
+              points in this cluster, LS is a vector sum of the N data points,
+              and SS is the  sum of the (vector) squares of the points.
+         <li> Trivial theorem: if two clusters are merged, the CF of the
+              merged cluster is the sum of the original CF's.
+         <li> CF tree: a height-balanced tree where each node represents
+              the cluster that would be created by merging its
+              children.  Leaves are current clusters.
+         <li> Leaf requirement: cluster diameter or radius must be below
+              some threshold T; if adding new point to the cluster would
+              violate this, must split the leaf.
+         <li> Optional periodic merging alleviates effects of splits
+              caused by page size.
+       </ul>
+  <li> At last, the BIRCH algorithm:
+       <ul>
+         <li> Authors used D2 and D4 distance metrics, which can be
+              calculated from CF vectors in O(N<sup>2</sup>).
+         <li> Phases:
+              <ol>
+                <li> Linear-scan all data and insert in CF-tree
+                <li> Condense into desirable range by building smaller
+                     CF-tree by removing some outliers and merging
+                     clusters
+                <li> Global clustering over leaves (authors used D2 and
+                     D4 distance metrics for this step, which takes
+                     O(N<sup>2</sup>)
+                <li> (optional and offline) further refinement and
+                     outlier elimination; provably converges to a minimum
+              </ol>
+         <li> Phase 1: initialize T, scan data values, insert points
+              into CF-tree.  If run out of memory before we're done,
+              need to increase T, and begin again by reinserting
+              existing leaves into new tree.
+         <li> Authors prove that if T is increased, new tree will be
+              non-larger than old tree.
+       </ul>
+  <li> How to choose T in phase 1 to prevent memory overflow but still
+       get good clustering?  "Beyond scope of paper", but authors have
+       some heuristics:
+       <ul>
+         <li> Choose next T in proportion to data seen so far.
+         <li> Want to increase threshold based on some measure of
+              cluster volume.  Can use either average volume of cluster,
+              or actual volume of leaves.  Either way, maintain record
+              of leaf radii as function of number of points, use
+              least-squares regression to estimate growth order, then
+              extrapolate r and compute the volume from it.
+         <li> Make T greater than the distance between the two closest
+              in the closest clusters on the most crowded leaf, so that
+              these clusters will be merged.
+         <li> Multiply current T by an expansion factor based on the
+              above distance.
+         <li> Wave a dead chicken and ask the spirits for a value of T.
+       </ul>
+  <li> Outlier handling:
+       <ul>
+         <li> Old leaf entry considered to be potential outlier if it
+              has "far fewer" points than average leaf.  "Far fewer" is
+              a heuristic.
+         <li> If disk space runs out, rescan data to see if outliers can
+              be reabsorbed (due to recent increase in T, e.g.)  If they
+              can't, good chance that they are true outliers.
+       </ul>
+  <li> Performance:
+       <ul>
+         <li> Synthetic data generator generates clusters centered on
+              grid points, on sine wave, or randomly; points are
+              zero-mean normally-distributed aroudn cluster centers.
+         <li> BIRCH is faster, produces better clusters, etc. than its
+              competitors....boring section, not much in the way of
+              proving the actual performance assumptions.
+         <li> Interesting example: clustering colors to characterize
+              images.  Soudns useful to me.
+       </ul>
+</ul>
+
+<h2>Relevance</h2>
+
+Single-pass, sort-of-linear time algorithm that results in a
+sort-of-clustering of large number of data points, with most outliers
+sort-of-thrown-out. 
+
+<h2>Flaws</h2>
+
+<ul>
+  <li> No statistical bounds on anything.
+  <li> O(N<sup>2</sup>) global-clustering step is not linearly scalable,
+       contrary to (misleading?) claim in opening section.
+  <li> Performance analysis unconvincing.
+  <li> Heuristics for choosing T and finding outliers are a hack.
+       Heuristics are reasonable but need more justification that they
+       actually work.
+  <li> A nice idea but needs more hardcore analysis.
+</ul>
+<hr>
+<a href="index.html"><i>Back to index</i></a>
+
+</body></html>
+@

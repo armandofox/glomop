@@ -1,0 +1,362 @@
+head	1.8;
+access;
+symbols
+	v15b:1.8
+	v10b3:1.5;
+locks; strict;
+comment	@ * @;
+
+
+1.8
+date	97.11.12.20.13.10;	author iang;	state Exp;
+branches;
+next	1.7;
+
+1.7
+date	97.11.09.21.43.25;	author iang;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	97.11.05.22.02.04;	author iang;	state Exp;
+branches;
+next	1.5;
+
+1.5
+date	97.10.30.15.35.33;	author iang;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	97.10.30.02.00.58;	author iang;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	97.10.29.22.07.28;	author aspolito;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	97.10.28.19.24.23;	author iang;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	97.10.28.16.49.21;	author iang;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.8
+log
+@o Change Doc to AportisDoc
+o Add "New" button to Hotlist editing page
+@
+text
+@#include <Pilot.h>
+#include "globals.h"
+#include "loaddb.h"
+#include "utils.h"
+#include "callback.h"
+#include "main.h"
+
+
+#define dbName(p) ((char *) p)
+#define dbFlags(p) (*(Word *)(p+0x20))
+#define dbVer(p) (*(Word *)(p+0x22))
+#define dbType(p) (*(DWord *)(p+0x3c))
+#define dbID(p) (*(DWord *)(p+0x40))
+
+static unsigned char *dbp = NULL; /* DataBasePointer */
+static Boolean done;
+
+void DatabaseLoad(VoidHand hDBtoLoad) {
+  EventType e;
+  Err err;
+
+  dbp = MemHandleLock(hDBtoLoad);
+  done = false;
+  
+  if (dbp == NULL) return;
+  
+  FrmPopupForm(LoadDatabaseForm);  
+  while (!done) {
+    EvtGetEvent(&e, -1);
+    if (! SysHandleEvent (&e))
+      if (! MenuHandleEvent (NULL, &e, &err))
+	if (! ApplicationHandleEvent (&e))
+	  FrmDispatchEvent (&e);
+    if (e.eType == appStopEvent) {
+      EvtAddEventToQueue(&e);
+      done = true;
+    }
+  }
+  FrmReturnToForm(0);
+  MemHandleUnlock(hDBtoLoad);
+  dbp = NULL;
+}
+
+
+Boolean LoadDatabaseHandleEvent(EventPtr e) {
+  Boolean handled = false;
+  FormPtr frm;
+  LocalID LID = 0;
+  Err err;
+#if 0
+  UInt cardNo = 0;
+  DmSearchStateType DBState;
+#endif
+  char name[33];
+
+  CALLBACK_PROLOGUE
+
+  switch (e->eType) {
+  DWord dbtype;
+  int resP;
+  FieldPtr kindfld;
+  int fldset;
+
+  case frmOpenEvent:
+    frm = FrmGetActiveForm(); 
+   
+    name[33] = 0;
+    MemMove(name, dbp, 32);    
+
+    LID = DmFindDatabase(0, name);
+
+    dbtype = dbType(dbp);
+    resP = dbFlags(dbp) & ~0x08; /* Clear the BACKUP flag */
+    if ((resP != 0 && resP != 1) || resP != dbVer(dbp)) {
+	/* This is suspicious... */
+	resP = 0;
+    }
+    
+    /* SETUP FIELDS */
+
+    SetFld(FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, LoadDBNameF)),	   
+	   name, 33);
+
+    fldset = 0;
+    kindfld = FrmGetObjectPtr(frm, FrmGetObjectIndex(frm, LoadDBKindF));
+    if (resP) {
+	switch(dbtype) {
+	case 'appl':
+	    SetFld(kindfld, "This seems to be an application.", 32);
+	    fldset = 1;
+	    break;
+	case 'HACK':
+	    SetFld(kindfld, "This seems to be a Hackmaster hack.", 35);
+	    fldset = 1;
+	    break;
+	case 'GLib':
+	    SetFld(kindfld, "This seems to be a GLib shared library.", 39);
+	    fldset = 1;
+	    break;
+	case 'libr':
+	    SetFld(kindfld, "This seems to be a SysLib shared library.", 41);
+	    fldset = 1;
+	    break;
+	}
+    } else {
+	if (dbtype == 'TEXt' && dbID(dbp) == 'REAd') {
+	    SetFld(kindfld, "This seems to be an AportisDoc file.", 36);
+	    fldset = 1;
+	}
+	if (dbtype == 'vIMG' && dbID(dbp) == 'View') {
+	    SetFld(kindfld, "This seems to be an Image Viewer file.", 38);
+	    fldset = 1;
+	}
+    }
+    if (!fldset) {
+	SetFld(kindfld, "This is an unknown database type.", 33);
+    }
+
+    SetFld(FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, LoadDBTypeF)),
+	   (char *) &dbType(dbp), 4);
+    SetFld(FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, LoadDBIDF)),
+	   (char *) &dbID(dbp), 4);
+#if 0
+    if (!LID) {
+      DmGetNextDatabaseByTypeCreator(true, &DBState, dbType(dbp),
+				     dbID(dbp), false, &cardNo, &LID);
+    }
+#endif
+    if (LID) {
+      SetFld(FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, LoadDBAlready)),
+	     "THIS WILL REPLACE AN EXISTING DATABASE.", 39);
+    } else {
+      SetFld(FrmGetObjectPtr (frm, FrmGetObjectIndex (frm, LoadDBAlready)),
+	     "This will not replace an existing database.", 43);
+    }
+
+    FrmDrawForm(frm);
+    
+    handled = true;
+    break;
+
+  case ctlSelectEvent:    
+    switch(e->data.ctlEnter.controlID) {
+    case LoadDBYes:
+      /* SAVE DATABASE */
+      name[33] = 0;
+      MemMove(name, dbp, 32);
+      do {
+	err = 0;
+	LID = DmFindDatabase(0, name);      
+	if (LID) {
+	  err = DmDeleteDatabase(0, LID);
+	}
+#if 0
+	if (!err && !DmGetNextDatabaseByTypeCreator(true, &DBState,
+	    dbType(dbp), dbID(dbp), false, &cardNo, &LID)) {
+	  err = DmDeleteDatabase(cardNo, LID);
+	}
+#endif
+	if (LID && err) {
+	    /* Badness.  We couldn't delete the database */
+	    FrmAlert(LoadDBBadnessAlert);
+	    goto badness_label;
+	} else {
+	    LID = 0;
+	}
+      } while (LID != 0);
+      DmCreateDatabaseFromImage(dbp);
+badness_label: ;
+      /* FALLTHROUGH */
+
+    case LoadDBNo:
+      handled = true;
+      done = true;
+      break;
+    }
+  default:
+  }
+    
+  CALLBACK_EPILOGUE
+
+  return handled;
+
+}
+@
+
+
+1.7
+log
+@Recover from CVS repository crash.  Changes include:
+o Editing of entries in hotlist and storage
+o Server-side imagemaps
+o Recognition of ImageViewer .pdb files
+@
+text
+@d73 1
+a73 1
+    resP = dbFlags(dbp);
+d107 1
+a107 1
+	    SetFld(kindfld, "This seems to be a Doc file.", 28);
+@
+
+
+1.6
+log
+@Added Doc support (load source as a Doc file)
+@
+text
+@d4 1
+a4 1
+#include "prefs.h"
+d108 4
+@
+
+
+1.5
+log
+@You _can_ have multiple databases with the same type/id.
+@
+text
+@d105 5
+@
+
+
+1.4
+log
+@Downloading prc's!  Yay!
+@
+text
+@d49 2
+a51 1
+  Err err;
+d53 1
+d114 1
+d119 1
+d145 1
+d150 1
+@
+
+
+1.3
+log
+@*** empty log message ***
+@
+text
+@d57 5
+d69 7
+d77 2
+d81 27
+d118 1
+a118 1
+	     "THIS WILL REPLACE AN EXISTING FILE", 34);
+d121 1
+a121 1
+	     "This will not overwrite any files", 32);
+a122 1
+    /* SETUP FIELDS */
+d136 1
+a139 1
+	  ErrFatalDisplayIf(err, "Can't delete current database!");
+d141 2
+a142 3
+	if (!DmGetNextDatabaseByTypeCreator(true, &DBState, dbType(dbp),
+					   dbID(dbp), false, &cardNo, 
+					   &LID)) {
+d144 5
+a148 1
+	  ErrFatalDisplayIf(err, "Can't delete current database!");
+d150 1
+a150 1
+	  LID = 0;
+d154 3
+@
+
+
+1.2
+log
+@Fixed up some memory problems
+@
+text
+@d4 3
+a7 4
+/* Anthony gets to fill this in */
+void DatabaseLoad(VoidHand hDBtoLoad)
+{
+    unsigned char *dbp = MemHandleLock(hDBtoLoad);
+d9 113
+a121 1
+    /* Make sure it really looks like a database */
+a122 1
+    MemHandleUnlock(hDBtoLoad);
+@
+
+
+1.1
+log
+@Prepare for database downloading
+@
+text
+@d8 5
+@

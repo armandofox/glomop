@@ -1,0 +1,602 @@
+head     1.1;
+branch   1.1.1;
+access   ;
+symbols  initial:1.1.1.1 initial:1.1.1;
+locks    ; strict;
+comment  @ * @;
+
+
+1.1
+date     95.09.12.01.49.06;  author gribble;  state Exp;
+branches 1.1.1.1;
+next     ;
+
+1.1.1.1
+date     95.09.12.01.49.07;  author gribble;  state Exp;
+branches ;
+next     ;
+
+
+desc
+@@
+
+
+
+1.1
+log
+@Initial revision
+@
+text
+@/*------------------------------------------------------------------------------
+#
+#	MailStore.c
+#
+#    MailStore definition file
+#	  - MailStore is a non-viewable object that stores all of the components of a letter
+#       in abstract form.
+#     - MailStore can decode its stored information from a stream of data (from GloMop)
+#     - MailStore can encode its stored information into a stream of data (to GloMop)
+#     - MailStore can create a MailViewBox with its data on it
+#     - MailStore can extract information from a MailViewBox to store in itself
+#
+#	Version:	1						August 8th, 1995
+#
+------------------------------------------------------------------------------*/
+
+/* Magic Cap System Software includes */
+#include "Magic.h"
+#include "Debug.h"
+#include "Package.h"  
+
+#include "MCindexicals.h"
+#include "CMailStore.h"
+
+/*** Note no main defined - is defined in MailClient.c  ***/
+
+#undef CURRENTCLASS
+#define CURRENTCLASS MailStore
+
+Method Boolean
+MailStore_decodeTOCEntry(ObjectID self, ObjectID decodeStream)  /** Assume bounded by LF **/
+{
+   char  nextLine[128];
+   char *theNL, *theMesNum, *theFlags, *theDate, *fromC, *subjC, *bodyC;
+   int   maxOff;
+	
+   ReadNELine(decodeStream, (Pointer) nextLine, 127, 10);                   /* get the line */
+   theNL = nextLine +  (long int) ScanForChar(10, nextLine, 127);       /* knock of trailing NL */
+   if (theNL >= nextLine)
+      *theNL = '\0';
+   Log(("Next summary: %s", nextLine));
+   
+   /* Ok - strip out chunk number */
+   /*theMesNum = nextLine + (long int) ScanForChar(':', nextLine, 127);
+   *theMesNum = '\0';  theMesNum += 1L;*/  /*obselete*/
+   
+   theMesNum = nextLine;
+   while (*theMesNum == ' ')
+      theMesNum += 1L;
+   
+   /* great - we've got the start of the message number */
+   theFlags = theMesNum;
+   while (CharacterIsDecimalDigit(*theFlags))
+       theFlags += 1L;
+   
+   /* theFlags now points to various MH flags next to message numbers.  Deal with here if we must */
+   *theFlags = '\0';
+   
+   /* get other easy fields */
+   theDate = theFlags + 2;
+   *(theDate + 5) = '\0';
+   fromC = theDate + 6;
+   *(fromC + 17) = '\0';
+   subjC = fromC + 16;
+   while (*subjC == ' ')
+   {
+      *subjC = '\0';
+	  subjC -= 1L;
+   }
+   
+   /* pull out and separate subject and body clip */
+   subjC = fromC + 19;
+   maxOff = (int) ScanForChar('\0', subjC, 122);
+   bodyC = subjC + (long int) ScanForChar('<', subjC, maxOff);
+   if (bodyC > subjC)
+      *bodyC = '\0';
+   bodyC += 1L;
+   if (*bodyC == '<')
+     bodyC += 1L;
+   theNL = bodyC + (long int) ScanForChar('\0', bodyC, 122);
+   if (theNL > bodyC)
+   {
+      while ( (*theNL == '\0') || (*theNL == '>'))
+	  {
+	     *theNL = '\0';
+		 theNL -= 1L;
+	  }
+   }
+      
+   /* Add stuff to MS as we wanted */
+   ReplaceTextWithLiteral(From_t(self), fromC);
+   ReplaceTextWithLiteral(To_t(self), "gribble@@cs.berkeley.edu");  /** ? what should go here ? **/
+   ReplaceTextWithLiteral(Subject_t(self), subjC);
+   ReplaceTextWithLiteral(Date_t(self), theDate);
+   ReplaceTextWithLiteral(Body_t(self), bodyC);
+   return true;
+}
+
+Private Boolean MSIsWS(char theChar)  /* is this character whitespace? */
+{
+   if ( (theChar == ' ') || (theChar == '\t') || (theChar == '\r') || (theChar == '\n'))
+      return true;
+   
+   return false;
+}
+
+Private void MSToastNL(char *theChars)  /* chop of a trailing NL if it exists */
+{
+   char *theNL;
+   long int theLen;
+   
+   theLen = (long int) ScanForChar(0, theChars, 255);
+   if (theLen < 0)
+      return;
+   theNL = theChars +  (long int) ScanForChar(10, theChars, theLen);      /* knock of trailing NL */
+   if (theNL >= theChars)
+      *theNL = '\0';
+}
+
+Private short MSTestFieldType(char *theLine)  /* is this the declaration of a recognized field? */
+{
+   if (CompareBytes(theLine, "From:", 5, NULL) == 0)
+      return MSP_FROM_FIELD;
+   if (CompareBytes(theLine, "To:", 3, NULL) == 0)
+      return MSP_TO_FIELD;
+   if (CompareBytes(theLine, "cc:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "CC:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "Cc:", 3, NULL) == 0)
+      return MSP_CC_FIELD;
+   if (CompareBytes(theLine, "Subject:", 8, NULL) == 0)
+      return MSP_SUBJECT_FIELD;
+   if (CompareBytes(theLine, "-----", 5, NULL) == 0)
+      return MSP_BODY_SEPARATOR;
+   return MSP_NO_FIELD;
+}
+
+Private Boolean MSTestDoneField(char *theLine)  /* is this the last line in a field? */
+{
+   char *theNL;
+   long int theLen;
+   
+   theLen = (long int) ScanForChar(0, theLine, 256);
+   if (theLen < 0L)
+      return true;  /* by default */
+   
+   theNL = theLine + (long int) ScanForChar(10, theLine, theLen);
+   if (theNL < theLine)
+      return false; /* don't have carriage return - can't be end of a field. */
+   
+   while(theNL >= theLine)
+   {
+      if ( MSIsWS(*theNL))
+	    theNL -= 1L;
+      else
+	  {
+	     if (*theNL == ',')   /* ie. line is  *,[WS][CR] */
+		    return false;
+	     else
+		    return true;
+	  }
+   }
+   /* all is WS - must be end of it by default */
+   return true;
+}
+
+Method Boolean
+MailStore_parseDRTfromStream(ObjectID self, ObjectID decodeStream)
+{
+    char      nextLine[256], *sizePtr;
+	long int  numDRTentries, i, sizeLine, j;
+	ObjectID  theFList;
+	
+	/** Read "NDOCS <#>", extract # **/
+	ReadNELine(decodeStream, (Pointer) nextLine, 255, 10);
+	MSToastNL(nextLine);
+	sizePtr = nextLine + 6L;
+	if (CompareBytes(nextLine, "NDOCS ", 6, NULL) != 0)
+	{
+	   Log(("Warning - NDOCS expected but not found!"));
+	   return false;
+	}
+	CtoPString(sizePtr);
+	if (!StringToInt(sizePtr, &numDRTentries))
+	{
+	   PtoCString(sizePtr);
+	   Log(("Couldn't convert %s to int!\n", sizePtr));
+	}
+	Log(("DRT size is %ld elements.", numDRTentries));
+	
+	/** Read entries one by one **/
+	theFList = Drt_entries(self);
+	for (i=1L; i<=numDRTentries; i++)
+	{
+	   char *newPtr;
+	   
+	   /* Get a DRT entry */
+	   ReadNELine(decodeStream, (Pointer) nextLine, 255, 10);
+	   MSToastNL(nextLine);
+	   sizeLine = CStringLength(nextLine) + 1L;
+	   newPtr = (char *) NewLockedBuffer(sizeLine);      /** Must remember to do DestroyLockedBuffer when reading in MIME **/
+	   
+	   /** Copy string into new buffer.  (I can't believe there isn't a memcopy operation!) **/
+	   for (j=0L; j< sizeLine; j++)
+	      *(newPtr + j) = *(nextLine + j);
+	   
+	   Log(("Copied DRT entry %s", newPtr));
+	   
+	   AddElemAt(theFList, i, (Pointer) &newPtr);
+	}
+	
+	/* Done! */
+	return true;
+}
+
+Method Boolean
+MailStore_decodeFromStream(ObjectID self, ObjectID decodeStream, Unsigned MSlength)
+{
+    long int  totalBytes = 0L;
+	char      nextLine[256], *postIdentifier, nextCH;
+	short     lineType;
+	ObjectID  fieldToAddTo;
+	int       done = 0;
+		
+	/* Strategy: loop through, line by line, looking for one of To:, From:, Subject:, or cc:.  If get one,
+	   strip off the identifier, add it to a buffer, and continue parsing lines to ensure we get all of the lines.
+	   Parsing format - if get "," + WS + NL, that field must continue on next line, otherwise return to loop. */
+	   
+	while((!done) && (totalBytes < MSlength))
+	{
+	   Log(("totalBytes: %ld, MSlength: %ld", totalBytes, MSlength));
+	   
+	   totalBytes += ReadALine(decodeStream, nextLine, 255, 10);
+	   Log(("Next line: %s", nextLine));
+	   lineType = MSTestFieldType(nextLine);
+	   switch(lineType)
+	   {
+	      case MSP_FROM_FIELD:
+		      Log(("Is from!"));
+		      fieldToAddTo = From_t(self);
+			  postIdentifier = nextLine + 5L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_TO_FIELD:
+		      Log(("Is to!"));
+		      fieldToAddTo = To_t(self);
+			  postIdentifier = nextLine + 3L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_CC_FIELD:
+		      Log(("Is cc!"));
+		      fieldToAddTo = Cc_t(self);
+			  postIdentifier = nextLine + 3L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_SUBJECT_FIELD:
+		      Log(("Is subject!"));
+		      fieldToAddTo = Subject_t(self);
+			  postIdentifier = nextLine + 8L;
+			  while ( MSIsWS(*postIdentifier) == true)
+			     postIdentifier += 1L;
+			  break;
+		  case MSP_BODY_SEPARATOR:
+		  	  done = 1;
+			  continue;
+		  default:
+		      Log(("Isn't recognized. :("));
+		      continue;
+	   }
+	   
+	   ReplaceTextWithLiteral(fieldToAddTo, "");
+	   /* OK - grabbed a field.  Test to see if it's the last field. */
+	   while( MSTestDoneField(postIdentifier) == false)
+	   {
+	      Log(("More to come..."));
+	      /* append to fieldToAddTo */
+		  AppendLiteral(fieldToAddTo, postIdentifier);
+		  totalBytes += ReadALine(decodeStream, nextLine, 255, 10);
+		  Log(("The more is: %s", nextLine));
+		  postIdentifier = nextLine;
+		  while ( MSIsWS(*postIdentifier) == true)
+			 postIdentifier += 1L;
+	   }
+	   /* Strip off last NL, add to field. */
+	   MSToastNL(postIdentifier);
+	   AppendLiteral(fieldToAddTo, postIdentifier);
+	   Log(("Done field"));
+	}
+	
+	Log(("Done headers"));
+	/* Great! Now add rest to body field */
+	fieldToAddTo = Body_t(self);
+	ReplaceTextWithLiteral(fieldToAddTo, "");
+	while (totalBytes < MSlength)
+	{
+	   nextCH = ReadByte(decodeStream);
+	   totalBytes += 1L;
+	   if ( MSIsWS(nextCH) == false)
+	   {
+	      AppendCharacter(fieldToAddTo, nextCH);
+		  break;
+	   }
+	}
+	
+	/* Add characters, one by painful one - this routine should be optimized to read characters in chunks */
+	while (totalBytes < MSlength)
+	{
+	   totalBytes += 1L;
+	   nextCH = ReadByte(decodeStream);
+	   AppendCharacter(fieldToAddTo, nextCH);
+	}
+	Log(("Done body"));
+	return true;
+}
+
+Private void
+MS_WriteOutTF(ObjectID theTF, ObjectID theStream)
+{
+   long int 	len,i,nC;
+   char     	nextBuf[512], regBuf[256];
+   TextRange	nextRange;
+   
+   len = TextLength(theTF);
+   for (i=0L; i<len; )
+   {
+      nextRange.start = i;
+	  nC = len - i;
+	  if (nC > 255L)
+	    nC = 255L;
+	  nextRange.length = nC;
+      CopyTextRangeToBuffer(theTF, &nextRange, (CharactersPointer) nextBuf);
+	  ConvertToMagic8Bit((CharactersPointer) nextBuf, (Pointer) regBuf, nC);
+
+	  Write(theStream, regBuf, nC);
+	  i += nC;
+   }
+}
+
+Method Boolean
+MailStore_encodeIntoStream(ObjectID self, ObjectID encodeStream)
+{
+   long int totLength, nLen, dLen;
+   char NDOCS[32], DSIZE[32];
+   
+   /* What we want to encode is the "NDOCS", "DSIZE", and data components */
+   
+   totLength = 0L;
+   
+   /* Add length of "From: <From_t>\r" */
+   totLength += TextLength(From_t(self));
+   totLength += 7L;
+   Log(("FromLength %ld", totLength));
+   
+   /* Add length of "To: <To_t>\r" */
+   totLength += TextLength(To_t(self));
+   totLength += 5L;
+   Log(("Tolength %ld", totLength));
+   
+   /* Add length of "Cc: <Cc_t>\r" */
+   totLength += TextLength(Cc_t(self));
+   totLength += 5L;
+   Log(("cclength %ld", totLength));
+   
+   /* Add length of "Subject: <Subject_t>\r------\r"*/
+   totLength += TextLength(Subject_t(self));
+   totLength += 17L;
+   Log(("subjectlength %ld", totLength));
+   
+   /* Add length of body field */
+   totLength += TextLength(Body_t(self));
+   Log(("bodylength %ld", totLength));
+   totLength += 1L;  /* for extra \r padded on end */
+   
+   /* Build NDOCS string and DSIZE string */
+   SPrintF(NDOCS, "NDOCS 0\r");  nLen = CStringLength(NDOCS);
+   SPrintF(DSIZE, "DSIZE %ld\r", totLength);   dLen = CStringLength(DSIZE);
+   
+   Write(encodeStream, NDOCS, nLen);
+   Write(encodeStream, DSIZE, dLen);
+   
+   /* Write out "From: " field */
+   Write(encodeStream, "From: ", 6);
+   MS_WriteOutTF(From_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "To: " field */
+   Write(encodeStream, "To: ", 4);
+   MS_WriteOutTF(To_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "Cc: " field */
+   Write(encodeStream, "Cc: ", 4);
+   MS_WriteOutTF(Cc_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   /* Write out "Subject: " field */
+   Write(encodeStream, "Subject: ", 9);
+   MS_WriteOutTF(Subject_t(self), encodeStream);
+   Write(encodeStream, "\r------\r", 8);
+   
+   /* Write out "Body" */
+   MS_WriteOutTF(Body_t(self), encodeStream);
+   Write(encodeStream, "\r", 1);
+   
+   Write(encodeStream, "END\r", 4);
+
+   /* Done! */
+}
+
+Method ObjectID
+MailStore_createMVB(ObjectID self)
+{
+   Dot  newDot;
+   ObjectID newMVB, aField, aMime, MIMElist;
+   ObjectID headerSTF, bodyofSTF;
+   Flags    theMSflags;
+   Boolean  doEdits;
+   long int i, Tlength;
+   
+   theMSflags = Info_flags(self);
+   if (theMSflags & MS_noteditable)
+      doEdits = false;
+   else
+      doEdits = true;
+   
+   newMVB = CopyNear(iTemplateMVB, iTemplateMVB);
+   newDot.h = 295.0*256.0;
+   newDot.v = 26.0 *256.0;
+
+   /* Add "From" field */
+   headerSTF = CopyNear(iTemplateSF, iTemplateSF);
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = From_t(self);
+   ReplaceText(bodyofSTF, aField);
+   SetEditable(bodyofSTF, doEdits);
+   resizeSTF(headerSTF, &newDot);
+   addMVBHeader(newMVB, headerSTF, "\pFrom:");
+   
+   /* Add "To" field */
+   headerSTF = CopyNear(iTemplateSF, iTemplateSF);
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = To_t(self);
+   ReplaceText(bodyofSTF, aField);
+   SetEditable(bodyofSTF, doEdits);
+   resizeSTF(headerSTF, &newDot);
+   addMVBHeader(newMVB, headerSTF, "\pTo:");
+   
+   /* Add "Cc" field */
+   headerSTF = CopyNear(iTemplateSF, iTemplateSF);
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Cc_t(self);
+   ReplaceText(bodyofSTF, aField);
+   SetEditable(bodyofSTF, doEdits);
+   resizeSTF(headerSTF, &newDot);
+   addMVBHeader(newMVB, headerSTF, "\pcc:");
+   
+   /* Add "Subject" field */
+   headerSTF = CopyNear(iTemplateSF, iTemplateSF);
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Subject_t(self);
+   ReplaceText(bodyofSTF, aField);
+   SetEditable(bodyofSTF, doEdits);
+   resizeSTF(headerSTF, &newDot);
+   addMVBHeader(newMVB, headerSTF, "\pSubject:");
+   
+   /* Add "Body" field */
+   newDot.h = 346.0*256.0;
+   newDot.v = 153.0*256.0;
+   headerSTF = CopyNear(iTemplateSF, iTemplateSF);
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Body_t(self);
+   ReplaceText(bodyofSTF, aField);
+   SetEditable(bodyofSTF, doEdits);
+   resizeSTF(headerSTF, &newDot);
+   addMVBBody(newMVB, headerSTF);
+   
+   /* Add each of the MIME subtypes */
+   MIMElist = Mime_parts(self);
+   Tlength = Length(MIMElist);
+   for (i=1L; i<= Tlength; i++)
+   {
+      aMime = At(MIMElist, i);
+	  addMVBMime(newMVB, aMime);
+   }
+   
+   return newMVB;
+}
+
+Method Boolean
+MailStore_extractMVB(ObjectID self, ObjectID extractFromMe)
+{
+   /* For now, we'll do it the stupid way. */
+   ObjectID aField;
+   ObjectID headerSTF, bodyofSTF;
+   Flags    theFlags;
+   
+   /* Extract "From" field */
+   headerSTF = getMVBHeader(extractFromMe, "\pFrom:");
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = From_t(self);
+   ReplaceText(aField, bodyofSTF);
+   
+   /* Extract "To" field */
+   headerSTF = getMVBHeader(extractFromMe, "\pTo:");
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = To_t(self);
+   ReplaceText(aField, bodyofSTF);
+   
+   /* Extract "Cc" field */
+   headerSTF = getMVBHeader(extractFromMe, "\pcc:");
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Cc_t(self);
+   ReplaceText(aField, bodyofSTF);
+      
+   /* Extract "Subject" field */
+   headerSTF = getMVBHeader(extractFromMe, "\pSubject:");
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Subject_t(self);
+   ReplaceText(aField, bodyofSTF);
+   
+   /* Extract "Body" field */
+   headerSTF = getMVBHeader(extractFromMe, "\pBody");
+   bodyofSTF = Stf_BodyField(headerSTF);
+   aField = Body_t(self);
+   ReplaceText(aField, bodyofSTF);
+   
+   theFlags = Info_flags(self);
+   theFlags = theFlags & (~MS_unreadMess);
+   SetInfo_flags(self, theFlags);
+   
+   return true;
+}
+
+Method void
+MailStore_updateInfoText(ObjectID self, Unsigned listPos)
+{
+   Flags theFlags;
+   ObjectID theInfoText;
+   char  numString[5];
+   
+   theFlags = Info_flags(self);
+   theInfoText = Info_t(self);
+   
+   SPrintF(numString, "%ld", listPos);
+   ReplaceTextWithLiteral(theInfoText, numString);
+   
+   if (theFlags & MS_beenDeleted)
+      AppendLiteral(theInfoText, "D");
+   else
+   {
+      if (theFlags & MS_newMessage)
+	     AppendLiteral(theInfoText, "N");
+	  if (theFlags & MS_unreadMess)
+	     AppendLiteral(theInfoText, "U");
+   }
+}
+
+#undef CURRENTCLASS  /* this goes at the end of the file */
+@
+
+
+1.1.1.1
+log
+@This directory contains source code for Magic Cap based programs, including
+proxy aware clients.
+
+@
+text
+@@

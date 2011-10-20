@@ -1,0 +1,904 @@
+head	1.7;
+access;
+symbols
+	release:1.6
+	geoworks:1.6.2.1
+	pregeo:1.6
+	geoworks-0701:1.6.2.1
+	geoworks-062696:1.6
+	dev:1.3
+	demo:1.3.0.2;
+locks; strict;
+comment	@# @;
+
+
+1.7
+date	96.07.04.02.38.53;	author fox;	state Exp;
+branches;
+next	1.6;
+
+1.6
+date	96.04.04.01.48.16;	author fox;	state Exp;
+branches
+	1.6.2.1;
+next	1.5;
+
+1.5
+date	96.03.09.23.37.42;	author fox;	state Exp;
+branches;
+next	1.4;
+
+1.4
+date	96.02.16.21.47.24;	author fox;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	95.11.15.10.10.59;	author fox;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	95.11.03.21.47.05;	author fox;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	95.10.31.07.08.16;	author fox;	state Exp;
+branches;
+next	;
+
+1.6.2.1
+date	96.07.04.03.18.52;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.7
+log
+@Geoworks rev 7/3 AM
+@
+text
+@#
+#   services.pl
+#
+#   This file keeps track of where various distillers are on the webproxy's
+#   behalf.  It provides the following functions:
+#
+#   birth(hostname,port,servicename):
+#      A new module for type 'servicename' has come up on hostname:port.
+#      Hostname and port are automatically canonicalized.
+#   death(hostname, port [,servicename]):
+#      The service at hostname:port has died.  Services should try to signal
+#      death to the webproxy as they go down.  Hostname and port are
+#      automatically canonicalized.
+#   servlist(servicename):
+#      Return a list of all instances of servicename; each list element has the
+#      form hostname:port.
+#   servaddr(servicename):
+#      Return host,port for a randomly-selected instance of servicename.
+#   startdefaults:
+#      Start default instance of each service
+#
+
+package distiller;
+
+%DistillersByName = ();
+%PackageFor = ();
+
+use integer;
+
+sub is_server { shift->{"is_server"} }
+sub host { shift->{"host"} }
+sub port { shift->{"port"} }
+sub path { shift->{"path"} }
+sub args { shift->{"args"} }
+sub pkg { shift->{"pkg"} }
+sub name { shift->{"name"} }
+
+# distiller object constructor
+#  ARGS:
+#     Distiller mime type (eg "image/gif")
+#     Package name that contains decision fn
+#     is a pythsvc style server (0 or 1)
+#     if a server:
+#         host
+#         port
+#     otherwise:
+#         path
+#         opaque args
+
+sub new {
+    my $class = shift;
+    my $name = shift;
+    my $pkg = shift;
+    my $is_server = shift;
+    my $host,$port,$path;
+    my $opaque_args;
+    
+    if ($is_server) {
+        $host = shift;
+        $port = shift;
+    } else {
+        $path = shift;
+        $opaque_args = shift;                # may be null.
+    }
+
+    my $self = bless {
+        'is_server' => $is_server,
+        'path' => $path,
+        'host' => $host,
+        'port' => $port,
+        'args' => $opaque_args,
+        'pkg' => $pkg,
+        'name' => $name
+    };
+
+    push(@@{$DistillersByName{$name}}, $self);
+    return $self;
+}
+    
+sub startdefault {
+    my ($proxyhost, $proxyport, $arch) = @@_;
+    # uses global @@Config array.
+    my $bin = '';
+    @@svcs = grep(/^(server|pipeline|bin)/i, @@main::Config);
+
+    my ($type,$perl,$path,$name,$args);
+    my $cmd;
+    my $port = $main::g{sport} || 9100;
+
+    foreach $svc (@@svcs) {
+        if ($svc =~ /^bin\s+(\S+)\s*$/) {
+            $bin = $1;
+            next;
+        }
+        $svc =~ /^(\S+)\s*(\S+)\s+(\S+)\s+(\S+)\s*(.*)/;
+        ($type,$name,$perl,$path,$args) = ($1,$2,$3,$4,$5);
+        &main::debug('services', "Sourcing ${perl}.pl");
+        eval qq!require('./${perl}.pl');! ;
+        if ($@@) {                           # bummer!
+            &main::log("*** Error sourcing ${perl}.pl: $@@");
+            next;
+        }
+        # if this is a distill server (as opposed to an external distiller),
+        # start an instance of the server.
+        if ($type =~ /server/i) {
+            $PackageFor{$name} = $perl;
+            if ($type =~ /auto/) {
+                @@cmd = ("$bin/$path.$arch", $port, $proxyhost, $proxyport);
+                &main::debug('services',
+                             "Starting server for $name at $proxyhost:$port");
+                unless (fork()) {
+                    unless (fork()) {
+                        # this is the grandchild
+                        delete $SIG{'INT'};
+                        delete $SIG{'HUP'};
+                        exec @@cmd;
+                        $" = $, = " ";                  #" 
+                        die "--$$: '@@cmd': $!";
+                    }
+                    exit 0;
+                }
+                wait;
+                $port++;
+            }
+        } elsif ($type =~ /pipeline/) {
+            # it's an external pipeline.  Record the names of the args in the
+            # config file, to pass (untouched) to the decision function.
+            new distiller $name,$perl,0,$path,$args;
+            &main::debug('services', "Path '$path' (args '$args') for $name");
+        } else {
+            die "Bad line in config file: `$svc'";
+        }
+    }
+}
+
+#  get_distiller: return handle to an available distiller for a particular mime
+#  type.  If more than one is available, return the first one, and cycle the
+#  list. 
+
+sub get_distiller {
+    my $name = shift;
+
+    my @@dist = @@{$DistillersByName{$name}};
+    if (scalar @@dist) {                     # got one
+        my $result = $dist[0];
+        # rotate the distillers
+        my $first = shift @@{$DistillersByName{$name}};
+        push( @@{$DistillersByName{$name}}, $first);
+        return $result;
+    } else {
+        # you lose
+        return undef;
+    }
+}
+
+#
+#  'birth' and 'death' are called when a new distiller is launched or killed
+#  (both cause the distiller to send a message to the proxy).  
+#
+
+sub birth {
+    my ($host,$port,$svc) = @@_;
+
+    # canonicalize hostname and port num of the new distiller that just
+    # contacted us. 
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    my $loc = "$host:$port";
+
+    # ignore duplicate birth messages
+    
+    if (grep(/$loc/, @@{$DistillersByName{$svc}})) {
+        &main::log("*** services: $svc at $loc already exists, ",
+                   "not adding it");
+        return;
+    }
+
+    # add a new distiller object to the list
+    my $pkg = $PackageFor{$svc};
+    unless (defined $pkg) {
+        &main::log("*** services: no package known to handle '$svc', " .
+                   "not adding it");
+        return;
+    }
+
+    new distiller $svc,$pkg,1,$host,$port;
+    &main::debug('services', "Added $svc at $loc");
+}
+
+sub death {
+    my ($host, $port, $svc) = @@_;
+    my ($whichlist,$index);
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    $port = 0+$port;
+
+    # try to find which distiller is there.
+
+    undef $whichlist;
+  DISTILLERS:
+    foreach $svc (keys %DistillersByName) {
+        my $svclist = $DistillersByName{$svc};
+        $index = 0;
+        foreach $dist (@@{$svclist}) {
+            if ($dist->is_server
+                && ($dist->host eq $host)
+                && ($dist->port eq $port)) {
+                $whichlist = $svclist;
+                last DISTILLERS;
+            }
+            $index++;
+        }
+    }
+    unless (defined $whichlist) {
+        &main::log("*** no service $svc at $host:$port");
+        return;
+    } else {
+        splice(@@{$DistillersByName{$svc}}, $index, 1);
+        &main::debug('services',"Removed $svc at $host:$port");
+    }
+}
+
+sub killall {
+    while (($key,$val) = each (%DistillersByName)) {
+        foreach $dist ( @@ {$val} ) {
+            if ($dist->is_server) {
+                my $name = $dist->name;
+                my $host = $dist->host;
+                my $port = $dist->port;
+                &main::debug('services', "Killing $name\@@$host:$port");
+                unless ($sock = connectsock gm_sock $host,$port) {
+                    &main::log("*** Contacting $host:$port to kill $name: " .
+                               &gm_sock::lasterror());
+                }
+                $sock->writesock("k k");
+                $sock->killsock();
+            }
+        }
+    }
+}
+1;
+@
+
+
+1.6
+log
+@Ready to ship to geoworks subject to temporary licensing agreement
+@
+text
+@d23 4
+a26 1
+package services;
+d30 50
+a80 1
+    my $self = shift;
+d83 2
+a84 1
+    @@svcs = grep(/^(server|pipeline)/i, @@main::Config);
+d86 1
+a86 1
+    my ($type,$perl,$path,$name);
+d91 6
+a96 2
+        $svc =~ /^(\S+)\s*(\S+)\s+(\S+)\s+(.*)/;
+        ($type,$name,$perl,$path) = ($1,$2,$3,$4);
+a102 2
+        # record name of package containing modelling function.
+        $self->{Packages}->{$name} = $perl;        
+d106 5
+a110 4
+            @@cmd = ("$path.$arch", $port, $proxyhost, $proxyport);
+            &main::debug('services',
+                         "Starting server for $name at $proxyhost:$port");
+            unless (fork()) {
+d112 9
+a120 6
+                    # this is the grandchild
+                    delete $SIG{'INT'};
+                    delete $SIG{'HUP'};
+                    exec @@cmd;
+                    $" = $, = " ";                  #" 
+                    die "'@@cmd': $!";
+d122 2
+a123 1
+                exit 0;
+d125 1
+a125 3
+            wait;
+            $port++;
+        } else {
+d128 4
+a131 2
+            $self->{DistillPaths}->{$name} = $path;
+            &main::debug('services', "Register pipeline '$path' for $name");
+d136 5
+a140 2
+sub distiller_path {
+    my $self = shift;
+a141 8
+    my $path = $self->{DistillPaths}->{$name};
+    
+    &main::debug('services', "Distiller path for $name is '$path'");
+    return ($path  ?
+            split(/\s+/, $path) :
+            ());
+}
+    
+d143 11
+a153 13
+sub new { 
+    my %svcs = ();
+    my %hosts = ();
+    my %count = ();
+    my %pkgs = ();
+    my %paths = ();
+    bless {
+        DistillPaths => \%paths,
+        Packages => \%pkgs,
+        Services => \%svcs,
+        Hosts => \%hosts,
+        Count => \%count
+        };
+d158 1
+a158 5
+#  (both cause the distiller to send a message to the proxy).  Two arrays are
+#  maintained.  $Hosts{} maps host:port pairs to service names of distillers
+#  running there.  $Services{} maps a service name (MIME type/subtype glob) to
+#  a list of addresses (host:port) where a distiller for that subtype is known
+#  to be running.
+a161 3
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $Hosts = $self->{Hosts};
+d163 1
+a163 3
+    my $s = $Services->{$svc};
+    my @@thissvc = (ref($s) eq "ARRAY")? @@{$s} : ();
+    
+a167 1
+    $port = 0+$port;
+d172 1
+a172 1
+    if (grep(/$loc/, @@thissvc)) {
+d178 5
+a182 5
+    # ignore message if we believe a different distiller is already running at
+    # that host:port
+
+    if (exists $Hosts->{$loc}) {
+        &main::log("*** services: already a service at $loc, not adding $svc");
+d186 2
+a187 4
+    push(@@thissvc, $loc);
+    $Hosts->{$loc} = $svc;
+    $Services->{$svc} = \@@thissvc;
+    &main::debug('services', "Added $svc at $host:$port");
+a190 3
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $Hosts = $self->{Hosts};
+d192 1
+a192 1
+    my $whatsvc ;
+a195 11
+    my $loc = "$host:$port";
+    my $whatsvc = exists $Hosts->{$loc} ? $Hosts->{$loc} : "";
+    
+    unless ($whatsvc) {
+        &main::log("*** warning: no service $svc at $loc");
+        return;
+    }
+    if ($whatsvc ne $svc) {
+        &main::log("*** service $svc is at $loc; not removing it");
+        return;
+    }
+d197 1
+a197 8
+    delete $Hosts->{$loc};
+    my $s= $Services->{$svc};
+    my @@thissvc = (ref($s) eq "ARRAY")? @@{$s}: ();
+
+    @@thissvc = grep((!/$loc/), @@thissvc);
+    $Services->{$svc} = \@@thissvc;
+    &main::debug('services', "Removed $svc at $loc");
+}
+d199 11
+a209 16
+sub killall {
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $sock;
+    
+    while (($key,$val) = each %{$Services}) {
+        next unless ref($val) eq "ARRAY";
+        for (@@{$val}) {
+            &main::debug('services', "Killing $key\@@$_");
+            &main::log("*** Bad service entry: $key, $_"), next
+                unless /(\S+):(\d+)/;
+            ($host,$port) = ($1,$2);
+            unless ($sock = connectsock gm_sock $host,$port) {
+                &main::log("*** While killing $key\@@$_: " .
+                           &gm_sock::lasterror());
+                next;
+d211 1
+a211 2
+            $sock->writesock("k k");
+            $sock->killsock();
+d214 7
+d223 14
+a236 10
+sub servlist {
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $svc = shift;
+    my @@svcs;
+    
+    if ($svc eq '*') {
+        while (($key, $val) = each %{$Services}) {
+            if (ref($val) eq "ARRAY") {
+                for (@@{$val})  { push(@@svcs, join('@@',$key,$_)); }
+a238 30
+    } else {
+        $svc = $Services->{$svc};
+        @@svcs =  ((ref($svc) eq "ARRAY")? @@{$svc}: ());
+    }
+    return (@@svcs);
+}
+
+sub servpkg {
+    my $self = shift;
+    my $mime = shift;
+    my $pkgs = $self->{Packages};
+    
+    return $pkgs->{$mime};
+}
+
+sub servaddr {
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $Count = $self->{Count};
+    my $svc = shift;
+    my @@list = $self->servlist($svc);
+
+    if (0) {
+        return ($#list >= 0) ?
+            split(/:/, $list[$Count->{$svc}++ % ($#list+1)])
+                : (undef,undef);
+    } else {
+        return ($#list >= 0) ?
+            split(/:/, $list[$$ % ($#list+1)])
+                : (undef, undef);
+a240 1
+    
+@
+
+
+1.6.2.1
+log
+@geoworks 7/1 PM
+@
+text
+@d23 1
+a23 4
+package distiller;
+
+%DistillersByName = ();
+%PackageFor = ();
+a26 50
+sub is_server { shift->{"is_server"} }
+sub host { shift->{"host"} }
+sub port { shift->{"port"} }
+sub path { shift->{"path"} }
+sub args { shift->{"args"} }
+sub pkg { shift->{"pkg"} }
+sub name { shift->{"name"} }
+
+# distiller object constructor
+#  ARGS:
+#     Distiller mime type (eg "image/gif")
+#     Package name that contains decision fn
+#     is a pythsvc style server (0 or 1)
+#     if a server:
+#         host
+#         port
+#     otherwise:
+#         path
+#         opaque args
+
+sub new {
+    my $class = shift;
+    my $name = shift;
+    my $pkg = shift;
+    my $is_server = shift;
+    my $host,$port,$path;
+    my $opaque_args;
+    
+    if ($is_server) {
+        $host = shift;
+        $port = shift;
+    } else {
+        $path = shift;
+        $opaque_args = shift;                # may be null.
+    }
+
+    my $self = bless {
+        'is_server' => $is_server,
+        'path' => $path,
+        'host' => $host,
+        'port' => $port,
+        'args' => $opaque_args,
+        'pkg' => $pkg,
+        'name' => $name
+    };
+
+    push(@@{$DistillersByName{$name}}, $self);
+    return $self;
+}
+    
+d28 1
+d31 1
+a31 2
+    my $bin = '';
+    @@svcs = grep(/^(server|pipeline|bin)/i, @@main::Config);
+d33 1
+a33 1
+    my ($type,$perl,$path,$name,$args);
+d38 2
+a39 6
+        if ($svc =~ /^bin\s+(\S+)\s*$/) {
+            $bin = $1;
+            next;
+        }
+        $svc =~ /^(\S+)\s*(\S+)\s+(\S+)\s+(\S+)\s*(.*)/;
+        ($type,$name,$perl,$path,$args) = ($1,$2,$3,$4,$5);
+d46 2
+d51 4
+a54 5
+            $PackageFor{$name} = $perl;
+            if ($type =~ /auto/) {
+                @@cmd = ("$bin/$path.$arch", $port, $proxyhost, $proxyport);
+                &main::debug('services',
+                             "Starting server for $name at $proxyhost:$port");
+d56 6
+a61 9
+                    unless (fork()) {
+                        # this is the grandchild
+                        delete $SIG{'INT'};
+                        delete $SIG{'HUP'};
+                        exec @@cmd;
+                        $" = $, = " ";                  #" 
+                        die "--$$: '@@cmd': $!";
+                    }
+                    exit 0;
+d63 1
+a63 2
+                wait;
+                $port++;
+d65 3
+a67 1
+        } elsif ($type =~ /pipeline/) {
+d70 2
+a71 4
+            new distiller $name,$perl,0,$path,$args;
+            &main::debug('services', "Path '$path' (args '$args') for $name");
+        } else {
+            die "Bad line in config file: `$svc'";
+d76 2
+a77 5
+#  get_distiller: return handle to an available distiller for a particular mime
+#  type.  If more than one is available, return the first one, and cycle the
+#  list. 
+
+sub get_distiller {
+d79 8
+d88 13
+a100 11
+    my @@dist = @@{$DistillersByName{$name}};
+    if (scalar @@dist) {                     # got one
+        my $result = $dist[0];
+        # rotate the distillers
+        my $first = shift @@{$DistillersByName{$name}};
+        push( @@{$DistillersByName{$name}}, $first);
+        return $result;
+    } else {
+        # you lose
+        return undef;
+    }
+d105 5
+a109 1
+#  (both cause the distiller to send a message to the proxy).  
+d113 3
+d117 3
+a119 1
+
+d124 1
+d129 1
+a129 1
+    if (grep(/$loc/, @@{$DistillersByName{$svc}})) {
+d135 5
+a139 5
+    # add a new distiller object to the list
+    my $pkg = $PackageFor{$svc};
+    unless (defined $pkg) {
+        &main::log("*** services: no package known to handle '$svc', " .
+                   "not adding it");
+d143 4
+a146 2
+    new distiller $svc,$pkg,1,$host,$port;
+    &main::debug('services', "Added $svc at $loc");
+d150 3
+d154 1
+a154 1
+    my ($whichlist,$index);
+d158 11
+d170 8
+a177 1
+    # try to find which distiller is there.
+d179 16
+a194 11
+    undef $whichlist;
+  DISTILLERS:
+    foreach $svc (keys %DistillersByName) {
+        my $svclist = $DistillersByName{$svc};
+        $index = 0;
+        foreach $dist (@@{$svclist}) {
+            if ($dist->is_server
+                && ($dist->host eq $host)
+                && ($dist->port eq $port)) {
+                $whichlist = $svclist;
+                last DISTILLERS;
+d196 2
+a197 1
+            $index++;
+d200 14
+a213 3
+    unless (defined $whichlist) {
+        &main::log("*** no service $svc at $host:$port");
+        return;
+d215 2
+a216 2
+        splice(@@{$DistillersByName{$svc}}, $index, 1);
+        &main::debug('services',"Removed $svc at $host:$port");
+d218 9
+d229 15
+a243 16
+sub killall {
+    while (($key,$val) = each (%DistillersByName)) {
+        foreach $dist ( @@ {$val} ) {
+            if ($dist->is_server) {
+                my $name = $dist->name;
+                my $host = $dist->host;
+                my $port = $dist->port;
+                &main::debug('services', "Killing $name\@@$host:$port");
+                unless ($sock = connectsock gm_sock $host,$port) {
+                    &main::log("*** Contacting $host:$port to kill $name: " .
+                               &gm_sock::lasterror());
+                }
+                $sock->writesock("k k");
+                $sock->killsock();
+            }
+        }
+d246 1
+@
+
+
+1.5
+log
+@latest version: uses perl HTML parser from net (with some additions and
+bug fixes by me); SafeSurf (NetCondom) removes Java/JavaScript tags; no
+longer has problems accidentally nesting <A>'s for refinement tags;
+understands new format handoff messages; pathnames for external
+distillers now in .cf file, not in code; minor changes to registration
+page; "About Pythia" link (to reg page) now appears on every page served
+by Pythia; random other buglets fixed.
+@
+text
+@d71 1
+d79 1
+a79 1
+    my $path;
+d81 2
+a82 1
+    return (($path = $self->{DistillPaths}->{$name}) ?
+@
+
+
+1.4
+log
+@various modularity changes
+@
+text
+@d33 1
+a33 1
+    my ($path,$name);
+d38 3
+a40 2
+        ($name,$perl,$path) = (split(/\s+/, $svc))[1..3];
+        &main::debug('services', "Sourcing $perl.pl");
+d43 1
+a43 1
+            &main::log("*** Error in eval: $@@");
+d50 1
+a50 1
+        if ($path) {
+d67 4
+d75 11
+d91 1
+d93 1
+@
+
+
+1.3
+log
+@various fixes: handoff hack is working, and pstotext converter.  need to
+generalize mechanism for launching distillers and pythia.cf syntax for
+specifying how to call them.
+@
+text
+@d31 1
+a31 1
+    @@svcs = grep(/^service/i, @@main::Config);
+d33 1
+a33 1
+    my $path,$name;
+d38 28
+a65 9
+        ($name,$path) = (split(/\s+/, $svc))[2,3];
+        @@cmd = ("$path.$arch", $port, $proxyhost, $proxyport);
+        &main::debug('services', "Starting $name at $proxyhost:$port");
+        $self->birth($proxyhost, $port, $name);
+        unless (fork()) {
+            # this is the child
+            exec @@cmd;
+            $" = $, = " ";
+            die "'@@cmd': $!";
+a66 1
+        $port++;
+d74 1
+d76 1
+d83 9
+d100 2
+a101 1
+    # canonicalize hostname and port num
+d106 2
+d115 3
+d159 1
+a159 1
+sub servlist {
+d162 1
+a162 10
+    my $svc = shift;
+    $svc = $Services->{$svc};
+    return ((ref($svc) eq "ARRAY")? @@{$svc}: ());
+}
+
+sub servaddr {
+
+    my ($host,$port,$svc) = @@_;
+    my $s = $Services->{$svc};
+    my @@thissvc = (ref($s) eq "ARRAY")? @@{$s} : ();
+d164 15
+a178 42
+    # canonicalize hostname and port num
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    $port = 0+$port;
+    my $loc = "$host:$port";
+    
+    if (grep(/$loc/, @@thissvc)) {
+        &main::log("*** services: $svc at $loc already exists, ",
+                   "not adding it");
+        return;
+    }
+
+    if (exists $Hosts->{$loc}) {
+        &main::log("*** services: already a service at $loc, not adding $svc");
+        return;
+    }
+
+    push(@@thissvc, $loc);
+    $Hosts->{$loc} = $svc;
+    $Services->{$svc} = \@@thissvc;
+    &main::debug('services', "Added $svc at $host:$port");
+}
+
+sub death {
+    my $self = shift;
+    my $Services = $self->{Services};
+    my $Hosts = $self->{Hosts};
+    my ($host, $port, $svc) = @@_;
+    my $whatsvc ;
+
+    $host = (gethostbyname($host))[0] || lc $host;
+    $port = 0+$port;
+    my $loc = "$host:$port";
+    my $whatsvc = exists $Hosts->{$loc} ? $Hosts->{$loc} : "";
+    
+    unless ($whatsvc) {
+        &main::log("*** warning: no service $svc at $loc");
+        return;
+    }
+    if ($whatsvc ne $svc) {
+        &main::log("*** service $svc is at $loc; not removing it");
+        return;
+a179 8
+
+    delete $Hosts->{$loc};
+    my $s= $Services->{$svc};
+    my @@thissvc = (ref($s) eq "ARRAY")? @@{$s}: ();
+
+    @@thissvc = grep((!/$loc/), @@thissvc);
+    $Services->{$svc} = \@@thissvc;
+    &main::debug('services', "Removed $svc at $loc");
+a186 1
+    my $key,$val;
+d199 8
+@
+
+
+1.2
+log
+@Registration, etc works well enough to release this version...
+@
+text
+@d19 2
+d26 25
+@
+
+
+1.1
+log
+@the seeds of scalability have been sown.
+@
+text
+@d168 14
+a181 2
+    $svc = $Services->{$svc};
+    return ((ref($svc) eq "ARRAY")? @@{$svc}: ());
+@

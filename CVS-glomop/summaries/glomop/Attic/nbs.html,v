@@ -1,0 +1,188 @@
+head	1.2;
+access;
+symbols
+	initial:1.1.1.1
+	initial:1.1.1;
+locks; strict;
+comment	@# @;
+
+
+1.2
+date	97.01.04.23.30.15;	author fox;	state dead;
+branches;
+next	1.1;
+
+1.1
+date	96.11.14.07.51.58;	author fox;	state Exp;
+branches
+	1.1.1.1;
+next	;
+
+1.1.1.1
+date	96.11.14.07.51.58;	author fox;	state Exp;
+branches;
+next	;
+
+
+desc
+@@
+
+
+1.2
+log
+@moved os structure papers to new osstruc submodule
+@
+text
+@<html>
+<title>
+Non-Blocking Synchronization
+</title>
+<body>
+<a href=index.html><i>Back to index</i></a>
+<h1>
+The Synergy Between Non-Blocking Synchronization and Operating System Structure
+</h1>
+<strong>
+Michael Greenwald and David Cheriton, Stanford
+</strong>
+
+<p><b>One-line summary:</b>
+
+Use CAS-2 (double compare and swap, ideally in hardware) instead of blocking
+synchronization to safely and efficiently update concurrent data
+structures.  One CAS is the update itself, the other CAS is a version
+number that protects the entire data structure, to detect
+inconsistency. 
+</p>
+
+<h2>Overview/Main Points</h2>
+
+Abstractions of interest:
+<ul>
+  <li> Type-specific memory: if T* is initially a pointer to T, it is
+       guaranteed that if T* is non-null, it points to a T and not some
+       other type of thing, i.e. if non-null it is always safe and
+       semantically meaningful to dereference it as a T.  The property
+       persists over a time Tstable
+       (paper assumes Tstable == infinite).
+       <ul>
+         <li> C++ "new" and "delete" support this at source level
+         <li> more efficient implementation of allocation (free lists of
+              fixed-size objects) 
+       </ul>
+  <li> Double compare and swap (DCAS or CAS2) atomically performs
+       <TT>if (*t1==v1 && *t2==v2) { *t1=u1; *t2=u2; }</TT> where t1 and
+       t2 are TSM
+  <li> Minimizing window of inconsistency during atomic update (read
+       all, recompute new, atomically conditional-write new): authors 
+       use a <i>version 
+       number</i> that covers the entire data structure (e.g. the queue)
+</UL>
+
+Using DCAS and version numbers for shared data structures and signal delivery:
+
+<ul>
+  <li> Rather than modifying a copy of the data structure and atomically
+       replacing a pointer, use a version number that covers the whole
+       data structure.  If the version number has changed while the new
+       data was being computed, the atomic update will fail and the
+       operation can be retried.
+  <li> Optimization: some data structures allow descriptor (entry) to be
+       removed, modified, then reinserted, if the remove and reinsert
+       are each atomic.  This poses a potential problem in case e.g. a
+       signal arrives for a thread while the thread's descriptor is not
+       in the queue (window of inconsistency).  In Cache Kernel,
+       <i>signal delivery is best-effort</i> since authors claim you
+       need higher-level timeout/retry for distributed programs anyway.
+  <li> Possible deadlock scenario: signal handler wanting to modify
+       descriptor D is called on the stack of a thread that has just
+       removed (but not yet replaced) D; deadlock results.  I.e. must be
+       careful in how retry is implemented.
+</ul>
+
+Comparison to other synchronization (Proteus simulations):
+
+<ul>
+  <li> With low preemption (# threads =~ # procs), comparable to spin
+       locks and way better than single-CAS implementation (which requires
+       substantially larger number of instructions to implement).
+  <li> With high preemption, somewhat better than single-CAS and way
+       better than spin-locks (which suffer from priority inversion due
+       to preemption).
+  <li> Simulations modeled a degree of contention atypical of a
+       well-designed system; authors claim this shows their technique
+       works well under stress.
+  <li> Synthesis Kernel used similar techniques, but doesn't
+       generalize because the particular in-kernel data structures had
+       constrained access patterns; e.g. a single toggle bit to protect
+       a data structure rather than a version number.
+  <li> Transactional Memory is a (heavyweight) generalization to n-way
+       CAS.  Authors'
+       contribution is to demonstrate that 2-way is enough to improve OS
+       structure using NBS.
+</ul>
+
+Implementation:
+
+<ul>
+  <li> RISC hardware: LLP (load linked pipelined) and SCP (store
+       cond. pipelined), which "nest" inside LL and SC (both in
+       pipelining sense and semantic sense.)  I.e. LLP is semantically
+       linked to preceding LL, and SCP is semantically linked to
+       subsequent SC.  Allows DCAS to be implemented with a nested
+       LL/LLP/SCP/SC pair.  Authors claim to have worked out design for
+       R4000-like pipeline, but omitted for brevity.
+  <li> CISC hardware: M68040 implements CAS2, but it's slow.
+  <li> Software: Bershad 1993: use single global OS lock to implement
+       DCAS sequences; if process holding lock is delayed, OS rolls back
+       the DCAS instructions performed so far, and releases lock.
+       Problems: contention on single global lock; multiple memory
+       accesses required in common case; difficult to prove correct if
+       rollback must undo memory accesses to paged-out or illegal region.
+</ul>
+
+
+<h2>Relevance</h2>
+
+<p>
+A potentially high-performance and robust (can't die while holding a
+lock!) way to increase concurrency of critical OS data structures, and
+possibly enable efficient implementation of OS services such as signal
+delivery, based on a neat hack.
+</p>
+<p>
+<b>Extension:</b> for more constrained cases, can use a single bit (or
+2-bit) version number by exploiting the fact (with proper compiler
+support) that addresses are usually word-aligned.
+</p>
+<h2>Flaws</h2>
+
+<ul>
+  <li> Code is not easy to get right for mere mortals (e.g. signal
+       handler deadlock scenario above), though authors
+       claim that "common cases" could be encapsulated in C++ classes
+  <li> Proposed LLP/SCP seems hard to implement in hardware, even for
+       hairy CPU's, and software solutions don't have good enough
+       performance to make NBS much better than blocking synchronization
+</ul>
+<hr>
+<a href=index.html><i>Back to index</i></a>
+
+</body></html>
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@@
+
+
+1.1.1.1
+log
+@
+@
+text
+@@
